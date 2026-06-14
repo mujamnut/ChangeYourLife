@@ -1,0 +1,10 @@
+.git
+.gradle
+.idea
+.junie
+.kotlin
+androidApp
+build
+backend/build
+local.properties
+*.iml

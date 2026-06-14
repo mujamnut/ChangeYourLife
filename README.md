@@ -52,4 +52,6 @@ For local auth testing, start the backend first with `.\gradlew.bat :backend:run
 
 For persistent auth/data with Aiven PostgreSQL, set `DATABASE_URL=postgresql://avnadmin:<password>@<host>:<port>/defaultdb?sslmode=require` and `JWT_SECRET` in `local.properties`, then restart the backend.
 
+For cloud backend hosting, deploy the backend to Render using the root `Dockerfile` or `render.yaml`. See `docs/render-deployment.md`.
+
 For AI via OpenRouter, set `OPENROUTER_API_KEY` in `local.properties`. The backend defaults to `OPENROUTER_MODEL=openai/gpt-oss-120b:free` when OpenRouter is configured.
