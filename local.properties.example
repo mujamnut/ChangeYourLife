@@ -1,0 +1,18 @@
+sdk.dir=C\:/Users/<your-user>/AppData/Local/Android/Sdk
+
+# Android app backend URL.
+# Emulator:
+# cyl.api.base.url=http://10.0.2.2:8080/
+# Physical phone:
+# cyl.api.base.url=http://<your-computer-ip>:8080/
+
+# Backend AI provider. OpenRouter is used first when this key is present.
+# Do not commit your real key.
+# OPENROUTER_API_KEY=sk-or-v1-your-key-here
+# OPENROUTER_MODEL=openai/gpt-oss-120b:free
+
+# Backend PostgreSQL persistence.
+# Aiven PostgreSQL service URI normally needs sslmode=require.
+# Do not commit your real database password.
+# DATABASE_URL=postgresql://avnadmin:<password>@<host>:<port>/defaultdb?sslmode=require
+# JWT_SECRET=replace-with-a-long-random-secret

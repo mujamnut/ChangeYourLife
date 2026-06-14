@@ -1,0 +1,1992 @@
+package com.changeyourlife.cyl.presentation.home
+
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.changeyourlife.cyl.core.constants.CylDefaults
+import com.changeyourlife.cyl.domain.model.Page
+import com.changeyourlife.cyl.domain.model.PageBlock
+import com.changeyourlife.cyl.domain.model.PageBlockDocument
+import com.changeyourlife.cyl.domain.model.PageBlockType
+import com.changeyourlife.cyl.domain.model.PagePropertyType
+import com.changeyourlife.cyl.domain.model.PageTable
+import com.changeyourlife.cyl.domain.model.PageTableColumn
+import com.changeyourlife.cyl.domain.model.PageTableColumnType
+import com.changeyourlife.cyl.domain.model.PageTableRollupAggregation
+import com.changeyourlife.cyl.domain.model.PageTableRow
+import com.changeyourlife.cyl.domain.model.PageTableView
+import com.changeyourlife.cyl.domain.model.Reminder
+import com.changeyourlife.cyl.domain.model.TaskItem
+import com.changeyourlife.cyl.domain.model.Workspace
+import com.changeyourlife.cyl.domain.repository.AuthRepository
+import com.changeyourlife.cyl.domain.repository.AiBlockContext
+import com.changeyourlife.cyl.domain.model.ChatMessage
+import com.changeyourlife.cyl.domain.model.ChatPageLink
+import com.changeyourlife.cyl.domain.model.ChatSession
+import com.changeyourlife.cyl.domain.repository.ChatHistoryRepository
+import com.changeyourlife.cyl.domain.repository.PageRepository
+import com.changeyourlife.cyl.domain.repository.ReminderRepository
+import com.changeyourlife.cyl.domain.repository.TaskRepository
+import com.changeyourlife.cyl.domain.repository.WorkspaceRepository
+import com.changeyourlife.cyl.domain.repository.AiPageContext
+import com.changeyourlife.cyl.domain.repository.AiRepository
+import com.changeyourlife.cyl.domain.repository.ChatAction
+import com.changeyourlife.cyl.presentation.ai.AiChatMessage
+import com.changeyourlife.cyl.presentation.ai.AiChatPageLink
+import com.changeyourlife.cyl.presentation.ai.AiPageActionExecutor
+import com.changeyourlife.cyl.presentation.ai.isTaskTableRowAction
+import com.changeyourlife.cyl.presentation.ai.toPageTableColumnFromAi
+import com.changeyourlife.cyl.presentation.ai.toRoleContentPairs
+import com.changeyourlife.cyl.presentation.ai.withTaskTableAction
+import com.changeyourlife.cyl.presentation.page.PageBlockCodec
+import com.changeyourlife.cyl.presentation.page.PageModuleTemplates
+import com.changeyourlife.cyl.presentation.page.PageModuleType
+import android.util.Log
+import dagger.hilt.android.lifecycle.HiltViewModel
+import javax.inject.Inject
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+
+@HiltViewModel
+class HomeViewModel @Inject constructor(
+    private val workspaceRepository: WorkspaceRepository,
+    private val pageRepository: PageRepository,
+    private val taskRepository: TaskRepository,
+    private val authRepository: AuthRepository,
+    private val reminderRepository: ReminderRepository,
+    private val aiRepository: AiRepository,
+    private val aiPageActionExecutor: AiPageActionExecutor,
+    private val chatHistoryRepository: ChatHistoryRepository,
+) : ViewModel() {
+    private val workspaceFormState = MutableStateFlow(WorkspaceFormState())
+    private val activeChatSessionId = MutableStateFlow<String?>(null)
+    private val activeWorkspaceChatScope: Flow<String> = workspaceRepository.observeActiveWorkspaceId()
+        .map { workspaceId ->
+            homeChatScopeId(
+                workspaceId
+                    ?.takeIf { it.isNotBlank() }
+                    ?: CylDefaults.DefaultWorkspaceId,
+            )
+        }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val chatSessions: Flow<List<ChatSession>> = activeWorkspaceChatScope
+        .flatMapLatest { scopeId -> chatHistoryRepository.observeSessions(scopeId) }
+
+    private val effectiveChatSessionId: Flow<String?> = combine(
+        chatSessions,
+        activeChatSessionId,
+    ) { sessions, selectedSessionId ->
+        selectedSessionId?.takeIf { sessionId -> sessions.any { session -> session.id == sessionId } }
+            ?: sessions.firstOrNull()?.id
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val chatMessages: Flow<List<AiChatMessage>> = effectiveChatSessionId
+        .flatMapLatest { sessionId ->
+            if (sessionId == null) {
+                flowOf(emptyList())
+            } else {
+                chatHistoryRepository.observeMessages(sessionId)
+                    .map { messages -> messages.toAiChatMessages() }
+            }
+    }
+    private val isAiGeneratingChat = MutableStateFlow(false)
+    private val aiChatError = MutableStateFlow<String?>(null)
+    private val chatState: Flow<HomeChatState> = combine(
+        chatMessages,
+        chatSessions,
+        effectiveChatSessionId,
+        isAiGeneratingChat,
+        aiChatError,
+    ) { messages, sessions, activeSessionId, isGenerating, error ->
+        HomeChatState(
+            messages = messages,
+            sessions = sessions,
+            activeSessionId = activeSessionId,
+            isGenerating = isGenerating,
+            error = error,
+        )
+    }
+    private val searchQuery = MutableStateFlow("")
+    private val chatHistorySearchQuery = MutableStateFlow("")
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val chatHistorySearchMessages: Flow<List<ChatMessage>> = activeWorkspaceChatScope
+        .flatMapLatest { scopeId -> chatHistoryRepository.observeMessagesForScope(scopeId) }
+
+    private val chatHistorySearchResults: Flow<List<ChatHistorySearchResult>> = combine(
+        chatSessions,
+        chatHistorySearchMessages,
+        chatHistorySearchQuery,
+    ) { sessions, messages, query ->
+        sessions.toChatHistorySearchResults(messages, query)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val dashboardState: Flow<HomeUiState> = combine(
+        workspaceRepository.observeWorkspaces(),
+        workspaceRepository.observeActiveWorkspaceId(),
+    ) { workspaces, activeWorkspaceId ->
+        val selectedWorkspace = workspaces.firstOrNull { workspace -> workspace.id == activeWorkspaceId }
+            ?: workspaces.firstOrNull { workspace -> workspace.id == CylDefaults.DefaultWorkspaceId }
+            ?: workspaces.firstOrNull()
+
+        WorkspaceDashboardState(
+            workspaces = workspaces,
+            activeWorkspace = selectedWorkspace,
+        )
+    }.flatMapLatest { workspaceState ->
+        val activeWorkspace = workspaceState.activeWorkspace
+        if (activeWorkspace == null) {
+            flowOf(
+                HomeUiState(
+                    isLoading = false,
+                    workspaces = workspaceState.workspaces,
+                ),
+            )
+        } else {
+            combine(
+                pageRepository.observePages(activeWorkspace.id),
+                taskRepository.observeOpenTaskCount(activeWorkspace.id),
+                taskRepository.observeOpenTasks(activeWorkspace.id),
+                reminderRepository.observePendingReminders(activeWorkspace.id),
+            ) { pages, openTaskCount, openTasks, reminders ->
+                val sortedPages = pages.sortedByDescending { page -> page.updatedAt }
+                HomeUiState(
+                    isLoading = false,
+                    activeWorkspaceId = activeWorkspace.id,
+                    workspaceName = activeWorkspace.name,
+                    workspaceCount = workspaceState.workspaces.size,
+                    workspaces = workspaceState.workspaces,
+                    pageCount = pages.size,
+                    openTaskCount = openTaskCount,
+                    pendingReminderCount = reminders.size,
+                    allPages = sortedPages,
+                    recentPages = sortedPages.take(5),
+                    openTasks = openTasks,
+                    reminders = reminders,
+                )
+            }
+        }
+    }
+
+    val uiState: StateFlow<HomeUiState> = combine(
+        dashboardState,
+        workspaceFormState,
+        chatState,
+        chatHistorySearchQuery,
+        chatHistorySearchResults,
+    ) { dashboard, form, chat, chatSearchQuery, chatSearchResults ->
+        dashboard.copy(
+            isCreateWorkspaceDialogVisible = form.isCreateWorkspaceDialogVisible,
+            newWorkspaceName = form.newWorkspaceName,
+            canCreateWorkspace = form.newWorkspaceName.isNotBlank(),
+            chatMessages = chat.messages,
+            chatSessions = chat.sessions,
+            activeChatSessionId = chat.activeSessionId,
+            isAiGeneratingChat = chat.isGenerating,
+            aiChatError = chat.error,
+            chatHistorySearchQuery = chatSearchQuery,
+            chatHistorySearchResults = chatSearchResults,
+        )
+    }.let { baseState ->
+        combine(baseState, searchQuery) { state, query ->
+            state.copy(
+                searchQuery = query,
+                searchResults = state.allPages.toSearchResults(query),
+            )
+        }
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5_000),
+        initialValue = HomeUiState(),
+    )
+
+    init {
+        viewModelScope.launch {
+            workspaceRepository.ensureDefaultWorkspace()
+            startFreshHomeChatSessionOnLaunch()
+        }
+    }
+
+    suspend fun createQuickPage(): Page {
+        workspaceRepository.ensureDefaultWorkspace()
+        val workspaceId = workspaceRepository.getActiveWorkspaceId()
+            ?.takeIf { it.isNotBlank() }
+            ?: CylDefaults.DefaultWorkspaceId
+        return pageRepository.createPage(
+            workspaceId = workspaceId,
+            title = "Untitled page",
+        )
+    }
+
+    fun createQuickPage(onCreated: (Page) -> Unit) {
+        viewModelScope.launch {
+            onCreated(createQuickPage())
+        }
+    }
+
+    suspend fun createModulePage(type: PageModuleType): Page {
+        workspaceRepository.ensureDefaultWorkspace()
+        val workspaceId = workspaceRepository.getActiveWorkspaceId()
+            ?.takeIf { it.isNotBlank() }
+            ?: CylDefaults.DefaultWorkspaceId
+        return pageRepository.createPage(
+            workspaceId = workspaceId,
+            title = PageModuleTemplates.defaultTitle(type),
+            content = PageModuleTemplates.contentFor(type),
+        )
+    }
+
+    fun createModulePage(
+        type: PageModuleType,
+        onCreated: (Page) -> Unit,
+    ) {
+        viewModelScope.launch {
+            onCreated(createModulePage(type))
+        }
+    }
+
+    fun selectWorkspace(workspaceId: String) {
+        viewModelScope.launch {
+            workspaceRepository.setActiveWorkspace(workspaceId)
+        }
+    }
+
+    fun showCreateWorkspace() {
+        workspaceFormState.update {
+            it.copy(isCreateWorkspaceDialogVisible = true)
+        }
+    }
+
+    fun hideCreateWorkspace() {
+        workspaceFormState.update {
+            it.copy(
+                isCreateWorkspaceDialogVisible = false,
+                newWorkspaceName = "",
+            )
+        }
+    }
+
+    fun updateNewWorkspaceName(name: String) {
+        workspaceFormState.update {
+            it.copy(newWorkspaceName = name)
+        }
+    }
+
+    fun updateSearchQuery(query: String) {
+        searchQuery.value = query
+    }
+
+    fun clearSearchQuery() {
+        searchQuery.value = ""
+    }
+
+    fun updateChatHistorySearchQuery(query: String) {
+        chatHistorySearchQuery.value = query
+    }
+
+    fun clearChatHistorySearchQuery() {
+        chatHistorySearchQuery.value = ""
+    }
+
+    fun createWorkspace() {
+        val name = workspaceFormState.value.newWorkspaceName.trim()
+        if (name.isBlank()) return
+
+        viewModelScope.launch {
+            workspaceRepository.createWorkspace(name)
+            workspaceFormState.update {
+                it.copy(
+                    isCreateWorkspaceDialogVisible = false,
+                    newWorkspaceName = "",
+                )
+            }
+        }
+    }
+
+    fun completeTask(task: TaskItem) {
+        viewModelScope.launch {
+            completeTaskAndReminder(task)
+        }
+    }
+
+    fun logout(onLoggedOut: () -> Unit) {
+        viewModelScope.launch {
+            authRepository.logout()
+            onLoggedOut()
+        }
+    }
+
+    fun sendChatMessage(prompt: String) {
+        if (prompt.isBlank()) return
+
+        viewModelScope.launch {
+            isAiGeneratingChat.value = true
+            aiChatError.value = null
+
+            val workspaceId = workspaceRepository.getActiveWorkspaceId()
+                ?.takeIf { it.isNotBlank() }
+                ?: CylDefaults.DefaultWorkspaceId
+            val scopeId = homeChatScopeId(workspaceId)
+            val session = resolveActiveChatSession(scopeId)
+            val currentMessages = chatHistoryRepository.observeMessages(session.id)
+                .first()
+                .toAiChatMessages()
+            val userMessage = AiChatMessage(role = "user", content = prompt)
+            val updatedMessages = currentMessages + userMessage
+            val savedUserMessage = chatHistoryRepository.appendMessage(
+                sessionId = session.id,
+                role = userMessage.role,
+                content = userMessage.content,
+            )
+            val pages = pageRepository.observePages(workspaceId)
+                .first()
+                .sortedByDescending { page -> page.updatedAt }
+            val pageContext = pages.map { page -> page.toAiPageContext() }
+            val openTasks = taskRepository.observeOpenTasks(workspaceId)
+                .first()
+            val taskContext = openTasks.map { task -> task.id to task.title }
+            val allChatSessions = chatHistoryRepository.observeSessions(scopeId).first()
+            val allChatMessages = chatHistoryRepository.observeMessagesForScope(scopeId)
+                .first()
+                .filterNot { message -> message.id == savedUserMessage.id }
+            buildHomeAiSearchReply(
+                prompt = prompt,
+                pages = pages,
+                tasks = openTasks,
+                chatSessions = allChatSessions,
+                chatMessages = allChatMessages,
+            )?.let { searchReply ->
+                isAiGeneratingChat.value = false
+                chatHistoryRepository.appendMessage(
+                    sessionId = session.id,
+                    role = "assistant",
+                    content = searchReply.content,
+                    pageLinks = searchReply.pageLinks.toDomainChatPageLinks(),
+                )
+                return@launch
+            }
+
+            // Pass only user/assistant messages — backend builds its own JSON-mode system prompt.
+            // Sending a second system message here would conflict with the backend's action prompt
+            // and cause Gemini to ignore the JSON instruction, returning actions: [] every time.
+            aiRepository.chatWithActions(updatedMessages.toRoleContentPairs(), pages = pageContext, tasks = taskContext)
+                .onSuccess { result ->
+                    val actionResults = if (result.actions.isNotEmpty()) {
+                        executeActions(result.actions, prompt)
+                    } else {
+                        HomeAiExecutionResult()
+                    }
+                    isAiGeneratingChat.value = false
+                    val assistantReply = result.reply.ifBlank {
+                        if (actionResults.messages.any { it.startsWith("✅") }) {
+                            "Done — I handled that for you."
+                        } else {
+                            "I received your message, but the AI returned an empty reply."
+                        }
+                    }
+                    val replyWithResults = if (actionResults.messages.isEmpty()) {
+                        assistantReply
+                    } else {
+                        assistantReply + "\n\n" + actionResults.messages.joinToString("\n")
+                    }
+                    val assistantLinks = actionResults.pageLinks.distinctBy { link -> link.pageId }
+                    chatHistoryRepository.appendMessage(
+                        sessionId = session.id,
+                        role = "assistant",
+                        content = replyWithResults,
+                        pageLinks = assistantLinks.toDomainChatPageLinks(),
+                    )
+                }
+                .onFailure { error ->
+                    isAiGeneratingChat.value = false
+                    val message = error.localizedMessage ?: "I couldn't reach the AI service. Make sure the backend is running and your AI API key is configured."
+                    aiChatError.value = message
+                    chatHistoryRepository.appendMessage(
+                        sessionId = session.id,
+                        role = "assistant",
+                        content = "I couldn't reach the AI service: $message",
+                    )
+                }
+        }
+    }
+
+    /** Executes actions returned by the AI via structured JSON. */
+    private suspend fun executeActions(
+        actions: List<ChatAction>,
+        userPrompt: String,
+    ): HomeAiExecutionResult {
+        Log.d("HomeViewModel", "Executing AI actions: count=${actions.size}")
+        val workspaceId = workspaceRepository.getActiveWorkspaceId()
+            ?.takeIf { it.isNotBlank() }
+            ?: CylDefaults.DefaultWorkspaceId
+        val mentionedPage = findMentionedPage(workspaceId, userPrompt)
+        val results = mutableListOf<String>()
+        val pageLinks = mutableListOf<AiChatPageLink>()
+
+        for (action in actions) {
+            Log.d("HomeViewModel", "Executing action: type=${action.type}, title=${action.title}, targetTitle=${action.targetTitle}")
+            runCatching {
+                val actionType = action.type.trim().uppercase()
+                val requestedModuleType = action.requestedModuleType(actionType)
+                val sharedTargetPage = resolveTargetPage(workspaceId, action, mentionedPage)
+                when {
+                    sharedTargetPage != null && aiPageActionExecutor.supports(action) -> {
+                        val execution = aiPageActionExecutor.executeOnPage(
+                            page = sharedTargetPage,
+                            title = sharedTargetPage.title,
+                            document = PageBlockCodec.decodeDocument(sharedTargetPage.content),
+                            actions = listOf(action),
+                        )
+                        val didUpdatePage = execution.updatedTitle != null || execution.updatedDocument != null
+                        val updatedPage = if (didUpdatePage) {
+                            sharedTargetPage.copy(
+                                title = execution.updatedTitle ?: sharedTargetPage.title,
+                                content = execution.updatedDocument?.let(PageBlockCodec::encodeDocument)
+                                    ?: sharedTargetPage.content,
+                                updatedAt = System.currentTimeMillis(),
+                            ).also { pageRepository.upsertPage(it) }
+                        } else {
+                            sharedTargetPage
+                        }
+                        if (didUpdatePage) {
+                            pageLinks += updatedPage.toChatPageLink()
+                        }
+                        pageLinks += execution.pageLinks
+                        pageLinks += execution.createdPages.map { page -> page.toChatPageLink() }
+                        execution.messages.joinToString("\n").ifBlank {
+                            "✅ Updated page: ${updatedPage.title.ifBlank { "Untitled page" }}"
+                        }
+                    }
+
+                    requestedModuleType != null -> {
+                        val title = action.title.ifBlank { PageModuleTemplates.defaultTitle(requestedModuleType) }
+                        val page = pageRepository.createPage(
+                            workspaceId = workspaceId,
+                            title = title,
+                            content = PageModuleTemplates.contentFor(requestedModuleType),
+                        )
+                        Log.d("HomeViewModel", "Module page created successfully: id=${page.id}, type=${requestedModuleType.name}")
+                        pageLinks += page.toChatPageLink()
+                        "✅ Created ${requestedModuleType.label} module: ${page.title.ifBlank { requestedModuleType.defaultTitle }}"
+                    }
+
+                    actionType == "CREATE_PAGE" -> {
+                        val title = action.title.ifBlank { error("Missing page title") }
+                        val page = pageRepository.createPage(workspaceId, title, content = action.content)
+                        Log.d("HomeViewModel", "Page created successfully: id=${page.id}")
+                        pageLinks += page.toChatPageLink()
+                        "✅ Created page: ${page.title.ifBlank { "Untitled page" }}"
+                    }
+
+                    actionType == "UPDATE_PAGE" -> {
+                        val targetTitle = action.targetTitle.ifBlank { action.title }
+                        val page = findPageByTitle(workspaceId, targetTitle)
+                            ?: error("Could not find page: $targetTitle")
+                        val updatedPage = page.copy(
+                            title = action.title.ifBlank { page.title },
+                            content = action.content.ifBlank { page.content },
+                            updatedAt = System.currentTimeMillis(),
+                        )
+                        pageRepository.upsertPage(updatedPage)
+                        Log.d("HomeViewModel", "Page updated successfully: id=${page.id}")
+                        pageLinks += updatedPage.toChatPageLink()
+                        "✅ Updated page: ${updatedPage.title.ifBlank { "Untitled page" }}"
+                    }
+
+                    actionType == "APPEND_PAGE_BLOCK" || actionType == "APPEND_BLOCK" || actionType == "ADD_BLOCK" -> {
+                        val page = resolveTargetPage(workspaceId, action, mentionedPage)
+                            ?: error("Mention a page, for example @Penjagaan Ayam, or provide targetTitle.")
+                        val updatedPage = appendBlockToPage(page, action.blockType, action.content)
+                        pageRepository.upsertPage(updatedPage)
+                        Log.d("HomeViewModel", "Block appended successfully: pageId=${page.id}")
+                        pageLinks += updatedPage.toChatPageLink()
+                        "✅ Added ${action.blockType.ifBlank { "Text" }} block to: ${page.title.ifBlank { "Untitled page" }}"
+                    }
+
+                    actionType == "CREATE_DATABASE" || actionType == "CREATE_TABLE" -> {
+                        val tableBlock = action.toDatabaseBlock()
+                        val targetPage = resolveTargetPage(workspaceId, action, mentionedPage)
+                        if (targetPage != null) {
+                            val page = targetPage
+                            val updatedPage = appendBlockToPage(page, tableBlock)
+                            pageRepository.upsertPage(updatedPage)
+                            pageLinks += updatedPage.toChatPageLink()
+                            "✅ Created database ${tableBlock.table.title} in: ${updatedPage.title.ifBlank { "Untitled page" }}"
+                        } else {
+                            val pageTitle = action.title
+                                .ifBlank { action.tableTitle }
+                                .ifBlank { tableBlock.table.title }
+                                .ifBlank { "AI database" }
+                            val page = pageRepository.createPage(
+                                workspaceId = workspaceId,
+                                title = pageTitle,
+                                content = PageBlockCodec.encodeDocument(
+                                    PageBlockDocument(blocks = listOf(tableBlock)),
+                                ),
+                            )
+                            pageLinks += page.toChatPageLink()
+                            "✅ Created database page: ${page.title.ifBlank { "Untitled page" }}"
+                        }
+                    }
+
+                    actionType == "ADD_PROPERTY" || actionType == "UPDATE_PROPERTY" -> {
+                        val page = resolveTargetPage(workspaceId, action, mentionedPage)
+                            ?: error("Mention a page, for example @Penjagaan Ayam, or provide targetTitle.")
+                        val propertyName = action.propertyName
+                            .ifBlank { action.title }
+                            .ifBlank { error("Missing property name") }
+                        val updatedPage = updatePageDocument(page) { document ->
+                            document.upsertProperty(
+                                name = propertyName,
+                                type = action.propertyType.toPagePropertyType(),
+                                value = action.value.ifBlank { action.content },
+                            )
+                        }
+                        pageRepository.upsertPage(updatedPage)
+                        pageLinks += updatedPage.toChatPageLink()
+                        "✅ Updated property $propertyName in: ${updatedPage.title.ifBlank { "Untitled page" }}"
+                    }
+
+                    actionType == "DELETE_PROPERTY" -> {
+                        val page = resolveTargetPage(workspaceId, action, mentionedPage)
+                            ?: error("Mention a page, for example @Penjagaan Ayam, or provide targetTitle.")
+                        val propertyName = action.propertyName
+                            .ifBlank { action.title }
+                            .ifBlank { error("Missing property name") }
+                        val updatedPage = updatePageDocument(page) { document ->
+                            document.deletePropertyByName(propertyName)
+                        }
+                        pageRepository.upsertPage(updatedPage)
+                        pageLinks += updatedPage.toChatPageLink()
+                        "✅ Deleted property $propertyName from: ${updatedPage.title.ifBlank { "Untitled page" }}"
+                    }
+
+                    actionType == "ADD_TABLE_ROW" -> {
+                        if (action.isTaskTableRowAction()) {
+                            val targetPage = resolveTaskTablePage(workspaceId, action, mentionedPage)
+                            val mutation = PageBlockCodec.decodeDocument(targetPage.content).withTaskTableAction(action)
+                            val updatedPage = targetPage.copy(
+                                content = PageBlockCodec.encodeDocument(mutation.document),
+                                updatedAt = System.currentTimeMillis(),
+                            )
+                            pageRepository.upsertPage(updatedPage)
+                            pageLinks += updatedPage.toChatPageLink()
+                            "✅ Added task row ${mutation.rowTitle} to ${mutation.tableTitle}"
+                        } else {
+                            val page = resolveTargetPage(workspaceId, action, mentionedPage)
+                                ?: error("Mention a page, for example @Penjagaan Ayam, or provide targetTitle.")
+                            val update = updatePageTable(page, action) { block ->
+                                block.copy(
+                                    table = block.table.copy(
+                                        rows = block.table.rows + block.table.newRowFromAction(action),
+                                    ),
+                                )
+                            }
+                            pageRepository.upsertPage(update.page)
+                            pageLinks += update.page.toChatPageLink()
+                            "✅ Added row to ${update.tableTitle} in: ${update.page.title.ifBlank { "Untitled page" }}"
+                        }
+                    }
+
+                    actionType == "UPDATE_TABLE_CELL" -> {
+                        val page = resolveTargetPage(workspaceId, action, mentionedPage)
+                            ?: error("Mention a page, for example @Penjagaan Ayam, or provide targetTitle.")
+                        val rowTitle = action.rowTitle.ifBlank { action.title }
+                        val columnName = action.columnName.ifBlank { action.propertyName }
+                        val cellValue = action.value.ifBlank { action.content }
+                        val update = updatePageTable(page, action) { block ->
+                            block.updateCellByNames(
+                                rowId = action.rowId,
+                                rowTitle = rowTitle,
+                                columnId = action.columnId,
+                                columnName = columnName,
+                                value = cellValue,
+                            )
+                        }
+                        pageRepository.upsertPage(update.page)
+                        pageLinks += update.page.toChatPageLink()
+                        "✅ Updated ${columnName.ifBlank { action.columnId }} for ${rowTitle.ifBlank { action.rowId }} in: ${update.page.title.ifBlank { "Untitled page" }}"
+                    }
+
+                    actionType == "DELETE_TABLE_ROW" -> {
+                        val page = resolveTargetPage(workspaceId, action, mentionedPage)
+                            ?: error("Mention a page, for example @Penjagaan Ayam, or provide targetTitle.")
+                        val rowTitle = action.rowTitle.ifBlank { action.title }
+                        val update = updatePageTable(page, action) { block ->
+                            block.deleteTableRow(
+                                rowId = action.rowId,
+                                rowTitle = rowTitle,
+                            )
+                        }
+                        pageRepository.upsertPage(update.page)
+                        pageLinks += update.page.toChatPageLink()
+                        "✅ Deleted row ${rowTitle.ifBlank { action.rowId }} from ${update.tableTitle}"
+                    }
+
+                    actionType == "CREATE_SUBPAGE" -> {
+                        val parentTitle = action.targetTitle
+                        val parent = findPageByTitle(workspaceId, parentTitle)
+                            ?: error("Could not find parent page: $parentTitle")
+                        val title = action.title.ifBlank { error("Missing subpage title") }
+                        val page = pageRepository.createPage(
+                            workspaceId = workspaceId,
+                            title = title,
+                            content = action.content,
+                            parentPageId = parent.id,
+                        )
+                        Log.d("HomeViewModel", "Subpage created successfully: id=${page.id}")
+                        pageLinks += page.toChatPageLink()
+                        "✅ Created subpage: ${page.title.ifBlank { "Untitled page" }}"
+                    }
+
+                    actionType == "DELETE_PAGE" -> {
+                        val targetTitle = action.targetTitle.ifBlank { action.title }
+                        val page = findPageByTitle(workspaceId, targetTitle)
+                            ?: error("Could not find page: $targetTitle")
+                        val now = System.currentTimeMillis()
+                        pageRepository.upsertPage(
+                            page.copy(
+                                updatedAt = now,
+                                deletedAt = now,
+                            )
+                        )
+                        Log.d("HomeViewModel", "Page deleted successfully: id=${page.id}")
+                        "✅ Deleted page: ${page.title.ifBlank { "Untitled page" }}"
+                    }
+
+                    actionType == "CREATE_TASK" -> {
+                        val targetPage = resolveTaskTablePage(workspaceId, action, mentionedPage)
+                        val mutation = PageBlockCodec.decodeDocument(targetPage.content).withTaskTableAction(action)
+                        val updatedPage = targetPage.copy(
+                            content = PageBlockCodec.encodeDocument(mutation.document),
+                            updatedAt = System.currentTimeMillis(),
+                        )
+                        pageRepository.upsertPage(updatedPage)
+                        pageLinks += updatedPage.toChatPageLink()
+                        "✅ Added task row ${mutation.rowTitle} to ${mutation.tableTitle}"
+                    }
+
+                    actionType == "UPDATE_TASK" -> {
+                        val targetTitle = action.targetTitle.ifBlank { action.title }
+                        val task = findTaskByTitle(workspaceId, targetTitle)
+                            ?: error("Could not find task: $targetTitle")
+                        val updatedTask = task.copy(
+                            title = action.title.ifBlank { task.title },
+                            notes = action.content.ifBlank { task.notes },
+                            updatedAt = System.currentTimeMillis(),
+                        )
+                        taskRepository.upsertTask(updatedTask)
+                        Log.d("HomeViewModel", "Task updated successfully: id=${task.id}")
+                        "✅ Updated task: ${updatedTask.title}"
+                    }
+
+                    actionType == "COMPLETE_TASK" -> {
+                        val targetTitle = action.targetTitle.ifBlank { action.title }
+                        val task = findTaskByTitle(workspaceId, targetTitle)
+                            ?: error("Could not find task: $targetTitle")
+                        completeTaskAndReminder(task)
+                        Log.d("HomeViewModel", "Task completed successfully: id=${task.id}")
+                        "✅ Completed task: ${task.title}"
+                    }
+
+                    actionType == "DELETE_TASK" -> {
+                        val targetTitle = action.targetTitle.ifBlank { action.title }
+                        val task = findTaskByTitle(workspaceId, targetTitle)
+                            ?: error("Could not find task: $targetTitle")
+                        val now = System.currentTimeMillis()
+                        taskRepository.upsertTask(
+                            task.copy(
+                                updatedAt = now,
+                                deletedAt = now,
+                            )
+                        )
+                        Log.d("HomeViewModel", "Task deleted successfully: id=${task.id}")
+                        "✅ Deleted task: ${task.title}"
+                    }
+
+                    actionType == "CREATE_REMINDER" -> {
+                        val targetPage = resolveTaskTablePage(workspaceId, action, mentionedPage)
+                        val mutation = PageBlockCodec.decodeDocument(targetPage.content).withTaskTableAction(action)
+                        val updatedPage = targetPage.copy(
+                            content = PageBlockCodec.encodeDocument(mutation.document),
+                            updatedAt = System.currentTimeMillis(),
+                        )
+                        pageRepository.upsertPage(updatedPage)
+                        pageLinks += updatedPage.toChatPageLink()
+                        "✅ Added reminder row ${mutation.rowTitle} to ${mutation.tableTitle}"
+                    }
+
+                    else -> error("Unsupported action type: ${action.type}")
+                }
+            }.onSuccess { message ->
+                results += message
+            }.onFailure { error ->
+                Log.e("HomeViewModel", "Error executing AI action: ${action.type}", error)
+                results += "⚠️ Failed ${action.type}: ${error.localizedMessage ?: "Unknown error"}"
+            }
+        }
+
+        return HomeAiExecutionResult(
+            messages = results,
+            pageLinks = pageLinks,
+        )
+    }
+
+    private suspend fun completeTaskAndReminder(task: TaskItem) {
+        taskRepository.upsertTask(
+            task.copy(
+                isCompleted = true,
+                updatedAt = System.currentTimeMillis(),
+            ),
+        )
+        val now = System.currentTimeMillis()
+        reminderRepository.getReminderForTask(task.id)?.let { reminder ->
+            reminderRepository.upsertReminder(
+                reminder.copy(
+                    isDone = true,
+                    updatedAt = now,
+                    deletedAt = now,
+                ),
+            )
+        }
+    }
+
+    private fun appendBlockToPage(page: Page, blockType: String, content: String): Page {
+        val document = PageBlockCodec.decodeDocument(page.content)
+        val block = PageBlockCodec.newBlock(blockType.toPageBlockType()).copy(text = content)
+        return appendBlockToPage(page, block, document)
+    }
+
+    private fun appendBlockToPage(page: Page, block: PageBlock): Page {
+        return appendBlockToPage(
+            page = page,
+            block = block,
+            document = PageBlockCodec.decodeDocument(page.content),
+        )
+    }
+
+    private fun appendBlockToPage(
+        page: Page,
+        block: PageBlock,
+        document: PageBlockDocument,
+    ): Page {
+        return page.copy(
+            content = PageBlockCodec.encodeDocument(
+                document.copy(blocks = document.blocks + block),
+            ),
+            updatedAt = System.currentTimeMillis(),
+        )
+    }
+
+    private fun String.toPageBlockType(): PageBlockType {
+        return when (trim().lowercase()) {
+            "heading" -> PageBlockType.Heading
+            "todo" -> PageBlockType.Todo
+            "bullet" -> PageBlockType.Bullet
+            "quote" -> PageBlockType.Quote
+            "divider" -> PageBlockType.Divider
+            "media", "file", "image", "video", "attachment" -> PageBlockType.MediaFile
+            else -> PageBlockType.Text
+        }
+    }
+
+    private fun ChatAction.requestedModuleType(actionType: String): PageModuleType? {
+        val normalizedActionType = actionType.replace("_", "")
+        val isModuleAction = normalizedActionType.startsWith("CREATE") &&
+            (
+                normalizedActionType.contains("MODULE") ||
+                    normalizedActionType.contains("TRACKER") ||
+                    normalizedActionType.contains("PLANNER")
+                )
+        if (isModuleAction) {
+            return PageModuleTemplates.fromActionFields(
+                moduleType,
+                type,
+                title,
+                tableTitle,
+                content,
+                blockType,
+            ) ?: error("Missing module type. Use Goal, Habit, Travel, or Budget.")
+        }
+
+        if (actionType != "CREATE_PAGE") return null
+        if (moduleType.isNotBlank()) {
+            return PageModuleType.from(moduleType)
+        }
+        val looksLikeModulePage = title.looksLikeModuleTitle() ||
+            tableTitle.looksLikeModuleTitle() ||
+            content.looksLikeModuleTitle()
+        if (!looksLikeModulePage) return null
+        return PageModuleTemplates.fromActionFields(title, tableTitle, content)
+    }
+
+    private fun String.looksLikeModuleTitle(): Boolean {
+        val value = trim().lowercase()
+        if (value.isBlank()) return false
+        return value.contains("module") ||
+            value.contains("tracker") ||
+            value.contains("planner") ||
+            value.contains("itinerary")
+    }
+
+    private fun ChatAction.toDatabaseBlock(): PageBlock {
+        val tableName = tableTitle
+            .ifBlank { title }
+            .ifBlank { content }
+            .ifBlank { "AI database" }
+        val columns = buildTableColumns()
+        val rows = buildTableRows(columns)
+
+        return PageBlockCodec.newBlock(PageBlockType.DatabaseTable).copy(
+            table = PageTable(
+                title = tableName,
+                view = tableView.toPageTableView(),
+                columns = columns,
+                rows = rows,
+            ),
+        )
+    }
+
+    private fun ChatAction.buildTableColumns(): List<PageTableColumn> {
+        val fromAction = tableColumns.mapNotNull { column ->
+            val name = column.name.trim()
+            if (name.isBlank()) {
+                null
+            } else {
+                column.toPageTableColumnFromAi()
+            }
+        }
+        if (fromAction.isNotEmpty()) return fromAction
+
+        val keys = (tableRows.flatMap { row -> row.keys } + cellValues.keys)
+            .map { key -> key.trim() }
+            .filter { key -> key.isNotBlank() }
+            .distinctBy { key -> key.normalizedAiKey() }
+        if (keys.isNotEmpty()) {
+            return keys.map { key -> PageBlockCodec.newTableColumn(key, key.inferTableColumnType()) }
+        }
+
+        return listOf(
+            PageBlockCodec.newTableColumn("Name"),
+            PageBlockCodec.newTableColumn("Status", PageTableColumnType.Status),
+            PageBlockCodec.newTableColumn("Date", PageTableColumnType.Date),
+        )
+    }
+
+    private fun ChatAction.buildTableRows(columns: List<PageTableColumn>): List<PageTableRow> {
+        val rowMaps = when {
+            tableRows.isNotEmpty() -> tableRows
+            cellValues.isNotEmpty() -> listOf(cellValues)
+            rowTitle.isNotBlank() || content.isNotBlank() -> listOf(mapOf(columns.first().name to rowTitle.ifBlank { content }))
+            else -> listOf(emptyMap())
+        }
+        return rowMaps.map { values -> columns.newRow(values) }
+    }
+
+    private fun List<PageTableColumn>.newRow(valuesByColumnName: Map<String, String>): PageTableRow {
+        val valuesByNormalizedName = valuesByColumnName.entries.associate { entry ->
+            entry.key.normalizedAiKey() to entry.value
+        }
+        return PageBlockCodec.newTableRow(this).copy(
+            cells = associate { column ->
+                column.id to valuesByNormalizedName[column.name.normalizedAiKey()].orEmpty()
+            },
+        )
+    }
+
+    private fun String.toPageTableColumnType(): PageTableColumnType {
+        return when (normalizedAiKey()) {
+            "number", "count", "amount", "price", "cost", "total" -> PageTableColumnType.Number
+            "status", "stage", "state", "phase" -> PageTableColumnType.Status
+            "date", "day", "deadline", "due", "time", "calendar" -> PageTableColumnType.Date
+            "file", "files", "media", "attachment", "attachments", "image", "photo", "video", "filesmedia", "filemedia" -> PageTableColumnType.FilesMedia
+            "checkbox", "check", "done", "complete", "completed", "boolean" -> PageTableColumnType.Checkbox
+            "formula", "calculation", "calculate", "computed" -> PageTableColumnType.Formula
+            "relation", "related", "link", "linkedrow", "linkedrows" -> PageTableColumnType.Relation
+            "rollup", "aggregate", "aggregation" -> PageTableColumnType.Rollup
+            else -> PageTableColumnType.Text
+        }
+    }
+
+    private fun String.inferTableColumnType(): PageTableColumnType {
+        return toPageTableColumnType()
+    }
+
+    private fun String.toPageTableView(): PageTableView {
+        return when (normalizedAiKey()) {
+            "list" -> PageTableView.List
+            "board", "kanban" -> PageTableView.Board
+            "calendar" -> PageTableView.Calendar
+            "gallery" -> PageTableView.Gallery
+            "timeline" -> PageTableView.Timeline
+            "dashboard", "chart", "charts" -> PageTableView.Dashboard
+            else -> PageTableView.Table
+        }
+    }
+
+    private fun String.toPageTableRollupAggregation(): PageTableRollupAggregation {
+        return when (normalizedAiKey()) {
+            "sum", "total" -> PageTableRollupAggregation.Sum
+            "average", "avg", "mean" -> PageTableRollupAggregation.Average
+            "min", "minimum", "lowest" -> PageTableRollupAggregation.Min
+            "max", "maximum", "highest" -> PageTableRollupAggregation.Max
+            else -> PageTableRollupAggregation.Count
+        }
+    }
+
+    private fun String.normalizedAiKey(): String {
+        return trim()
+            .lowercase()
+            .replace(Regex("[^a-z0-9]"), "")
+    }
+
+    private suspend fun findMentionedPage(
+        workspaceId: String,
+        prompt: String,
+    ): Page? {
+        val pages = pageRepository.observePages(workspaceId).first()
+        val normalizedPrompt = prompt.lowercase()
+        return pages
+            .filter { page -> page.title.isNotBlank() }
+            .sortedByDescending { page -> page.title.length }
+            .firstOrNull { page ->
+                normalizedPrompt.contains("@${page.title.lowercase()}")
+            }
+    }
+
+    private suspend fun resolveTargetPage(
+        workspaceId: String,
+        action: ChatAction,
+        mentionedPage: Page?,
+    ): Page? {
+        val targetTitle = action.targetTitle.trim().removePrefix("@")
+        return if (targetTitle.isNotBlank()) {
+            findPageByTitle(workspaceId, targetTitle)
+        } else {
+            mentionedPage
+        }
+    }
+
+    private suspend fun resolveTaskTablePage(
+        workspaceId: String,
+        action: ChatAction,
+        mentionedPage: Page?,
+    ): Page {
+        resolveTargetPage(workspaceId, action, mentionedPage)?.let { page -> return page }
+        findPageByTitle(workspaceId, "Tasks")?.let { page -> return page }
+        return pageRepository.createPage(
+            workspaceId = workspaceId,
+            title = "Tasks",
+            content = PageBlockCodec.encodeDocument(PageBlockDocument()),
+        )
+    }
+
+    private fun updatePageDocument(
+        page: Page,
+        transform: (PageBlockDocument) -> PageBlockDocument,
+    ): Page {
+        val document = PageBlockCodec.decodeDocument(page.content)
+        return page.copy(
+            content = PageBlockCodec.encodeDocument(transform(document)),
+            updatedAt = System.currentTimeMillis(),
+        )
+    }
+
+    private fun updatePageTable(
+        page: Page,
+        action: ChatAction,
+        transform: (PageBlock) -> PageBlock,
+    ): HomeTableUpdateResult {
+        val document = PageBlockCodec.decodeDocument(page.content)
+        val tableBlock = document.blocks.findMatchingTable(action)
+            ?: error("Could not find table: ${action.tableTitle.ifBlank { action.blockId.ifBlank { "first table" } }}")
+        val updatedBlocks = document.blocks.map { block ->
+            if (block.id == tableBlock.id) transform(block) else block
+        }
+        val updatedBlock = updatedBlocks.firstOrNull { block -> block.id == tableBlock.id }
+            ?: tableBlock
+        return HomeTableUpdateResult(
+            page = page.copy(
+                content = PageBlockCodec.encodeDocument(document.copy(blocks = updatedBlocks)),
+                updatedAt = System.currentTimeMillis(),
+            ),
+            tableTitle = updatedBlock.table.title,
+        )
+    }
+
+    private fun List<PageBlock>.findMatchingTable(action: ChatAction): PageBlock? {
+        if (action.blockId.isNotBlank()) {
+            firstOrNull { block ->
+                block.id == action.blockId && block.type == PageBlockType.DatabaseTable
+            }?.let { return it }
+        }
+        val tableName = action.tableTitle.ifBlank { action.title }
+        if (tableName.isNotBlank()) {
+            firstOrNull { block ->
+                block.type == PageBlockType.DatabaseTable &&
+                    block.table.title.equals(tableName, ignoreCase = true)
+            }?.let { return it }
+            firstOrNull { block ->
+                block.type == PageBlockType.DatabaseTable &&
+                    block.table.title.contains(tableName, ignoreCase = true)
+            }?.let { return it }
+        }
+        return filter { block -> block.type == PageBlockType.DatabaseTable }
+            .singleOrNull()
+            ?: firstOrNull { block -> block.type == PageBlockType.DatabaseTable }
+    }
+
+    private fun PageBlockDocument.upsertProperty(
+        name: String,
+        type: PagePropertyType,
+        value: String,
+    ): PageBlockDocument {
+        val existing = properties.firstOrNull { property ->
+            property.name.equals(name, ignoreCase = true)
+        }
+        return if (existing == null) {
+            copy(
+                properties = properties + PageBlockCodec.newProperty(type, name).copy(value = value),
+            )
+        } else {
+            copy(
+                properties = properties.map { property ->
+                    if (property.id == existing.id) {
+                        property.copy(
+                            type = type,
+                            value = value.ifBlank { property.value },
+                        )
+                    } else {
+                        property
+                    }
+                },
+            )
+        }
+    }
+
+    private fun PageBlockDocument.deletePropertyByName(propertyName: String): PageBlockDocument {
+        val normalized = propertyName.normalizedAiKey()
+        val updatedProperties = properties.filterNot { property ->
+            property.name.normalizedAiKey() == normalized
+        }
+        if (updatedProperties.size == properties.size) {
+            error("Could not find property: $propertyName")
+        }
+        return copy(properties = updatedProperties)
+    }
+
+    private fun PageTable.newRowFromAction(action: ChatAction): PageTableRow {
+        val title = action.rowTitle
+            .ifBlank { action.title }
+            .ifBlank { action.content }
+        val values = action.cellValues.toMutableMap()
+        val firstColumn = columns.firstOrNull()
+        if (title.isNotBlank() && firstColumn != null) {
+            val hasFirstColumnValue = values.keys.any { key ->
+                key.normalizedAiKey() == firstColumn.name.normalizedAiKey()
+            }
+            if (!hasFirstColumnValue) {
+                values[firstColumn.name] = title
+            }
+        }
+        return columns.newRow(values)
+    }
+
+    private fun PageBlock.updateCellByNames(
+        rowId: String,
+        rowTitle: String,
+        columnId: String,
+        columnName: String,
+        value: String,
+    ): PageBlock {
+        val column = table.findColumn(columnId = columnId, columnName = columnName)
+            ?: error("Could not find column: ${columnName.ifBlank { columnId }}")
+        val row = table.findRow(rowId = rowId, rowTitle = rowTitle)
+            ?: error("Could not find row: ${rowTitle.ifBlank { rowId }}")
+        return copy(
+            table = table.copy(
+                rows = table.rows.map { existingRow ->
+                    if (existingRow.id == row.id) {
+                        existingRow.copy(cells = existingRow.cells + (column.id to value))
+                    } else {
+                        existingRow
+                    }
+                },
+            ),
+        )
+    }
+
+    private fun PageBlock.deleteTableRow(
+        rowId: String,
+        rowTitle: String,
+    ): PageBlock {
+        val row = table.findRow(rowId = rowId, rowTitle = rowTitle)
+            ?: error("Could not find row: ${rowTitle.ifBlank { rowId }}")
+        return copy(
+            table = table.copy(
+                rows = table.rows.filterNot { existingRow -> existingRow.id == row.id },
+            ),
+        )
+    }
+
+    private fun PageTable.findColumn(
+        columnId: String = "",
+        columnName: String,
+    ): PageTableColumn? {
+        if (columnId.isNotBlank()) {
+            columns.firstOrNull { column -> column.id == columnId }?.let { return it }
+        }
+        if (columnName.isBlank()) return null
+        val normalized = columnName.normalizedAiKey()
+        return columns.firstOrNull { column -> column.name.normalizedAiKey() == normalized }
+            ?: columns.firstOrNull { column ->
+                val current = column.name.normalizedAiKey()
+                current.contains(normalized) || normalized.contains(current)
+            }
+    }
+
+    private fun PageTable.findRow(
+        rowId: String = "",
+        rowTitle: String,
+    ): PageTableRow? {
+        if (rowId.isNotBlank()) {
+            rows.firstOrNull { row -> row.id == rowId }?.let { return it }
+        }
+        if (rowTitle.isBlank()) return null
+        val titleColumn = columns.firstOrNull()
+        return rows.firstOrNull { row ->
+            row.cellText(titleColumn).equals(rowTitle, ignoreCase = true)
+        } ?: rows.firstOrNull { row ->
+            val cellText = row.cellText(titleColumn)
+            cellText.isNotBlank() &&
+                (
+                    cellText.contains(rowTitle, ignoreCase = true) ||
+                        rowTitle.contains(cellText, ignoreCase = true)
+                    )
+        }
+    }
+
+    private fun PageTableRow.cellText(column: PageTableColumn?): String {
+        return column?.let { tableColumn -> cells[tableColumn.id] }.orEmpty().trim()
+    }
+
+    private fun String.toPagePropertyType(): PagePropertyType {
+        return when (normalizedAiKey()) {
+            "summarize", "summary" -> PagePropertyType.Summarize
+            "translate", "translation" -> PagePropertyType.Translate
+            "number" -> PagePropertyType.Number
+            "select" -> PagePropertyType.Select
+            "multiselect" -> PagePropertyType.MultiSelect
+            "status" -> PagePropertyType.Status
+            "date" -> PagePropertyType.Date
+            "person", "people" -> PagePropertyType.Person
+            "filesmedia", "filemedia", "filesandmedia", "attachment", "attachments" -> PagePropertyType.FilesMedia
+            "checkbox", "check" -> PagePropertyType.Checkbox
+            "url", "link" -> PagePropertyType.Url
+            "email" -> PagePropertyType.Email
+            "phone", "telephone" -> PagePropertyType.Phone
+            "formula" -> PagePropertyType.Formula
+            "relation" -> PagePropertyType.Relation
+            "rollup" -> PagePropertyType.Rollup
+            "createdtime" -> PagePropertyType.CreatedTime
+            "createdby" -> PagePropertyType.CreatedBy
+            "lasteditedtime" -> PagePropertyType.LastEditedTime
+            "lasteditedby" -> PagePropertyType.LastEditedBy
+            "button" -> PagePropertyType.Button
+            "place", "location", "map" -> PagePropertyType.Place
+            "id" -> PagePropertyType.Id
+            else -> PagePropertyType.Text
+        }
+    }
+
+    private suspend fun findPageByTitle(workspaceId: String, title: String): Page? {
+        if (title.isBlank()) return null
+        val pages = pageRepository.observePages(workspaceId).first()
+        return pages.firstOrNull { page -> page.title.equals(title, ignoreCase = true) }
+            ?: pages.firstOrNull { page -> page.title.contains(title, ignoreCase = true) }
+    }
+
+    private suspend fun findTaskByTitle(workspaceId: String, title: String): TaskItem? {
+        if (title.isBlank()) return null
+        val tasks = taskRepository.observeOpenTasks(workspaceId).first()
+        return tasks.firstOrNull { task -> task.title.equals(title, ignoreCase = true) }
+            ?: tasks.firstOrNull { task -> task.title.contains(title, ignoreCase = true) }
+    }
+
+    fun clearChatHistory() {
+        aiChatError.value = null
+        viewModelScope.launch {
+            val workspaceId = workspaceRepository.getActiveWorkspaceId()
+                ?.takeIf { it.isNotBlank() }
+                ?: CylDefaults.DefaultWorkspaceId
+            val scopeId = homeChatScopeId(workspaceId)
+            val session = resolveActiveChatSession(scopeId)
+            chatHistoryRepository.clearMessages(session.id)
+        }
+    }
+
+    fun createNewChatSession() {
+        viewModelScope.launch {
+            val workspaceId = workspaceRepository.getActiveWorkspaceId()
+                ?.takeIf { it.isNotBlank() }
+                ?: CylDefaults.DefaultWorkspaceId
+            val session = chatHistoryRepository.createSession(homeChatScopeId(workspaceId))
+            activeChatSessionId.value = session.id
+            aiChatError.value = null
+        }
+    }
+
+    fun selectChatSession(sessionId: String) {
+        activeChatSessionId.value = sessionId
+        aiChatError.value = null
+    }
+
+    fun clearAiChatError() {
+        aiChatError.value = null
+    }
+
+    private suspend fun startFreshHomeChatSessionOnLaunch() {
+        val workspaceId = workspaceRepository.getActiveWorkspaceId()
+            ?.takeIf { it.isNotBlank() }
+            ?: CylDefaults.DefaultWorkspaceId
+        val scopeId = homeChatScopeId(workspaceId)
+        val latestSession = chatHistoryRepository.getOrCreateLatestSession(scopeId)
+        val latestMessages = chatHistoryRepository.observeMessages(latestSession.id).first()
+        val launchSession = if (latestMessages.isEmpty()) {
+            latestSession
+        } else {
+            chatHistoryRepository.createSession(scopeId)
+        }
+        activeChatSessionId.value = launchSession.id
+        aiChatError.value = null
+    }
+
+    private fun homeChatScopeId(workspaceId: String): String {
+        return "home:$workspaceId"
+    }
+
+    private suspend fun resolveActiveChatSession(scopeId: String): ChatSession {
+        val sessions = chatHistoryRepository.observeSessions(scopeId).first()
+        val session = activeChatSessionId.value
+            ?.let { selectedSessionId -> sessions.firstOrNull { session -> session.id == selectedSessionId } }
+            ?: sessions.firstOrNull()
+            ?: chatHistoryRepository.createSession(scopeId)
+        activeChatSessionId.value = session.id
+        return session
+    }
+
+    private fun List<ChatMessage>.toAiChatMessages(): List<AiChatMessage> {
+        return map { message ->
+            AiChatMessage(
+                role = message.role,
+                content = message.content,
+                pageLinks = message.pageLinks.map { link ->
+                    AiChatPageLink(
+                        pageId = link.pageId,
+                        title = link.title,
+                        targetType = link.targetType,
+                        targetId = link.targetId,
+                    )
+                },
+            )
+        }
+    }
+
+    private fun List<AiChatPageLink>.toDomainChatPageLinks(): List<ChatPageLink> {
+        return map { link ->
+            ChatPageLink(
+                pageId = link.pageId,
+                title = link.title,
+                targetType = link.targetType,
+                targetId = link.targetId,
+            )
+        }
+    }
+
+    private fun Page.toAiPageContext(): AiPageContext {
+        val document = PageBlockCodec.decodeDocument(content)
+        val propertyContexts = document.properties.map { property ->
+            AiBlockContext(
+                id = property.id,
+                type = "Property",
+                text = "${property.name} (${property.type.name}) = ${property.value.ifBlank { "empty" }}",
+                path = "property:${property.name}",
+            )
+        }
+        return AiPageContext(
+            id = id,
+            title = title.ifBlank { "Untitled page" },
+            blocks = (propertyContexts + document.blocks.toAiBlockContexts()).take(140),
+        )
+    }
+
+    private fun List<PageBlock>.toAiBlockContexts(
+        pathPrefix: String = "",
+        tableBlockId: String = "",
+        tableTitle: String = "",
+        rowId: String = "",
+        rowTitle: String = "",
+    ): List<AiBlockContext> {
+        return flatMapIndexed { index, block ->
+            val path = if (pathPrefix.isBlank()) "${index + 1}" else "$pathPrefix.${index + 1}"
+            val currentTableTitle = if (block.type == PageBlockType.DatabaseTable) {
+                block.table.title
+            } else {
+                tableTitle
+            }
+            val blockContext = listOf(
+                AiBlockContext(
+                    id = block.id,
+                    type = block.type.name,
+                    text = block.contextText(),
+                    path = path,
+                    tableTitle = currentTableTitle,
+                    tableBlockId = tableBlockId,
+                    rowId = rowId,
+                    rowTitle = rowTitle,
+                    rowBlockId = if (rowId.isNotBlank()) block.id else "",
+                    isChecked = if (block.type == PageBlockType.Todo) block.isChecked else null,
+                ),
+            ) + block.children.toAiBlockContexts(
+                pathPrefix = path,
+                tableBlockId = tableBlockId,
+                tableTitle = currentTableTitle,
+                rowId = rowId,
+                rowTitle = rowTitle,
+            )
+            val rowBlockContexts = if (block.type == PageBlockType.DatabaseTable) {
+                val titleColumn = block.table.columns.firstOrNull()
+                block.table.rows.take(20).flatMap { row ->
+                    val rowLabel = row.cellText(titleColumn).ifBlank { row.id }
+                    row.blocks.toAiBlockContexts(
+                        pathPrefix = "$path.row:${row.id}",
+                        tableBlockId = block.id,
+                        tableTitle = block.table.title,
+                        rowId = row.id,
+                        rowTitle = rowLabel,
+                    )
+                }
+            } else {
+                emptyList()
+            }
+            blockContext + rowBlockContexts
+        }
+    }
+
+    private fun PageBlock.contextText(): String {
+        if (type == PageBlockType.DatabaseTable) {
+            val columns = table.columns.joinToString { column -> column.aiContextText() }
+            val rows = table.rows.take(12).joinToString(separator = "; ") { row ->
+                val cells = table.columns.joinToString { column ->
+                    "${column.name}=${row.cells[column.id].orEmpty()}"
+                }
+                val rowBlocks = row.blocks.take(6).joinToString(separator = " | ") { rowBlock ->
+                    "${rowBlock.id}:${rowBlock.type.name}:${rowBlock.text.ifBlank { "empty" }}"
+                }.ifBlank { "none" }
+                "${row.id}[$cells; rowBlocks=$rowBlocks]"
+            }
+            return "title=${table.title}; ${table.contextStateText()}; columns=$columns; rows=$rows".take(1_800)
+        }
+        val mediaText = mediaAttachments.joinToString(separator = ", ") { attachment ->
+            attachment.name
+        }
+        return listOf(text, mediaText)
+            .filter { value -> value.isNotBlank() }
+            .joinToString(separator = " | ")
+            .ifBlank { "empty" }
+            .take(600)
+    }
+}
+
+private fun List<Page>.toSearchResults(query: String): List<PageSearchResult> {
+    val terms = query.trim()
+        .split(Regex("\\s+"))
+        .filter { term -> term.isNotBlank() }
+    if (terms.isEmpty()) return emptyList()
+
+    return asSequence()
+        .mapNotNull { page ->
+            val candidates = page.searchCandidates()
+            val haystack = candidates.joinToString(separator = "\n") { candidate -> candidate.text }
+            if (terms.all { term -> haystack.contains(term, ignoreCase = true) }) {
+                val bestCandidate = candidates
+                    .map { candidate -> candidate to candidate.text.searchScore(terms) }
+                    .filter { (_, score) -> score > 0 }
+                    .sortedWith(
+                        compareByDescending<Pair<PageSearchCandidate, Int>> { (_, score) -> score }
+                            .thenBy { (candidate, _) -> candidate.targetType }
+                            .thenBy { (candidate, _) -> candidate.text },
+                    )
+                    .firstOrNull()
+                    ?.first
+                    ?: PageSearchCandidate(
+                        text = "Title: ${page.title.ifBlank { "Untitled page" }}",
+                        targetType = SearchTargetPageTitle,
+                        targetId = "",
+                    )
+                PageSearchResult(
+                    page = page,
+                    snippet = bestCandidate.text.compactLine().ifBlank { "Title match" },
+                    targetType = bestCandidate.targetType,
+                    targetId = bestCandidate.targetId,
+                )
+            } else {
+                null
+            }
+        }
+        .take(30)
+        .toList()
+}
+
+private fun List<ChatSession>.toChatHistorySearchResults(
+    messages: List<ChatMessage>,
+    query: String,
+): List<ChatHistorySearchResult> {
+    return toChatHistorySearchResults(messages = messages, terms = query.searchTerms())
+}
+
+private fun List<ChatSession>.toChatHistorySearchResults(
+    messages: List<ChatMessage>,
+    terms: List<String>,
+): List<ChatHistorySearchResult> {
+    if (terms.isEmpty()) return emptyList()
+    val messagesBySession = messages.groupBy { message -> message.sessionId }
+    return mapNotNull { session ->
+        val candidates = buildList {
+            add(ChatSearchCandidate(text = "Chat title: ${session.title}", createdAt = session.updatedAt))
+            messagesBySession[session.id].orEmpty().forEach { message ->
+                add(
+                    ChatSearchCandidate(
+                        text = "${message.role}: ${message.content}",
+                        createdAt = message.createdAt,
+                    ),
+                )
+            }
+        }
+        val haystack = candidates.joinToString(separator = "\n") { candidate -> candidate.text }
+        if (!terms.all { term -> haystack.contains(term, ignoreCase = true) }) {
+            null
+        } else {
+            val matches = candidates
+                .map { candidate -> candidate to candidate.text.searchScore(terms) }
+                .filter { (_, score) -> score > 0 }
+            val bestCandidate = matches
+                .sortedWith(
+                    compareByDescending<Pair<ChatSearchCandidate, Int>> { (_, score) -> score }
+                        .thenByDescending { (candidate, _) -> candidate.createdAt },
+                )
+                .firstOrNull()
+                ?.first
+            val snippet = bestCandidate
+                ?.text
+                ?.removePrefix("user: ")
+                ?.removePrefix("assistant: ")
+                ?.removePrefix("Chat title: ")
+                ?.compactLine()
+                .orEmpty()
+                .ifBlank { session.title.ifBlank { "New chat" } }
+            ChatHistorySearchResult(
+                session = session,
+                snippet = snippet,
+                matchCount = matches.size,
+                lastMatchedAt = matches.maxOfOrNull { (candidate, _) -> candidate.createdAt }
+                    ?: session.updatedAt,
+            )
+        }
+    }
+        .sortedWith(
+            compareByDescending<ChatHistorySearchResult> { result -> result.lastMatchedAt }
+                .thenBy { result -> result.session.title },
+        )
+        .take(30)
+}
+
+private fun buildHomeAiSearchReply(
+    prompt: String,
+    pages: List<Page>,
+    tasks: List<TaskItem>,
+    chatSessions: List<ChatSession>,
+    chatMessages: List<ChatMessage>,
+): HomeAiSearchReply? {
+    if (!prompt.isReadOnlySearchRequest()) return null
+    val terms = prompt.searchTerms()
+    if (terms.isEmpty()) {
+        return HomeAiSearchReply(
+            content = "Boleh. Beritahu keyword atau data apa yang awak nak saya cari.",
+        )
+    }
+
+    val pageMatches = pages.flatMap { page ->
+        page.searchCandidates().mapNotNull { candidate ->
+            val score = candidate.text.searchScore(terms)
+            if (score <= 0) {
+                null
+            } else {
+                AiSearchHit(
+                    title = page.title.ifBlank { "Untitled page" },
+                    detail = candidate.text.compactLine(),
+                    score = score,
+                    pageLink = page.toChatPageLink(
+                        targetType = candidate.targetType,
+                        targetId = candidate.targetId,
+                    ),
+                )
+            }
+        }
+    }
+    val taskMatches = tasks.mapNotNull { task ->
+        val line = "Task: ${task.title}"
+        val score = line.searchScore(terms)
+        if (score <= 0) null else AiSearchHit(title = "Tasks", detail = line, score = score)
+    }
+    val chatMatches = chatSessions.toChatHistorySearchResults(chatMessages, terms)
+        .map { result ->
+            AiSearchHit(
+                title = "Chat: ${result.session.title.ifBlank { "New chat" }}",
+                detail = result.snippet,
+                score = result.matchCount,
+            )
+        }
+    val matches = (pageMatches + taskMatches + chatMatches)
+        .sortedWith(compareByDescending<AiSearchHit> { it.score }.thenBy { it.title })
+        .take(8)
+
+    if (matches.isEmpty()) {
+        return HomeAiSearchReply(
+            content = "Saya tak jumpa padanan untuk `${terms.joinToString(" ")}` dalam pages, tables, rows, tasks, atau chat history yang ada.",
+        )
+    }
+
+    return HomeAiSearchReply(
+        content = buildString {
+            appendLine("Saya jumpa ${matches.size} padanan teratas:")
+            matches.forEachIndexed { index, hit ->
+                appendLine("${index + 1}. ${hit.title} - ${hit.detail}")
+            }
+        }.trim(),
+        pageLinks = matches.mapNotNull { hit -> hit.pageLink }.distinctBy { link -> link.pageId },
+    )
+}
+
+private fun Page.searchLines(): List<String> {
+    val document = PageBlockCodec.decodeDocument(content)
+    val propertyLines = document.properties.map { property ->
+        "Property ${property.name} (${property.type.name}) ${property.value}"
+    }
+    return propertyLines + document.blocks.flatMap { block -> block.searchLines() }
+}
+
+private fun Page.searchCandidates(): List<PageSearchCandidate> {
+    val document = PageBlockCodec.decodeDocument(content)
+    val title = title.ifBlank { "Untitled page" }
+    return buildList {
+        add(
+            PageSearchCandidate(
+                text = "Title: $title",
+                targetType = SearchTargetPageTitle,
+                targetId = "",
+            ),
+        )
+        document.properties.forEach { property ->
+            add(
+                PageSearchCandidate(
+                    text = "Property ${property.name} (${property.type.name}) ${property.value}",
+                    targetType = SearchTargetProperty,
+                    targetId = property.id,
+                ),
+            )
+        }
+        document.blocks.forEach { block ->
+            addAll(block.searchCandidates())
+        }
+    }
+}
+
+private fun PageBlock.searchCandidates(): List<PageSearchCandidate> {
+    val selfCandidates = when (type) {
+        PageBlockType.DatabaseTable -> table.searchCandidates(tableBlockId = id)
+        PageBlockType.MediaFile -> mediaAttachments.map { attachment ->
+            PageSearchCandidate(
+                text = "File ${attachment.name} ${attachment.mimeType}",
+                targetType = SearchTargetBlock,
+                targetId = id,
+            )
+        }.ifEmpty {
+            listOf(
+                PageSearchCandidate(
+                    text = "Media file",
+                    targetType = SearchTargetBlock,
+                    targetId = id,
+                ),
+            )
+        }
+        PageBlockType.Divider -> listOf(
+            PageSearchCandidate(
+                text = "Divider",
+                targetType = SearchTargetBlock,
+                targetId = id,
+            ),
+        )
+        else -> listOf(
+            PageSearchCandidate(
+                text = "${type.name}: ${text.ifBlank { "empty" }}",
+                targetType = SearchTargetBlock,
+                targetId = id,
+            ),
+        )
+    }
+    return selfCandidates + children.flatMap { child -> child.searchCandidates() }
+}
+
+private fun PageTable.searchCandidates(tableBlockId: String): List<PageSearchCandidate> {
+    val columnCandidates = columns.map { column ->
+        PageSearchCandidate(
+            text = "Column ${column.name} ${column.type.name} ${column.formula}",
+            targetType = SearchTargetBlock,
+            targetId = tableBlockId,
+        )
+    }
+    val rowCandidates = rows.flatMap { row ->
+        val cells = columns.mapNotNull { column ->
+            row.cells[column.id]
+                ?.takeIf { value -> value.isNotBlank() }
+                ?.let { value -> "${column.name}: $value" }
+        }
+        val rowTitle = row.cellText(columns.firstOrNull()).ifBlank { row.id }
+        listOf(
+            PageSearchCandidate(
+                text = "Row $rowTitle ${cells.joinToString(separator = "; ")}",
+                targetType = SearchTargetRow,
+                targetId = row.id,
+            ),
+        ) + row.blocks.flatMap { block ->
+            block.searchCandidates().map { candidate ->
+                candidate.copy(
+                    targetType = SearchTargetRowBlock,
+                    targetId = candidate.targetId,
+                )
+            }
+        }
+    }
+    return listOf(
+        PageSearchCandidate(
+            text = "Table $title ${view.name}",
+            targetType = SearchTargetBlock,
+            targetId = tableBlockId,
+        ),
+    ) + columnCandidates + rowCandidates
+}
+
+private data class AiSearchHit(
+    val title: String,
+    val detail: String,
+    val score: Int,
+    val pageLink: AiChatPageLink? = null,
+)
+
+private data class HomeAiSearchReply(
+    val content: String,
+    val pageLinks: List<AiChatPageLink> = emptyList(),
+)
+
+private data class PageSearchCandidate(
+    val text: String,
+    val targetType: String,
+    val targetId: String,
+)
+
+private data class ChatSearchCandidate(
+    val text: String,
+    val createdAt: Long,
+)
+
+private const val SearchTargetPageTitle = "title"
+private const val SearchTargetProperty = "property"
+private const val SearchTargetBlock = "block"
+private const val SearchTargetRow = "row"
+private const val SearchTargetRowBlock = "row_block"
+
+private fun String.isReadOnlySearchRequest(): Boolean {
+    val text = lowercase()
+    val searchWords = listOf(
+        "cari",
+        "search",
+        "find",
+        "lookup",
+        "senarai",
+        "list",
+        "tunjuk",
+        "show",
+        "apa",
+        "mana",
+        "berapa",
+        "count",
+        "kira",
+        "ringkas",
+        "summarize",
+    )
+    val mutationWords = listOf(
+        "buat",
+        "create",
+        "tambah",
+        "add",
+        "ubah",
+        "tukar",
+        "change",
+        "update",
+        "edit",
+        "delete",
+        "padam",
+        "remove",
+        "rename",
+        "complete",
+        "mark",
+        "sort",
+        "filter",
+        "group",
+        "set",
+        "jadikan",
+    )
+    return searchWords.any { word -> text.contains(word) } &&
+        mutationWords.none { word -> text.contains(word) }
+}
+
+private fun String.searchTerms(): List<String> {
+    val stopWords = setOf(
+        "ai",
+        "aku",
+        "awak",
+        "boleh",
+        "can",
+        "cari",
+        "search",
+        "find",
+        "lookup",
+        "senarai",
+        "list",
+        "tunjuk",
+        "show",
+        "apa",
+        "mana",
+        "berapa",
+        "count",
+        "kira",
+        "ringkas",
+        "summarize",
+        "dalam",
+        "dekat",
+        "di",
+        "page",
+        "pages",
+        "table",
+        "row",
+        "rows",
+        "chat",
+        "history",
+        "sejarah",
+        "mesej",
+        "message",
+        "messages",
+        "data",
+        "item",
+        "rekod",
+        "record",
+        "records",
+        "yang",
+        "dan",
+        "atau",
+        "the",
+        "a",
+        "an",
+        "to",
+        "for",
+        "of",
+        "in",
+        "on",
+        "me",
+        "please",
+        "tolong",
+    )
+    return lowercase()
+        .split(Regex("[^a-z0-9@]+"))
+        .map { it.trim('@') }
+        .filter { term -> term.length >= 2 && term !in stopWords }
+        .distinct()
+}
+
+private fun String.searchScore(terms: List<String>): Int {
+    val text = lowercase()
+    return terms.count { term -> text.contains(term) }
+}
+
+private fun PageBlock.searchLines(): List<String> {
+    val selfLines = when (type) {
+        PageBlockType.DatabaseTable -> table.searchLines()
+        PageBlockType.MediaFile -> mediaAttachments.map { attachment ->
+            "File ${attachment.name} ${attachment.mimeType}"
+        }.ifEmpty { listOf("Media file") }
+        PageBlockType.Divider -> listOf("Divider")
+        else -> listOf(text)
+    }
+    return selfLines.filter { line -> line.isNotBlank() } +
+        children.flatMap { child -> child.searchLines() }
+}
+
+private fun PageTable.searchLines(): List<String> {
+    val columnLines = columns.map { column ->
+        "Column ${column.name} ${column.type.name} ${column.formula}"
+    }
+    val rowLines = rows.flatMap { row ->
+        val cells = columns.mapNotNull { column ->
+            row.cells[column.id]
+                ?.takeIf { value -> value.isNotBlank() }
+                ?.let { value -> "${column.name}: $value" }
+        }
+        val rowTitle = row.cellText(columns.firstOrNull()).ifBlank { row.id }
+        listOf("Row $rowTitle ${cells.joinToString(separator = "; ")}") +
+            row.blocks.flatMap { block -> block.searchLines() }
+    }
+    return listOf("Table $title ${view.name}") + columnLines + rowLines
+}
+
+private fun String.compactLine(): String {
+    return trim()
+        .replace(Regex("\\s+"), " ")
+        .take(180)
+}
+
+private fun PageTableRow.cellText(column: PageTableColumn?): String {
+    return column?.let { tableColumn -> cells[tableColumn.id] }.orEmpty().trim()
+}
+
+private fun PageTable.contextStateText(): String {
+    val sortText = if (sort.columnId.isBlank()) "none" else "${sort.columnId}:${sort.direction.name}"
+    val filterText = if (filter.columnId.isBlank() || filter.query.isBlank()) {
+        "none"
+    } else {
+        "${filter.columnId}:${filter.query}"
+    }
+    val groupText = groupByColumnId.ifBlank { "none" }
+    val viewConfigText = listOf(
+        "calendarDate=${viewConfig.calendarDateColumnId.ifBlank { "auto" }}",
+        "timelineStart=${viewConfig.timelineStartColumnId.ifBlank { "auto" }}",
+        "timelineEnd=${viewConfig.timelineEndColumnId.ifBlank { "none" }}",
+        "dashboardMetric=${viewConfig.dashboardMetricColumnId.ifBlank { "auto" }}",
+        "dashboardGroup=${viewConfig.dashboardGroupColumnId.ifBlank { "auto" }}",
+    ).joinToString(",")
+    return "sort=$sortText; filter=$filterText; groupBy=$groupText; viewConfig=$viewConfigText"
+}
+
+private fun PageTableColumn.aiContextText(): String {
+    val config = when (type) {
+        PageTableColumnType.Formula -> " formula=${formula.ifBlank { "none" }}"
+        PageTableColumnType.Relation -> " relationTargetTableId=${relationTargetTableId.ifBlank { "none" }}"
+        PageTableColumnType.Rollup -> {
+            " rollupRelationColumnId=${rollupRelationColumnId.ifBlank { "none" }} " +
+                "rollupTargetColumnId=${rollupTargetColumnId.ifBlank { "none" }} " +
+                "rollupAggregation=${rollupAggregation.name}"
+        }
+        PageTableColumnType.Text,
+        PageTableColumnType.Number,
+        PageTableColumnType.Status,
+        PageTableColumnType.Date,
+        PageTableColumnType.Checkbox,
+        PageTableColumnType.FilesMedia,
+        -> ""
+    }
+    return "$id:$name:${type.name}$config"
+}
+
+private data class WorkspaceDashboardState(
+    val workspaces: List<Workspace>,
+    val activeWorkspace: Workspace?,
+)
+
+private data class WorkspaceFormState(
+    val isCreateWorkspaceDialogVisible: Boolean = false,
+    val newWorkspaceName: String = "",
+)
+
+private data class HomeChatState(
+    val messages: List<AiChatMessage> = emptyList(),
+    val sessions: List<ChatSession> = emptyList(),
+    val activeSessionId: String? = null,
+    val isGenerating: Boolean = false,
+    val error: String? = null,
+)
+
+data class HomeUiState(
+    val isLoading: Boolean = true,
+    val activeWorkspaceId: String = CylDefaults.DefaultWorkspaceId,
+    val workspaceName: String = CylDefaults.DefaultWorkspaceName,
+    val workspaceCount: Int = 0,
+    val workspaces: List<Workspace> = emptyList(),
+    val pageCount: Int = 0,
+    val openTaskCount: Int = 0,
+    val pendingReminderCount: Int = 0,
+    val allPages: List<Page> = emptyList(),
+    val recentPages: List<Page> = emptyList(),
+    val searchQuery: String = "",
+    val searchResults: List<PageSearchResult> = emptyList(),
+    val openTasks: List<TaskItem> = emptyList(),
+    val reminders: List<Reminder> = emptyList(),
+    val isCreateWorkspaceDialogVisible: Boolean = false,
+    val newWorkspaceName: String = "",
+    val canCreateWorkspace: Boolean = false,
+    val chatMessages: List<AiChatMessage> = emptyList(),
+    val chatSessions: List<ChatSession> = emptyList(),
+    val activeChatSessionId: String? = null,
+    val chatHistorySearchQuery: String = "",
+    val chatHistorySearchResults: List<ChatHistorySearchResult> = emptyList(),
+    val isAiGeneratingChat: Boolean = false,
+    val aiChatError: String? = null,
+)
+
+private data class HomeAiExecutionResult(
+    val messages: List<String> = emptyList(),
+    val pageLinks: List<AiChatPageLink> = emptyList(),
+)
+
+private data class HomeTableUpdateResult(
+    val page: Page,
+    val tableTitle: String,
+)
+
+data class PageSearchResult(
+    val page: Page,
+    val snippet: String,
+    val targetType: String = "",
+    val targetId: String = "",
+)
+
+data class ChatHistorySearchResult(
+    val session: ChatSession,
+    val snippet: String,
+    val matchCount: Int,
+    val lastMatchedAt: Long,
+)
+
+private fun Page.toChatPageLink(
+    targetType: String = "",
+    targetId: String = "",
+): AiChatPageLink {
+    return AiChatPageLink(
+        pageId = id,
+        title = title.ifBlank { "Untitled page" },
+        targetType = targetType,
+        targetId = targetId,
+    )
+}

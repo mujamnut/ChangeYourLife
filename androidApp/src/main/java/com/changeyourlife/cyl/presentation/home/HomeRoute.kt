@@ -1,0 +1,1484 @@
+package com.changeyourlife.cyl.presentation.home
+
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.widget.Toast
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.Article
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.Logout
+import androidx.compose.material.icons.automirrored.rounded.Send
+import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Home
+import androidx.compose.material.icons.rounded.Notifications
+import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextFieldDefaults
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.dp
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.changeyourlife.cyl.domain.model.ChatSession
+import com.changeyourlife.cyl.domain.model.Page
+import com.changeyourlife.cyl.presentation.ai.AiChatMessage
+import com.changeyourlife.cyl.presentation.ai.AiChatPageLink
+import com.changeyourlife.cyl.presentation.page.PageModuleType
+import com.changeyourlife.cyl.presentation.theme.ChangeYourLifeTheme
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import kotlinx.coroutines.launch
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun HomeRoute(
+    onCreatePage: () -> Unit,
+    onOpenPage: (String, String, String) -> Unit,
+    onSearch: () -> Unit,
+    onLoggedOut: () -> Unit,
+    modifier: Modifier = Modifier,
+    viewModel: HomeViewModel = hiltViewModel(),
+) {
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+
+    HomeScreen(
+        uiState = uiState,
+        onCreatePage = {
+            viewModel.createQuickPage { page ->
+                onOpenPage(page.id, "", "")
+            }
+            onCreatePage()
+        },
+        onCreateModule = { type ->
+            viewModel.createModulePage(type) { page ->
+                onOpenPage(page.id, "", "")
+            }
+        },
+        onOpenPage = { pageId -> onOpenPage(pageId, "", "") },
+        onOpenPageTarget = onOpenPage,
+        onSearch = onSearch,
+        onDismissCreateWorkspace = viewModel::hideCreateWorkspace,
+        onNewWorkspaceNameChange = viewModel::updateNewWorkspaceName,
+        onCreateWorkspace = viewModel::createWorkspace,
+        onSendChatMessage = viewModel::sendChatMessage,
+        onClearChatHistory = viewModel::clearChatHistory,
+        onCreateChatSession = viewModel::createNewChatSession,
+        onSelectChatSession = viewModel::selectChatSession,
+        onChatHistorySearchQueryChange = viewModel::updateChatHistorySearchQuery,
+        onClearChatHistorySearchQuery = viewModel::clearChatHistorySearchQuery,
+        onDismissChatError = viewModel::clearAiChatError,
+        onLogout = {
+            viewModel.logout(onLoggedOut)
+        },
+        modifier = modifier,
+    )
+}
+
+@Composable
+fun HomeSearchRoute(
+    onBack: () -> Unit,
+    onOpenPage: (String, String, String) -> Unit,
+    modifier: Modifier = Modifier,
+    viewModel: HomeViewModel = hiltViewModel(),
+) {
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+
+    HomeSearchScreen(
+        uiState = uiState,
+        onBack = onBack,
+        onOpenPage = onOpenPage,
+        onSearchQueryChange = viewModel::updateSearchQuery,
+        onClearSearchQuery = viewModel::clearSearchQuery,
+        modifier = modifier,
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun HomeScreen(
+    uiState: HomeUiState,
+    onCreatePage: () -> Unit,
+    onCreateModule: (PageModuleType) -> Unit,
+    onOpenPage: (String) -> Unit,
+    onOpenPageTarget: (String, String, String) -> Unit,
+    onSearch: () -> Unit,
+    onDismissCreateWorkspace: () -> Unit,
+    onNewWorkspaceNameChange: (String) -> Unit,
+    onCreateWorkspace: () -> Unit,
+    onSendChatMessage: (String) -> Unit,
+    onClearChatHistory: () -> Unit,
+    onCreateChatSession: () -> Unit,
+    onSelectChatSession: (String) -> Unit,
+    onChatHistorySearchQueryChange: (String) -> Unit,
+    onClearChatHistorySearchQuery: () -> Unit,
+    onDismissChatError: () -> Unit,
+    onLogout: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var isChatSheetOpen by rememberSaveable { mutableStateOf(false) }
+    var selectedHomeTab by rememberSaveable { mutableStateOf(HomeTab.Home) }
+    val chatSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val scope = rememberCoroutineScope()
+
+    if (isChatSheetOpen) {
+        AiChatSheet(
+            messages = uiState.chatMessages,
+            mentionPages = uiState.allPages,
+            isGenerating = uiState.isAiGeneratingChat,
+            errorMessage = uiState.aiChatError,
+            onSendMessage = onSendChatMessage,
+            onClearHistory = onClearChatHistory,
+            onCreateChatSession = onCreateChatSession,
+            onDismissError = onDismissChatError,
+            onOpenPage = { pageId, targetType, targetId ->
+                scope.launch { chatSheetState.hide() }.invokeOnCompletion {
+                    isChatSheetOpen = false
+                    onOpenPageTarget(pageId, targetType, targetId)
+                }
+            },
+            onDismiss = {
+                scope.launch { chatSheetState.hide() }.invokeOnCompletion {
+                    isChatSheetOpen = false
+                }
+            },
+            sheetState = chatSheetState,
+        )
+    }
+    if (uiState.isCreateWorkspaceDialogVisible) {
+        CreateWorkspaceDialog(
+            name = uiState.newWorkspaceName,
+            canCreate = uiState.canCreateWorkspace,
+            onNameChange = onNewWorkspaceNameChange,
+            onCreate = onCreateWorkspace,
+            onDismiss = onDismissCreateWorkspace,
+        )
+    }
+
+    Scaffold(
+        modifier = modifier,
+        bottomBar = {
+            HomeBottomBar(
+                onSearch = onSearch,
+                onOpenAi = { isChatSheetOpen = true },
+                onCreatePage = onCreatePage,
+            )
+        },
+    ) { innerPadding ->
+        LazyColumn(
+            contentPadding = PaddingValues(
+                start = 20.dp,
+                top = innerPadding.calculateTopPadding() + 20.dp,
+                end = 20.dp,
+                bottom = innerPadding.calculateBottomPadding() + 24.dp,
+            ),
+            verticalArrangement = Arrangement.spacedBy(18.dp),
+        ) {
+            item {
+                HomeHeader(
+                    workspaceName = uiState.workspaceName,
+                    selectedTab = selectedHomeTab,
+                    onSelectTab = { tab -> selectedHomeTab = tab },
+                    onLogout = onLogout,
+                )
+            }
+
+            when (selectedHomeTab) {
+                HomeTab.Home -> {
+                    item {
+                        HomeSectionHeader(text = "Recents")
+                        Spacer(modifier = Modifier.height(10.dp))
+                        if (uiState.recentPages.isEmpty()) {
+                            EmptyStateCard()
+                        } else {
+                            RecentPagesRail(
+                                pages = uiState.recentPages,
+                                onOpenPage = onOpenPage,
+                            )
+                        }
+                    }
+
+                    item {
+                        HomeSectionHeader(
+                            text = "Private",
+                            actionLabel = "New",
+                            onAction = onCreatePage,
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        if (uiState.allPages.isEmpty()) {
+                            EmptyStateCard()
+                        }
+                    }
+
+                    items(
+                        items = uiState.allPages.take(12),
+                        key = { page -> page.id },
+                    ) { page ->
+                        HomePageRow(
+                            page = page,
+                            onOpenPage = onOpenPage,
+                        )
+                    }
+
+                    item {
+                        HomeSectionHeader(text = "Modules")
+                        Spacer(modifier = Modifier.height(8.dp))
+                        ModuleQuickCreate(onCreateModule = onCreateModule)
+                    }
+                }
+
+                HomeTab.Chat -> {
+                    item {
+                        HomeSectionHeader(
+                            text = "Chat History",
+                            actionLabel = "New",
+                            onAction = {
+                                onCreateChatSession()
+                                isChatSheetOpen = true
+                            },
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        ChatHistorySearch(
+                            query = uiState.chatHistorySearchQuery,
+                            resultCount = uiState.chatHistorySearchResults.size,
+                            onQueryChange = onChatHistorySearchQueryChange,
+                            onClear = onClearChatHistorySearchQuery,
+                        )
+                        if (uiState.chatHistorySearchQuery.isBlank() && uiState.chatSessions.isEmpty()) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            EmptyHomeTabCard(
+                                title = "No chat history yet",
+                                icon = Icons.Rounded.AutoAwesome,
+                            )
+                        } else if (uiState.chatHistorySearchQuery.isNotBlank() && uiState.chatHistorySearchResults.isEmpty()) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            EmptyHomeTabCard(
+                                title = "No matching chat found",
+                                icon = Icons.Rounded.Search,
+                            )
+                        }
+                    }
+
+                    if (uiState.chatHistorySearchQuery.isBlank()) {
+                        items(
+                            items = uiState.chatSessions,
+                            key = { session -> session.id },
+                        ) { session ->
+                            HomeChatSessionRow(
+                                session = session,
+                                isActive = session.id == uiState.activeChatSessionId,
+                                onClick = {
+                                    onSelectChatSession(session.id)
+                                    isChatSheetOpen = true
+                                },
+                            )
+                        }
+                    } else {
+                        items(
+                            items = uiState.chatHistorySearchResults,
+                            key = { result -> result.session.id },
+                        ) { result ->
+                            HomeChatSessionRow(
+                                session = result.session,
+                                isActive = result.session.id == uiState.activeChatSessionId,
+                                supportingText = result.snippet,
+                                trailingText = "${result.matchCount} match${if (result.matchCount == 1) "" else "es"}",
+                                onClick = {
+                                    onSelectChatSession(result.session.id)
+                                    isChatSheetOpen = true
+                                },
+                            )
+                        }
+                    }
+                }
+
+                HomeTab.Activity -> {
+                    item {
+                        HomeSectionHeader(text = "Mentions & Activity")
+                        Spacer(modifier = Modifier.height(8.dp))
+                        EmptyHomeTabCard(
+                            title = "No mentions or activity yet",
+                            icon = Icons.Rounded.Notifications,
+                        )
+                    }
+                }
+            }
+
+        }
+    }
+}
+
+@Composable
+private fun HomeSearchScreen(
+    uiState: HomeUiState,
+    onBack: () -> Unit,
+    onOpenPage: (String, String, String) -> Unit,
+    onSearchQueryChange: (String) -> Unit,
+    onClearSearchQuery: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Scaffold(modifier = modifier) { innerPadding ->
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(
+                start = 20.dp,
+                top = innerPadding.calculateTopPadding() + 18.dp,
+                end = 20.dp,
+                bottom = innerPadding.calculateBottomPadding() + 24.dp,
+            ),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
+                            contentDescription = "Back",
+                        )
+                    }
+                    Column {
+                        Text(
+                            text = "Search",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            text = "Pages, tables, rows, and properties",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+
+            item {
+                GlobalPageSearch(
+                    query = uiState.searchQuery,
+                    resultCount = uiState.searchResults.size,
+                    onQueryChange = onSearchQueryChange,
+                    onClear = onClearSearchQuery,
+                )
+            }
+
+            if (uiState.searchQuery.isBlank()) {
+                item {
+                    EmptyHomeTabCard(
+                        title = "Type to search your workspace",
+                        icon = Icons.Rounded.Search,
+                    )
+                }
+            } else {
+                item {
+                    HomeSectionHeader(text = "Results")
+                    if (uiState.searchResults.isEmpty()) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        EmptySearchCard()
+                    }
+                }
+
+                items(
+                    items = uiState.searchResults,
+                    key = { result -> result.page.id },
+                ) { result ->
+                    SearchResultCard(
+                        result = result,
+                        onOpenPage = onOpenPage,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HomeHeader(
+    workspaceName: String,
+    selectedTab: HomeTab,
+    onSelectTab: (HomeTab) -> Unit,
+    onLogout: () -> Unit,
+) {
+    var isProfileMenuOpen by rememberSaveable { mutableStateOf(false) }
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box {
+            Box(
+                modifier = Modifier
+                    .size(44.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .clickable { isProfileMenuOpen = true }
+                    .background(MaterialTheme.colorScheme.surfaceContainerHigh),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = workspaceName.firstOrNull()?.uppercaseChar()?.toString() ?: "C",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+            DropdownMenu(
+                expanded = isProfileMenuOpen,
+                onDismissRequest = { isProfileMenuOpen = false },
+            ) {
+                DropdownMenuItem(
+                    text = { Text(text = "Logout") },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Rounded.Logout,
+                            contentDescription = null,
+                        )
+                    },
+                    onClick = {
+                        isProfileMenuOpen = false
+                        onLogout()
+                    },
+                )
+            }
+        }
+        Row(
+            modifier = Modifier
+                .weight(1f)
+                .height(52.dp)
+                .clip(RoundedCornerShape(26.dp))
+                .background(MaterialTheme.colorScheme.surfaceContainer)
+                .padding(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            HomeTopTabButton(
+                tab = HomeTab.Home,
+                selectedTab = selectedTab,
+                onSelectTab = onSelectTab,
+                modifier = Modifier.weight(1f),
+            )
+            HomeTopTabButton(
+                tab = HomeTab.Chat,
+                selectedTab = selectedTab,
+                onSelectTab = onSelectTab,
+                modifier = Modifier.weight(1f),
+            )
+            HomeTopTabButton(
+                tab = HomeTab.Activity,
+                selectedTab = selectedTab,
+                onSelectTab = onSelectTab,
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
+}
+
+private enum class HomeTab(
+    val icon: ImageVector,
+    val contentDescription: String,
+) {
+    Home(
+        icon = Icons.Rounded.Home,
+        contentDescription = "Home",
+    ),
+    Chat(
+        icon = Icons.Rounded.AutoAwesome,
+        contentDescription = "Chat history",
+    ),
+    Activity(
+        icon = Icons.Rounded.Notifications,
+        contentDescription = "Mentions and activity",
+    ),
+}
+
+@Composable
+private fun HomeTopTabButton(
+    tab: HomeTab,
+    selectedTab: HomeTab,
+    onSelectTab: (HomeTab) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val isSelected = tab == selectedTab
+    Box(
+        modifier = modifier
+            .height(44.dp)
+            .clip(RoundedCornerShape(22.dp))
+            .clickable { onSelectTab(tab) }
+            .background(
+                if (isSelected) {
+                    MaterialTheme.colorScheme.surface
+                } else {
+                    MaterialTheme.colorScheme.surfaceContainer
+                },
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = tab.icon,
+            contentDescription = tab.contentDescription,
+            tint = if (isSelected) {
+                MaterialTheme.colorScheme.onSurface
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            },
+        )
+    }
+}
+
+@Composable
+private fun HomeBottomBar(
+    onSearch: () -> Unit,
+    onOpenAi: () -> Unit,
+    onCreatePage: () -> Unit,
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        shape = RoundedCornerShape(28.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        ),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(onClick = onSearch) {
+                Icon(
+                    imageVector = Icons.Rounded.Search,
+                    contentDescription = "Search",
+                )
+            }
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(44.dp)
+                    .clip(RoundedCornerShape(22.dp))
+                    .clickable(onClick = onOpenAi)
+                    .background(MaterialTheme.colorScheme.surface)
+                    .padding(horizontal = 14.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.AutoAwesome,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(20.dp),
+                )
+                Text(
+                    text = "Ask AI",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            IconButton(onClick = onCreatePage) {
+                Icon(
+                    imageVector = Icons.Rounded.Add,
+                    contentDescription = "Create page",
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun EmptyHomeTabCard(
+    title: String,
+    icon: ImageVector,
+) {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainer,
+        ),
+    ) {
+        ListItem(
+            headlineContent = { Text(text = title) },
+            leadingContent = {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            },
+        )
+    }
+}
+
+@Composable
+private fun ChatHistorySearch(
+    query: String,
+    resultCount: Int,
+    onQueryChange: (String) -> Unit,
+    onClear: () -> Unit,
+) {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainer,
+        ),
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            OutlinedTextField(
+                value = query,
+                onValueChange = onQueryChange,
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                placeholder = { Text(text = "Search chat sessions") },
+                leadingIcon = {
+                    Icon(
+                        imageVector = Icons.Rounded.Search,
+                        contentDescription = null,
+                    )
+                },
+                trailingIcon = {
+                    if (query.isNotBlank()) {
+                        IconButton(onClick = onClear) {
+                            Icon(
+                                imageVector = Icons.Rounded.Close,
+                                contentDescription = "Clear chat search",
+                            )
+                        }
+                    }
+                },
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                shape = RoundedCornerShape(16.dp),
+                colors = TextFieldDefaults.colors(
+                    focusedContainerColor = MaterialTheme.colorScheme.surface,
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surface,
+                ),
+            )
+            if (query.isNotBlank()) {
+                Text(
+                    text = "$resultCount chat${if (resultCount == 1) "" else "s"} found",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun HomeChatSessionRow(
+    session: ChatSession,
+    isActive: Boolean,
+    supportingText: String? = null,
+    trailingText: String? = null,
+    onClick: () -> Unit,
+) {
+    Card(
+        modifier = Modifier.clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isActive) {
+                MaterialTheme.colorScheme.primaryContainer
+            } else {
+                MaterialTheme.colorScheme.surfaceContainer
+            },
+        ),
+    ) {
+        ListItem(
+            headlineContent = {
+                Text(
+                    text = session.title.ifBlank { "New chat" },
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            },
+            supportingContent = {
+                Text(
+                    text = supportingText ?: session.updatedAt.toDisplayDateTime(),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            },
+            trailingContent = trailingText?.let { text ->
+                {
+                    Text(
+                        text = text,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            },
+            leadingContent = {
+                Icon(
+                    imageVector = Icons.Rounded.AutoAwesome,
+                    contentDescription = null,
+                    tint = if (isActive) {
+                        MaterialTheme.colorScheme.onPrimaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                )
+            },
+        )
+    }
+}
+
+@Composable
+private fun HomeSectionHeader(
+    text: String,
+    actionLabel: String? = null,
+    onAction: (() -> Unit)? = null,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        if (actionLabel != null && onAction != null) {
+            TextButton(onClick = onAction) {
+                Text(text = actionLabel)
+            }
+        }
+    }
+}
+
+@Composable
+private fun RecentPagesRail(
+    pages: List<Page>,
+    onOpenPage: (String) -> Unit,
+) {
+    LazyRow(
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        items(
+            items = pages,
+            key = { page -> page.id },
+        ) { page ->
+            RecentPageCard(
+                page = page,
+                onOpenPage = onOpenPage,
+            )
+        }
+    }
+}
+
+@Composable
+private fun RecentPageCard(
+    page: Page,
+    onOpenPage: (String) -> Unit,
+) {
+    Card(
+        modifier = Modifier
+            .widthIn(min = 148.dp, max = 176.dp)
+            .height(116.dp)
+            .clickable { onOpenPage(page.id) },
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainer,
+        ),
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Icon(
+                imageVector = Icons.AutoMirrored.Rounded.Article,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+            )
+            Text(
+                text = page.title.ifBlank { "Untitled page" },
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+@Composable
+private fun HomePageRow(
+    page: Page,
+    onOpenPage: (String) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(52.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .clickable { onOpenPage(page.id) }
+            .padding(horizontal = 10.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = Icons.AutoMirrored.Rounded.Article,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            text = page.title.ifBlank { "Untitled page" },
+            style = MaterialTheme.typography.bodyLarge,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+@Composable
+private fun ModuleQuickCreate(
+    onCreateModule: (PageModuleType) -> Unit,
+) {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainer,
+        ),
+    ) {
+        LazyRow(
+            modifier = Modifier.padding(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            items(
+                items = PageModuleType.entries,
+                key = { type -> type.name },
+            ) { type ->
+                FilterChip(
+                    selected = false,
+                    onClick = { onCreateModule(type) },
+                    label = { Text(text = type.label) },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = Icons.Rounded.Add,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun GlobalPageSearch(
+    query: String,
+    resultCount: Int,
+    onQueryChange: (String) -> Unit,
+    onClear: () -> Unit,
+) {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainer,
+        ),
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            OutlinedTextField(
+                value = query,
+                onValueChange = onQueryChange,
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                placeholder = { Text(text = "Search pages, tables, rows") },
+                leadingIcon = {
+                    Icon(
+                        imageVector = Icons.Rounded.Search,
+                        contentDescription = null,
+                    )
+                },
+                trailingIcon = {
+                    if (query.isNotBlank()) {
+                        IconButton(onClick = onClear) {
+                            Icon(
+                                imageVector = Icons.Rounded.Close,
+                                contentDescription = "Clear search",
+                            )
+                        }
+                    }
+                },
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                shape = RoundedCornerShape(16.dp),
+                colors = TextFieldDefaults.colors(
+                    focusedContainerColor = MaterialTheme.colorScheme.surface,
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surface,
+                ),
+            )
+            if (query.isNotBlank()) {
+                Text(
+                    text = "$resultCount result${if (resultCount == 1) "" else "s"}",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SearchResultCard(
+    result: PageSearchResult,
+    onOpenPage: (String, String, String) -> Unit,
+) {
+    Card(
+        modifier = Modifier.clickable {
+            onOpenPage(result.page.id, result.targetType, result.targetId)
+        },
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainer,
+        ),
+    ) {
+        ListItem(
+            headlineContent = {
+                Text(text = result.page.title.ifBlank { "Untitled page" })
+            },
+            supportingContent = {
+                Text(text = result.snippet)
+            },
+            leadingContent = {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Rounded.Article,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+            },
+        )
+    }
+}
+
+@Composable
+private fun EmptySearchCard() {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainer,
+        ),
+    ) {
+        ListItem(
+            headlineContent = { Text(text = "No matching pages") },
+            supportingContent = {
+                Text(text = "Try another word from a page, table, row, or property.")
+            },
+            leadingContent = {
+                Icon(
+                    imageVector = Icons.Rounded.Search,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.secondary,
+                )
+            },
+        )
+    }
+}
+
+@Composable
+private fun CreateWorkspaceDialog(
+    name: String,
+    canCreate: Boolean,
+    onNameChange: (String) -> Unit,
+    onCreate: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(text = "New Workspace") },
+        text = {
+            OutlinedTextField(
+                value = name,
+                onValueChange = onNameChange,
+                singleLine = true,
+                label = { Text(text = "Workspace name") },
+                placeholder = { Text(text = "Personal goals") },
+                colors = TextFieldDefaults.colors(
+                    focusedContainerColor = MaterialTheme.colorScheme.surface,
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surface,
+                ),
+            )
+        },
+        confirmButton = {
+            Button(
+                onClick = onCreate,
+                enabled = canCreate,
+            ) {
+                Text(text = "Create")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(text = "Cancel")
+            }
+        },
+    )
+}
+
+@Composable
+private fun EmptyStateCard() {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainer,
+        ),
+    ) {
+        ListItem(
+            headlineContent = { Text(text = "No pages yet") },
+            supportingContent = {
+                Text(text = "Tap create to add your first local page.")
+            },
+            leadingContent = {
+                Icon(
+                    imageVector = Icons.Rounded.Notifications,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.secondary,
+                )
+            },
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@Composable
+private fun AiChatSheet(
+    messages: List<AiChatMessage>,
+    mentionPages: List<Page>,
+    isGenerating: Boolean,
+    errorMessage: String?,
+    onSendMessage: (String) -> Unit,
+    onClearHistory: () -> Unit,
+    onCreateChatSession: () -> Unit,
+    onDismissError: () -> Unit,
+    onOpenPage: (String, String, String) -> Unit,
+    onDismiss: () -> Unit,
+    sheetState: androidx.compose.material3.SheetState,
+) {
+    var inputText by rememberSaveable { mutableStateOf("") }
+    val listState = rememberLazyListState()
+    val context = LocalContext.current
+    val mentionQuery = inputText.activeMentionQuery()
+    val mentionSuggestions = if (mentionQuery != null) {
+        mentionPages
+            .filter { page ->
+                val title = page.title.ifBlank { "Untitled page" }
+                mentionQuery.isBlank() || title.contains(mentionQuery, ignoreCase = true)
+            }
+            .take(6)
+    } else {
+        emptyList()
+    }
+
+    LaunchedEffect(messages.size) {
+        if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
+    }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+    ) {
+        Column(modifier = Modifier.padding(bottom = 16.dp)) {
+            // Header
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.AutoAwesome,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp),
+                    )
+                    Text(
+                        text = "AI Assistant",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+                Row {
+                    TextButton(onClick = onCreateChatSession) {
+                        Text(text = "New")
+                    }
+                    if (messages.isNotEmpty()) {
+                        TextButton(onClick = onClearHistory) {
+                            Text(text = "Clear")
+                        }
+                    }
+                    IconButton(onClick = onDismiss) {
+                        Icon(
+                            imageVector = Icons.Rounded.Close,
+                            contentDescription = "Close",
+                        )
+                    }
+                }
+            }
+
+            // Error banner
+            if (errorMessage != null) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 4.dp)
+                        .clickable(onClick = onDismissError),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer,
+                    ),
+                ) {
+                    Text(
+                        text = errorMessage,
+                        modifier = Modifier.padding(12.dp),
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+
+            // Messages list
+            LazyColumn(
+                state = listState,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f, fill = false)
+                    .padding(horizontal = 16.dp)
+                    .height(360.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                contentPadding = PaddingValues(vertical = 8.dp),
+            ) {
+                if (messages.isEmpty() && !isGenerating) {
+                    item {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 32.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.AutoAwesome,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f),
+                                    modifier = Modifier.size(40.dp),
+                                )
+                                Text(
+                                    text = "Ask me anything about your goals,\ntasks, or productivity!",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                )
+                            }
+                        }
+                    }
+                }
+                items(messages) { message ->
+                    val isUser = message.role == "user"
+                    val messageText = message.content.ifBlank { "No response content." }
+                    Box(
+                        modifier = Modifier.fillMaxWidth(),
+                        contentAlignment = if (isUser) Alignment.CenterEnd else Alignment.CenterStart,
+                    ) {
+                        Column(
+                            modifier = Modifier.widthIn(max = 280.dp),
+                            horizontalAlignment = if (isUser) Alignment.End else Alignment.Start,
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            Text(
+                                text = if (isUser) "You" else "CYL AI",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Text(
+                                text = messageText,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .combinedClickable(
+                                        onClick = {},
+                                        onLongClick = {
+                                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                            clipboard.setPrimaryClip(
+                                                ClipData.newPlainText("CYL AI message", messageText),
+                                            )
+                                            Toast.makeText(context, "Message copied", Toast.LENGTH_SHORT).show()
+                                        },
+                                    )
+                                    .background(
+                                        if (isUser) MaterialTheme.colorScheme.primaryContainer
+                                        else MaterialTheme.colorScheme.surfaceContainerHigh
+                                    )
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                color = if (isUser) MaterialTheme.colorScheme.onPrimaryContainer
+                                else MaterialTheme.colorScheme.onSurface,
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                            if (!isUser && message.pageLinks.isNotEmpty()) {
+                                ChatPageLinks(
+                                    links = message.pageLinks,
+                                    onOpenPage = onOpenPage,
+                                )
+                            }
+                        }
+                    }
+                }
+                if (isGenerating) {
+                    item {
+                        Box(
+                            modifier = Modifier.fillMaxWidth(),
+                            contentAlignment = Alignment.CenterStart,
+                        ) {
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(14.dp),
+                                    strokeWidth = 2.dp,
+                                )
+                                Text(
+                                    text = "Thinking…",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (mentionSuggestions.isNotEmpty()) {
+                ChatMentionSuggestions(
+                    pages = mentionSuggestions,
+                    onSelectPage = { page ->
+                        inputText = inputText.insertMention(page.title.ifBlank { "Untitled page" })
+                    },
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                )
+            }
+
+            // Input row
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.Bottom,
+            ) {
+                OutlinedTextField(
+                    value = inputText,
+                    onValueChange = { inputText = it },
+                    modifier = Modifier.weight(1f),
+                    placeholder = { Text("Message AI…") },
+                    maxLines = 4,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardActions = KeyboardActions(
+                        onSend = {
+                            if (inputText.isNotBlank() && !isGenerating) {
+                                onSendMessage(inputText.trim())
+                                inputText = ""
+                            }
+                        },
+                    ),
+                    shape = RoundedCornerShape(16.dp),
+                )
+                IconButton(
+                    onClick = {
+                        if (inputText.isNotBlank() && !isGenerating) {
+                            onSendMessage(inputText.trim())
+                            inputText = ""
+                        }
+                    },
+                    enabled = inputText.isNotBlank() && !isGenerating,
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Rounded.Send,
+                        contentDescription = "Send",
+                        tint = if (inputText.isNotBlank() && !isGenerating)
+                            MaterialTheme.colorScheme.primary
+                        else
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChatMentionSuggestions(
+    pages: List<Page>,
+    onSelectPage: (Page) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        ),
+    ) {
+        Column {
+            pages.forEach { page ->
+                ListItem(
+                    headlineContent = {
+                        Text(
+                            text = page.title.ifBlank { "Untitled page" },
+                            maxLines = 1,
+                        )
+                    },
+                    supportingContent = { Text(text = "Mention page") },
+                    leadingContent = {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Rounded.Article,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                    },
+                    modifier = Modifier.clickable { onSelectPage(page) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChatPageLinks(
+    links: List<AiChatPageLink>,
+    onOpenPage: (String, String, String) -> Unit,
+) {
+    Column(
+        horizontalAlignment = Alignment.Start,
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        links.forEach { link ->
+            TextButton(
+                onClick = { onOpenPage(link.pageId, link.targetType, link.targetId) },
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+            ) {
+                Text(text = "Open ${link.title}")
+            }
+        }
+    }
+}
+
+private fun String.activeMentionQuery(): String? {
+    val atIndex = lastIndexOf('@')
+    if (atIndex < 0) return null
+    val query = substring(atIndex + 1)
+    if (query.contains('\n') || query.endsWith(" ")) return null
+    return query.trim()
+}
+
+private fun String.insertMention(title: String): String {
+    val atIndex = lastIndexOf('@')
+    val mention = "@$title "
+    if (atIndex < 0) return this + mention
+    return substring(0, atIndex) + mention
+}
+
+private fun Long.toDisplayDateTime(): String {
+    return Instant.ofEpochMilli(this)
+        .atZone(ZoneId.systemDefault())
+        .format(DateTimeFormatter.ofPattern("MMM d, h:mm a"))
+}
+
+@Preview(showBackground = true)
+@Composable
+private fun HomeRoutePreview() {
+    ChangeYourLifeTheme {
+        HomeScreen(
+            uiState = HomeUiState(
+                isLoading = false,
+                pageCount = 2,
+            ),
+            onCreatePage = {},
+            onCreateModule = {},
+            onOpenPage = {},
+            onOpenPageTarget = { _, _, _ -> },
+            onSearch = {},
+            onDismissCreateWorkspace = {},
+            onNewWorkspaceNameChange = {},
+            onCreateWorkspace = {},
+            onSendChatMessage = {},
+            onClearChatHistory = {},
+            onCreateChatSession = {},
+            onSelectChatSession = {},
+            onChatHistorySearchQueryChange = {},
+            onClearChatHistorySearchQuery = {},
+            onDismissChatError = {},
+            onLogout = {},
+        )
+    }
+}
