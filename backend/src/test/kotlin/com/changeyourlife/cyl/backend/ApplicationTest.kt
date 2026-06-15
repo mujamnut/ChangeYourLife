@@ -2,6 +2,7 @@ package com.changeyourlife.cyl.backend
 
 import com.changeyourlife.cyl.backend.config.AppConfig
 import com.changeyourlife.cyl.backend.config.DatabaseConfig
+import com.changeyourlife.cyl.backend.config.EmailConfig
 import com.changeyourlife.cyl.backend.config.JwtConfig
 import com.changeyourlife.cyl.backend.service.AiService
 import com.changeyourlife.cyl.backend.model.ai.ChatMessage
@@ -244,6 +245,12 @@ class ApplicationTest {
                 realm = "test",
                 secret = "test-secret-that-is-long-enough-for-tests",
                 expiresInMillis = 60_000L,
+            ),
+            email = EmailConfig(
+                resendApiKey = null,
+                from = null,
+                replyTo = null,
+                appName = "ChangeYourLife",
             ),
             glmApiKey = null,
             geminiApiKey = null,

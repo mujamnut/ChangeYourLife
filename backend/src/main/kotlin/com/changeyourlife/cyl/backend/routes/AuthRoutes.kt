@@ -13,8 +13,11 @@ import com.changeyourlife.cyl.backend.model.auth.RegisterRequest
 import com.changeyourlife.cyl.backend.model.auth.ResetPasswordRequest
 import com.changeyourlife.cyl.backend.model.auth.ResetPasswordResponse
 import com.changeyourlife.cyl.backend.model.auth.UserResponse
+import com.changeyourlife.cyl.backend.service.DisabledPasswordResetEmailSender
+import com.changeyourlife.cyl.backend.service.EmailSendResult
 import com.changeyourlife.cyl.backend.service.JwtService
 import com.changeyourlife.cyl.backend.service.PasswordHasher
+import com.changeyourlife.cyl.backend.service.PasswordResetEmailSender
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.auth.authenticate
 import io.ktor.server.auth.jwt.JWTPrincipal
@@ -32,6 +35,7 @@ fun Route.authRoutes(
     jwtService: JwtService,
     passwordHasher: PasswordHasher = PasswordHasher(),
     passwordResetDebugCodes: Boolean = false,
+    passwordResetEmailSender: PasswordResetEmailSender = DisabledPasswordResetEmailSender,
 ) {
     val resetCodeGenerator = PasswordResetCodeGenerator()
 
@@ -83,6 +87,17 @@ fun Route.authRoutes(
                     expiresAt = now + PasswordResetCodeTtlMillis,
                     createdAt = now,
                 )
+                when (val emailResult = passwordResetEmailSender.sendPasswordResetCode(email, code)) {
+                    EmailSendResult.Sent -> Unit
+                    EmailSendResult.NotConfigured -> {
+                        if (!passwordResetDebugCodes) {
+                            call.application.environment.log.warn("Password reset email provider is not configured.")
+                        }
+                    }
+                    is EmailSendResult.Failed -> call.application.environment.log.error(
+                        "Password reset email failed. status=${emailResult.statusCode}, message=${emailResult.message}",
+                    )
+                }
                 if (passwordResetDebugCodes) code else null
             } else {
                 null

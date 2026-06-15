@@ -21,6 +21,15 @@ DATABASE_URL=postgresql://user:password@host:5432/db?sslmode=require
 JWT_SECRET=replace-with-a-long-random-secret
 ```
 
+Required for production forgot-password emails:
+
+```txt
+RESEND_API_KEY=re_your-key-here
+EMAIL_FROM=ChangeYourLife <noreply@yourdomain.com>
+```
+
+`EMAIL_REPLY_TO` is optional. If the email provider is not configured, local in-memory development still returns a debug reset code, but production does not expose reset codes in API responses.
+
 For local development, the backend also reads these values from the root `local.properties` file:
 
 ```properties
@@ -36,6 +45,8 @@ Aiven for PostgreSQL requires TLS for connections. Use `sslmode=require` unless 
 GET  /health
 POST /auth/register
 POST /auth/login
+POST /auth/forgot-password
+POST /auth/reset-password
 GET  /auth/me
 ```
 
@@ -54,3 +65,7 @@ The first migration creates:
 - `pages`
 - `tasks`
 - `reminders`
+
+The second migration creates:
+
+- `password_reset_codes`

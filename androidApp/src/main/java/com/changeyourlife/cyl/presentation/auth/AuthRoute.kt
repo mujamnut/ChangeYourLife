@@ -239,11 +239,22 @@ private fun AuthScreen(
                 }
 
                 if (isLogin) {
-                    TextButton(
-                        onClick = { onModeChange(AuthMode.ForgotPassword) },
-                        modifier = Modifier.align(Alignment.End),
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 44.dp)
+                            .clip(RoundedCornerShape(14.dp))
+                            .clickable { onModeChange(AuthMode.ForgotPassword) }
+                            .padding(horizontal = 6.dp),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Text(text = "Forgot password?")
+                        Text(
+                            text = "Forgot password?",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.SemiBold,
+                        )
                     }
                 }
 

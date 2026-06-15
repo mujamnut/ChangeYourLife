@@ -16,3 +16,9 @@ sdk.dir=C\:/Users/<your-user>/AppData/Local/Android/Sdk
 # Do not commit your real database password.
 # DATABASE_URL=postgresql://avnadmin:<password>@<host>:<port>/defaultdb?sslmode=require
 # JWT_SECRET=replace-with-a-long-random-secret
+
+# Backend forgot-password email provider.
+# Resend requires a verified sender/domain in production.
+# RESEND_API_KEY=re_your-key-here
+# EMAIL_FROM=ChangeYourLife <noreply@yourdomain.com>
+# EMAIL_REPLY_TO=support@yourdomain.com

@@ -6,6 +6,7 @@ import com.changeyourlife.cyl.backend.routes.aiRoutes
 import com.changeyourlife.cyl.backend.routes.authRoutes
 import com.changeyourlife.cyl.backend.service.AiService
 import com.changeyourlife.cyl.backend.service.JwtService
+import com.changeyourlife.cyl.backend.service.PasswordResetEmailSender
 import io.ktor.server.application.Application
 import io.ktor.server.response.respond
 import io.ktor.server.response.respondText
@@ -17,6 +18,7 @@ fun Application.configureRouting(
     jwtService: JwtService,
     databaseConfigured: Boolean,
     aiService: AiService,
+    passwordResetEmailSender: PasswordResetEmailSender,
 ) {
     routing {
         get("/") {
@@ -37,6 +39,7 @@ fun Application.configureRouting(
             userRepository = userRepository,
             jwtService = jwtService,
             passwordResetDebugCodes = !databaseConfigured,
+            passwordResetEmailSender = passwordResetEmailSender,
         )
 
         aiRoutes(

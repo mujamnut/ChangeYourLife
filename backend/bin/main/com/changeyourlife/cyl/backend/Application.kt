@@ -11,6 +11,7 @@ import com.changeyourlife.cyl.backend.plugins.configureMonitoring
 import com.changeyourlife.cyl.backend.plugins.configureRouting
 import com.changeyourlife.cyl.backend.plugins.configureSerialization
 import com.changeyourlife.cyl.backend.service.AiService
+import com.changeyourlife.cyl.backend.service.EmailService
 import com.changeyourlife.cyl.backend.service.JwtService
 import io.ktor.server.application.Application
 import io.ktor.server.application.serverConfig
@@ -66,11 +67,14 @@ fun Application.module(
     environment.log.info(
         "AI provider initialized: provider=${aiService.activeProvider}, model=${aiService.activeModel}, apiKeyConfigured=${!aiService.isMockMode}",
     )
+    val emailService = EmailService(appConfig.email)
+    environment.log.info("Email provider initialized: resendConfigured=${appConfig.email.isConfigured}")
 
     configureRouting(
         userRepository = userRepository,
         jwtService = JwtService(appConfig.jwt),
         databaseConfigured = dataSource != null,
         aiService = aiService,
+        passwordResetEmailSender = emailService,
     )
 }

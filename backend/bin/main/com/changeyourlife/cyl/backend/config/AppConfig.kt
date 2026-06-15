@@ -9,6 +9,7 @@ import java.util.Properties
 data class AppConfig(
     val database: DatabaseConfig,
     val jwt: JwtConfig,
+    val email: EmailConfig,
     val glmApiKey: String?,
     val geminiApiKey: String?,
     val openRouterApiKey: String?,
@@ -21,6 +22,7 @@ data class AppConfig(
             return AppConfig(
                 database = DatabaseConfig.fromEnvironment(environment),
                 jwt = JwtConfig.fromEnvironment(environment),
+                email = EmailConfig.fromEnvironment(environment),
                 glmApiKey = loadApiKey(
                     environment = environment,
                     envNames = listOf("GLM_API_KEY"),
@@ -108,6 +110,77 @@ data class AppConfig(
                         }
                     } catch (e: Exception) {
                         // Ignore
+                    }
+                }
+            }
+            return null
+        }
+    }
+}
+
+data class EmailConfig(
+    val resendApiKey: String?,
+    val from: String?,
+    val replyTo: String?,
+    val appName: String,
+) {
+    val isConfigured: Boolean = !resendApiKey.isNullOrBlank() && !from.isNullOrBlank()
+
+    companion object {
+        fun fromEnvironment(environment: Map<String, String>): EmailConfig {
+            return EmailConfig(
+                resendApiKey = loadEmailSetting(
+                    environment = environment,
+                    envNames = listOf("RESEND_API_KEY"),
+                    propNames = listOf("RESEND_API_KEY", "resend.api.key"),
+                ),
+                from = loadEmailSetting(
+                    environment = environment,
+                    envNames = listOf("EMAIL_FROM"),
+                    propNames = listOf("EMAIL_FROM", "email.from"),
+                ),
+                replyTo = loadEmailSetting(
+                    environment = environment,
+                    envNames = listOf("EMAIL_REPLY_TO"),
+                    propNames = listOf("EMAIL_REPLY_TO", "email.replyTo"),
+                ),
+                appName = loadEmailSetting(
+                    environment = environment,
+                    envNames = listOf("EMAIL_APP_NAME"),
+                    propNames = listOf("EMAIL_APP_NAME", "email.appName"),
+                ) ?: "ChangeYourLife",
+            )
+        }
+
+        private fun loadEmailSetting(
+            environment: Map<String, String>,
+            envNames: List<String>,
+            propNames: List<String>,
+        ): String? {
+            for (name in envNames) {
+                val value = environment[name]
+                if (!value.isNullOrBlank()) {
+                    return value.trim().removeSurrounding("\"").removeSurrounding("'")
+                }
+            }
+            val filesToTry = listOf(
+                File("local.properties"),
+                File("../local.properties"),
+                File("backend/local.properties"),
+            )
+            for (file in filesToTry) {
+                if (file.exists()) {
+                    try {
+                        val properties = Properties()
+                        file.inputStream().use { properties.load(it) }
+                        for (prop in propNames) {
+                            val value = properties.getProperty(prop)
+                            if (!value.isNullOrBlank()) {
+                                return value.trim().removeSurrounding("\"").removeSurrounding("'")
+                            }
+                        }
+                    } catch (e: Exception) {
+                        // Ignore local config read failures.
                     }
                 }
             }
