@@ -2,12 +2,14 @@ FROM eclipse-temurin:17-jdk-jammy AS build
 
 WORKDIR /workspace
 
-COPY gradlew settings.backend.gradle.kts build.gradle.kts gradle.properties ./
+COPY gradlew ./
 COPY gradle ./gradle
 COPY backend ./backend
 
 RUN chmod +x ./gradlew
-RUN ./gradlew -c settings.backend.gradle.kts :backend:buildFatJar --no-daemon
+WORKDIR /workspace/backend
+
+RUN ../gradlew buildFatJar --no-daemon
 
 FROM eclipse-temurin:17-jre-jammy
 
