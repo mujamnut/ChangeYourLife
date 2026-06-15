@@ -52,6 +52,7 @@ data class GeneratePlanResponse(
 @Serializable
 data class AiStatusResponse(
     val mode: String,
+    val provider: String,
     val model: String,
     val apiKeyConfigured: Boolean,
     val apiKeyLength: Int,
