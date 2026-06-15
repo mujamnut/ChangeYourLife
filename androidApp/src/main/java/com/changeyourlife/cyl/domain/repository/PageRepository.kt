@@ -12,6 +12,8 @@ interface PageRepository {
 
     fun observeRecentPages(workspaceId: String, limit: Int = 5): Flow<List<Page>>
 
+    fun observeDeletedPages(workspaceId: String): Flow<List<Page>>
+
     fun observePage(pageId: String): Flow<Page?>
 
     fun observePageCount(): Flow<Int>
@@ -28,4 +30,10 @@ interface PageRepository {
         content: String = "",
         parentPageId: String? = null,
     ): Page
+
+    suspend fun deletePage(pageId: String)
+
+    suspend fun restorePage(pageId: String)
+
+    suspend fun deletePagePermanently(pageId: String)
 }

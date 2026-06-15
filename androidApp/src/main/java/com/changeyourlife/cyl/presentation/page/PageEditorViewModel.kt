@@ -56,9 +56,20 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import retrofit2.HttpException
 
 private const val MaxEditorUndoSnapshots = 40
 private const val TableCheckboxCheckedValue = "true"
+
+private fun Throwable.toPageAiErrorMessage(): String {
+    return if (this is HttpException && code() == 401) {
+        "Your session expired after the backend change. Please log in again."
+    } else {
+        "I couldn't reach the CYL backend: ${
+            localizedMessage ?: "Check your backend URL and make sure the server is running."
+        }"
+    }
+}
 
 enum class TableColumnInsertSide {
     Left,
@@ -1513,14 +1524,13 @@ class PageEditorViewModel @Inject constructor(
                         .toDomainChatPageLinks(),
                 )
             }.onFailure { error ->
-                val message = error.localizedMessage
-                    ?: "I couldn't reach the CYL backend. Check your backend URL and make sure the server is running."
+                val message = error.toPageAiErrorMessage()
                 _isPageAiGenerating.value = false
                 _pageAiError.value = message
                 chatHistoryRepository.appendMessage(
                     sessionId = scopeId,
                     role = "assistant",
-                    content = "I couldn't reach the CYL backend: $message",
+                    content = message,
                 )
             }
         }

@@ -21,6 +21,7 @@ import com.changeyourlife.cyl.presentation.page.PageBlockCodec
 import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import retrofit2.HttpException
 
 class AiRepositoryImpl @Inject constructor(
     private val aiApi: AiApi,
@@ -32,6 +33,12 @@ class AiRepositoryImpl @Inject constructor(
         return "Bearer $token"
     }
 
+    private fun clearSessionIfUnauthorized(error: Throwable) {
+        if (error is HttpException && error.code() == 401) {
+            tokenStore.clearToken()
+        }
+    }
+
     override suspend fun chat(messages: List<Pair<String, String>>): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
             val header = getAuthHeader()
@@ -40,7 +47,7 @@ class AiRepositoryImpl @Inject constructor(
             )
             val response = aiApi.chat(header, request)
             response.content
-        }
+        }.onFailure(::clearSessionIfUnauthorized)
     }
 
     override suspend fun chatWithActions(
@@ -145,7 +152,7 @@ class AiRepositoryImpl @Inject constructor(
                     )
                 }
             )
-        }
+        }.onFailure(::clearSessionIfUnauthorized)
     }
 
     override suspend fun summarize(content: String): Result<String> = withContext(Dispatchers.IO) {
@@ -154,7 +161,7 @@ class AiRepositoryImpl @Inject constructor(
             val request = SummarizeRequestDto(content = content)
             val response = aiApi.summarize(header, request)
             response.summary
-        }
+        }.onFailure(::clearSessionIfUnauthorized)
     }
 
     override suspend fun generateTasks(content: String): Result<List<String>> = withContext(Dispatchers.IO) {
@@ -163,7 +170,7 @@ class AiRepositoryImpl @Inject constructor(
             val request = GenerateTasksRequestDto(content = content)
             val response = aiApi.generateTasks(header, request)
             response.tasks
-        }
+        }.onFailure(::clearSessionIfUnauthorized)
     }
 
     override suspend fun generatePlan(prompt: String): Result<PageBlockDocument> = withContext(Dispatchers.IO) {
@@ -172,7 +179,7 @@ class AiRepositoryImpl @Inject constructor(
             val request = GeneratePlanRequestDto(prompt = prompt)
             val response = aiApi.generatePlan(header, request)
             PageBlockCodec.decodeDocument(response.planJson)
-        }
+        }.onFailure(::clearSessionIfUnauthorized)
     }
 }
 

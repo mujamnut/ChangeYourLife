@@ -33,6 +33,11 @@ class PageRepositoryImpl @Inject constructor(
             .map { pages -> pages.map { it.toDomain() } }
     }
 
+    override fun observeDeletedPages(workspaceId: String): Flow<List<Page>> {
+        return pageDao.observeDeletedPages(workspaceId)
+            .map { pages -> pages.map { it.toDomain() } }
+    }
+
     override fun observePage(pageId: String): Flow<Page?> {
         return pageDao.observePage(pageId)
             .map { page -> page?.toDomain() }
@@ -74,5 +79,23 @@ class PageRepositoryImpl @Inject constructor(
         )
         pageDao.upsertPage(page.toEntity())
         return page
+    }
+
+    override suspend fun deletePage(pageId: String) {
+        pageDao.softDeletePageTree(
+            pageId = pageId,
+            deletedAt = System.currentTimeMillis(),
+        )
+    }
+
+    override suspend fun restorePage(pageId: String) {
+        pageDao.restorePageTree(
+            pageId = pageId,
+            restoredAt = System.currentTimeMillis(),
+        )
+    }
+
+    override suspend fun deletePagePermanently(pageId: String) {
+        pageDao.deletePageTreePermanently(pageId)
     }
 }

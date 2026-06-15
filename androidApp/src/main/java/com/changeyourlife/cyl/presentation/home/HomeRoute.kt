@@ -36,7 +36,9 @@ import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Home
+import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Notifications
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.AlertDialog
@@ -63,6 +65,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -80,6 +83,7 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.changeyourlife.cyl.domain.model.ChatSession
 import com.changeyourlife.cyl.domain.model.Page
+import com.changeyourlife.cyl.domain.model.PageBlockType
 import com.changeyourlife.cyl.presentation.ai.AiChatMessage
 import com.changeyourlife.cyl.presentation.ai.AiChatPageLink
 import com.changeyourlife.cyl.presentation.page.PageModuleType
@@ -114,6 +118,14 @@ fun HomeRoute(
                 onOpenPage(page.id, "", "")
             }
         },
+        onAddBlockToPage = { pageId, type ->
+            viewModel.addBlockToPage(pageId, type) { updatedPageId, blockId ->
+                onOpenPage(updatedPageId, "block", blockId)
+            }
+        },
+        onDeletePage = viewModel::deletePage,
+        onRestorePage = viewModel::restorePage,
+        onDeletePagePermanently = viewModel::deletePagePermanently,
         onOpenPage = { pageId -> onOpenPage(pageId, "", "") },
         onOpenPageTarget = onOpenPage,
         onSearch = onSearch,
@@ -159,6 +171,10 @@ private fun HomeScreen(
     uiState: HomeUiState,
     onCreatePage: () -> Unit,
     onCreateModule: (PageModuleType) -> Unit,
+    onAddBlockToPage: (String, PageBlockType) -> Unit,
+    onDeletePage: (String) -> Unit,
+    onRestorePage: (String) -> Unit,
+    onDeletePagePermanently: (String) -> Unit,
     onOpenPage: (String) -> Unit,
     onOpenPageTarget: (String, String, String) -> Unit,
     onSearch: () -> Unit,
@@ -177,8 +193,20 @@ private fun HomeScreen(
 ) {
     var isChatSheetOpen by rememberSaveable { mutableStateOf(false) }
     var selectedHomeTab by rememberSaveable { mutableStateOf(HomeTab.Home) }
+    var selectedPageActionId by rememberSaveable { mutableStateOf<String?>(null) }
+    var permanentDeletePage by rememberSaveable { mutableStateOf<Page?>(null) }
     val chatSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val pageActionSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scope = rememberCoroutineScope()
+    val selectedPageActionPage = remember(
+        selectedPageActionId,
+        uiState.allPages,
+        uiState.recentPages,
+    ) {
+        (uiState.allPages + uiState.recentPages)
+            .distinctBy { page -> page.id }
+            .firstOrNull { page -> page.id == selectedPageActionId }
+    }
 
     if (isChatSheetOpen) {
         AiChatSheet(
@@ -204,6 +232,54 @@ private fun HomeScreen(
             sheetState = chatSheetState,
         )
     }
+    selectedPageActionPage?.let { page ->
+        HomePageActionSheet(
+            page = page,
+            onOpenPage = {
+                selectedPageActionId = null
+                onOpenPage(page.id)
+            },
+            onAddBlock = { type ->
+                selectedPageActionId = null
+                onAddBlockToPage(page.id, type)
+            },
+            onDeletePage = {
+                selectedPageActionId = null
+                onDeletePage(page.id)
+            },
+            onDismiss = { selectedPageActionId = null },
+            sheetState = pageActionSheetState,
+        )
+    }
+    permanentDeletePage?.let { page ->
+        AlertDialog(
+            onDismissRequest = { permanentDeletePage = null },
+            title = { Text(text = "Delete permanently?") },
+            text = {
+                Text(
+                    text = "This will permanently delete ${page.title.ifBlank { "Untitled page" }}. This action cannot be undone.",
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        permanentDeletePage = null
+                        onDeletePagePermanently(page.id)
+                    },
+                ) {
+                    Text(
+                        text = "Delete",
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { permanentDeletePage = null }) {
+                    Text(text = "Cancel")
+                }
+            },
+        )
+    }
     if (uiState.isCreateWorkspaceDialogVisible) {
         CreateWorkspaceDialog(
             name = uiState.newWorkspaceName,
@@ -212,6 +288,17 @@ private fun HomeScreen(
             onCreate = onCreateWorkspace,
             onDismiss = onDismissCreateWorkspace,
         )
+    }
+
+    if (selectedHomeTab == HomeTab.Trash) {
+        TrashScreen(
+            pages = uiState.deletedPages,
+            onBack = { selectedHomeTab = HomeTab.Home },
+            onRestorePage = onRestorePage,
+            onDeletePermanently = { page -> permanentDeletePage = page },
+            modifier = modifier,
+        )
+        return
     }
 
     Scaffold(
@@ -238,6 +325,7 @@ private fun HomeScreen(
                     workspaceName = uiState.workspaceName,
                     selectedTab = selectedHomeTab,
                     onSelectTab = { tab -> selectedHomeTab = tab },
+                    onOpenTrash = { selectedHomeTab = HomeTab.Trash },
                     onLogout = onLogout,
                 )
             }
@@ -276,6 +364,7 @@ private fun HomeScreen(
                         HomePageRow(
                             page = page,
                             onOpenPage = onOpenPage,
+                            onOpenActions = { selectedPageActionId = page.id },
                         )
                     }
 
@@ -361,8 +450,72 @@ private fun HomeScreen(
                         )
                     }
                 }
+
+                HomeTab.Trash -> Unit
             }
 
+        }
+    }
+}
+
+@Composable
+private fun TrashScreen(
+    pages: List<Page>,
+    onBack: () -> Unit,
+    onRestorePage: (String) -> Unit,
+    onDeletePermanently: (Page) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Scaffold(modifier = modifier) { innerPadding ->
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(
+                start = 20.dp,
+                top = innerPadding.calculateTopPadding() + 14.dp,
+                end = 20.dp,
+                bottom = innerPadding.calculateBottomPadding() + 24.dp,
+            ),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
+                            contentDescription = "Back",
+                        )
+                    }
+                    Text(
+                        text = "Trash",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+            }
+
+            if (pages.isEmpty()) {
+                item {
+                    EmptyHomeTabCard(
+                        title = "Trash is empty",
+                        icon = Icons.Rounded.Delete,
+                    )
+                }
+            } else {
+                items(
+                    items = pages,
+                    key = { page -> page.id },
+                ) { page ->
+                    TrashPageRow(
+                        page = page,
+                        onRestore = { onRestorePage(page.id) },
+                        onDeletePermanently = { onDeletePermanently(page) },
+                    )
+                }
+            }
         }
     }
 }
@@ -458,6 +611,7 @@ private fun HomeHeader(
     workspaceName: String,
     selectedTab: HomeTab,
     onSelectTab: (HomeTab) -> Unit,
+    onOpenTrash: () -> Unit,
     onLogout: () -> Unit,
 ) {
     var isProfileMenuOpen by rememberSaveable { mutableStateOf(false) }
@@ -487,6 +641,19 @@ private fun HomeHeader(
                 expanded = isProfileMenuOpen,
                 onDismissRequest = { isProfileMenuOpen = false },
             ) {
+                DropdownMenuItem(
+                    text = { Text(text = "Trash") },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = Icons.Rounded.Delete,
+                            contentDescription = null,
+                        )
+                    },
+                    onClick = {
+                        isProfileMenuOpen = false
+                        onOpenTrash()
+                    },
+                )
                 DropdownMenuItem(
                     text = { Text(text = "Logout") },
                     leadingIcon = {
@@ -549,6 +716,10 @@ private enum class HomeTab(
     Activity(
         icon = Icons.Rounded.Notifications,
         contentDescription = "Mentions and activity",
+    ),
+    Trash(
+        icon = Icons.Rounded.Delete,
+        contentDescription = "Trash",
     ),
 }
 
@@ -867,6 +1038,7 @@ private fun RecentPageCard(
 private fun HomePageRow(
     page: Page,
     onOpenPage: (String) -> Unit,
+    onOpenActions: () -> Unit,
 ) {
     Row(
         modifier = Modifier
@@ -890,6 +1062,183 @@ private fun HomePageRow(
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
+        IconButton(
+            onClick = onOpenActions,
+            modifier = Modifier.size(40.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.MoreVert,
+                contentDescription = "Page actions",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun HomePageActionSheet(
+    page: Page,
+    onOpenPage: () -> Unit,
+    onAddBlock: (PageBlockType) -> Unit,
+    onDeletePage: () -> Unit,
+    onDismiss: () -> Unit,
+    sheetState: androidx.compose.material3.SheetState,
+) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 20.dp, end = 20.dp, bottom = 28.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(
+                text = page.title.ifBlank { "Untitled page" },
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(bottom = 8.dp),
+            )
+            HomePageActionRow(
+                icon = Icons.AutoMirrored.Rounded.Article,
+                text = "Open page",
+                onClick = onOpenPage,
+            )
+            Text(
+                text = "Add block",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 10.dp, bottom = 4.dp),
+            )
+            HomePageActionRow(
+                icon = Icons.AutoMirrored.Rounded.Article,
+                text = "Text",
+                onClick = { onAddBlock(PageBlockType.Text) },
+            )
+            HomePageActionRow(
+                icon = Icons.AutoMirrored.Rounded.Article,
+                text = "Heading",
+                onClick = { onAddBlock(PageBlockType.Heading) },
+            )
+            HomePageActionRow(
+                icon = Icons.Rounded.CheckCircle,
+                text = "To-do",
+                onClick = { onAddBlock(PageBlockType.Todo) },
+            )
+            HomePageActionRow(
+                icon = Icons.Rounded.Add,
+                text = "Table",
+                onClick = { onAddBlock(PageBlockType.DatabaseTable) },
+            )
+            HomePageActionRow(
+                icon = Icons.Rounded.Delete,
+                text = "Delete page",
+                isDestructive = true,
+                onClick = onDeletePage,
+            )
+        }
+    }
+}
+
+@Composable
+private fun HomePageActionRow(
+    icon: ImageVector,
+    text: String,
+    onClick: () -> Unit,
+    isDestructive: Boolean = false,
+) {
+    val contentColor = if (isDestructive) {
+        MaterialTheme.colorScheme.error
+    } else {
+        MaterialTheme.colorScheme.onSurface
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 14.dp),
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = contentColor,
+            modifier = Modifier.size(22.dp),
+        )
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodyLarge,
+            color = contentColor,
+        )
+    }
+}
+
+@Composable
+private fun TrashPageRow(
+    page: Page,
+    onRestore: () -> Unit,
+    onDeletePermanently: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainer)
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                imageVector = Icons.AutoMirrored.Rounded.Article,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = page.title.ifBlank { "Untitled page" },
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = "Deleted ${page.deletedAt?.toDisplayDateTime().orEmpty()}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(onClick = onRestore) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Rounded.Article,
+                    contentDescription = "Restore",
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+            }
+            IconButton(onClick = onDeletePermanently) {
+                Icon(
+                    imageVector = Icons.Rounded.Delete,
+                    contentDescription = "Delete permanently",
+                    tint = MaterialTheme.colorScheme.error,
+                )
+            }
+        }
     }
 }
 
@@ -1465,6 +1814,10 @@ private fun HomeRoutePreview() {
             ),
             onCreatePage = {},
             onCreateModule = {},
+            onAddBlockToPage = { _, _ -> },
+            onDeletePage = {},
+            onRestorePage = {},
+            onDeletePagePermanently = {},
             onOpenPage = {},
             onOpenPageTarget = { _, _, _ -> },
             onSearch = {},

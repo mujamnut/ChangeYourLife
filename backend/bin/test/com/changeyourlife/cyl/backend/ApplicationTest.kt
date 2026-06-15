@@ -1,9 +1,12 @@
 package com.changeyourlife.cyl.backend
 
 import com.changeyourlife.cyl.backend.config.AppConfig
+import com.changeyourlife.cyl.backend.config.DatabaseConfig
+import com.changeyourlife.cyl.backend.config.JwtConfig
 import com.changeyourlife.cyl.backend.service.AiService
 import com.changeyourlife.cyl.backend.model.ai.ChatMessage
 import com.changeyourlife.cyl.backend.model.auth.AuthResponse
+import com.changeyourlife.cyl.backend.model.auth.ForgotPasswordResponse
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.post
@@ -149,5 +152,103 @@ class ApplicationTest {
 
         assertEquals(HttpStatusCode.OK, meResponse.status)
         assertTrue(meResponse.bodyAsText().contains("person@example.com"))
+    }
+
+    @Test
+    fun forgotPasswordCanResetPasswordInDevelopmentMode() = testApplication {
+        application {
+            module(appConfig = inMemoryTestConfig())
+        }
+
+        val registerResponse = client.post("/auth/register") {
+            contentType(ContentType.Application.Json)
+            setBody(
+                """
+                {
+                  "email": "reset@example.com",
+                  "password": "old-password",
+                  "displayName": "Reset User"
+                }
+                """.trimIndent(),
+            )
+        }
+        assertEquals(HttpStatusCode.Created, registerResponse.status)
+
+        val forgotResponse = client.post("/auth/forgot-password") {
+            contentType(ContentType.Application.Json)
+            setBody(
+                """
+                {
+                  "email": "reset@example.com"
+                }
+                """.trimIndent(),
+            )
+        }
+        assertEquals(HttpStatusCode.OK, forgotResponse.status)
+        val forgotBody = Json.decodeFromString<ForgotPasswordResponse>(forgotResponse.bodyAsText())
+        val resetCode = forgotBody.debugCode
+        assertTrue(!resetCode.isNullOrBlank(), "Expected development reset code.")
+
+        val resetResponse = client.post("/auth/reset-password") {
+            contentType(ContentType.Application.Json)
+            setBody(
+                """
+                {
+                  "email": "reset@example.com",
+                  "code": "$resetCode",
+                  "password": "new-password"
+                }
+                """.trimIndent(),
+            )
+        }
+        assertEquals(HttpStatusCode.OK, resetResponse.status)
+
+        val oldLoginResponse = client.post("/auth/login") {
+            contentType(ContentType.Application.Json)
+            setBody(
+                """
+                {
+                  "email": "reset@example.com",
+                  "password": "old-password"
+                }
+                """.trimIndent(),
+            )
+        }
+        assertEquals(HttpStatusCode.Unauthorized, oldLoginResponse.status)
+
+        val newLoginResponse = client.post("/auth/login") {
+            contentType(ContentType.Application.Json)
+            setBody(
+                """
+                {
+                  "email": "reset@example.com",
+                  "password": "new-password"
+                }
+                """.trimIndent(),
+            )
+        }
+        assertEquals(HttpStatusCode.OK, newLoginResponse.status)
+    }
+
+    private fun inMemoryTestConfig(): AppConfig {
+        return AppConfig(
+            database = DatabaseConfig(
+                jdbcUrl = null,
+                username = null,
+                password = null,
+                maxPoolSize = 5,
+            ),
+            jwt = JwtConfig(
+                issuer = "test",
+                audience = "test",
+                realm = "test",
+                secret = "test-secret-that-is-long-enough-for-tests",
+                expiresInMillis = 60_000L,
+            ),
+            glmApiKey = null,
+            geminiApiKey = null,
+            openRouterApiKey = null,
+            openRouterModel = "test-model",
+        )
     }
 }

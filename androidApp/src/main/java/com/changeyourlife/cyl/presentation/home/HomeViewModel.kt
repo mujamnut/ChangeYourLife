@@ -56,6 +56,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import retrofit2.HttpException
 
 @HiltViewModel
 class HomeViewModel @Inject constructor(
@@ -158,10 +159,11 @@ class HomeViewModel @Inject constructor(
         } else {
             combine(
                 pageRepository.observePages(activeWorkspace.id),
+                pageRepository.observeDeletedPages(activeWorkspace.id),
                 taskRepository.observeOpenTaskCount(activeWorkspace.id),
                 taskRepository.observeOpenTasks(activeWorkspace.id),
                 reminderRepository.observePendingReminders(activeWorkspace.id),
-            ) { pages, openTaskCount, openTasks, reminders ->
+            ) { pages, deletedPages, openTaskCount, openTasks, reminders ->
                 val sortedPages = pages.sortedByDescending { page -> page.updatedAt }
                 HomeUiState(
                     isLoading = false,
@@ -174,6 +176,7 @@ class HomeViewModel @Inject constructor(
                     pendingReminderCount = reminders.size,
                     allPages = sortedPages,
                     recentPages = sortedPages.take(5),
+                    deletedPages = deletedPages,
                     openTasks = openTasks,
                     reminders = reminders,
                 )
@@ -255,6 +258,38 @@ class HomeViewModel @Inject constructor(
     ) {
         viewModelScope.launch {
             onCreated(createModulePage(type))
+        }
+    }
+
+    fun addBlockToPage(
+        pageId: String,
+        type: PageBlockType,
+        onAdded: (pageId: String, blockId: String) -> Unit,
+    ) {
+        viewModelScope.launch {
+            val page = pageRepository.getPage(pageId) ?: return@launch
+            val block = PageBlockCodec.newBlock(type)
+            val updatedPage = appendBlockToPage(page, block)
+            pageRepository.upsertPage(updatedPage)
+            onAdded(page.id, block.id)
+        }
+    }
+
+    fun deletePage(pageId: String) {
+        viewModelScope.launch {
+            pageRepository.deletePage(pageId)
+        }
+    }
+
+    fun restorePage(pageId: String) {
+        viewModelScope.launch {
+            pageRepository.restorePage(pageId)
+        }
+    }
+
+    fun deletePagePermanently(pageId: String) {
+        viewModelScope.launch {
+            pageRepository.deletePagePermanently(pageId)
         }
     }
 
@@ -412,13 +447,12 @@ class HomeViewModel @Inject constructor(
                 }
                 .onFailure { error ->
                     isAiGeneratingChat.value = false
-                    val message = error.localizedMessage
-                        ?: "I couldn't reach the CYL backend. Check your backend URL and make sure the server is running."
+                    val message = error.toAiChatErrorMessage()
                     aiChatError.value = message
                     chatHistoryRepository.appendMessage(
                         sessionId = session.id,
                         role = "assistant",
-                        content = "I couldn't reach the CYL backend: $message",
+                        content = message,
                     )
                 }
         }
@@ -1929,6 +1963,16 @@ private data class HomeChatState(
     val error: String? = null,
 )
 
+private fun Throwable.toAiChatErrorMessage(): String {
+    return if (this is HttpException && code() == 401) {
+        "Your session expired after the backend change. Please log in again."
+    } else {
+        "I couldn't reach the CYL backend: ${
+            localizedMessage ?: "Check your backend URL and make sure the server is running."
+        }"
+    }
+}
+
 data class HomeUiState(
     val isLoading: Boolean = true,
     val activeWorkspaceId: String = CylDefaults.DefaultWorkspaceId,
@@ -1940,6 +1984,7 @@ data class HomeUiState(
     val pendingReminderCount: Int = 0,
     val allPages: List<Page> = emptyList(),
     val recentPages: List<Page> = emptyList(),
+    val deletedPages: List<Page> = emptyList(),
     val searchQuery: String = "",
     val searchResults: List<PageSearchResult> = emptyList(),
     val openTasks: List<TaskItem> = emptyList(),

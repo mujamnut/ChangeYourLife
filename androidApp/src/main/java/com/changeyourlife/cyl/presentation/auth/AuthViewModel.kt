@@ -26,6 +26,7 @@ class AuthViewModel @Inject constructor(
             it.copy(
                 mode = mode,
                 errorMessage = null,
+                infoMessage = null,
             )
         }
     }
@@ -36,6 +37,15 @@ class AuthViewModel @Inject constructor(
 
     fun updatePassword(password: String) {
         _uiState.update { it.copy(password = password, errorMessage = null) }
+    }
+
+    fun updateResetCode(resetCode: String) {
+        _uiState.update {
+            it.copy(
+                resetCode = resetCode.filter(Char::isDigit).take(6),
+                errorMessage = null,
+            )
+        }
     }
 
     fun updateDisplayName(displayName: String) {
@@ -51,40 +61,110 @@ class AuthViewModel @Inject constructor(
         }
 
         viewModelScope.launch {
-            _uiState.update { it.copy(isSubmitting = true, errorMessage = null) }
-            val result = when (state.mode) {
-                AuthMode.Login -> authRepository.login(
-                    email = state.email,
-                    password = state.password,
-                )
-
-                AuthMode.Register -> authRepository.register(
-                    email = state.email,
-                    password = state.password,
-                    displayName = state.displayName,
-                )
+            _uiState.update { it.copy(isSubmitting = true, errorMessage = null, infoMessage = null) }
+            when (state.mode) {
+                AuthMode.Login -> submitLogin(state, onAuthenticated)
+                AuthMode.Register -> submitRegister(state, onAuthenticated)
+                AuthMode.ForgotPassword -> submitForgotPassword(state)
+                AuthMode.ResetPassword -> submitResetPassword(state)
             }
+        }
+    }
 
-            result
-                .onSuccess {
-                    _uiState.update { it.copy(isSubmitting = false) }
-                    onAuthenticated()
+    private suspend fun submitLogin(
+        state: AuthUiState,
+        onAuthenticated: () -> Unit,
+    ) {
+        authRepository.login(
+            email = state.email,
+            password = state.password,
+        )
+            .onSuccess {
+                _uiState.update { it.copy(isSubmitting = false) }
+                onAuthenticated()
+            }
+            .onFailure { throwable ->
+                handleFailure(throwable)
+            }
+    }
+
+    private suspend fun submitRegister(
+        state: AuthUiState,
+        onAuthenticated: () -> Unit,
+    ) {
+        authRepository.register(
+            email = state.email,
+            password = state.password,
+            displayName = state.displayName,
+        )
+            .onSuccess {
+                _uiState.update { it.copy(isSubmitting = false) }
+                onAuthenticated()
+            }
+            .onFailure { throwable ->
+                handleFailure(throwable)
+            }
+    }
+
+    private suspend fun submitForgotPassword(state: AuthUiState) {
+        authRepository.requestPasswordReset(email = state.email)
+            .onSuccess { result ->
+                _uiState.update {
+                    it.copy(
+                        mode = AuthMode.ResetPassword,
+                        isSubmitting = false,
+                        infoMessage = buildString {
+                            append("If the email exists, a reset code has been sent.")
+                            if (!result.debugCode.isNullOrBlank()) {
+                                append(" Dev code: ${result.debugCode}")
+                            }
+                        },
+                        resetCode = result.debugCode.orEmpty(),
+                    )
                 }
-                .onFailure { throwable ->
-                    Log.w(TAG, "Auth request failed.", throwable)
-                    _uiState.update {
-                        it.copy(
-                            isSubmitting = false,
-                            errorMessage = throwable.toUserMessage(),
-                        )
-                    }
+            }
+            .onFailure { throwable ->
+                handleFailure(throwable)
+            }
+    }
+
+    private suspend fun submitResetPassword(state: AuthUiState) {
+        authRepository.resetPassword(
+            email = state.email,
+            code = state.resetCode,
+            password = state.password,
+        )
+            .onSuccess {
+                _uiState.update {
+                    it.copy(
+                        mode = AuthMode.Login,
+                        password = "",
+                        resetCode = "",
+                        isSubmitting = false,
+                        infoMessage = "Password reset. Log in with your new password.",
+                    )
                 }
+            }
+            .onFailure { throwable ->
+                handleFailure(throwable)
+            }
+    }
+
+    private fun handleFailure(throwable: Throwable) {
+        Log.w(TAG, "Auth request failed.", throwable)
+        _uiState.update {
+            it.copy(
+                isSubmitting = false,
+                errorMessage = throwable.toUserMessage(),
+            )
         }
     }
 
     private fun validate(state: AuthUiState): String? {
         return when {
             state.email.isBlank() || "@" !in state.email -> "Enter a valid email."
+            state.mode == AuthMode.ForgotPassword -> null
+            state.mode == AuthMode.ResetPassword && state.resetCode.length != 6 -> "Enter the 6-digit reset code."
             state.password.length < 8 -> "Password must be at least 8 characters."
             state.mode == AuthMode.Register && state.displayName.length > 80 -> "Name is too long."
             else -> null
@@ -114,12 +194,16 @@ data class AuthUiState(
     val mode: AuthMode = AuthMode.Login,
     val email: String = "",
     val password: String = "",
+    val resetCode: String = "",
     val displayName: String = "",
     val isSubmitting: Boolean = false,
     val errorMessage: String? = null,
+    val infoMessage: String? = null,
 )
 
 enum class AuthMode {
     Login,
     Register,
+    ForgotPassword,
+    ResetPassword,
 }

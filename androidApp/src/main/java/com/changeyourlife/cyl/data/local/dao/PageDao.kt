@@ -46,6 +46,15 @@ interface PageDao {
     )
     fun observeRecentPages(workspaceId: String, limit: Int): Flow<List<PageEntity>>
 
+    @Query(
+        """
+        SELECT * FROM pages
+        WHERE workspaceId = :workspaceId AND deletedAt IS NOT NULL
+        ORDER BY deletedAt DESC, updatedAt DESC
+        """,
+    )
+    fun observeDeletedPages(workspaceId: String): Flow<List<PageEntity>>
+
     @Query("SELECT * FROM pages WHERE id = :pageId AND deletedAt IS NULL LIMIT 1")
     fun observePage(pageId: String): Flow<PageEntity?>
 
@@ -60,4 +69,25 @@ interface PageDao {
 
     @Upsert
     suspend fun upsertPage(page: PageEntity)
+
+    @Query(
+        """
+        UPDATE pages
+        SET deletedAt = :deletedAt, updatedAt = :deletedAt
+        WHERE id = :pageId OR parentPageId = :pageId
+        """,
+    )
+    suspend fun softDeletePageTree(pageId: String, deletedAt: Long)
+
+    @Query(
+        """
+        UPDATE pages
+        SET deletedAt = NULL, updatedAt = :restoredAt
+        WHERE id = :pageId OR parentPageId = :pageId
+        """,
+    )
+    suspend fun restorePageTree(pageId: String, restoredAt: Long)
+
+    @Query("DELETE FROM pages WHERE id = :pageId OR parentPageId = :pageId")
+    suspend fun deletePageTreePermanently(pageId: String)
 }

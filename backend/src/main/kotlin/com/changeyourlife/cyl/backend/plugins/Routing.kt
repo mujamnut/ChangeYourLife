@@ -36,6 +36,7 @@ fun Application.configureRouting(
         authRoutes(
             userRepository = userRepository,
             jwtService = jwtService,
+            passwordResetDebugCodes = !databaseConfigured,
         )
 
         aiRoutes(

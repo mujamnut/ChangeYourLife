@@ -16,6 +16,29 @@ data class LoginRequest(
 )
 
 @Serializable
+data class ForgotPasswordRequest(
+    val email: String,
+)
+
+@Serializable
+data class ResetPasswordRequest(
+    val email: String,
+    val code: String,
+    val password: String,
+)
+
+@Serializable
+data class ForgotPasswordResponse(
+    val message: String,
+    val debugCode: String? = null,
+)
+
+@Serializable
+data class ResetPasswordResponse(
+    val message: String,
+)
+
+@Serializable
 data class AuthResponse(
     val token: String,
     val user: UserResponse,
@@ -29,4 +52,3 @@ data class UserResponse(
     val createdAt: Long,
     val updatedAt: Long,
 )
-

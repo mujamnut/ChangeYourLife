@@ -6,8 +6,12 @@ import com.changeyourlife.cyl.backend.domain.UserAccount
 import com.changeyourlife.cyl.backend.domain.UserRepository
 import com.changeyourlife.cyl.backend.model.ErrorResponse
 import com.changeyourlife.cyl.backend.model.auth.AuthResponse
+import com.changeyourlife.cyl.backend.model.auth.ForgotPasswordRequest
+import com.changeyourlife.cyl.backend.model.auth.ForgotPasswordResponse
 import com.changeyourlife.cyl.backend.model.auth.LoginRequest
 import com.changeyourlife.cyl.backend.model.auth.RegisterRequest
+import com.changeyourlife.cyl.backend.model.auth.ResetPasswordRequest
+import com.changeyourlife.cyl.backend.model.auth.ResetPasswordResponse
 import com.changeyourlife.cyl.backend.model.auth.UserResponse
 import com.changeyourlife.cyl.backend.service.JwtService
 import com.changeyourlife.cyl.backend.service.PasswordHasher
@@ -21,12 +25,16 @@ import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.route
+import java.security.SecureRandom
 
 fun Route.authRoutes(
     userRepository: UserRepository,
     jwtService: JwtService,
     passwordHasher: PasswordHasher = PasswordHasher(),
+    passwordResetDebugCodes: Boolean = false,
 ) {
+    val resetCodeGenerator = PasswordResetCodeGenerator()
+
     route("/auth") {
         post("/register") {
             val request = call.receive<RegisterRequest>()
@@ -53,6 +61,69 @@ fun Route.authRoutes(
                 AuthResponse(
                     token = jwtService.generateToken(user),
                     user = user.toResponse(),
+                ),
+            )
+        }
+
+        post("/forgot-password") {
+            val request = call.receive<ForgotPasswordRequest>()
+            val email = request.email.normalizeEmail()
+            if (email.isBlank() || "@" !in email) {
+                call.respond(HttpStatusCode.BadRequest, ErrorResponse("A valid email is required."))
+                return@post
+            }
+
+            val user = userRepository.findByEmail(email)
+            val debugCode = if (user != null) {
+                val now = System.currentTimeMillis()
+                val code = resetCodeGenerator.nextCode()
+                userRepository.createPasswordResetCode(
+                    userId = user.id,
+                    codeHash = passwordHasher.hash(code),
+                    expiresAt = now + PasswordResetCodeTtlMillis,
+                    createdAt = now,
+                )
+                if (passwordResetDebugCodes) code else null
+            } else {
+                null
+            }
+
+            call.respond(
+                ForgotPasswordResponse(
+                    message = "If the email exists, a reset code has been sent.",
+                    debugCode = debugCode,
+                ),
+            )
+        }
+
+        post("/reset-password") {
+            val request = call.receive<ResetPasswordRequest>()
+            val validationError = validateResetPasswordRequest(request)
+            if (validationError != null) {
+                call.respond(HttpStatusCode.BadRequest, ErrorResponse(validationError))
+                return@post
+            }
+
+            val now = System.currentTimeMillis()
+            val resetCode = userRepository.findActivePasswordResetCode(request.email, now)
+            if (resetCode == null || !passwordHasher.verify(request.code.trim(), resetCode.codeHash)) {
+                call.respond(HttpStatusCode.BadRequest, ErrorResponse("Invalid or expired reset code."))
+                return@post
+            }
+
+            userRepository.updatePasswordHash(
+                userId = resetCode.userId,
+                passwordHash = passwordHasher.hash(request.password),
+                updatedAt = now,
+            )
+            userRepository.markPasswordResetCodeUsed(
+                codeId = resetCode.id,
+                usedAt = now,
+            )
+
+            call.respond(
+                ResetPasswordResponse(
+                    message = "Password has been reset. You can log in with the new password.",
                 ),
             )
         }
@@ -105,6 +176,17 @@ private fun validateRegisterRequest(request: RegisterRequest): String? {
     }
 }
 
+private fun validateResetPasswordRequest(request: ResetPasswordRequest): String? {
+    val email = request.email.normalizeEmail()
+    val code = request.code.trim()
+    return when {
+        email.isBlank() || "@" !in email -> "A valid email is required."
+        code.length != 6 || code.any { !it.isDigit() } -> "Enter the 6-digit reset code."
+        request.password.length < 8 -> "Password must be at least 8 characters."
+        else -> null
+    }
+}
+
 private fun UserAccount.toResponse(): UserResponse {
     return UserResponse(
         id = id,
@@ -115,3 +197,12 @@ private fun UserAccount.toResponse(): UserResponse {
     )
 }
 
+private class PasswordResetCodeGenerator {
+    private val random = SecureRandom()
+
+    fun nextCode(): String {
+        return "%06d".format(random.nextInt(1_000_000))
+    }
+}
+
+private const val PasswordResetCodeTtlMillis = 15L * 60L * 1_000L
