@@ -192,10 +192,12 @@ private fun HomeScreen(
     modifier: Modifier = Modifier,
 ) {
     var isChatSheetOpen by rememberSaveable { mutableStateOf(false) }
+    var isCreateSheetOpen by rememberSaveable { mutableStateOf(false) }
     var selectedHomeTab by rememberSaveable { mutableStateOf(HomeTab.Home) }
     var selectedPageActionId by rememberSaveable { mutableStateOf<String?>(null) }
     var permanentDeletePage by rememberSaveable { mutableStateOf<Page?>(null) }
     val chatSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val createSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val pageActionSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scope = rememberCoroutineScope()
     val selectedPageActionPage = remember(
@@ -230,6 +232,28 @@ private fun HomeScreen(
                 }
             },
             sheetState = chatSheetState,
+        )
+    }
+    if (isCreateSheetOpen) {
+        HomeCreateSheet(
+            onCreatePage = {
+                scope.launch { createSheetState.hide() }.invokeOnCompletion {
+                    isCreateSheetOpen = false
+                    onCreatePage()
+                }
+            },
+            onCreateModule = { type ->
+                scope.launch { createSheetState.hide() }.invokeOnCompletion {
+                    isCreateSheetOpen = false
+                    onCreateModule(type)
+                }
+            },
+            onDismiss = {
+                scope.launch { createSheetState.hide() }.invokeOnCompletion {
+                    isCreateSheetOpen = false
+                }
+            },
+            sheetState = createSheetState,
         )
     }
     selectedPageActionPage?.let { page ->
@@ -307,7 +331,7 @@ private fun HomeScreen(
             HomeBottomBar(
                 onSearch = onSearch,
                 onOpenAi = { isChatSheetOpen = true },
-                onCreatePage = onCreatePage,
+                onCreatePage = { isCreateSheetOpen = true },
             )
         },
     ) { innerPadding ->
@@ -332,12 +356,10 @@ private fun HomeScreen(
 
             when (selectedHomeTab) {
                 HomeTab.Home -> {
-                    item {
-                        HomeSectionHeader(text = "Recents")
-                        Spacer(modifier = Modifier.height(10.dp))
-                        if (uiState.recentPages.isEmpty()) {
-                            EmptyStateCard()
-                        } else {
+                    if (uiState.recentPages.isNotEmpty()) {
+                        item {
+                            HomeSectionHeader(text = "Recents")
+                            Spacer(modifier = Modifier.height(10.dp))
                             RecentPagesRail(
                                 pages = uiState.recentPages,
                                 onOpenPage = onOpenPage,
@@ -349,7 +371,7 @@ private fun HomeScreen(
                         HomeSectionHeader(
                             text = "Private",
                             actionLabel = "New",
-                            onAction = onCreatePage,
+                            onAction = { isCreateSheetOpen = true },
                         )
                         Spacer(modifier = Modifier.height(6.dp))
                         if (uiState.allPages.isEmpty()) {
@@ -358,7 +380,7 @@ private fun HomeScreen(
                     }
 
                     items(
-                        items = uiState.allPages.take(12),
+                        items = uiState.allPages,
                         key = { page -> page.id },
                     ) { page ->
                         HomePageRow(
@@ -366,12 +388,6 @@ private fun HomeScreen(
                             onOpenPage = onOpenPage,
                             onOpenActions = { selectedPageActionId = page.id },
                         )
-                    }
-
-                    item {
-                        HomeSectionHeader(text = "Modules")
-                        Spacer(modifier = Modifier.height(8.dp))
-                        ModuleQuickCreate(onCreateModule = onCreateModule)
                     }
                 }
 
@@ -812,6 +828,52 @@ private fun HomeBottomBar(
                 Icon(
                     imageVector = Icons.Rounded.Add,
                     contentDescription = "Create page",
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun HomeCreateSheet(
+    onCreatePage: () -> Unit,
+    onCreateModule: (PageModuleType) -> Unit,
+    onDismiss: () -> Unit,
+    sheetState: androidx.compose.material3.SheetState,
+) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 20.dp, end = 20.dp, bottom = 28.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(
+                text = "Create",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(bottom = 8.dp),
+            )
+            HomePageActionRow(
+                icon = Icons.AutoMirrored.Rounded.Article,
+                text = "Blank page",
+                onClick = onCreatePage,
+            )
+            Text(
+                text = "Modules",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 10.dp, bottom = 4.dp),
+            )
+            PageModuleType.entries.forEach { type ->
+                HomePageActionRow(
+                    icon = Icons.Rounded.AutoAwesome,
+                    text = type.label,
+                    onClick = { onCreateModule(type) },
                 )
             }
         }
@@ -1436,7 +1498,7 @@ private fun EmptyStateCard() {
         ListItem(
             headlineContent = { Text(text = "No pages yet") },
             supportingContent = {
-                Text(text = "Tap create to add your first local page.")
+                Text(text = "Tap + to create a blank page or start from a module.")
             },
             leadingContent = {
                 Icon(
