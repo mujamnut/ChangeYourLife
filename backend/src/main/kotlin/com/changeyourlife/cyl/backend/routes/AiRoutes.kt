@@ -32,6 +32,7 @@ fun Route.aiRoutes(aiService: AiService) {
             call.respond(
                 AiStatusResponse(
                     mode = if (aiService.isMockMode) "sandbox" else "live",
+                    provider = aiService.activeProvider,
                     model = aiService.activeModel,
                     apiKeyConfigured = !aiService.isMockMode,
                     apiKeyLength = aiService.apiKeyLength,

@@ -84,7 +84,7 @@ class AiService(
     fun chat(messages: List<ChatMessage>): String {
         if (isMockMode) {
             val userMsg = messages.lastOrNull { it.role == "user" }?.content.orEmpty()
-            return "[AI Sandbox Mode - No API Key]\nHere is a simulated response to your question: \"$userMsg\". Add GEMINI_API_KEY to local.properties to enable live AI answers."
+            return "[AI Sandbox Mode - No API Key]\nHere is a simulated response to your question: \"$userMsg\". Add OPENROUTER_API_KEY to enable live AI answers."
         }
 
         return try {
@@ -201,7 +201,7 @@ class AiService(
     ): AiActionResult {
         if (isMockMode) {
             return AiActionResult(
-                reply = "[AI Sandbox Mode] This is a simulated chat-with-actions response. Add GEMINI_API_KEY to enable live AI.",
+                reply = "[AI Sandbox Mode] This is a simulated chat-with-actions response. Add OPENROUTER_API_KEY to enable live AI.",
                 actions = emptyList()
             )
         }
@@ -549,7 +549,7 @@ class AiService(
           ],
           "blocks": [
             { "id": "$planId", "type": "Heading", "text": "Plan: $prompt (Sandbox Mode)" },
-            { "id": "$quoteId", "type": "Quote", "text": "This is a sandbox response. Add GEMINI_API_KEY to local.properties to enable live AI generation." },
+            { "id": "$quoteId", "type": "Quote", "text": "This is a sandbox response. Add OPENROUTER_API_KEY to enable live AI generation." },
             { "id": "$todo1Id", "type": "Todo", "text": "Task A: Research details on $prompt", "isChecked": false },
             { "id": "$todo2Id", "type": "Todo", "text": "Task B: Outline requirements for $prompt", "isChecked": false },
             { "id": "$divId1", "type": "Divider" },

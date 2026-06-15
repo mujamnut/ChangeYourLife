@@ -412,12 +412,13 @@ class HomeViewModel @Inject constructor(
                 }
                 .onFailure { error ->
                     isAiGeneratingChat.value = false
-                    val message = error.localizedMessage ?: "I couldn't reach the AI service. Make sure the backend is running and your AI API key is configured."
+                    val message = error.localizedMessage
+                        ?: "I couldn't reach the CYL backend. Check your backend URL and make sure the server is running."
                     aiChatError.value = message
                     chatHistoryRepository.appendMessage(
                         sessionId = session.id,
                         role = "assistant",
-                        content = "I couldn't reach the AI service: $message",
+                        content = "I couldn't reach the CYL backend: $message",
                     )
                 }
         }

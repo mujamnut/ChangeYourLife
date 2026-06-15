@@ -1514,13 +1514,13 @@ class PageEditorViewModel @Inject constructor(
                 )
             }.onFailure { error ->
                 val message = error.localizedMessage
-                    ?: "I couldn't reach the AI service. Make sure the backend is running."
+                    ?: "I couldn't reach the CYL backend. Check your backend URL and make sure the server is running."
                 _isPageAiGenerating.value = false
                 _pageAiError.value = message
                 chatHistoryRepository.appendMessage(
                     sessionId = scopeId,
                     role = "assistant",
-                    content = "I couldn't reach the AI service: $message",
+                    content = "I couldn't reach the CYL backend: $message",
                 )
             }
         }

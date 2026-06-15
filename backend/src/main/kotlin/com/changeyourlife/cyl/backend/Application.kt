@@ -63,6 +63,9 @@ fun Application.module(
         openRouterApiKey = appConfig.openRouterApiKey,
         openRouterModel = appConfig.openRouterModel,
     )
+    environment.log.info(
+        "AI provider initialized: provider=${aiService.activeProvider}, model=${aiService.activeModel}, apiKeyConfigured=${!aiService.isMockMode}",
+    )
 
     configureRouting(
         userRepository = userRepository,
