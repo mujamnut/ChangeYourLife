@@ -63,7 +63,9 @@ data class AiStatusResponse(
 data class ChatWithActionsRequest(
     val messages: List<ChatMessage>,
     val pages: List<AiPageContext> = emptyList(),
-    val tasks: List<AiTaskContext> = emptyList()
+    val tasks: List<AiTaskContext> = emptyList(),
+    val clientDate: String = "",
+    val clientTimezone: String = "",
 )
 
 @Serializable

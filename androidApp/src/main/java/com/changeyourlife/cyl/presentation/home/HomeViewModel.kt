@@ -88,8 +88,9 @@ class HomeViewModel @Inject constructor(
         chatSessions,
         activeChatSessionId,
     ) { sessions, selectedSessionId ->
-        selectedSessionId?.takeIf { sessionId -> sessions.any { session -> session.id == sessionId } }
-            ?: sessions.firstOrNull()?.id
+        selectedSessionId
+            ?.takeUnless { sessionId -> sessionId == DraftHomeChatSessionId }
+            ?.takeIf { sessionId -> sessions.any { session -> session.id == sessionId } }
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -104,27 +105,47 @@ class HomeViewModel @Inject constructor(
     }
     private val isAiGeneratingChat = MutableStateFlow(false)
     private val aiChatError = MutableStateFlow<String?>(null)
-    private val chatState: Flow<HomeChatState> = combine(
-        chatMessages,
-        chatSessions,
-        effectiveChatSessionId,
-        isAiGeneratingChat,
-        aiChatError,
-    ) { messages, sessions, activeSessionId, isGenerating, error ->
-        HomeChatState(
-            messages = messages,
-            sessions = sessions,
-            activeSessionId = activeSessionId,
-            isGenerating = isGenerating,
-            error = error,
-        )
-    }
     private val searchQuery = MutableStateFlow("")
     private val chatHistorySearchQuery = MutableStateFlow("")
 
     @OptIn(ExperimentalCoroutinesApi::class)
     private val chatHistorySearchMessages: Flow<List<ChatMessage>> = activeWorkspaceChatScope
         .flatMapLatest { scopeId -> chatHistoryRepository.observeMessagesForScope(scopeId) }
+
+    private val chatSessionPreviews: Flow<Map<String, ChatSessionPreview>> = combine(
+        chatSessions,
+        chatHistorySearchMessages,
+    ) { sessions, messages ->
+        sessions.toChatSessionPreviews(messages)
+    }
+
+    private val chatMetaState: Flow<HomeChatMetaState> = combine(
+        chatSessions,
+        chatSessionPreviews,
+        effectiveChatSessionId,
+    ) { sessions, previews, activeSessionId ->
+        HomeChatMetaState(
+            sessions = sessions,
+            previews = previews,
+            activeSessionId = activeSessionId,
+        )
+    }
+
+    private val chatState: Flow<HomeChatState> = combine(
+        chatMessages,
+        chatMetaState,
+        isAiGeneratingChat,
+        aiChatError,
+    ) { messages, meta, isGenerating, error ->
+        HomeChatState(
+            messages = messages,
+            sessions = meta.sessions,
+            previews = meta.previews,
+            activeSessionId = meta.activeSessionId,
+            isGenerating = isGenerating,
+            error = error,
+        )
+    }
 
     private val chatHistorySearchResults: Flow<List<ChatHistorySearchResult>> = combine(
         chatSessions,
@@ -197,6 +218,7 @@ class HomeViewModel @Inject constructor(
             canCreateWorkspace = form.newWorkspaceName.isNotBlank(),
             chatMessages = chat.messages,
             chatSessions = chat.sessions,
+            chatSessionPreviews = chat.previews,
             activeChatSessionId = chat.activeSessionId,
             isAiGeneratingChat = chat.isGenerating,
             aiChatError = chat.error,
@@ -365,10 +387,10 @@ class HomeViewModel @Inject constructor(
     }
 
     fun sendChatMessage(prompt: String) {
-        if (prompt.isBlank()) return
+        if (prompt.isBlank() || isAiGeneratingChat.value) return
 
+        isAiGeneratingChat.value = true
         viewModelScope.launch {
-            isAiGeneratingChat.value = true
             aiChatError.value = null
 
             val workspaceId = workspaceRepository.getActiveWorkspaceId()
@@ -419,8 +441,15 @@ class HomeViewModel @Inject constructor(
             // and cause Gemini to ignore the JSON instruction, returning actions: [] every time.
             aiRepository.chatWithActions(updatedMessages.toRoleContentPairs(), pages = pageContext, tasks = taskContext)
                 .onSuccess { result ->
-                    val actionResults = if (result.actions.isNotEmpty()) {
-                        executeActions(result.actions, prompt)
+                    val executableActions = result.actions.ifEmpty {
+                        recoverPageWriteActions(
+                            prompt = prompt,
+                            pages = pages,
+                            assistantReply = result.reply,
+                        )
+                    }
+                    val actionResults = if (executableActions.isNotEmpty()) {
+                        executeActions(executableActions, prompt)
                     } else {
                         HomeAiExecutionResult()
                     }
@@ -988,6 +1017,104 @@ class HomeViewModel @Inject constructor(
             .replace(Regex("[^a-z0-9]"), "")
     }
 
+    private fun recoverPageWriteActions(
+        prompt: String,
+        pages: List<Page>,
+        assistantReply: String,
+    ): List<ChatAction> {
+        if (!prompt.looksLikePageWriteRequest()) return emptyList()
+        val targetPage = pages.findMentionedPage(prompt) ?: return emptyList()
+        val content = assistantReply.asWritablePageContent()
+            .ifBlank { prompt.extractWriteFallbackContent(targetPage.title) }
+        if (content.isBlank()) return emptyList()
+
+        return listOf(
+            ChatAction(
+                type = "APPEND_BLOCK",
+                title = "",
+                targetTitle = targetPage.title,
+                blockType = prompt.inferWriteBlockType(),
+                content = content,
+            ),
+        )
+    }
+
+    private fun List<Page>.findMentionedPage(prompt: String): Page? {
+        val normalizedPrompt = prompt.lowercase()
+        return filter { page -> page.title.isNotBlank() }
+            .sortedByDescending { page -> page.title.length }
+            .firstOrNull { page -> normalizedPrompt.contains("@${page.title.lowercase()}") }
+    }
+
+    private fun String.looksLikePageWriteRequest(): Boolean {
+        val value = lowercase()
+        val hasWriteIntent = listOf(
+            "write",
+            "tulis",
+            "catat",
+            "masukkan",
+            "insert",
+            "append",
+            "add note",
+            "tambah nota",
+            "buat isi",
+            "draft",
+            "karangan",
+        ).any { token -> value.contains(token) }
+        if (!hasWriteIntent) return false
+
+        val destructiveOrTableIntent = listOf(
+            "delete",
+            "hapus",
+            "buang",
+            "rename",
+            "table",
+            "database",
+            "row",
+            "column",
+            "property",
+        ).any { token -> value.contains(token) }
+        return !destructiveOrTableIntent
+    }
+
+    private fun String.asWritablePageContent(): String {
+        val value = trim()
+        if (value.isBlank()) return ""
+        val lower = value.lowercase()
+        val isGenericFailure = listOf(
+            "i can't",
+            "i cannot",
+            "cannot",
+            "can't",
+            "tidak dapat",
+            "tak dapat",
+            "maaf",
+            "sorry",
+            "please try again",
+            "couldn't convert",
+        ).any { token -> lower.contains(token) }
+        if (isGenericFailure) return ""
+        return value
+    }
+
+    private fun String.extractWriteFallbackContent(pageTitle: String): String {
+        return replace("@$pageTitle", "", ignoreCase = true)
+            .replace(Regex("(?i)\\b(write|tulis|catat|masukkan|insert|append|draft|buat isi|tambah nota|add note)\\b"), "")
+            .replace(Regex("\\s+"), " ")
+            .trim(' ', '-', ':')
+    }
+
+    private fun String.inferWriteBlockType(): String {
+        val value = lowercase()
+        return when {
+            value.contains("heading") || value.contains("tajuk") -> "Heading"
+            value.contains("bullet") || value.contains("list") || value.contains("senarai") -> "Bullet"
+            value.contains("quote") || value.contains("petikan") -> "Quote"
+            value.contains("todo") || value.contains("checklist") -> "Todo"
+            else -> "Text"
+        }
+    }
+
     private suspend fun findMentionedPage(
         workspaceId: String,
         prompt: String,
@@ -1268,25 +1395,31 @@ class HomeViewModel @Inject constructor(
                 ?.takeIf { it.isNotBlank() }
                 ?: CylDefaults.DefaultWorkspaceId
             val scopeId = homeChatScopeId(workspaceId)
-            val session = resolveActiveChatSession(scopeId)
-            chatHistoryRepository.clearMessages(session.id)
+            val sessionId = activePersistedChatSessionId(scopeId) ?: return@launch
+            chatHistoryRepository.clearMessages(sessionId)
+            chatHistoryRepository.deleteSession(sessionId)
+            activeChatSessionId.value = DraftHomeChatSessionId
         }
     }
 
     fun createNewChatSession() {
-        viewModelScope.launch {
-            val workspaceId = workspaceRepository.getActiveWorkspaceId()
-                ?.takeIf { it.isNotBlank() }
-                ?: CylDefaults.DefaultWorkspaceId
-            val session = chatHistoryRepository.createSession(homeChatScopeId(workspaceId))
-            activeChatSessionId.value = session.id
-            aiChatError.value = null
-        }
+        activeChatSessionId.value = DraftHomeChatSessionId
+        aiChatError.value = null
     }
 
     fun selectChatSession(sessionId: String) {
         activeChatSessionId.value = sessionId
         aiChatError.value = null
+    }
+
+    fun deleteChatSession(sessionId: String) {
+        viewModelScope.launch {
+            chatHistoryRepository.deleteSession(sessionId)
+            if (activeChatSessionId.value == sessionId) {
+                activeChatSessionId.value = DraftHomeChatSessionId
+            }
+            aiChatError.value = null
+        }
     }
 
     fun clearAiChatError() {
@@ -1297,15 +1430,8 @@ class HomeViewModel @Inject constructor(
         val workspaceId = workspaceRepository.getActiveWorkspaceId()
             ?.takeIf { it.isNotBlank() }
             ?: CylDefaults.DefaultWorkspaceId
-        val scopeId = homeChatScopeId(workspaceId)
-        val latestSession = chatHistoryRepository.getOrCreateLatestSession(scopeId)
-        val latestMessages = chatHistoryRepository.observeMessages(latestSession.id).first()
-        val launchSession = if (latestMessages.isEmpty()) {
-            latestSession
-        } else {
-            chatHistoryRepository.createSession(scopeId)
-        }
-        activeChatSessionId.value = launchSession.id
+        chatHistoryRepository.deleteEmptySessions(homeChatScopeId(workspaceId))
+        activeChatSessionId.value = DraftHomeChatSessionId
         aiChatError.value = null
     }
 
@@ -1316,11 +1442,19 @@ class HomeViewModel @Inject constructor(
     private suspend fun resolveActiveChatSession(scopeId: String): ChatSession {
         val sessions = chatHistoryRepository.observeSessions(scopeId).first()
         val session = activeChatSessionId.value
+            ?.takeUnless { selectedSessionId -> selectedSessionId == DraftHomeChatSessionId }
             ?.let { selectedSessionId -> sessions.firstOrNull { session -> session.id == selectedSessionId } }
-            ?: sessions.firstOrNull()
             ?: chatHistoryRepository.createSession(scopeId)
         activeChatSessionId.value = session.id
         return session
+    }
+
+    private suspend fun activePersistedChatSessionId(scopeId: String): String? {
+        val selectedSessionId = activeChatSessionId.value
+            ?.takeUnless { sessionId -> sessionId == DraftHomeChatSessionId }
+            ?: return null
+        val sessions = chatHistoryRepository.observeSessions(scopeId).first()
+        return selectedSessionId.takeIf { sessionId -> sessions.any { session -> session.id == sessionId } }
     }
 
     private fun List<ChatMessage>.toAiChatMessages(): List<AiChatMessage> {
@@ -1491,6 +1625,25 @@ private fun List<ChatSession>.toChatHistorySearchResults(
     query: String,
 ): List<ChatHistorySearchResult> {
     return toChatHistorySearchResults(messages = messages, terms = query.searchTerms())
+}
+
+private fun List<ChatSession>.toChatSessionPreviews(
+    messages: List<ChatMessage>,
+): Map<String, ChatSessionPreview> {
+    val messagesBySession = messages.groupBy { message -> message.sessionId }
+    return associate { session ->
+        val sessionMessages = messagesBySession[session.id].orEmpty()
+        val lastMessage = sessionMessages.maxByOrNull { message -> message.createdAt }
+        session.id to ChatSessionPreview(
+            lastMessage = lastMessage?.toPreviewText().orEmpty(),
+            messageCount = sessionMessages.size,
+        )
+    }
+}
+
+private fun ChatMessage.toPreviewText(): String {
+    val speaker = if (role.equals("user", ignoreCase = true)) "You" else "CYL"
+    return "$speaker: ${content.compactLine()}".take(96)
 }
 
 private fun List<ChatSession>.toChatHistorySearchResults(
@@ -1753,6 +1906,7 @@ private const val SearchTargetProperty = "property"
 private const val SearchTargetBlock = "block"
 private const val SearchTargetRow = "row"
 private const val SearchTargetRowBlock = "row_block"
+private const val DraftHomeChatSessionId = "draft-home-chat"
 
 private fun String.isReadOnlySearchRequest(): Boolean {
     val text = lowercase()
@@ -1955,9 +2109,16 @@ private data class WorkspaceFormState(
     val newWorkspaceName: String = "",
 )
 
+private data class HomeChatMetaState(
+    val sessions: List<ChatSession> = emptyList(),
+    val previews: Map<String, ChatSessionPreview> = emptyMap(),
+    val activeSessionId: String? = null,
+)
+
 private data class HomeChatState(
     val messages: List<AiChatMessage> = emptyList(),
     val sessions: List<ChatSession> = emptyList(),
+    val previews: Map<String, ChatSessionPreview> = emptyMap(),
     val activeSessionId: String? = null,
     val isGenerating: Boolean = false,
     val error: String? = null,
@@ -1994,6 +2155,7 @@ data class HomeUiState(
     val canCreateWorkspace: Boolean = false,
     val chatMessages: List<AiChatMessage> = emptyList(),
     val chatSessions: List<ChatSession> = emptyList(),
+    val chatSessionPreviews: Map<String, ChatSessionPreview> = emptyMap(),
     val activeChatSessionId: String? = null,
     val chatHistorySearchQuery: String = "",
     val chatHistorySearchResults: List<ChatHistorySearchResult> = emptyList(),
@@ -2023,6 +2185,11 @@ data class ChatHistorySearchResult(
     val snippet: String,
     val matchCount: Int,
     val lastMatchedAt: Long,
+)
+
+data class ChatSessionPreview(
+    val lastMessage: String = "",
+    val messageCount: Int = 0,
 )
 
 private fun Page.toChatPageLink(

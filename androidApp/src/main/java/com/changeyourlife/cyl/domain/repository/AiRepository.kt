@@ -8,6 +8,8 @@ interface AiRepository {
         messages: List<Pair<String, String>>,
         pages: List<AiPageContext> = emptyList(),
         tasks: List<Pair<String, String>> = emptyList(),
+        clientDate: String = "",
+        clientTimezone: String = "",
     ): Result<ChatActionResult>
     suspend fun summarize(content: String): Result<String>
     suspend fun generateTasks(content: String): Result<List<String>>

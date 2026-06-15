@@ -61,4 +61,21 @@ interface ChatMessageDao {
 
     @Query("DELETE FROM chat_messages WHERE scopeId = :sessionId")
     suspend fun clearMessages(sessionId: String)
+
+    @Query("UPDATE chat_sessions SET deletedAt = :deletedAt WHERE id = :sessionId")
+    suspend fun softDeleteSession(sessionId: String, deletedAt: Long)
+
+    @Query(
+        """
+        UPDATE chat_sessions
+        SET deletedAt = :deletedAt
+        WHERE scopeId = :scopeId
+            AND deletedAt IS NULL
+            AND NOT EXISTS (
+                SELECT 1 FROM chat_messages
+                WHERE chat_messages.scopeId = chat_sessions.id
+            )
+        """,
+    )
+    suspend fun softDeleteEmptySessions(scopeId: String, deletedAt: Long)
 }

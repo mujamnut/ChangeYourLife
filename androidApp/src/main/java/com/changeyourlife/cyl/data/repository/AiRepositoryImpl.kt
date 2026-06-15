@@ -18,6 +18,8 @@ import com.changeyourlife.cyl.domain.repository.ChatAction
 import com.changeyourlife.cyl.domain.repository.ChatActionResult
 import com.changeyourlife.cyl.domain.repository.ChatTableColumn
 import com.changeyourlife.cyl.presentation.page.PageBlockCodec
+import java.time.LocalDate
+import java.util.TimeZone
 import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -54,6 +56,8 @@ class AiRepositoryImpl @Inject constructor(
         messages: List<Pair<String, String>>,
         pages: List<AiPageContext>,
         tasks: List<Pair<String, String>>,
+        clientDate: String,
+        clientTimezone: String,
     ): Result<ChatActionResult> = withContext(Dispatchers.IO) {
         runCatching {
             val header = getAuthHeader()
@@ -80,6 +84,8 @@ class AiRepositoryImpl @Inject constructor(
                     )
                 },
                 tasks = tasks.map { AiTaskContextDto(id = it.first, title = it.second) },
+                clientDate = clientDate.ifBlank { LocalDate.now().toString() },
+                clientTimezone = clientTimezone.ifBlank { TimeZone.getDefault().id },
             )
             val response = aiApi.chatWithActions(header, request)
             ChatActionResult(

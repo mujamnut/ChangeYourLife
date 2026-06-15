@@ -52,7 +52,15 @@ fun Route.aiRoutes(aiService: AiService) {
 
             post("/chat-actions") {
                 val request = call.receive<ChatWithActionsRequest>()
-                val result = withContext(Dispatchers.IO) { aiService.chatWithActions(request.messages, request.pages, request.tasks) }
+                val result = withContext(Dispatchers.IO) {
+                    aiService.chatWithActions(
+                        messages = request.messages,
+                        pages = request.pages,
+                        tasks = request.tasks,
+                        clientDate = request.clientDate,
+                        clientTimezone = request.clientTimezone,
+                    )
+                }
                 call.respond(
                     ChatWithActionsResponse(
                         reply = result.reply,

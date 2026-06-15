@@ -54,7 +54,9 @@ data class GeneratePlanResponseDto(
 data class ChatWithActionsRequestDto(
     val messages: List<ChatMessageDto>,
     val pages: List<AiPageContextDto> = emptyList(),
-    val tasks: List<AiTaskContextDto> = emptyList()
+    val tasks: List<AiTaskContextDto> = emptyList(),
+    val clientDate: String = "",
+    val clientTimezone: String = "",
 )
 
 @Serializable

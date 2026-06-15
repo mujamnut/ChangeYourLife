@@ -148,8 +148,12 @@ import com.changeyourlife.cyl.domain.model.PageTableSortDirection
 import com.changeyourlife.cyl.domain.model.PageTableView
 import com.changeyourlife.cyl.domain.model.PageTableViewConfig
 import com.changeyourlife.cyl.domain.model.PageTextSpan
+import com.changeyourlife.cyl.presentation.ai.AiChatSheet
 import com.changeyourlife.cyl.presentation.ai.AiChatMessage
 import com.changeyourlife.cyl.presentation.ai.AiChatPageLink
+import com.changeyourlife.cyl.presentation.components.CylBottomCommandBar
+import com.changeyourlife.cyl.presentation.components.CylChromeIconButton
+import com.changeyourlife.cyl.presentation.home.HomeUiState
 import com.changeyourlife.cyl.presentation.theme.ChangeYourLifeTheme
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
@@ -159,9 +163,14 @@ import kotlinx.serialization.json.Json
 @Composable
 fun PageEditorRoute(
     onBack: () -> Unit,
+    homeAiState: HomeUiState,
     initialSearchTargetType: String = "",
     initialSearchTargetId: String = "",
     onOpenPage: (String, String, String) -> Unit,
+    onSendHomeAiMessage: (String) -> Unit,
+    onClearHomeAiHistory: () -> Unit,
+    onCreateHomeChatSession: () -> Unit,
+    onDismissHomeAiError: () -> Unit,
     modifier: Modifier = Modifier,
     viewModel: PageEditorViewModel = hiltViewModel(),
 ) {
@@ -169,6 +178,7 @@ fun PageEditorRoute(
 
     PageEditorScreen(
         uiState = uiState,
+        homeAiState = homeAiState,
         onBack = onBack,
         onOpenPage = onOpenPage,
         initialSearchTargetType = initialSearchTargetType,
@@ -219,13 +229,11 @@ fun PageEditorRoute(
                 onOpenPage(page.id, "", "")
             }
         },
-        onSendPageAiMessage = viewModel::sendPageAiMessage,
-        onApplyPageAiActions = viewModel::applyPendingPageAiActions,
-        onCancelPageAiActions = viewModel::cancelPendingPageAiActions,
-        onUndoPageAiAction = viewModel::undoLastPageAiAction,
         onUndoEditorChange = viewModel::undoLastEditorChange,
-        onClearPageAiHistory = viewModel::clearPageAiHistory,
-        onClearPageAiError = viewModel::clearPageAiError,
+        onSendHomeAiMessage = onSendHomeAiMessage,
+        onClearHomeAiHistory = onClearHomeAiHistory,
+        onCreateHomeChatSession = onCreateHomeChatSession,
+        onDismissHomeAiError = onDismissHomeAiError,
         modifier = modifier,
     )
 }
@@ -234,6 +242,7 @@ fun PageEditorRoute(
 @Composable
 private fun PageEditorScreen(
     uiState: PageEditorUiState,
+    homeAiState: HomeUiState,
     onBack: () -> Unit,
     onOpenPage: (String, String, String) -> Unit,
     initialSearchTargetType: String = "",
@@ -287,13 +296,11 @@ private fun PageEditorScreen(
     onPropertyValueChange: (String, String) -> Unit,
     onDeleteProperty: (String) -> Unit,
     onCreateChildPage: () -> Unit,
-    onSendPageAiMessage: (String) -> Unit,
-    onApplyPageAiActions: () -> Unit,
-    onCancelPageAiActions: () -> Unit,
-    onUndoPageAiAction: () -> Unit,
     onUndoEditorChange: () -> Unit,
-    onClearPageAiHistory: () -> Unit,
-    onClearPageAiError: () -> Unit,
+    onSendHomeAiMessage: (String) -> Unit,
+    onClearHomeAiHistory: () -> Unit,
+    onCreateHomeChatSession: () -> Unit,
+    onDismissHomeAiError: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var isAiChatSheetOpen by rememberSaveable { mutableStateOf(false) }
@@ -311,18 +318,16 @@ private fun PageEditorScreen(
     Scaffold(
         modifier = modifier,
         topBar = {
-            TopAppBar(
-                title = {
-                    Text(text = "")
-                },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
-                            contentDescription = "Back",
-                        )
-                    }
-                },
+            PageEditorTopBar(
+                pageTitle = uiState.title.ifBlank { "Untitled page" },
+                blockCount = uiState.blocks.size,
+                isAiGenerating = homeAiState.isAiGeneratingChat,
+                canUndoEditorChange = uiState.canUndoEditorChange,
+                onBack = onBack,
+                onUndoEditorChange = onUndoEditorChange,
+                onSearch = { isPageSearchSheetOpen = true },
+                onOpenAi = { isAiChatSheetOpen = true },
+                onCreateBlock = { isBlockPickerSheetOpen = true },
             )
         },
         bottomBar = {
@@ -342,25 +347,22 @@ private fun PageEditorScreen(
         },
     ) { innerPadding ->
         if (isAiChatSheetOpen) {
-            PageAiChatSheet(
-                pageTitle = uiState.title.ifBlank { "Untitled page" },
-                messages = uiState.pageAiMessages,
-                isGenerating = uiState.isPageAiGenerating,
-                errorMessage = uiState.pageAiError,
-                pendingActionPreview = uiState.pendingActionPreview,
-                canUndoAction = uiState.canUndoPageAiAction,
-                onSendMessage = onSendPageAiMessage,
-                onApplyActions = onApplyPageAiActions,
-                onCancelActions = onCancelPageAiActions,
-                onUndoAction = onUndoPageAiAction,
-                onClearHistory = onClearPageAiHistory,
-                onDismissError = onClearPageAiError,
+            AiChatSheet(
+                messages = homeAiState.chatMessages,
+                mentionPages = homeAiState.allPages,
+                isGenerating = homeAiState.isAiGeneratingChat,
+                errorMessage = homeAiState.aiChatError,
+                onSendMessage = onSendHomeAiMessage,
+                onClearHistory = onClearHomeAiHistory,
+                onCreateChatSession = onCreateHomeChatSession,
+                onDismissError = onDismissHomeAiError,
                 onOpenPage = { pageId, targetType, targetId ->
                     isAiChatSheetOpen = false
                     onOpenPage(pageId, targetType, targetId)
                 },
                 onDismiss = { isAiChatSheetOpen = false },
                 sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+                attachedPageTitle = uiState.title.ifBlank { "Untitled page" },
             )
         }
         if (isPageSearchSheetOpen) {
@@ -521,6 +523,133 @@ private fun PageEditorScreen(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PageEditorTopBar(
+    pageTitle: String,
+    blockCount: Int,
+    isAiGenerating: Boolean,
+    canUndoEditorChange: Boolean,
+    onBack: () -> Unit,
+    onUndoEditorChange: () -> Unit,
+    onSearch: () -> Unit,
+    onOpenAi: () -> Unit,
+    onCreateBlock: () -> Unit,
+) {
+    var isMenuOpen by rememberSaveable { mutableStateOf(false) }
+
+    TopAppBar(
+        title = {
+            Column {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = pageTitle,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    if (isAiGenerating) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(14.dp),
+                            strokeWidth = 2.dp,
+                        )
+                    }
+                }
+                Text(
+                    text = "$blockCount blocks",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                )
+            }
+        },
+        navigationIcon = {
+            IconButton(onClick = onBack) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
+                    contentDescription = "Back",
+                )
+            }
+        },
+        actions = {
+            IconButton(
+                onClick = onUndoEditorChange,
+                enabled = canUndoEditorChange,
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Rounded.Undo,
+                    contentDescription = "Undo last edit",
+                )
+            }
+            IconButton(onClick = onSearch) {
+                Icon(
+                    imageVector = Icons.Rounded.Search,
+                    contentDescription = "Search page",
+                )
+            }
+            Box {
+                IconButton(onClick = { isMenuOpen = true }) {
+                    Icon(
+                        imageVector = Icons.Rounded.MoreVert,
+                        contentDescription = "Page actions",
+                    )
+                }
+                DropdownMenu(
+                    expanded = isMenuOpen,
+                    onDismissRequest = { isMenuOpen = false },
+                ) {
+                    DropdownMenuItem(
+                        text = { Text(text = "Ask AI") },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Rounded.AutoAwesome,
+                                contentDescription = null,
+                            )
+                        },
+                        onClick = {
+                            isMenuOpen = false
+                            onOpenAi()
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text(text = "Add block") },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Rounded.Add,
+                                contentDescription = null,
+                            )
+                        },
+                        onClick = {
+                            isMenuOpen = false
+                            onCreateBlock()
+                        },
+                    )
+                    if (canUndoEditorChange) {
+                        DropdownMenuItem(
+                            text = { Text(text = "Undo last edit") },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Rounded.Undo,
+                                    contentDescription = null,
+                                )
+                            },
+                            onClick = {
+                                isMenuOpen = false
+                                onUndoEditorChange()
+                            },
+                        )
+                    }
+                }
+            }
+        },
+    )
+}
+
 @Composable
 private fun PageEditorBottomBar(
     activeBlockId: String?,
@@ -550,67 +679,33 @@ private fun PageEditorBottomBar(
                 onUndoEditorChange = onUndoEditorChange,
             )
         } else {
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 10.dp),
-                shape = RoundedCornerShape(28.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                ),
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 8.dp, vertical = 6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
+            CylBottomCommandBar(
+                centerLabel = "Ask AI",
+                centerIcon = Icons.Rounded.AutoAwesome,
+                centerContentDescription = "Ask AI about this page",
+                onCenterClick = onOpenAi,
+                leadingActions = {
                     if (canUndoEditorChange) {
-                        IconButton(onClick = onUndoEditorChange) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Rounded.Undo,
-                                contentDescription = "Undo last edit",
-                            )
-                        }
-                    }
-                    IconButton(onClick = onSearch) {
-                        Icon(
-                            imageVector = Icons.Rounded.Search,
-                            contentDescription = "Search page",
+                        CylChromeIconButton(
+                            icon = Icons.AutoMirrored.Rounded.Undo,
+                            contentDescription = "Undo last edit",
+                            onClick = onUndoEditorChange,
                         )
                     }
-                    Row(
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(44.dp)
-                            .clip(RoundedCornerShape(22.dp))
-                            .clickable(onClick = onOpenAi)
-                            .background(MaterialTheme.colorScheme.surface)
-                            .padding(horizontal = 14.dp),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.AutoAwesome,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(20.dp),
-                        )
-                        Text(
-                            text = "Ask AI",
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    IconButton(onClick = onCreateBlock) {
-                        Icon(
-                            imageVector = Icons.Rounded.Add,
-                            contentDescription = "Add block",
-                        )
-                    }
-                }
-            }
+                    CylChromeIconButton(
+                        icon = Icons.Rounded.Search,
+                        contentDescription = "Search page",
+                        onClick = onSearch,
+                    )
+                },
+                trailingActions = {
+                    CylChromeIconButton(
+                        icon = Icons.Rounded.Add,
+                        contentDescription = "Add block",
+                        onClick = onCreateBlock,
+                    )
+                },
+            )
         }
     }
 }
@@ -809,54 +904,6 @@ private fun PageSearchSheet(
     }
 }
 
-@Composable
-private fun PageAiMentionSuggestion(
-    title: String,
-    onSelect: (String) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Card(
-        modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-        ),
-    ) {
-        ListItem(
-            headlineContent = {
-                Text(
-                    text = title,
-                    maxLines = 1,
-                )
-            },
-            supportingContent = { Text(text = "Mention current page") },
-            leadingContent = {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Rounded.Article,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                )
-            },
-            modifier = Modifier.clickable { onSelect(title) },
-        )
-    }
-}
-
-private fun String.activeMentionQuery(): String? {
-    val atIndex = lastIndexOf('@')
-    if (atIndex < 0) return null
-    val query = substring(atIndex + 1)
-    if (query.contains('\n') || query.endsWith(" ")) return null
-    return query.trim()
-}
-
-private fun String.insertMention(title: String): String {
-    val atIndex = lastIndexOf('@')
-    val mention = "@$title "
-    if (atIndex < 0) return this + mention
-    return substring(0, atIndex) + mention
-}
-
 private data class PageLocalSearchResult(
     val key: String,
     val title: String,
@@ -947,26 +994,6 @@ private fun PageTable.localSearchResults(
         }
     }
     return listOf(tableResult) + rowResults
-}
-
-@Composable
-private fun PageAiChatPageLinks(
-    links: List<AiChatPageLink>,
-    onOpenPage: (String, String, String) -> Unit,
-) {
-    Column(
-        horizontalAlignment = Alignment.Start,
-        verticalArrangement = Arrangement.spacedBy(2.dp),
-    ) {
-        links.forEach { link ->
-            TextButton(
-                onClick = { onOpenPage(link.pageId, link.targetType, link.targetId) },
-                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-            ) {
-                Text(text = "Open ${link.title}")
-            }
-        }
-    }
 }
 
 @Composable
@@ -6659,6 +6686,7 @@ private fun PageEditorScreenPreview() {
                     ),
                 ),
             ),
+            homeAiState = HomeUiState(),
             onBack = {},
             onOpenPage = { _, _, _ -> },
             onTitleChange = {},
@@ -6703,366 +6731,11 @@ private fun PageEditorScreenPreview() {
             onDeleteProperty = {},
             onAddChildBlock = { _, _ -> },
             onCreateChildPage = {},
-            onSendPageAiMessage = {},
-            onApplyPageAiActions = {},
-            onCancelPageAiActions = {},
-            onUndoPageAiAction = {},
             onUndoEditorChange = {},
-            onClearPageAiHistory = {},
-            onClearPageAiError = {},
+            onSendHomeAiMessage = {},
+            onClearHomeAiHistory = {},
+            onCreateHomeChatSession = {},
+            onDismissHomeAiError = {},
         )
-    }
-}
-
-@Composable
-private fun AiActionPreviewCard(
-    preview: PageAiActionPreview,
-    onApply: () -> Unit,
-    onCancel: () -> Unit,
-) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.secondaryContainer,
-        ),
-    ) {
-        Column(
-            modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Text(
-                text = "Review changes",
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSecondaryContainer,
-            )
-            preview.actionLabels.forEach { label ->
-                Text(
-                    text = "- $label",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSecondaryContainer,
-                )
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                TextButton(onClick = onCancel) {
-                    Text(text = "Cancel")
-                }
-                Button(onClick = onApply) {
-                    Text(text = "Apply")
-                }
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
-@Composable
-private fun PageAiChatSheet(
-    pageTitle: String,
-    messages: List<AiChatMessage>,
-    isGenerating: Boolean,
-    errorMessage: String?,
-    pendingActionPreview: PageAiActionPreview?,
-    canUndoAction: Boolean,
-    onSendMessage: (String) -> Unit,
-    onApplyActions: () -> Unit,
-    onCancelActions: () -> Unit,
-    onUndoAction: () -> Unit,
-    onClearHistory: () -> Unit,
-    onDismissError: () -> Unit,
-    onOpenPage: (String, String, String) -> Unit,
-    onDismiss: () -> Unit,
-    sheetState: androidx.compose.material3.SheetState,
-) {
-    var inputText by rememberSaveable { mutableStateOf("") }
-    val listState = rememberLazyListState()
-    val context = LocalContext.current
-    val attachedPage = "@${pageTitle.ifBlank { "Untitled page" }}"
-    val canSend = inputText.isNotBlank() && !isGenerating && pendingActionPreview == null
-    val mentionQuery = inputText.activeMentionQuery()
-    val showAttachedPageMention = mentionQuery != null &&
-        (mentionQuery.isBlank() || pageTitle.contains(mentionQuery, ignoreCase = true))
-
-    LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty()) {
-            listState.animateScrollToItem(messages.size - 1)
-        }
-    }
-
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-    ) {
-        Column(
-            modifier = Modifier.padding(bottom = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.AutoAwesome,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(20.dp),
-                    )
-                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text(
-                            text = "CYL AI",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                        Text(
-                            text = attachedPage,
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
-                    }
-                }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (canUndoAction) {
-                        TextButton(onClick = onUndoAction) {
-                            Text(text = "Undo")
-                        }
-                    }
-                    if (messages.isNotEmpty()) {
-                        TextButton(onClick = onClearHistory) {
-                            Text(text = "Clear")
-                        }
-                    }
-                    IconButton(onClick = onDismiss) {
-                        Icon(
-                            imageVector = Icons.Rounded.Close,
-                            contentDescription = "Close",
-                        )
-                    }
-                }
-            }
-
-            if (pendingActionPreview != null) {
-                AiActionPreviewCard(
-                    preview = pendingActionPreview,
-                    onApply = onApplyActions,
-                    onCancel = onCancelActions,
-                )
-            }
-
-            if (errorMessage != null) {
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp)
-                        .clickable(onClick = onDismissError),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.errorContainer,
-                    ),
-                ) {
-                    Text(
-                        text = errorMessage,
-                        modifier = Modifier.padding(12.dp),
-                        color = MaterialTheme.colorScheme.onErrorContainer,
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
-            }
-
-            LazyColumn(
-                state = listState,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(360.dp)
-                    .padding(horizontal = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                contentPadding = PaddingValues(vertical = 8.dp),
-            ) {
-                if (messages.isEmpty() && !isGenerating) {
-                    item {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 32.dp),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(8.dp),
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Rounded.AutoAwesome,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f),
-                                    modifier = Modifier.size(40.dp),
-                                )
-                                Text(
-                                    text = "Ask about $attachedPage",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    textAlign = TextAlign.Center,
-                                )
-                            }
-                        }
-                    }
-                }
-
-                items(messages) { message ->
-                    val isUser = message.role == "user"
-                    val messageText = message.content.ifBlank { "No response content." }
-                    Box(
-                        modifier = Modifier.fillMaxWidth(),
-                        contentAlignment = if (isUser) Alignment.CenterEnd else Alignment.CenterStart,
-                    ) {
-                        Column(
-                            modifier = Modifier.widthIn(max = 300.dp),
-                            horizontalAlignment = if (isUser) Alignment.End else Alignment.Start,
-                            verticalArrangement = Arrangement.spacedBy(4.dp),
-                        ) {
-                            Text(
-                                text = if (isUser) "You" else "CYL AI",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Text(
-                                text = messageText,
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .combinedClickable(
-                                        onClick = {},
-                                        onLongClick = {
-                                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                            clipboard.setPrimaryClip(
-                                                ClipData.newPlainText("CYL AI message", messageText),
-                                            )
-                                            Toast.makeText(context, "Message copied", Toast.LENGTH_SHORT).show()
-                                        },
-                                    )
-                                    .background(
-                                        if (isUser) {
-                                            MaterialTheme.colorScheme.primaryContainer
-                                        } else {
-                                            MaterialTheme.colorScheme.surfaceContainerHigh
-                                        },
-                                    )
-                                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                                color = if (isUser) {
-                                    MaterialTheme.colorScheme.onPrimaryContainer
-                                } else {
-                                    MaterialTheme.colorScheme.onSurface
-                                },
-                                style = MaterialTheme.typography.bodyMedium,
-                            )
-                            if (!isUser && message.pageLinks.isNotEmpty()) {
-                                PageAiChatPageLinks(
-                                    links = message.pageLinks,
-                                    onOpenPage = onOpenPage,
-                                )
-                            }
-                        }
-                    }
-                }
-
-                if (isGenerating) {
-                    item {
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                                .padding(horizontal = 12.dp, vertical = 10.dp),
-                        ) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(14.dp),
-                                strokeWidth = 2.dp,
-                            )
-                            Text(
-                                text = "Thinking...",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                }
-            }
-
-            if (showAttachedPageMention) {
-                PageAiMentionSuggestion(
-                    title = pageTitle.ifBlank { "Untitled page" },
-                    onSelect = { selectedTitle ->
-                        inputText = inputText.insertMention(selectedTitle)
-                    },
-                    modifier = Modifier.padding(horizontal = 16.dp),
-                )
-            }
-
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.Bottom,
-            ) {
-                OutlinedTextField(
-                    value = inputText,
-                    onValueChange = { inputText = it },
-                    modifier = Modifier.weight(1f),
-                    enabled = pendingActionPreview == null,
-                    placeholder = {
-                        Text(
-                            text = if (pendingActionPreview == null) {
-                                "Message $attachedPage..."
-                            } else {
-                                "Apply or cancel the proposed changes first"
-                            },
-                        )
-                    },
-                    maxLines = 4,
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                    keyboardActions = KeyboardActions(
-                        onSend = {
-                            if (canSend) {
-                                onSendMessage(inputText.trim())
-                                inputText = ""
-                            }
-                        },
-                    ),
-                    shape = RoundedCornerShape(16.dp),
-                )
-                IconButton(
-                    onClick = {
-                        if (canSend) {
-                            onSendMessage(inputText.trim())
-                            inputText = ""
-                        }
-                    },
-                    enabled = canSend,
-                ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Rounded.Send,
-                        contentDescription = "Send",
-                        tint = if (canSend) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-                        },
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(4.dp))
-        }
     }
 }

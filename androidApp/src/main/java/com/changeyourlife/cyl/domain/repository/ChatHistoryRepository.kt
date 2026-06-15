@@ -27,4 +27,8 @@ interface ChatHistoryRepository {
     ): ChatMessage
 
     suspend fun clearMessages(sessionId: String)
+
+    suspend fun deleteSession(sessionId: String)
+
+    suspend fun deleteEmptySessions(scopeId: String)
 }

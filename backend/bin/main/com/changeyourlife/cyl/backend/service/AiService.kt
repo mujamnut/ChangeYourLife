@@ -8,6 +8,7 @@ import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.time.Duration
+import java.time.LocalDate
 import java.util.UUID
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
@@ -197,7 +198,9 @@ class AiService(
     fun chatWithActions(
         messages: List<ChatMessage>,
         pages: List<AiPageContext> = emptyList(),
-        tasks: List<AiTaskContext> = emptyList()
+        tasks: List<AiTaskContext> = emptyList(),
+        clientDate: String = "",
+        clientTimezone: String = "",
     ): AiActionResult {
         if (isMockMode) {
             return AiActionResult(
@@ -207,6 +210,8 @@ class AiService(
         }
 
         return try {
+            val resolvedClientDate = clientDate.ifBlank { LocalDate.now().toString() }
+            val resolvedClientTimezone = clientTimezone.ifBlank { "Local" }
             val pageContext = pages.joinToString(separator = "\n") { page ->
                 val blockContext = page.blocks
                     .joinToString(separator = "\n") { block ->
@@ -250,6 +255,12 @@ class AiService(
                 You MUST respond with a JSON object containing:
                 1. "reply": A friendly conversational response to the user.
                 2. "actions": An array of actions to execute.
+
+                Current runtime context:
+                - Client date: $resolvedClientDate
+                - Client timezone: $resolvedClientTimezone
+                - When the user says today, tomorrow, next week, tonight, later, in 30 minutes, or any relative date/time, resolve it from the client date/time context above when possible.
+                - If you cannot confidently calculate an exact date/time, keep the Date cell blank and put the relative wording in Notes instead of inventing a date.
 
                 Supported action types:
                 - "CREATE_PAGE": use "title" for the new page title and optional "content" for page content.
@@ -307,6 +318,13 @@ class AiService(
                 - Home/global chat can modify a mentioned page using page-level actions such as ADD_PROPERTY, UPDATE_PROPERTY, DELETE_PROPERTY, APPEND_BLOCK, CREATE_DATABASE, ADD_TABLE_ROW, UPDATE_TABLE_CELL, and DELETE_TABLE_ROW.
                 - Page/current chat may omit "targetTitle" because the attached page is already the target.
 
+                Write/update autonomy:
+                - If the user asks you to write, tulis, buat isi, masukkan, tambah nota, draft, plan, outline, summarize into, or add content inside the current/mentioned page, return an action; do not only reply with text.
+                - For new text content in the current/mentioned page, prefer "APPEND_BLOCK" with "blockType":"Text" unless the user asks for Heading, Bullet, Todo, Quote, table, or module.
+                - If the user asks to replace all page content, use "UPDATE_PAGE" with "content". If the user asks to edit a visible block, use "UPDATE_BLOCK" and the exact blockId when available.
+                - If the target page/table/row is clearly the current/mentioned page and exactly one matching object is visible, act on it. Ask clarification only when multiple visible targets genuinely match.
+                - Never say you cannot modify the app when a supported action can represent the request.
+
                 Database view behavior:
                 - Default every new database to "tableView":"Table".
                 - Do not create or switch to List, Board, Calendar, Gallery, Timeline, or Dashboard unless the user explicitly asks for that view.
@@ -341,9 +359,10 @@ class AiService(
                 - User: "buat habit tracker module" → {"reply": "Done — I created a Habit module.", "actions": [{"type": "CREATE_MODULE", "moduleType": "Habit", "title": "Habit Tracker"}]}
                 - User: "create a travel planner module for Japan" → {"reply": "Done — I created a Travel module.", "actions": [{"type": "CREATE_MODULE", "moduleType": "Travel", "title": "Japan Travel Planner"}]}
                 - User: "rename Trip Plan to Japan Trip" → {"reply": "Done — I renamed the page.", "actions": [{"type": "UPDATE_PAGE", "targetTitle": "Trip Plan", "title": "Japan Trip"}]}
-                - User: "add a task to Trip Plan to book hotels tomorrow 10am" → {"reply": "Done — I added that task to the table.", "actions": [{"type": "ADD_TABLE_ROW", "targetTitle": "Trip Plan", "tableTitle": "Tasks", "rowTitle": "Book hotels", "cellValues": {"Task": "Book hotels", "Status": "Not started", "Date": "{\"startDate\":\"2026-06-15\",\"startTime\":\"10:00:00\",\"includeTime\":true,\"timezoneLabel\":\"Local\"}", "Notes": ""}}]}
+                - User: "add a task to Trip Plan to book hotels tomorrow 10am" → {"reply": "Done — I added that task to the table.", "actions": [{"type": "ADD_TABLE_ROW", "targetTitle": "Trip Plan", "tableTitle": "Tasks", "rowTitle": "Book hotels", "cellValues": {"Task": "Book hotels", "Status": "Not started", "Date": "{\"startDate\":\"YYYY-MM-DD\",\"startTime\":\"10:00:00\",\"includeTime\":true,\"timezoneLabel\":\"Local\"}", "Notes": ""}}]}
                 - User: "create a packing subpage under Trip Plan" → {"reply": "Done — I created the subpage.", "actions": [{"type": "CREATE_SUBPAGE", "targetTitle": "Trip Plan", "title": "Packing"}]}
                 - User: "in @Trip Plan add status property Planning" → {"reply": "Done — I added that property.", "actions": [{"type": "ADD_PROPERTY", "propertyName": "Status", "propertyType": "Status", "value": "Planning"}]}
+                - User: "tulis ringkasan tentang idea ini di page ini" → {"reply": "Done — I added that text to the page.", "actions": [{"type": "APPEND_BLOCK", "blockType": "Text", "content": "Ringkasan idea ini..."}]}
                 - User: "add a checklist item here to buy tickets" → {"reply": "Done — I added that item to the task table.", "actions": [{"type": "ADD_TABLE_ROW", "rowTitle": "Buy tickets", "cellValues": {"Task": "Buy tickets", "Status": "Not started", "Date": "", "Notes": ""}}]}
                 - User: "rename this page to Japan Trip" → {"reply": "Done — I renamed this page.", "actions": [{"type": "RENAME_CURRENT_PAGE", "title": "Japan Trip"}]}
                 - User: "delete status property" → {"reply": "Done — I deleted that property.", "actions": [{"type": "DELETE_PROPERTY", "propertyName": "Status"}]}
@@ -378,7 +397,7 @@ class AiService(
 
             val allMessages = listOf(ChatMessage(role = "system", content = systemPrompt)) + messages
             val responseText = chatCompletionsJson(allMessages)
-            val parsed = json.decodeFromString<AiActionJsonResponse>(responseText.cleanJson())
+            val parsed = json.decodeFromString<AiActionJsonResponse>(responseText.cleanAiJson())
             val reply = parsed.reply.ifBlank {
                 if (parsed.actions.isNotEmpty()) {
                     "Done — I handled that for you."
@@ -388,7 +407,7 @@ class AiService(
             }
             AiActionResult(reply = reply, actions = parsed.actions)
         } catch (e: Exception) {
-            val fallback = chat(messages)
+            val fallback = "I couldn't convert that into a CYL action reliably. Please try again with the page/table/row name, or mention the page with @."
             AiActionResult(reply = fallback, actions = emptyList())
         }
     }
@@ -430,7 +449,7 @@ class AiService(
                 ChatMessage(role = "user", content = prompt)
             )
             val response = chatCompletionsJson(messages)
-            json.decodeFromString<List<String>>(response.cleanJson())
+            json.decodeFromString<List<String>>(response.cleanAiJson())
         } catch (e: Exception) {
             listOf("Failed to extract tasks: ${e.localizedMessage}")
         }
@@ -482,7 +501,7 @@ class AiService(
         )
 
         return try {
-            chatCompletionsJson(messages).cleanJson()
+            chatCompletionsJson(messages).cleanAiJson()
         } catch (e: Exception) {
             createMockPlanJson("Error generating plan: ${e.localizedMessage}")
         }
@@ -514,14 +533,6 @@ class AiService(
         } else {
             throw Exception("HTTP Error: ${response.statusCode()} - ${response.body()}")
         }
-    }
-
-    private fun String.cleanJson(): String {
-        var cleaned = this.trim()
-        if (cleaned.startsWith("```json")) cleaned = cleaned.substringAfter("```json")
-        else if (cleaned.startsWith("```")) cleaned = cleaned.substringAfter("```")
-        if (cleaned.endsWith("```")) cleaned = cleaned.substringBeforeLast("```")
-        return cleaned.trim()
     }
 
     private fun createMockPlanJson(prompt: String): String {
@@ -608,4 +619,61 @@ class AiService(
     private data class ApiChoice(
         val message: ApiMessage
     )
+}
+
+internal fun String.cleanAiJson(): String {
+    var cleaned = trim()
+    if (cleaned.startsWith("```json", ignoreCase = true)) {
+        cleaned = cleaned.substringAfter('\n', missingDelimiterValue = cleaned.removePrefix("```json"))
+    } else if (cleaned.startsWith("```")) {
+        cleaned = cleaned.substringAfter('\n', missingDelimiterValue = cleaned.removePrefix("```"))
+    }
+    if (cleaned.endsWith("```")) cleaned = cleaned.substringBeforeLast("```")
+    cleaned = cleaned.trim()
+
+    val objectStart = cleaned.indexOf('{')
+    val arrayStart = cleaned.indexOf('[')
+    val start = when {
+        objectStart < 0 -> arrayStart
+        arrayStart < 0 -> objectStart
+        else -> minOf(objectStart, arrayStart)
+    }
+    if (start < 0) return cleaned
+
+    val open = cleaned[start]
+    val close = if (open == '{') '}' else ']'
+    return cleaned.extractBalancedJson(start, open, close) ?: cleaned
+}
+
+private fun String.extractBalancedJson(
+    start: Int,
+    open: Char,
+    close: Char,
+): String? {
+    var depth = 0
+    var inString = false
+    var escaped = false
+    for (index in start until length) {
+        val char = this[index]
+        if (inString) {
+            when {
+                escaped -> escaped = false
+                char == '\\' -> escaped = true
+                char == '"' -> inString = false
+            }
+            continue
+        }
+
+        when (char) {
+            '"' -> inString = true
+            open -> depth++
+            close -> {
+                depth--
+                if (depth == 0) {
+                    return substring(start, index + 1).trim()
+                }
+            }
+        }
+    }
+    return null
 }

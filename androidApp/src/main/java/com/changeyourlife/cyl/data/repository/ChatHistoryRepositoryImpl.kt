@@ -101,6 +101,20 @@ class ChatHistoryRepositoryImpl @Inject constructor(
     override suspend fun clearMessages(sessionId: String) {
         chatMessageDao.clearMessages(sessionId)
     }
+
+    override suspend fun deleteSession(sessionId: String) {
+        chatMessageDao.softDeleteSession(
+            sessionId = sessionId,
+            deletedAt = System.currentTimeMillis(),
+        )
+    }
+
+    override suspend fun deleteEmptySessions(scopeId: String) {
+        chatMessageDao.softDeleteEmptySessions(
+            scopeId = scopeId,
+            deletedAt = System.currentTimeMillis(),
+        )
+    }
 }
 
 private fun ChatSessionEntity.toDomain(): ChatSession {

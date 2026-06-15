@@ -20,6 +20,7 @@ import com.changeyourlife.cyl.domain.repository.AuthState
 import com.changeyourlife.cyl.presentation.auth.AuthRoute
 import com.changeyourlife.cyl.presentation.home.HomeRoute
 import com.changeyourlife.cyl.presentation.home.HomeSearchRoute
+import com.changeyourlife.cyl.presentation.home.HomeViewModel
 import com.changeyourlife.cyl.presentation.page.PageEditorRoute
 
 private object Routes {
@@ -52,7 +53,9 @@ fun CylNavHost(
     viewModel: AuthGateViewModel = hiltViewModel(),
 ) {
     val navController = rememberNavController()
+    val homeViewModel: HomeViewModel = hiltViewModel()
     val authState by viewModel.authState.collectAsStateWithLifecycle()
+    val homeUiState by homeViewModel.uiState.collectAsStateWithLifecycle()
     val startDestination = when (authState) {
         AuthState.Loading -> null
         is AuthState.SignedIn -> Routes.Home
@@ -107,6 +110,7 @@ fun CylNavHost(
                         launchSingleTop = true
                     }
                 },
+                viewModel = homeViewModel,
             )
         }
         composable(Routes.HomeSearch) {
@@ -117,6 +121,7 @@ fun CylNavHost(
                 onOpenPage = { pageId, targetType, targetId ->
                     navController.navigate(Routes.pageEditor(pageId, targetType, targetId))
                 },
+                viewModel = homeViewModel,
             )
         }
         composable(
@@ -139,11 +144,16 @@ fun CylNavHost(
                 onBack = {
                     navController.popBackStack()
                 },
+                homeAiState = homeUiState,
                 initialSearchTargetType = it.arguments?.getString("targetType").orEmpty(),
                 initialSearchTargetId = it.arguments?.getString("targetId").orEmpty(),
                 onOpenPage = { pageId, targetType, targetId ->
                     navController.navigate(Routes.pageEditor(pageId, targetType, targetId))
                 },
+                onSendHomeAiMessage = homeViewModel::sendChatMessage,
+                onClearHomeAiHistory = homeViewModel::clearChatHistory,
+                onCreateHomeChatSession = homeViewModel::createNewChatSession,
+                onDismissHomeAiError = homeViewModel::clearAiChatError,
             )
         }
     }

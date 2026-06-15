@@ -26,22 +26,17 @@ import com.changeyourlife.cyl.domain.model.PageTableViewConfig
 import com.changeyourlife.cyl.domain.model.PageTextSpan
 import com.changeyourlife.cyl.domain.model.Reminder
 import com.changeyourlife.cyl.domain.model.TaskItem
-import com.changeyourlife.cyl.domain.model.ChatMessage
-import com.changeyourlife.cyl.domain.model.ChatPageLink
 import com.changeyourlife.cyl.domain.repository.AiBlockContext
 import com.changeyourlife.cyl.domain.repository.AiPageContext
 import com.changeyourlife.cyl.domain.repository.AiRepository
-import com.changeyourlife.cyl.domain.repository.ChatHistoryRepository
 import com.changeyourlife.cyl.domain.repository.ChatAction
 import com.changeyourlife.cyl.domain.repository.PageRepository
 import com.changeyourlife.cyl.domain.repository.ReminderRepository
 import com.changeyourlife.cyl.domain.repository.TaskRepository
-import com.changeyourlife.cyl.presentation.ai.AiChatMessage
 import com.changeyourlife.cyl.presentation.ai.AiChatPageLink
 import com.changeyourlife.cyl.presentation.ai.AiPageActionExecutor
 import com.changeyourlife.cyl.presentation.ai.isTaskTableRowAction
 import com.changeyourlife.cyl.presentation.ai.toPageTableColumnFromAi
-import com.changeyourlife.cyl.presentation.ai.toRoleContentPairs
 import com.changeyourlife.cyl.presentation.ai.withTaskTableAction
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
@@ -56,20 +51,9 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import retrofit2.HttpException
 
 private const val MaxEditorUndoSnapshots = 40
 private const val TableCheckboxCheckedValue = "true"
-
-private fun Throwable.toPageAiErrorMessage(): String {
-    return if (this is HttpException && code() == 401) {
-        "Your session expired after the backend change. Please log in again."
-    } else {
-        "I couldn't reach the CYL backend: ${
-            localizedMessage ?: "Check your backend URL and make sure the server is running."
-        }"
-    }
-}
 
 enum class TableColumnInsertSide {
     Left,
@@ -84,7 +68,6 @@ class PageEditorViewModel @Inject constructor(
     private val taskRepository: TaskRepository,
     private val reminderRepository: ReminderRepository,
     private val aiPageActionExecutor: AiPageActionExecutor,
-    private val chatHistoryRepository: ChatHistoryRepository,
 ) : ViewModel() {
     private val pageId: String = checkNotNull(savedStateHandle["pageId"])
 
@@ -93,14 +76,6 @@ class PageEditorViewModel @Inject constructor(
     private val _canUndoEditorChange = MutableStateFlow(false)
     private val _isAiGenerating = MutableStateFlow(false)
     private val _aiError = MutableStateFlow<String?>(null)
-    private val pageAiMessages = chatHistoryRepository.observeMessages(pageChatScopeId(pageId))
-        .map { messages -> messages.toAiChatMessages() }
-    private val _isPageAiGenerating = MutableStateFlow(false)
-    private val _pageAiError = MutableStateFlow<String?>(null)
-    private val _pendingPageAiActionPreview = MutableStateFlow<PageAiActionPreview?>(null)
-    private val _canUndoPageAiAction = MutableStateFlow(false)
-    private var pendingPageAiActions: List<ChatAction> = emptyList()
-    private var lastPageAiUndoSnapshot: PageAiUndoSnapshot? = null
     private val editorUndoSnapshots = ArrayDeque<PageBlockDocument>()
 
     private val _dbState = combine(
@@ -122,35 +97,13 @@ class PageEditorViewModel @Inject constructor(
         }
     }
 
-    private val _pageAiInteractionState = combine(
-        pageAiMessages,
-        _isPageAiGenerating,
-        _pageAiError,
-        _pendingPageAiActionPreview,
-        _canUndoPageAiAction,
-    ) { pageAiMessages, isPageAiGenerating, pageAiError, pendingActionPreview, canUndoPageAiAction ->
-        PageAiInteractionState(
-            pageAiMessages = pageAiMessages,
-            isPageAiGenerating = isPageAiGenerating,
-            pageAiError = pageAiError,
-            pendingActionPreview = pendingActionPreview,
-            canUndoPageAiAction = canUndoPageAiAction,
-        )
-    }
-
     private val _aiState = combine(
         _isAiGenerating,
         _aiError,
-        _pageAiInteractionState,
-    ) { isGenerating, aiError, pageAiInteractionState ->
+    ) { isGenerating, aiError ->
         PageEditorAiState(
             isAiGenerating = isGenerating,
             aiError = aiError,
-            pageAiMessages = pageAiInteractionState.pageAiMessages,
-            isPageAiGenerating = pageAiInteractionState.isPageAiGenerating,
-            pageAiError = pageAiInteractionState.pageAiError,
-            pendingActionPreview = pageAiInteractionState.pendingActionPreview,
-            canUndoPageAiAction = pageAiInteractionState.canUndoPageAiAction,
         )
     }
 
@@ -169,22 +122,12 @@ class PageEditorViewModel @Inject constructor(
                 canUndoEditorChange = canUndoEditorChange,
                 isAiGenerating = aiState.isAiGenerating,
                 aiError = aiState.aiError,
-                pageAiMessages = aiState.pageAiMessages,
-                isPageAiGenerating = aiState.isPageAiGenerating,
-                pageAiError = aiState.pageAiError,
-                pendingActionPreview = aiState.pendingActionPreview,
-                canUndoPageAiAction = aiState.canUndoPageAiAction,
             )
         } else {
             dbState.copy(
                 canUndoEditorChange = canUndoEditorChange,
                 isAiGenerating = aiState.isAiGenerating,
                 aiError = aiState.aiError,
-                pageAiMessages = aiState.pageAiMessages,
-                isPageAiGenerating = aiState.isPageAiGenerating,
-                pageAiError = aiState.pageAiError,
-                pendingActionPreview = aiState.pendingActionPreview,
-                canUndoPageAiAction = aiState.canUndoPageAiAction,
             )
         }
     }.stateIn(
@@ -1430,255 +1373,6 @@ class PageEditorViewModel @Inject constructor(
 
     fun clearAiError() {
         _aiError.value = null
-    }
-
-    fun sendPageAiMessage(prompt: String) {
-        val trimmedPrompt = prompt.trim()
-        if (trimmedPrompt.isBlank()) return
-
-        val currentUiState = uiState.value
-        val page = currentUiState.page ?: return
-
-        viewModelScope.launch {
-            _isPageAiGenerating.value = true
-            _pageAiError.value = null
-            val scopeId = pageChatScopeId(pageId)
-            val currentMessages = chatHistoryRepository.observeMessages(scopeId)
-                .first()
-                .toAiChatMessages()
-            val userMessage = AiChatMessage(role = "user", content = trimmedPrompt)
-            val visibleMessages = currentMessages + userMessage
-            chatHistoryRepository.appendMessage(
-                sessionId = scopeId,
-                role = userMessage.role,
-                content = userMessage.content,
-            )
-            buildPageAiSearchReply(currentUiState, trimmedPrompt)?.let { reply ->
-                _isPageAiGenerating.value = false
-                chatHistoryRepository.appendMessage(
-                    sessionId = scopeId,
-                    role = "assistant",
-                    content = reply,
-                )
-                return@launch
-            }
-
-            val contextualPrompt = buildPageContextPrompt(currentUiState, trimmedPrompt)
-            val apiMessages = currentMessages
-                .takeLast(8)
-                .toRoleContentPairs() + ("user" to contextualPrompt)
-
-            aiRepository.chatWithActions(
-                messages = apiMessages,
-                pages = listOf(currentUiState.toAiPageContext(page.id)),
-                tasks = emptyList(),
-            ).onSuccess { result ->
-                val assistantReply = result.reply.ifBlank {
-                    if (result.actions.isNotEmpty()) {
-                        "Done — I applied the changes."
-                    } else {
-                        "I received your message, but the AI returned an empty reply."
-                    }
-                }
-                val execution = if (result.actions.isNotEmpty()) {
-                    val latestPage = pageRepository.getPage(pageId) ?: page
-                    val snapshotPage = latestPage.copy(
-                        title = currentUiState.title.ifBlank { latestPage.title },
-                        content = PageBlockCodec.encodeDocument(
-                            PageBlockDocument(
-                                properties = currentUiState.properties,
-                                blocks = currentUiState.blocks,
-                            ),
-                        ),
-                    )
-                    executePageAiActions(
-                        actions = result.actions,
-                        page = latestPage,
-                        currentUiState = currentUiState,
-                    ).also { execution ->
-                        lastPageAiUndoSnapshot = PageAiUndoSnapshot(
-                            page = snapshotPage,
-                            createdPages = execution.createdPages,
-                            createdTasks = execution.createdTasks,
-                            createdReminders = execution.createdReminders,
-                        )
-                        _canUndoPageAiAction.value = true
-                    }
-                } else {
-                    PageAiExecutionResult(messages = emptyList())
-                }
-                pendingPageAiActions = emptyList()
-                _pendingPageAiActionPreview.value = null
-                _isPageAiGenerating.value = false
-                val replyWithResults = if (execution.messages.isEmpty()) {
-                    assistantReply
-                } else {
-                    assistantReply + "\n\n" + execution.messages.joinToString("\n")
-                }
-                chatHistoryRepository.appendMessage(
-                    sessionId = scopeId,
-                    role = "assistant",
-                    content = replyWithResults,
-                    pageLinks = execution.pageLinks
-                        .distinctBy { link -> link.pageId }
-                        .toDomainChatPageLinks(),
-                )
-            }.onFailure { error ->
-                val message = error.toPageAiErrorMessage()
-                _isPageAiGenerating.value = false
-                _pageAiError.value = message
-                chatHistoryRepository.appendMessage(
-                    sessionId = scopeId,
-                    role = "assistant",
-                    content = message,
-                )
-            }
-        }
-    }
-
-    fun clearPageAiHistory() {
-        _pageAiError.value = null
-        pendingPageAiActions = emptyList()
-        _pendingPageAiActionPreview.value = null
-        viewModelScope.launch {
-            chatHistoryRepository.clearMessages(pageChatScopeId(pageId))
-        }
-    }
-
-    fun clearPageAiError() {
-        _pageAiError.value = null
-    }
-
-    private fun pageChatScopeId(pageId: String): String {
-        return "page:$pageId"
-    }
-
-    private fun List<ChatMessage>.toAiChatMessages(): List<AiChatMessage> {
-        return map { message ->
-            AiChatMessage(
-                role = message.role,
-                content = message.content,
-                pageLinks = message.pageLinks.map { link ->
-                    AiChatPageLink(
-                        pageId = link.pageId,
-                        title = link.title,
-                        targetType = link.targetType,
-                        targetId = link.targetId,
-                    )
-                },
-            )
-        }
-    }
-
-    private fun List<AiChatPageLink>.toDomainChatPageLinks(): List<ChatPageLink> {
-        return map { link ->
-            ChatPageLink(
-                pageId = link.pageId,
-                title = link.title,
-                targetType = link.targetType,
-                targetId = link.targetId,
-            )
-        }
-    }
-
-    fun applyPendingPageAiActions() {
-        val actions = pendingPageAiActions
-        if (actions.isEmpty()) return
-
-        viewModelScope.launch {
-            val page = pageRepository.getPage(pageId) ?: return@launch
-            val snapshotPage = page.copy(
-                title = uiState.value.title.ifBlank { page.title },
-                content = PageBlockCodec.encodeDocument(
-                    PageBlockDocument(
-                        properties = uiState.value.properties,
-                        blocks = uiState.value.blocks,
-                    ),
-                ),
-            )
-
-            _isPageAiGenerating.value = true
-            _pageAiError.value = null
-
-            val execution = executePageAiActions(
-                actions = actions,
-                page = page,
-                currentUiState = uiState.value,
-            )
-            lastPageAiUndoSnapshot = PageAiUndoSnapshot(
-                page = snapshotPage,
-                createdPages = execution.createdPages,
-                createdTasks = execution.createdTasks,
-                createdReminders = execution.createdReminders,
-            )
-            _canUndoPageAiAction.value = true
-            pendingPageAiActions = emptyList()
-            _pendingPageAiActionPreview.value = null
-            _isPageAiGenerating.value = false
-            chatHistoryRepository.appendMessage(
-                sessionId = pageChatScopeId(pageId),
-                role = "assistant",
-                content = "Applied changes:\n${execution.messages.joinToString("\n")}",
-                pageLinks = execution.pageLinks
-                    .distinctBy { link -> link.pageId }
-                    .toDomainChatPageLinks(),
-            )
-        }
-    }
-
-    fun cancelPendingPageAiActions() {
-        pendingPageAiActions = emptyList()
-        _pendingPageAiActionPreview.value = null
-        viewModelScope.launch {
-            chatHistoryRepository.appendMessage(
-                sessionId = pageChatScopeId(pageId),
-                role = "assistant",
-                content = "Cancelled. No changes applied.",
-            )
-        }
-    }
-
-    fun undoLastPageAiAction() {
-        val snapshot = lastPageAiUndoSnapshot ?: return
-
-        viewModelScope.launch {
-            val now = System.currentTimeMillis()
-            pageRepository.upsertPage(snapshot.page.copy(updatedAt = now))
-            snapshot.createdPages.forEach { page ->
-                pageRepository.upsertPage(
-                    page.copy(
-                        updatedAt = now,
-                        deletedAt = now,
-                    ),
-                )
-            }
-            snapshot.createdTasks.forEach { task ->
-                taskRepository.upsertTask(
-                    task.copy(
-                        updatedAt = now,
-                        deletedAt = now,
-                    ),
-                )
-            }
-            snapshot.createdReminders.forEach { reminder ->
-                reminderRepository.upsertReminder(
-                    reminder.copy(
-                        updatedAt = now,
-                        deletedAt = now,
-                    ),
-                )
-            }
-
-            _pendingTitle.value = snapshot.page.title
-            _pendingChanges.value = PageBlockCodec.decodeDocument(snapshot.page.content)
-            lastPageAiUndoSnapshot = null
-            _canUndoPageAiAction.value = false
-            chatHistoryRepository.appendMessage(
-                sessionId = pageChatScopeId(pageId),
-                role = "assistant",
-                content = "Undone last AI apply.",
-            )
-        }
     }
 
     private suspend fun executePageAiActions(actions: List<ChatAction>): PageAiExecutionResult {
@@ -4139,35 +3833,12 @@ data class PageEditorUiState(
     val childPages: List<Page> = emptyList(),
     val isAiGenerating: Boolean = false,
     val aiError: String? = null,
-    val pageAiMessages: List<AiChatMessage> = emptyList(),
-    val isPageAiGenerating: Boolean = false,
-    val pageAiError: String? = null,
-    val pendingActionPreview: PageAiActionPreview? = null,
-    val canUndoPageAiAction: Boolean = false,
     val canUndoEditorChange: Boolean = false,
-)
-
-data class PageAiActionPreview(
-    val reply: String,
-    val actionLabels: List<String>,
-)
-
-private data class PageAiInteractionState(
-    val pageAiMessages: List<AiChatMessage>,
-    val isPageAiGenerating: Boolean,
-    val pageAiError: String?,
-    val pendingActionPreview: PageAiActionPreview?,
-    val canUndoPageAiAction: Boolean,
 )
 
 private data class PageEditorAiState(
     val isAiGenerating: Boolean,
     val aiError: String?,
-    val pageAiMessages: List<AiChatMessage>,
-    val isPageAiGenerating: Boolean,
-    val pageAiError: String?,
-    val pendingActionPreview: PageAiActionPreview?,
-    val canUndoPageAiAction: Boolean,
 )
 
 private data class PageAiExecutionResult(
@@ -4176,13 +3847,6 @@ private data class PageAiExecutionResult(
     val createdTasks: List<TaskItem> = emptyList(),
     val createdReminders: List<Reminder> = emptyList(),
     val pageLinks: List<AiChatPageLink> = emptyList(),
-)
-
-private data class PageAiUndoSnapshot(
-    val page: Page,
-    val createdPages: List<Page>,
-    val createdTasks: List<TaskItem>,
-    val createdReminders: List<Reminder>,
 )
 
 private data class TableUpdateResult(
