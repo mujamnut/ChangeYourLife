@@ -45,18 +45,35 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Article
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.automirrored.rounded.Send
+import androidx.compose.material.icons.automirrored.rounded.Sort
 import androidx.compose.material.icons.automirrored.rounded.Undo
+import androidx.compose.material.icons.automirrored.rounded.WrapText
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.AccessTime
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.Calculate
+import androidx.compose.material.icons.rounded.CalendarMonth
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.DragIndicator
+import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.FilterList
+import androidx.compose.material.icons.rounded.Functions
+import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.Notifications
+import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.SwapVert
 import androidx.compose.material.icons.rounded.TaskAlt
+import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material.icons.rounded.ViewColumn
+import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -98,6 +115,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -321,13 +339,9 @@ private fun PageEditorScreen(
             PageEditorTopBar(
                 pageTitle = uiState.title.ifBlank { "Untitled page" },
                 blockCount = uiState.blocks.size,
+                isSaving = uiState.isSaving,
                 isAiGenerating = homeAiState.isAiGeneratingChat,
-                canUndoEditorChange = uiState.canUndoEditorChange,
                 onBack = onBack,
-                onUndoEditorChange = onUndoEditorChange,
-                onSearch = { isPageSearchSheetOpen = true },
-                onOpenAi = { isAiChatSheetOpen = true },
-                onCreateBlock = { isBlockPickerSheetOpen = true },
             )
         },
         bottomBar = {
@@ -528,16 +542,10 @@ private fun PageEditorScreen(
 private fun PageEditorTopBar(
     pageTitle: String,
     blockCount: Int,
+    isSaving: Boolean,
     isAiGenerating: Boolean,
-    canUndoEditorChange: Boolean,
     onBack: () -> Unit,
-    onUndoEditorChange: () -> Unit,
-    onSearch: () -> Unit,
-    onOpenAi: () -> Unit,
-    onCreateBlock: () -> Unit,
 ) {
-    var isMenuOpen by rememberSaveable { mutableStateOf(false) }
-
     TopAppBar(
         title = {
             Column {
@@ -561,7 +569,12 @@ private fun PageEditorTopBar(
                     }
                 }
                 Text(
-                    text = "$blockCount blocks",
+                    text = buildString {
+                        append(if (isSaving) "Saving..." else "Saved")
+                        append(" · ")
+                        append("$blockCount ")
+                        append(if (blockCount == 1) "block" else "blocks")
+                    },
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
@@ -574,77 +587,6 @@ private fun PageEditorTopBar(
                     imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
                     contentDescription = "Back",
                 )
-            }
-        },
-        actions = {
-            IconButton(
-                onClick = onUndoEditorChange,
-                enabled = canUndoEditorChange,
-            ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Rounded.Undo,
-                    contentDescription = "Undo last edit",
-                )
-            }
-            IconButton(onClick = onSearch) {
-                Icon(
-                    imageVector = Icons.Rounded.Search,
-                    contentDescription = "Search page",
-                )
-            }
-            Box {
-                IconButton(onClick = { isMenuOpen = true }) {
-                    Icon(
-                        imageVector = Icons.Rounded.MoreVert,
-                        contentDescription = "Page actions",
-                    )
-                }
-                DropdownMenu(
-                    expanded = isMenuOpen,
-                    onDismissRequest = { isMenuOpen = false },
-                ) {
-                    DropdownMenuItem(
-                        text = { Text(text = "Ask AI") },
-                        leadingIcon = {
-                            Icon(
-                                imageVector = Icons.Rounded.AutoAwesome,
-                                contentDescription = null,
-                            )
-                        },
-                        onClick = {
-                            isMenuOpen = false
-                            onOpenAi()
-                        },
-                    )
-                    DropdownMenuItem(
-                        text = { Text(text = "Add block") },
-                        leadingIcon = {
-                            Icon(
-                                imageVector = Icons.Rounded.Add,
-                                contentDescription = null,
-                            )
-                        },
-                        onClick = {
-                            isMenuOpen = false
-                            onCreateBlock()
-                        },
-                    )
-                    if (canUndoEditorChange) {
-                        DropdownMenuItem(
-                            text = { Text(text = "Undo last edit") },
-                            leadingIcon = {
-                                Icon(
-                                    imageVector = Icons.AutoMirrored.Rounded.Undo,
-                                    contentDescription = null,
-                                )
-                            },
-                            onClick = {
-                                isMenuOpen = false
-                                onUndoEditorChange()
-                            },
-                        )
-                    }
-                }
             }
         },
     )
@@ -1855,35 +1797,46 @@ private fun MediaFileBlockEditor(
 
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .clickable { filePicker.launch(arrayOf("*/*")) }
+                .padding(horizontal = 4.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "Media & files",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
+            Row(
+                modifier = Modifier.weight(1f),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Rounded.Article,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(21.dp),
                 )
                 Text(
-                    text = "${block.mediaAttachments.size} attached",
-                    style = MaterialTheme.typography.labelMedium,
+                    text = if (block.mediaAttachments.isEmpty()) {
+                        "Add file or media"
+                    } else {
+                        "${block.mediaAttachments.size} attached"
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
-            Button(onClick = { filePicker.launch(arrayOf("*/*")) }) {
-                Icon(imageVector = Icons.Rounded.Add, contentDescription = null)
-                Text(text = "Attach", modifier = Modifier.padding(start = 8.dp))
-            }
+            Icon(
+                imageVector = Icons.Rounded.Add,
+                contentDescription = "Attach file",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(21.dp),
+            )
         }
 
-        if (block.mediaAttachments.isEmpty()) {
-            Text(
-                text = "No files attached.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        } else {
+        if (block.mediaAttachments.isNotEmpty()) {
             block.mediaAttachments.forEach { attachment ->
                 MediaAttachmentCard(
                     attachment = attachment,
@@ -1915,8 +1868,9 @@ private fun MediaAttachmentCard(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainer)
+            .clickable(onClick = onOpen)
             .padding(10.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
@@ -1927,7 +1881,7 @@ private fun MediaAttachmentCard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(180.dp)
-                    .clip(RoundedCornerShape(8.dp)),
+                    .clip(RoundedCornerShape(10.dp)),
                 contentScale = ContentScale.Crop,
             )
         }
@@ -1939,20 +1893,21 @@ private fun MediaAttachmentCard(
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = attachment.name.ifBlank { "Untitled file" },
-                    style = MaterialTheme.typography.bodyLarge,
+                    style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
                 Text(
                     text = listOf(
                         attachment.mimeType.ifBlank { "unknown type" },
                         attachment.sizeBytes.formatFileSize(),
-                    ).joinToString(" • "),
+                    ).joinToString(" · "),
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
-            }
-            TextButton(onClick = onOpen) {
-                Text(text = "Open")
             }
             IconButton(onClick = onRemove) {
                 Icon(
@@ -2068,38 +2023,10 @@ private fun DatabaseTableBlockEditor(
         )
     }
 
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        BasicTextField(
-            value = table.title,
-            onValueChange = onTitleChange,
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
-            textStyle = MaterialTheme.typography.headlineSmall.copy(
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f),
-            ),
-            decorationBox = { innerTextField ->
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 10.dp, bottom = 4.dp),
-                ) {
-                    if (table.title.isBlank()) {
-                        Text(
-                            text = "Untitled table",
-                            style = MaterialTheme.typography.headlineSmall.copy(
-                                fontWeight = FontWeight.SemiBold,
-                            ),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f),
-                        )
-                    }
-                    innerTextField()
-                }
-            },
-        )
-
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         TableToolbar(
             table = table,
+            onTitleChange = onTitleChange,
             onViewChange = onViewChange,
             onSortChange = onSortChange,
             onFilterChange = onFilterChange,
@@ -2149,21 +2076,28 @@ private fun DatabaseTableBlockEditor(
 @Composable
 private fun TableToolbar(
     table: PageTable,
+    onTitleChange: (String) -> Unit,
     onViewChange: (PageTableView) -> Unit,
     onSortChange: (String, PageTableSortDirection) -> Unit,
     onFilterChange: (String, String) -> Unit,
     onGroupChange: (String) -> Unit,
 ) {
-    Row(
+    Column(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        TableViewSelector(
-            selectedView = table.view,
-            onViewChange = onViewChange,
-        )
-        Box(modifier = Modifier.weight(1f)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            TableViewSelector(
+                tableTitle = table.title,
+                selectedView = table.view,
+                onTitleChange = onTitleChange,
+                onViewChange = onViewChange,
+            )
+            Spacer(modifier = Modifier.weight(1f))
             TableControls(
                 table = table,
                 onSortChange = onSortChange,
@@ -2171,34 +2105,56 @@ private fun TableToolbar(
                 onGroupChange = onGroupChange,
             )
         }
+        TableActiveControlsRow(table = table)
     }
 }
 
 @Composable
 private fun TableViewSelector(
+    tableTitle: String,
     selectedView: PageTableView,
+    onTitleChange: (String) -> Unit,
     onViewChange: (PageTableView) -> Unit,
 ) {
     var isViewMenuOpen by remember { mutableStateOf(false) }
     val selectedOption = TableViewOption.entries.firstOrNull { option -> option.view == selectedView }
         ?: TableViewOption.entries.first()
+    val displayTitle = tableTitle.ifBlank { "Untitled table" }
 
     Box {
         Row(
             modifier = Modifier
                 .height(48.dp)
-                .clip(RoundedCornerShape(24.dp))
+                .clip(RoundedCornerShape(15.dp))
                 .clickable { isViewMenuOpen = true }
-                .background(MaterialTheme.colorScheme.surfaceContainer)
-                .padding(horizontal = 14.dp),
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                .padding(horizontal = 12.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(
-                text = selectedOption.label,
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.SemiBold,
+            Icon(
+                imageVector = Icons.Rounded.ViewColumn,
+                contentDescription = null,
+                modifier = Modifier.size(20.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            Column(modifier = Modifier.widthIn(max = 230.dp)) {
+                Text(
+                    text = displayTitle,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = selectedOption.label,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
             Icon(
                 imageVector = Icons.Rounded.KeyboardArrowDown,
                 contentDescription = null,
@@ -2209,9 +2165,38 @@ private fun TableViewSelector(
             expanded = isViewMenuOpen,
             onDismissRequest = { isViewMenuOpen = false },
         ) {
+            OutlinedTextField(
+                value = tableTitle,
+                onValueChange = onTitleChange,
+                modifier = Modifier
+                    .width(300.dp)
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                singleLine = true,
+                label = { Text(text = "Table name") },
+                placeholder = { Text(text = "Untitled table") },
+                leadingIcon = {
+                    Icon(
+                        imageVector = Icons.Rounded.Edit,
+                        contentDescription = null,
+                    )
+                },
+                colors = blockTextFieldColors(),
+            )
+            HorizontalDivider()
             TableViewOption.entries.forEach { option ->
                 DropdownMenuItem(
-                    text = { Text(text = option.label) },
+                    text = {
+                        Column {
+                            Text(text = option.label)
+                            if (option.view == selectedView) {
+                                Text(
+                                    text = "Current view",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    },
                     onClick = {
                         onViewChange(option.view)
                         isViewMenuOpen = false
@@ -2353,37 +2338,28 @@ private fun TableControls(
     val filterColumn = table.columns.firstOrNull { column -> column.id == table.filter.columnId }
     val groupColumn = table.columns.firstOrNull { column -> column.id == table.groupByColumnId }
 
-    LazyRow(
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        item {
-            TableControlChip(
-                label = sortColumn?.let { column ->
-                    "Sort: ${column.name.ifBlank { "Untitled" }} ${table.sort.direction.arrowLabel}"
-                } ?: "Sort",
-                selected = sortColumn != null,
-                onClick = { activeControl = TableControlType.Sort },
-            )
-        }
-        item {
-            TableControlChip(
-                label = filterColumn?.let { column ->
-                    "Filter: ${column.name.ifBlank { "Untitled" }}"
-                } ?: "Filter",
-                selected = filterColumn != null && table.filter.query.isNotBlank(),
-                onClick = { activeControl = TableControlType.Filter },
-            )
-        }
-        item {
-            TableControlChip(
-                label = groupColumn?.let { column ->
-                    "Group: ${column.name.ifBlank { "Untitled" }}"
-                } ?: "Group",
-                selected = groupColumn != null,
-                onClick = { activeControl = TableControlType.Group },
-            )
-        }
+        TableControlIconButton(
+            icon = Icons.AutoMirrored.Rounded.Sort,
+            selected = sortColumn != null,
+            contentDescription = "Sort table",
+            onClick = { activeControl = TableControlType.Sort },
+        )
+        TableControlIconButton(
+            icon = Icons.Rounded.FilterList,
+            selected = filterColumn != null && table.filter.query.isNotBlank(),
+            contentDescription = "Filter table",
+            onClick = { activeControl = TableControlType.Filter },
+        )
+        TableControlIconButton(
+            icon = Icons.Rounded.ViewColumn,
+            selected = groupColumn != null,
+            contentDescription = "Group table",
+            onClick = { activeControl = TableControlType.Group },
+        )
     }
 
     activeControl?.let { control ->
@@ -2404,16 +2380,72 @@ private fun TableControls(
 }
 
 @Composable
-private fun TableControlChip(
-    label: String,
+private fun TableControlIconButton(
+    icon: ImageVector,
     selected: Boolean,
+    contentDescription: String,
     onClick: () -> Unit,
 ) {
-    FilterChip(
-        selected = selected,
-        onClick = onClick,
-        label = { Text(text = label.compactControlLabel()) },
-    )
+    Box(
+        modifier = Modifier
+            .size(42.dp)
+            .clip(RoundedCornerShape(13.dp))
+            .background(
+                if (selected) {
+                    MaterialTheme.colorScheme.primaryContainer
+                } else {
+                    MaterialTheme.colorScheme.surfaceContainer
+                },
+            )
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            modifier = Modifier.size(21.dp),
+            tint = if (selected) {
+                MaterialTheme.colorScheme.onPrimaryContainer
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            },
+        )
+    }
+}
+
+@Composable
+private fun TableActiveControlsRow(table: PageTable) {
+    val sortColumn = table.columns.firstOrNull { column -> column.id == table.sort.columnId }
+    val filterColumn = table.columns.firstOrNull { column -> column.id == table.filter.columnId }
+    val groupColumn = table.columns.firstOrNull { column -> column.id == table.groupByColumnId }
+    val labels = buildList {
+        if (sortColumn != null) {
+            add("Sort ${sortColumn.name.ifBlank { "Untitled" }} ${table.sort.direction.arrowLabel}")
+        }
+        if (filterColumn != null && table.filter.query.isNotBlank()) {
+            add("Filter ${filterColumn.name.ifBlank { "Untitled" }}: ${table.filter.query}")
+        }
+        if (groupColumn != null) {
+            add("Group ${groupColumn.name.ifBlank { "Untitled" }}")
+        }
+    }
+    if (labels.isEmpty()) return
+
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        items(labels) { label ->
+            Text(
+                text = label.compactControlLabel(),
+                modifier = Modifier
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(MaterialTheme.colorScheme.surfaceContainer)
+                    .padding(horizontal = 10.dp, vertical = 5.dp),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
 }
 
 @Composable
@@ -2740,65 +2772,96 @@ private fun TableHeaderRow(
     onInsertColumn: (String, TableColumnInsertSide) -> Unit,
     onDuplicateColumn: (String) -> Unit,
 ) {
-    Row(horizontalArrangement = Arrangement.spacedBy(0.dp)) {
-        Box(modifier = Modifier.width(TableOpenWidth))
-        columns.forEach { column ->
-            var isColumnSheetOpen by remember(column.id) { mutableStateOf(false) }
-            TableHeaderCell(
+    @Composable
+    fun HeaderColumn(column: PageTableColumn) {
+        var isColumnSheetOpen by remember(column.id) { mutableStateOf(false) }
+        TableHeaderCell(
+            column = column,
+            onClick = { isColumnSheetOpen = true },
+        )
+        if (isColumnSheetOpen) {
+            TableColumnEditSheet(
+                currentTableBlockId = tableBlockId,
+                table = table,
                 column = column,
-                onClick = { isColumnSheetOpen = true },
+                tableReferences = tableReferences,
+                onSort = {
+                    onSortChange(
+                        column.id,
+                        if (table.sort.columnId == column.id &&
+                            table.sort.direction == PageTableSortDirection.Ascending
+                        ) {
+                            PageTableSortDirection.Descending
+                        } else {
+                            PageTableSortDirection.Ascending
+                        },
+                    )
+                },
+                onFilter = { query -> onFilterChange(column.id, query) },
+                onGroup = { onGroupChange(column.id) },
+                onColumnNameChange = { name -> onColumnNameChange(column.id, name) },
+                onColumnTypeChange = { type -> onColumnTypeChange(column.id, type) },
+                onDateSettingsChange = { dateFormat, timeFormat, reminder, timezoneLabel ->
+                    onColumnDateSettingsChange(column.id, dateFormat, timeFormat, reminder, timezoneLabel)
+                },
+                onFormulaChange = { formula -> onColumnFormulaChange(column.id, formula) },
+                onRelationTargetChange = { targetTableId -> onColumnRelationTargetChange(column.id, targetTableId) },
+                onRollupChange = { relationColumnId, targetColumnId, aggregation ->
+                    onColumnRollupChange(column.id, relationColumnId, targetColumnId, aggregation)
+                },
+                onDelete = {
+                    onDeleteColumn(column.id)
+                    isColumnSheetOpen = false
+                },
+                onInsertLeft = {
+                    onInsertColumn(column.id, TableColumnInsertSide.Left)
+                    isColumnSheetOpen = false
+                },
+                onInsertRight = {
+                    onInsertColumn(column.id, TableColumnInsertSide.Right)
+                    isColumnSheetOpen = false
+                },
+                onDuplicate = {
+                    onDuplicateColumn(column.id)
+                    isColumnSheetOpen = false
+                },
+                onDismiss = { isColumnSheetOpen = false },
             )
-            if (isColumnSheetOpen) {
-                TableColumnEditSheet(
-                    currentTableBlockId = tableBlockId,
-                    table = table,
-                    column = column,
-                    tableReferences = tableReferences,
-                    onSort = {
-                        onSortChange(
-                            column.id,
-                            if (table.sort.columnId == column.id &&
-                                table.sort.direction == PageTableSortDirection.Ascending
-                            ) {
-                                PageTableSortDirection.Descending
-                            } else {
-                                PageTableSortDirection.Ascending
-                            },
-                        )
-                    },
-                    onFilter = { query -> onFilterChange(column.id, query) },
-                    onGroup = { onGroupChange(column.id) },
-                    onColumnNameChange = { name -> onColumnNameChange(column.id, name) },
-                    onColumnTypeChange = { type -> onColumnTypeChange(column.id, type) },
-                    onDateSettingsChange = { dateFormat, timeFormat, reminder, timezoneLabel ->
-                        onColumnDateSettingsChange(column.id, dateFormat, timeFormat, reminder, timezoneLabel)
-                    },
-                    onFormulaChange = { formula -> onColumnFormulaChange(column.id, formula) },
-                    onRelationTargetChange = { targetTableId -> onColumnRelationTargetChange(column.id, targetTableId) },
-                    onRollupChange = { relationColumnId, targetColumnId, aggregation ->
-                        onColumnRollupChange(column.id, relationColumnId, targetColumnId, aggregation)
-                    },
-                    onDelete = {
-                        onDeleteColumn(column.id)
-                        isColumnSheetOpen = false
-                    },
-                    onInsertLeft = {
-                        onInsertColumn(column.id, TableColumnInsertSide.Left)
-                        isColumnSheetOpen = false
-                    },
-                    onInsertRight = {
-                        onInsertColumn(column.id, TableColumnInsertSide.Right)
-                        isColumnSheetOpen = false
-                    },
-                    onDuplicate = {
-                        onDuplicateColumn(column.id)
-                        isColumnSheetOpen = false
-                    },
-                    onDismiss = { isColumnSheetOpen = false },
-                )
-            }
+        }
+    }
+
+    val primaryColumn = columns.firstOrNull()
+    val remainingColumns = columns.drop(1)
+
+    Row(horizontalArrangement = Arrangement.spacedBy(0.dp)) {
+        if (primaryColumn != null) {
+            HeaderColumn(primaryColumn)
+            TableOpenHeaderCell()
+        }
+        remainingColumns.forEach { column ->
+            HeaderColumn(column)
         }
         TableAddColumnCell(onAddColumn = onAddColumn)
+    }
+}
+
+@Composable
+private fun TableOpenHeaderCell() {
+    Row(
+        modifier = Modifier
+            .width(TableOpenWidth)
+            .height(TableHeaderHeight)
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .padding(horizontal = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = "Open",
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
@@ -2812,23 +2875,30 @@ private fun TableHeaderCell(
             .width(TableCellWidth)
             .height(TableHeaderHeight)
             .clickable(onClick = onClick)
-            .background(MaterialTheme.colorScheme.surface)
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
             .padding(horizontal = 10.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
-            text = column.type.shortLabel,
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        Icon(
+            imageVector = column.type.icon,
+            contentDescription = column.type.label,
+            modifier = Modifier.size(20.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Text(
             text = column.name.ifBlank { "Untitled" },
+            modifier = Modifier.weight(1f),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Icon(
+            imageVector = Icons.Rounded.KeyboardArrowDown,
+            contentDescription = null,
+            modifier = Modifier.size(18.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
         )
     }
 }
@@ -2852,7 +2922,7 @@ private fun TableAddColumnCell(
             .width(TableAddColumnWidth)
             .height(TableHeaderHeight)
             .clickable { isNewColumnSheetOpen = true }
-            .background(MaterialTheme.colorScheme.surface)
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
             .padding(horizontal = 10.dp),
         contentAlignment = Alignment.Center,
     ) {
@@ -2919,13 +2989,10 @@ private fun NewTableColumnSheet(
                     ListItem(
                         headlineContent = { Text(text = type.label) },
                         leadingContent = {
-                            Text(
-                                text = type.shortLabel,
-                                modifier = Modifier.width(36.dp),
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.SemiBold,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                textAlign = TextAlign.Center,
+                            Icon(
+                                imageVector = type.icon,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         },
                         modifier = Modifier.clickable(enabled = canCreate) {
@@ -3007,21 +3074,17 @@ private fun TableColumnEditSheet(
                         singleLine = true,
                         placeholder = { Text(text = "Property name") },
                         leadingIcon = {
-                            Text(
-                                text = column.type.shortLabel,
-                                modifier = Modifier.width(36.dp),
-                                textAlign = TextAlign.Center,
-                                fontWeight = FontWeight.SemiBold,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            Icon(
+                                imageVector = column.type.icon,
+                                contentDescription = column.type.label,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         },
                         trailingIcon = {
-                            Text(
-                                text = "i",
-                                modifier = Modifier.width(28.dp),
-                                textAlign = TextAlign.Center,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            Icon(
+                                imageVector = Icons.Rounded.Info,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         },
                         colors = blockTextFieldColors(),
@@ -3029,7 +3092,7 @@ private fun TableColumnEditSheet(
 
                     PropertyMenuGroup {
                         PropertyMenuRow(
-                            icon = "Sl",
+                            icon = Icons.Rounded.Tune,
                             label = "Edit property",
                             value = if (column.type == PageTableColumnType.Date) {
                                 column.dateFormat.label
@@ -3045,13 +3108,13 @@ private fun TableColumnEditSheet(
                             },
                         )
                         PropertyMenuRow(
-                            icon = "Ty",
+                            icon = Icons.Rounded.SwapVert,
                             label = "Change type",
                             value = column.type.label,
                             onClick = { detail = PropertySheetDetail.ChangeType },
                         )
                         PropertyMenuRow(
-                            icon = "AI",
+                            icon = Icons.Rounded.AutoAwesome,
                             label = "AI Autofill",
                             value = "Now with agents",
                             onClick = {},
@@ -3060,19 +3123,19 @@ private fun TableColumnEditSheet(
 
                     PropertyMenuGroup {
                         PropertyMenuRow(
-                            icon = "Fi",
+                            icon = Icons.Rounded.FilterList,
                             label = "Filter",
                             value = if (table.filter.columnId == column.id) table.filter.query else "",
                             onClick = { detail = PropertySheetDetail.Filter },
                         )
                         PropertyMenuRow(
-                            icon = "So",
+                            icon = Icons.AutoMirrored.Rounded.Sort,
                             label = "Sort",
                             value = if (table.sort.columnId == column.id) table.sort.direction.arrowLabel else "",
                             onClick = { detail = PropertySheetDetail.Sort },
                         )
                         PropertyMenuRow(
-                            icon = "Gr",
+                            icon = Icons.Rounded.ViewColumn,
                             label = "Group",
                             value = if (table.groupByColumnId == column.id) "Active" else "",
                             onClick = {
@@ -3081,19 +3144,19 @@ private fun TableColumnEditSheet(
                             },
                         )
                         PropertyMenuRow(
-                            icon = "Fx",
+                            icon = Icons.Rounded.Functions,
                             label = "Calculate",
                             value = column.configSummary(table, tableReferences),
                             onClick = { detail = PropertySheetDetail.Calculate },
                         )
                         PropertyMenuRow(
-                            icon = "Hi",
+                            icon = Icons.Rounded.VisibilityOff,
                             label = "Hide",
                             value = "",
                             onClick = onDismiss,
                         )
                         PropertyMenuRow(
-                            icon = "Un",
+                            icon = Icons.AutoMirrored.Rounded.WrapText,
                             label = "Unwrap content",
                             value = "",
                             onClick = onDismiss,
@@ -3101,11 +3164,11 @@ private fun TableColumnEditSheet(
                     }
 
                     PropertyMenuGroup {
-                        PropertyMenuRow(icon = "<", label = "Insert left", onClick = onInsertLeft)
-                        PropertyMenuRow(icon = ">", label = "Insert right", onClick = onInsertRight)
-                        PropertyMenuRow(icon = "Cp", label = "Duplicate property", onClick = onDuplicate)
+                        PropertyMenuRow(icon = Icons.AutoMirrored.Rounded.ArrowBack, label = "Insert left", onClick = onInsertLeft)
+                        PropertyMenuRow(icon = Icons.AutoMirrored.Rounded.ArrowForward, label = "Insert right", onClick = onInsertRight)
+                        PropertyMenuRow(icon = Icons.Rounded.ContentCopy, label = "Duplicate property", onClick = onDuplicate)
                         PropertyMenuRow(
-                            icon = "Del",
+                            icon = Icons.Rounded.Delete,
                             label = "Delete property",
                             color = MaterialTheme.colorScheme.error,
                             onClick = onDelete,
@@ -3186,7 +3249,7 @@ private fun PropertyMenuGroup(content: @Composable ColumnScope.() -> Unit) {
 
 @Composable
 private fun PropertyMenuRow(
-    icon: String,
+    icon: ImageVector,
     label: String,
     value: String = "",
     color: Color = MaterialTheme.colorScheme.onSurface,
@@ -3212,18 +3275,28 @@ private fun PropertyMenuRow(
             null
         },
         leadingContent = {
-            Text(
-                text = icon,
-                modifier = Modifier.width(38.dp),
-                textAlign = TextAlign.Center,
-                color = color.copy(alpha = 0.82f),
-                fontWeight = FontWeight.SemiBold,
-            )
+            Box(
+                modifier = Modifier
+                    .width(38.dp)
+                    .height(40.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = color.copy(alpha = 0.82f),
+                    modifier = Modifier.size(22.dp),
+                )
+            }
         },
         trailingContent = {
-            Text(
-                text = ">",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            Icon(
+                imageVector = Icons.Rounded.KeyboardArrowDown,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier
+                    .size(20.dp)
+                    .graphicsLayer(rotationZ = -90f),
             )
         },
         modifier = Modifier.clickable(onClick = onClick),
@@ -3267,7 +3340,7 @@ private fun ChangePropertyTypeSheet(
     PropertyMenuGroup {
         PageTableColumnType.entries.forEach { type ->
             PropertyMenuRow(
-                icon = type.shortLabel,
+                icon = type.icon,
                 label = type.label,
                 value = if (type == selectedType) "Selected" else "",
                 onClick = { onTypeChange(type) },
@@ -3308,7 +3381,7 @@ private fun TableDatePropertySettingsSheet(
     PropertyDetailHeader(title = "Edit property", onBack = onBack)
     PropertyMenuGroup {
         DateSettingChoiceRow(
-            icon = "Cal",
+            icon = Icons.Rounded.CalendarMonth,
             label = "Date format",
             selectedLabel = dateFormat.label,
             items = PageTableDateFormat.entries,
@@ -3316,7 +3389,7 @@ private fun TableDatePropertySettingsSheet(
             onSelect = { format -> save(nextDateFormat = format) },
         )
         DateSettingChoiceRow(
-            icon = "Tm",
+            icon = Icons.Rounded.AccessTime,
             label = "Time format",
             selectedLabel = timeFormat.label,
             items = PageTableTimeFormat.entries,
@@ -3324,7 +3397,7 @@ private fun TableDatePropertySettingsSheet(
             onSelect = { format -> save(nextTimeFormat = format) },
         )
         DateSettingChoiceRow(
-            icon = "Al",
+            icon = Icons.Rounded.Notifications,
             label = "Notifications",
             selectedLabel = reminder.label,
             items = PageTableDateReminder.entries,
@@ -3332,7 +3405,7 @@ private fun TableDatePropertySettingsSheet(
             onSelect = { value -> save(nextReminder = value) },
         )
         DateSettingChoiceRow(
-            icon = "TZ",
+            icon = Icons.Rounded.Public,
             label = "Timezone",
             selectedLabel = timezoneLabel,
             items = TableTimezoneOptions,
@@ -3344,7 +3417,7 @@ private fun TableDatePropertySettingsSheet(
 
 @Composable
 private fun <T> DateSettingChoiceRow(
-    icon: String,
+    icon: ImageVector,
     label: String,
     selectedLabel: String,
     items: List<T>,
@@ -3735,29 +3808,40 @@ private fun TableDataRow(
     onOpenRow: (String) -> Unit,
     isHighlighted: Boolean = false,
 ) {
+    val primaryColumn = columns.firstOrNull()
+    val remainingColumns = columns.drop(1)
+
     Row(
         modifier = Modifier.background(
             if (isHighlighted) {
                 MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
             } else {
-                Color.Transparent
+                MaterialTheme.colorScheme.surface
             },
         ),
         horizontalArrangement = Arrangement.spacedBy(0.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        TextButton(
-            modifier = Modifier
-                .width(TableOpenWidth)
-                .height(TableRowHeight),
-            onClick = { onOpenRow(row.id) },
-        ) {
-            Text(
-                text = "OPEN",
-                style = MaterialTheme.typography.labelSmall,
+        if (primaryColumn != null) {
+            TableCellEditor(
+                column = primaryColumn,
+                row = row,
+                table = table,
+                tableReferences = tableReferences,
+                value = row.cells[primaryColumn.id].orEmpty(),
+                onValueChange = { value -> onCellChange(row.id, primaryColumn.id, value) },
+                onDateSettingsChange = { dateFormat, timeFormat, reminder, timezoneLabel ->
+                    onColumnDateSettingsChange(primaryColumn.id, dateFormat, timeFormat, reminder, timezoneLabel)
+                },
+                modifier = Modifier
+                    .width(TableCellWidth)
+                    .background(MaterialTheme.colorScheme.surface),
             )
+            TableOpenRowCell(onClick = { onOpenRow(row.id) })
+        } else {
+            TableOpenRowCell(onClick = { onOpenRow(row.id) })
         }
-        columns.forEach { column ->
+        remainingColumns.forEach { column ->
             TableCellEditor(
                 column = column,
                 row = row,
@@ -3768,11 +3852,42 @@ private fun TableDataRow(
                 onDateSettingsChange = { dateFormat, timeFormat, reminder, timezoneLabel ->
                     onColumnDateSettingsChange(column.id, dateFormat, timeFormat, reminder, timezoneLabel)
                 },
-                modifier = Modifier.width(TableCellWidth),
+                modifier = Modifier
+                    .width(TableCellWidth)
+                    .background(MaterialTheme.colorScheme.surface),
             )
         }
+        Box(
+            modifier = Modifier
+                .width(TableAddColumnWidth)
+                .height(TableRowHeight)
+                .background(MaterialTheme.colorScheme.surface),
+        )
     }
     HorizontalDivider()
+}
+
+@Composable
+private fun TableOpenRowCell(onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .width(TableOpenWidth)
+            .height(TableRowHeight)
+            .background(MaterialTheme.colorScheme.surface),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = "Open",
+            modifier = Modifier
+                .clip(RoundedCornerShape(9.dp))
+                .background(MaterialTheme.colorScheme.surfaceContainer)
+                .clickable(onClick = onClick)
+                .padding(horizontal = 12.dp, vertical = 7.dp),
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
 }
 
 @Composable
@@ -3780,37 +3895,38 @@ private fun TableAddRowRow(
     columns: List<PageTableColumn>,
     onAddRow: () -> Unit,
 ) {
+    val hasPrimaryColumn = columns.isNotEmpty()
+    val remainingColumnCount = (columns.size - 1).coerceAtLeast(0)
+
     Row(
         horizontalArrangement = Arrangement.spacedBy(0.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(
-            modifier = Modifier
-                .width(TableOpenWidth)
-                .height(TableRowHeight),
+        TableAddRowCell(
+            modifier = Modifier.width(TableCellWidth),
+            onAddRow = onAddRow,
         )
-        if (columns.isEmpty()) {
-            TableAddRowCell(
-                modifier = Modifier.width(TableCellWidth),
-                onAddRow = onAddRow,
+        if (hasPrimaryColumn) {
+            Box(
+                modifier = Modifier
+                    .width(TableOpenWidth)
+                    .height(TableRowHeight)
+                    .background(MaterialTheme.colorScheme.surface),
             )
-        } else {
-            TableAddRowCell(
-                modifier = Modifier.width(TableCellWidth),
-                onAddRow = onAddRow,
-            )
-            repeat((columns.size - 1).coerceAtLeast(0)) {
+            repeat(remainingColumnCount) {
                 Box(
                     modifier = Modifier
                         .width(TableCellWidth)
-                        .height(TableRowHeight),
+                        .height(TableRowHeight)
+                        .background(MaterialTheme.colorScheme.surface),
                 )
             }
         }
         Box(
             modifier = Modifier
                 .width(TableAddColumnWidth)
-                .height(TableRowHeight),
+                .height(TableRowHeight)
+                .background(MaterialTheme.colorScheme.surface),
         )
     }
     HorizontalDivider()
@@ -3824,6 +3940,7 @@ private fun TableAddRowCell(
     Row(
         modifier = modifier
             .height(TableRowHeight)
+            .background(MaterialTheme.colorScheme.surface)
             .clickable(onClick = onAddRow)
             .padding(horizontal = 10.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -4051,7 +4168,7 @@ private fun TableDateEditorSheet(
                     },
                 )
                 DateChoiceRow(
-                    icon = "Cal",
+                    icon = Icons.Rounded.CalendarMonth,
                     label = "Date format",
                     selectedLabel = dateFormat.label,
                     items = PageTableDateFormat.entries,
@@ -4082,7 +4199,7 @@ private fun TableDateEditorSheet(
                     },
                 )
                 DateChoiceRow(
-                    icon = "Tm",
+                    icon = Icons.Rounded.AccessTime,
                     label = "Time format",
                     selectedLabel = timeFormat.label,
                     items = PageTableTimeFormat.entries,
@@ -4103,7 +4220,7 @@ private fun TableDateEditorSheet(
                     },
                 )
                 DateChoiceRow(
-                    icon = "TZ",
+                    icon = Icons.Rounded.Public,
                     label = "Timezone",
                     selectedLabel = timezoneLabel,
                     items = TableTimezoneOptions,
@@ -4114,7 +4231,7 @@ private fun TableDateEditorSheet(
                     },
                 )
                 DateChoiceRow(
-                    icon = "Al",
+                    icon = Icons.Rounded.Notifications,
                     label = "Remind",
                     selectedLabel = reminder.label,
                     items = PageTableDateReminder.entries,
@@ -4321,7 +4438,7 @@ private fun DateToggleRow(
 
 @Composable
 private fun <T> DateChoiceRow(
-    icon: String,
+    icon: ImageVector,
     label: String,
     selectedLabel: String,
     items: List<T>,
@@ -4340,18 +4457,26 @@ private fun <T> DateChoiceRow(
                 )
             },
             leadingContent = {
-                Text(
-                    text = icon,
+                Box(
                     modifier = Modifier.width(34.dp),
-                    textAlign = TextAlign.Center,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(21.dp),
+                    )
+                }
             },
             trailingContent = {
-                Text(
-                    text = ">",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                Icon(
+                    imageVector = Icons.Rounded.KeyboardArrowDown,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier
+                        .size(20.dp)
+                        .graphicsLayer(rotationZ = -90f),
                 )
             },
             modifier = Modifier.clickable { expanded = true },
@@ -4442,22 +4567,34 @@ private fun TableCellEditor(
         PageTableColumnType.Status -> {
             var isStatusMenuExpanded by remember { mutableStateOf(false) }
             Box(modifier = modifier) {
-                OutlinedTextField(
-                    value = value,
-                    onValueChange = {},
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(TableRowHeight),
-                    readOnly = true,
-                    singleLine = true,
-                    placeholder = { Text(text = "Select status") },
-                    trailingIcon = {
-                        TextButton(onClick = { isStatusMenuExpanded = true }) {
-                            Text(text = "Pick")
-                        }
-                    },
-                    colors = plainBlockTextFieldColors(),
-                )
+                        .height(TableRowHeight)
+                        .clickable { isStatusMenuExpanded = true }
+                        .padding(horizontal = 10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = value.ifBlank { "Select status" },
+                        modifier = Modifier.weight(1f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (value.isBlank()) {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        } else {
+                            MaterialTheme.colorScheme.onSurface
+                        },
+                    )
+                    Icon(
+                        imageVector = Icons.Rounded.KeyboardArrowDown,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 DropdownMenu(
                     expanded = isStatusMenuExpanded,
                     onDismissRequest = { isStatusMenuExpanded = false },
@@ -4632,9 +4769,12 @@ private fun TableMediaCellEditor(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
-        TextButton(onClick = { filePicker.launch(arrayOf("*/*")) }) {
-            Text(text = if (attachments.isEmpty()) "Attach" else "Add")
-        }
+        Icon(
+            imageVector = Icons.Rounded.KeyboardArrowDown,
+            contentDescription = null,
+            modifier = Modifier.size(18.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
@@ -4657,24 +4797,34 @@ private fun RelationCellEditor(
     }
 
     Box(modifier = modifier) {
-        OutlinedTextField(
-            value = displayText,
-            onValueChange = {},
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(TableRowHeight),
-            readOnly = true,
-            singleLine = true,
-            trailingIcon = {
-                TextButton(
-                    enabled = targetTable != null,
-                    onClick = { isExpanded = true },
-                ) {
-                    Text(text = "Pick")
-                }
-            },
-            colors = plainBlockTextFieldColors(),
-        )
+                .height(TableRowHeight)
+                .clickable(enabled = targetTable != null) { isExpanded = true }
+                .padding(horizontal = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = displayText,
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (targetTable == null || selectedRow == null) {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                } else {
+                    MaterialTheme.colorScheme.onSurface
+                },
+            )
+            Icon(
+                imageVector = Icons.Rounded.KeyboardArrowDown,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         DropdownMenu(
             expanded = isExpanded,
             onDismissRequest = { isExpanded = false },
@@ -5289,12 +5439,27 @@ private fun DashboardBar(
 
 @Composable
 private fun EmptyTableMessage() {
-    Text(
-        text = "No rows yet.",
-        modifier = Modifier.padding(vertical = 8.dp),
-        style = MaterialTheme.typography.bodyLarge,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainer)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = Icons.Rounded.Add,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp),
+        )
+        Text(
+            text = "No rows yet. Add a row from the table grid.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
 }
 
 @Composable
@@ -5438,11 +5603,10 @@ private val PageBlockType.isPlainEditorBlock: Boolean
         PageBlockType.Todo,
         PageBlockType.Bullet,
         PageBlockType.Quote,
-        -> true
         PageBlockType.Divider,
         PageBlockType.MediaFile,
-        PageBlockType.DatabaseTable,
-        -> false
+        -> true
+        PageBlockType.DatabaseTable -> false
     }
 
 private data class BlockTypeOption(
@@ -6499,6 +6663,19 @@ private val PageTableColumnType.shortLabel: String
         PageTableColumnType.Formula -> "Fx"
         PageTableColumnType.Relation -> "Rel"
         PageTableColumnType.Rollup -> "Roll"
+    }
+
+private val PageTableColumnType.icon: ImageVector
+    get() = when (this) {
+        PageTableColumnType.Text -> Icons.Rounded.Edit
+        PageTableColumnType.Number -> Icons.Rounded.Calculate
+        PageTableColumnType.Status -> Icons.Rounded.TaskAlt
+        PageTableColumnType.Date -> Icons.Rounded.CalendarMonth
+        PageTableColumnType.FilesMedia -> Icons.AutoMirrored.Rounded.Article
+        PageTableColumnType.Checkbox -> Icons.Rounded.TaskAlt
+        PageTableColumnType.Formula -> Icons.Rounded.Functions
+        PageTableColumnType.Relation -> Icons.Rounded.ViewColumn
+        PageTableColumnType.Rollup -> Icons.Rounded.Calculate
     }
 
 private fun PageTableColumn.configSummary(

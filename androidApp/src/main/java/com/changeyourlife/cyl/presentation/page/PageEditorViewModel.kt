@@ -119,12 +119,14 @@ class PageEditorViewModel @Inject constructor(
                 title = pendingTitle ?: dbState.title,
                 properties = pendingDoc?.properties ?: dbState.properties,
                 blocks = pendingDoc?.blocks ?: dbState.blocks,
+                isSaving = pendingDoc != null || pendingTitle != null,
                 canUndoEditorChange = canUndoEditorChange,
                 isAiGenerating = aiState.isAiGenerating,
                 aiError = aiState.aiError,
             )
         } else {
             dbState.copy(
+                isSaving = pendingDoc != null || pendingTitle != null,
                 canUndoEditorChange = canUndoEditorChange,
                 isAiGenerating = aiState.isAiGenerating,
                 aiError = aiState.aiError,
@@ -2077,10 +2079,18 @@ class PageEditorViewModel @Inject constructor(
     }
 
     private fun PageEditorUiState.toAiPageContext(pageId: String): AiPageContext {
+        val propertyContexts = properties.map { property ->
+            AiBlockContext(
+                id = property.id,
+                type = "Property",
+                text = "${property.name} (${property.type.name}) = ${property.value.ifBlank { "empty" }}",
+                path = "property:${property.name}",
+            )
+        }
         return AiPageContext(
             id = pageId,
             title = title.ifBlank { "Untitled page" },
-            blocks = blocks.toAiBlockContexts().take(120),
+            blocks = (propertyContexts + blocks.toAiBlockContexts()).take(140),
         )
     }
 
@@ -3831,6 +3841,7 @@ data class PageEditorUiState(
     val properties: List<PageProperty> = emptyList(),
     val blocks: List<PageBlock> = emptyList(),
     val childPages: List<Page> = emptyList(),
+    val isSaving: Boolean = false,
     val isAiGenerating: Boolean = false,
     val aiError: String? = null,
     val canUndoEditorChange: Boolean = false,

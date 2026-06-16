@@ -1022,8 +1022,13 @@ class HomeViewModel @Inject constructor(
         pages: List<Page>,
         assistantReply: String,
     ): List<ChatAction> {
-        if (!prompt.looksLikePageWriteRequest()) return emptyList()
+        if (!prompt.looksLikePageMutationRequest()) return emptyList()
         val targetPage = pages.findMentionedPage(prompt) ?: return emptyList()
+
+        prompt.recoverPropertyAction(targetPage)?.let { action -> return listOf(action) }
+        prompt.recoverBlockMutationAction(targetPage)?.let { action -> return listOf(action) }
+
+        if (!prompt.looksLikePageWriteRequest()) return emptyList()
         val content = assistantReply.asWritablePageContent()
             .ifBlank { prompt.extractWriteFallbackContent(targetPage.title) }
         if (content.isBlank()) return emptyList()
@@ -1077,6 +1082,81 @@ class HomeViewModel @Inject constructor(
         return !destructiveOrTableIntent
     }
 
+    private fun String.looksLikePageMutationRequest(): Boolean {
+        val value = lowercase()
+        return looksLikePageWriteRequest() ||
+            listOf("property", "properties", "prop").any { token -> value.contains(token) } ||
+            listOf("block", "heading", "todo", "quote", "divider", "media", "file").any { token -> value.contains(token) } &&
+            listOf(
+                "ubah",
+                "tukar",
+                "edit",
+                "update",
+                "ganti",
+                "padam",
+                "buang",
+                "hapus",
+                "delete",
+                "remove",
+            ).any { token -> value.contains(token) }
+    }
+
+    private fun String.recoverPropertyAction(targetPage: Page): ChatAction? {
+        val value = lowercase()
+        val mentionsProperty = listOf("property", "properties", "prop").any { token -> value.contains(token) }
+        if (!mentionsProperty) return null
+
+        val actionType = when {
+            listOf("padam", "buang", "hapus", "delete", "remove").any { token -> value.contains(token) } -> "DELETE_PROPERTY"
+            listOf("ubah", "tukar", "edit", "update", "set", "jadikan").any { token -> value.contains(token) } -> "UPDATE_PROPERTY"
+            listOf("tambah", "add", "create", "buat", "masukkan", "letak").any { token -> value.contains(token) } -> "ADD_PROPERTY"
+            else -> return null
+        }
+        val propertyName = extractPropertyName(targetPage.title)
+        if (propertyName.isBlank()) return null
+
+        return ChatAction(
+            type = actionType,
+            title = "",
+            targetTitle = targetPage.title,
+            propertyName = propertyName,
+            propertyType = inferPropertyType(),
+            value = extractPropertyValue(targetPage.title),
+        )
+    }
+
+    private fun String.recoverBlockMutationAction(targetPage: Page): ChatAction? {
+        val value = lowercase()
+        val hasBlockIntent = listOf("block", "heading", "tajuk", "todo", "quote", "petikan", "divider", "media", "file")
+            .any { token -> value.contains(token) }
+        if (!hasBlockIntent) return null
+
+        val isDelete = listOf("padam", "buang", "hapus", "delete", "remove").any { token -> value.contains(token) }
+        if (isDelete) {
+            val blockText = extractBlockReference(targetPage.title)
+            return ChatAction(
+                type = "DELETE_BLOCK",
+                title = "",
+                targetTitle = targetPage.title,
+                blockType = inferWriteBlockType(),
+                blockText = blockText,
+                content = blockText,
+            )
+        }
+
+        val isUpdate = listOf("ubah", "tukar", "edit", "update", "ganti", "jadikan").any { token -> value.contains(token) }
+        if (!isUpdate) return null
+        val replacement = splitBlockReplacement(targetPage.title) ?: return null
+        return ChatAction(
+            type = "UPDATE_BLOCK",
+            title = "",
+            targetTitle = targetPage.title,
+            blockType = inferWriteBlockType(),
+            blockText = replacement.first,
+            content = replacement.second,
+        )
+    }
+
     private fun String.asWritablePageContent(): String {
         val value = trim()
         if (value.isBlank()) return ""
@@ -1092,13 +1172,15 @@ class HomeViewModel @Inject constructor(
             "sorry",
             "please try again",
             "couldn't convert",
+            "belum dapat tukar",
+            "tukar arahan",
         ).any { token -> lower.contains(token) }
         if (isGenericFailure) return ""
         return value
     }
 
     private fun String.extractWriteFallbackContent(pageTitle: String): String {
-        return replace("@$pageTitle", "", ignoreCase = true)
+        return removeMentionedPage(pageTitle)
             .replace(Regex("(?i)\\b(write|tulis|catat|masukkan|insert|append|draft|buat isi|tambah nota|add note)\\b"), "")
             .replace(Regex("\\s+"), " ")
             .trim(' ', '-', ':')
@@ -1111,8 +1193,123 @@ class HomeViewModel @Inject constructor(
             value.contains("bullet") || value.contains("list") || value.contains("senarai") -> "Bullet"
             value.contains("quote") || value.contains("petikan") -> "Quote"
             value.contains("todo") || value.contains("checklist") -> "Todo"
+            value.contains("divider") || value.contains("garisan") || value.contains("line") -> "Divider"
+            value.contains("media") || value.contains("file") || value.contains("gambar") -> "MediaFile"
             else -> "Text"
         }
+    }
+
+    private fun String.extractPropertyName(pageTitle: String): String {
+        val typeWords = setOf(
+            "text",
+            "number",
+            "nombor",
+            "select",
+            "multiselect",
+            "status",
+            "date",
+            "tarikh",
+            "person",
+            "files",
+            "media",
+            "checkbox",
+            "url",
+            "email",
+            "phone",
+            "telefon",
+            "formula",
+            "relation",
+            "rollup",
+            "button",
+            "place",
+            "tempat",
+            "id",
+        )
+        val cleaned = removeMentionedPage(pageTitle)
+            .replace(
+                Regex(
+                    "(?i)\\b(tambah|add|create|buat|masukkan|letak|ubah|tukar|edit|update|set|jadikan|padam|buang|hapus|delete|remove|property|properties|prop|dalam|dekat|di|page|ini|sini)\\b",
+                ),
+                " ",
+            )
+            .replace(Regex("(?i)\\b(type|jenis|as|sebagai|kepada|ke|value|nilai|with|dengan)\\b.*$"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim(' ', '-', ':')
+
+        return cleaned
+            .split(" ")
+            .filter { token -> token.isNotBlank() && token.lowercase() !in typeWords }
+            .joinToString(" ")
+            .trim()
+    }
+
+    private fun String.extractPropertyValue(pageTitle: String): String {
+        val withoutMention = removeMentionedPage(pageTitle)
+        val match = Regex("(?i)\\b(value|nilai|kepada|ke|as|sebagai|dengan)\\b\\s+(.+)$")
+            .find(withoutMention)
+            ?: return ""
+        return match.groupValues.getOrNull(2)
+            .orEmpty()
+            .replace(Regex("\\s+"), " ")
+            .trim(' ', '-', ':')
+    }
+
+    private fun String.inferPropertyType(): String {
+        val value = lowercase()
+        return when {
+            value.contains("number") || value.contains("nombor") || value.contains("jumlah") || value.contains("harga") -> "Number"
+            value.contains("multi-select") || value.contains("multiselect") || value.contains("multi select") -> "MultiSelect"
+            value.contains("select") -> "Select"
+            value.contains("status") -> "Status"
+            value.contains("date") || value.contains("tarikh") || value.contains("deadline") || value.contains("due") -> "Date"
+            value.contains("person") || value.contains("orang") -> "Person"
+            value.contains("file") || value.contains("media") || value.contains("gambar") -> "FilesMedia"
+            value.contains("checkbox") || value.contains("check") || value.contains("tick") || value.contains("siap") -> "Checkbox"
+            value.contains("url") || value.contains("link") -> "Url"
+            value.contains("email") -> "Email"
+            value.contains("phone") || value.contains("telefon") -> "Phone"
+            value.contains("formula") || value.contains("kira") -> "Formula"
+            value.contains("relation") || value.contains("hubungan") -> "Relation"
+            value.contains("rollup") -> "Rollup"
+            value.contains("button") -> "Button"
+            value.contains("place") || value.contains("tempat") || value.contains("lokasi") -> "Place"
+            value.contains("id") -> "Id"
+            else -> "Text"
+        }
+    }
+
+    private fun String.extractBlockReference(pageTitle: String): String {
+        return removeMentionedPage(pageTitle)
+            .replace(
+                Regex(
+                    "(?i)\\b(padam|buang|hapus|delete|remove|block|heading|tajuk|todo|quote|petikan|divider|media|file|dalam|dekat|di|page|ini|sini)\\b",
+                ),
+                " ",
+            )
+            .replace(Regex("\\s+"), " ")
+            .trim(' ', '-', ':')
+    }
+
+    private fun String.splitBlockReplacement(pageTitle: String): Pair<String, String>? {
+        val cleaned = removeMentionedPage(pageTitle)
+            .replace(
+                Regex("(?i)\\b(ubah|tukar|edit|update|ganti|jadikan|block|heading|tajuk|todo|quote|petikan|divider|media|file|dalam|dekat|di|page|ini|sini)\\b"),
+                " ",
+            )
+            .replace(Regex("\\s+"), " ")
+            .trim(' ', '-', ':')
+        val parts = Regex("(?i)\\s+\\b(kepada|ke|jadi|menjadi|dengan|to|into|with)\\b\\s+")
+            .split(cleaned, limit = 2)
+        if (parts.size != 2) return null
+        val from = parts[0].trim(' ', '-', ':')
+        val to = parts[1].trim(' ', '-', ':')
+        if (from.isBlank() || to.isBlank()) return null
+        return from to to
+    }
+
+    private fun String.removeMentionedPage(pageTitle: String): String {
+        return replace("@$pageTitle", "", ignoreCase = true)
+            .replace(Regex("@[^\\s]+"), " ")
     }
 
     private suspend fun findMentionedPage(

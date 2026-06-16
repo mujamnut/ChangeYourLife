@@ -252,9 +252,20 @@ class AiService(
                 .ifBlank { "No open tasks." }
             val systemPrompt = """
                 You are CYL (ChangeYourLife), a helpful personal productivity AI assistant.
+                You understand Malay/Malaysian slang, Indonesian, and English.
+                Reply in the same language the user used. If the user writes Malay, reply in natural Malay.
                 You MUST respond with a JSON object containing:
                 1. "reply": A friendly conversational response to the user.
                 2. "actions": An array of actions to execute.
+                Output ONLY valid JSON. Do not wrap it in markdown. Do not add prose outside JSON.
+
+                Malay command map:
+                - "buat", "cipta" = create
+                - "tambah", "masukkan", "letak" = add/append
+                - "tulis", "catat", "buat isi" = write/append text
+                - "ubah", "tukar", "edit", "jadikan" = update/change/set
+                - "padam", "buang", "hapus", "delete" = delete
+                - "siapkan", "selesaikan", "done" = mark done/status done
 
                 Current runtime context:
                 - Client date: $resolvedClientDate
@@ -317,6 +328,7 @@ class AiService(
                 - If the user mentions a page with @Page Title in any chat, copy the exact page title into "targetTitle" for actions that modify that page.
                 - Home/global chat can modify a mentioned page using page-level actions such as ADD_PROPERTY, UPDATE_PROPERTY, DELETE_PROPERTY, APPEND_BLOCK, CREATE_DATABASE, ADD_TABLE_ROW, UPDATE_TABLE_CELL, and DELETE_TABLE_ROW.
                 - Page/current chat may omit "targetTitle" because the attached page is already the target.
+                - If the user writes Malay like "dalam @Page", "dekat @Page", "di @Page", "page @Page", treat that as the target page.
 
                 Write/update autonomy:
                 - If the user asks you to write, tulis, buat isi, masukkan, tambah nota, draft, plan, outline, summarize into, or add content inside the current/mentioned page, return an action; do not only reply with text.
@@ -324,6 +336,9 @@ class AiService(
                 - If the user asks to replace all page content, use "UPDATE_PAGE" with "content". If the user asks to edit a visible block, use "UPDATE_BLOCK" and the exact blockId when available.
                 - If the target page/table/row is clearly the current/mentioned page and exactly one matching object is visible, act on it. Ask clarification only when multiple visible targets genuinely match.
                 - Never say you cannot modify the app when a supported action can represent the request.
+                - For Malay "boleh buatkan/tuliskan/masukkan dekat page ini", always return APPEND_BLOCK or CREATE_DATABASE/ADD_TABLE_ROW depending on the requested content.
+                - For Malay "padam/buang block", return DELETE_BLOCK. For "ubah/tukar block", return UPDATE_BLOCK. Use blockId from the outline when visible.
+                - For Malay "tambah/ubah/padam property", return ADD_PROPERTY, UPDATE_PROPERTY, or DELETE_PROPERTY.
 
                 Database view behavior:
                 - Default every new database to "tableView":"Table".
@@ -363,6 +378,11 @@ class AiService(
                 - User: "create a packing subpage under Trip Plan" → {"reply": "Done — I created the subpage.", "actions": [{"type": "CREATE_SUBPAGE", "targetTitle": "Trip Plan", "title": "Packing"}]}
                 - User: "in @Trip Plan add status property Planning" → {"reply": "Done — I added that property.", "actions": [{"type": "ADD_PROPERTY", "propertyName": "Status", "propertyType": "Status", "value": "Planning"}]}
                 - User: "tulis ringkasan tentang idea ini di page ini" → {"reply": "Done — I added that text to the page.", "actions": [{"type": "APPEND_BLOCK", "blockType": "Text", "content": "Ringkasan idea ini..."}]}
+                - User: "tulis nota ayam makan pagi dalam @Penjagaan Ayam" → {"reply": "Siap — saya tambah nota itu.", "actions": [{"type": "APPEND_BLOCK", "targetTitle": "Penjagaan Ayam", "blockType": "Text", "content": "Ayam makan pagi"}]}
+                - User: "tambah property deadline date dekat @Tasks" → {"reply": "Siap — saya tambah property Deadline.", "actions": [{"type": "ADD_PROPERTY", "targetTitle": "Tasks", "propertyName": "Deadline", "propertyType": "Date"}]}
+                - User: "padam property phone dalam @Contacts" → {"reply": "Siap — saya padam property itu.", "actions": [{"type": "DELETE_PROPERTY", "targetTitle": "Contacts", "propertyName": "Phone"}]}
+                - User: "ubah block meeting lama kepada meeting baru" → {"reply": "Siap — saya ubah block itu.", "actions": [{"type": "UPDATE_BLOCK", "blockText": "meeting lama", "content": "meeting baru"}]}
+                - User: "buang block quote motivasi" → {"reply": "Siap — saya buang block itu.", "actions": [{"type": "DELETE_BLOCK", "blockType": "Quote", "blockText": "motivasi"}]}
                 - User: "add a checklist item here to buy tickets" → {"reply": "Done — I added that item to the task table.", "actions": [{"type": "ADD_TABLE_ROW", "rowTitle": "Buy tickets", "cellValues": {"Task": "Buy tickets", "Status": "Not started", "Date": "", "Notes": ""}}]}
                 - User: "rename this page to Japan Trip" → {"reply": "Done — I renamed this page.", "actions": [{"type": "RENAME_CURRENT_PAGE", "title": "Japan Trip"}]}
                 - User: "delete status property" → {"reply": "Done — I deleted that property.", "actions": [{"type": "DELETE_PROPERTY", "propertyName": "Status"}]}
@@ -396,7 +416,7 @@ class AiService(
             """.trimIndent()
 
             val allMessages = listOf(ChatMessage(role = "system", content = systemPrompt)) + messages
-            val responseText = chatCompletionsJson(allMessages)
+            val responseText = chatCompletionsJson(allMessages, temperature = 0.1)
             val parsed = json.decodeFromString<AiActionJsonResponse>(responseText.cleanAiJson())
             val reply = parsed.reply.ifBlank {
                 if (parsed.actions.isNotEmpty()) {
@@ -407,7 +427,7 @@ class AiService(
             }
             AiActionResult(reply = reply, actions = parsed.actions)
         } catch (e: Exception) {
-            val fallback = "I couldn't convert that into a CYL action reliably. Please try again with the page/table/row name, or mention the page with @."
+            val fallback = "Saya belum dapat tukar arahan itu kepada tindakan CYL dengan yakin. Cuba sebut nama page/table/row, atau mention page dengan @."
             AiActionResult(reply = fallback, actions = emptyList())
         }
     }
@@ -507,11 +527,15 @@ class AiService(
         }
     }
 
-    private fun chatCompletionsJson(messages: List<ChatMessage>): String {
+    private fun chatCompletionsJson(
+        messages: List<ChatMessage>,
+        temperature: Double = 0.2,
+    ): String {
         val body = json.encodeToString(
             ApiRequest(
                 model = activeModel,
                 messages = messages.map { ApiMessage(it.role, it.content) },
+                temperature = temperature,
                 response_format = ApiResponseFormat("json_object")
             )
         )
