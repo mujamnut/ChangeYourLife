@@ -433,8 +433,9 @@ class AiService(
                 }
             }
             val parsedResult = AiActionResult(reply = reply, actions = parsed.actions)
-            if (parsed.actions.shouldRecoverInstead(latestPrompt)) {
-                recoverActionFromPrompt(latestPrompt, pages) ?: parsedResult
+            val recoveredResult = recoverActionFromPrompt(latestPrompt, pages)
+            if (parsed.actions.shouldRecoverInstead(latestPrompt, recoveredResult?.actions.orEmpty())) {
+                recoveredResult ?: parsedResult
             } else {
                 parsedResult
             }
@@ -450,7 +451,10 @@ class AiService(
         }
     }
 
-    private fun List<AiActionItem>.shouldRecoverInstead(prompt: String): Boolean {
+    private fun List<AiActionItem>.shouldRecoverInstead(
+        prompt: String,
+        recoveredActions: List<AiActionItem>,
+    ): Boolean {
         if (isEmpty()) return true
         val hasCreateDatabase = any { action ->
             action.type.equals("CREATE_DATABASE", ignoreCase = true) ||
@@ -463,7 +467,10 @@ class AiService(
                 visiblePrompt.looksLikeTableRowRequest() &&
                 !visiblePrompt.looksLikeTaskRowRequest()
         }
-        return (hasCreateDatabase && visiblePrompt.looksLikeTableRowRequest()) || hasTaskLikeRowForNonTaskPrompt
+        val localCoversMoreSegments = visiblePrompt.actionSegments().size > size && recoveredActions.size > size
+        return (hasCreateDatabase && visiblePrompt.looksLikeTableRowRequest()) ||
+            hasTaskLikeRowForNonTaskPrompt ||
+            localCoversMoreSegments
     }
 
     internal fun recoverActionFromPrompt(
@@ -491,13 +498,18 @@ class AiService(
     }
 
     private fun String.recoverStructuredActions(targetPage: AiPageContext): List<AiActionItem> {
+        var createdTableTitle: String? = null
         val actions = actionSegments()
             .mapNotNull { segment ->
-                segment.recoverBlockAction(targetPage)
-                    ?: segment.recoverTableRowAction(targetPage)
+                val action = segment.recoverBlockAction(targetPage)
+                    ?: segment.recoverTableRowAction(targetPage, fallbackTableTitle = createdTableTitle)
                     ?: segment.recoverPropertyAction(targetPage)
                     ?: segment.recoverDatabaseAction(targetPage)
                     ?: segment.takeUnless { it.looksLikeTableContextOnlyRequest() }?.recoverWriteAction(targetPage)
+                if (action != null && action.type.equals("CREATE_DATABASE", ignoreCase = true)) {
+                    createdTableTitle = action.tableTitle.takeIf { title -> title.isNotBlank() }
+                }
+                action
             }
         return if (actions.isNotEmpty()) {
             actions
@@ -647,9 +659,13 @@ class AiService(
         )
     }
 
-    private fun String.recoverTableRowAction(targetPage: AiPageContext): AiActionItem? {
+    private fun String.recoverTableRowAction(
+        targetPage: AiPageContext,
+        fallbackTableTitle: String? = null,
+    ): AiActionItem? {
         if (!looksLikeTableRowRequest()) return null
         val tableTitle = targetPage.defaultTableTitle()
+            ?: fallbackTableTitle?.takeIf { title -> title.isNotBlank() }
         if (tableTitle == null && !targetPage.hasAnyTable()) return null
 
         val rowPrompt = bestTableRowSegment()

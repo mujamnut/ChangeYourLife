@@ -450,6 +450,36 @@ class HomeViewModel @Inject constructor(
                 return@launch
             }
 
+            val localStructuredActions = recoverPageStructuredActions(
+                prompt = prompt,
+                pages = pages,
+                mentionedPageIds = normalizedMentionedPageIds,
+            )
+            if (localStructuredActions.isNotEmpty()) {
+                val actionResults = executeActions(localStructuredActions, prompt, normalizedMentionedPageIds)
+                isAiGeneratingChat.value = false
+                val actionSucceeded = actionResults.messages.any { message -> message.startsWith("✅") }
+                val assistantReply = if (actionSucceeded) {
+                    prompt.recoveredActionReply()
+                } else {
+                    "Saya faham tindakan yang diminta, tapi perubahan itu gagal dilaksanakan."
+                }
+                val replyWithResults = if (actionResults.messages.isEmpty()) {
+                    assistantReply
+                } else {
+                    assistantReply + "\n\n" + actionResults.messages.joinToString("\n")
+                }
+                chatHistoryRepository.appendMessage(
+                    sessionId = session.id,
+                    role = "assistant",
+                    content = replyWithResults,
+                    pageLinks = actionResults.pageLinks
+                        .distinctBy { link -> link.pageId }
+                        .toDomainChatPageLinks(),
+                )
+                return@launch
+            }
+
             // Pass only user/assistant messages — backend builds its own JSON-mode system prompt.
             // Sending a second system message here would conflict with the backend's action prompt
             // and cause Gemini to ignore the JSON instruction, returning actions: [] every time.
@@ -458,14 +488,16 @@ class HomeViewModel @Inject constructor(
             )
             aiRepository.chatWithActions(messagesForAi.toRoleContentPairs(), pages = pageContext, tasks = taskContext)
                 .onSuccess { result ->
-                    val executableActions = result.actions.ifEmpty {
-                        recoverPageWriteActions(
-                            prompt = prompt,
-                            pages = pages,
-                            assistantReply = result.reply,
-                            mentionedPageIds = normalizedMentionedPageIds,
-                        )
-                    }
+                    val recoveredFallbackActions = recoverPageWriteActions(
+                        prompt = prompt,
+                        pages = pages,
+                        assistantReply = result.reply,
+                        mentionedPageIds = normalizedMentionedPageIds,
+                    )
+                    val executableActions = result.actions.repairedWithLocalPlan(
+                        prompt = prompt,
+                        localActions = recoveredFallbackActions,
+                    ).ifEmpty { recoveredFallbackActions }
                     val actionResults = if (executableActions.isNotEmpty()) {
                         executeActions(executableActions, prompt, normalizedMentionedPageIds)
                     } else {
@@ -1081,6 +1113,56 @@ class HomeViewModel @Inject constructor(
         )
     }
 
+    private fun recoverPageStructuredActions(
+        prompt: String,
+        pages: List<Page>,
+        mentionedPageIds: List<String> = emptyList(),
+    ): List<ChatAction> {
+        val hasSelectedMention = mentionedPageIds.isNotEmpty()
+        if (!prompt.looksLikePageMutationRequest() && !(hasSelectedMention && prompt.looksLikePageActionIntent())) {
+            return emptyList()
+        }
+        val targetPage = pages.findPagesByIds(mentionedPageIds).firstOrNull()
+            ?: pages.findMentionedPage(prompt)
+            ?: pages.singleOrNull()
+            ?: return emptyList()
+        return prompt.recoverStructuredActions(targetPage)
+    }
+
+    private fun List<ChatAction>.repairedWithLocalPlan(
+        prompt: String,
+        localActions: List<ChatAction>,
+    ): List<ChatAction> {
+        if (isEmpty()) return localActions
+        if (localActions.isEmpty()) return this
+
+        val hasConflictingAction = any { action -> action.conflictsWithPrompt(prompt) }
+        val localCoversMoreSegments = prompt.actionSegments().size > size && localActions.size > size
+        return if (hasConflictingAction || localCoversMoreSegments) {
+            localActions
+        } else {
+            this
+        }
+    }
+
+    private fun ChatAction.conflictsWithPrompt(prompt: String): Boolean {
+        val normalizedType = type.trim().uppercase()
+        val visiblePrompt = prompt.substringBefore("CYL_MENTION_CONTEXT:").trim()
+        return when {
+            normalizedType in setOf("CREATE_DATABASE", "CREATE_TABLE") &&
+                visiblePrompt.looksLikeTableRowRequest() -> true
+
+            normalizedType == "ADD_TABLE_ROW" &&
+                visiblePrompt.looksLikeTableRowRequest() &&
+                !visiblePrompt.looksLikeTaskRowRequest() &&
+                cellValues.keys.any { key -> key.equals("Task", ignoreCase = true) } -> true
+
+            normalizedType == "DELETE_BLOCK" && visiblePrompt.requestsAllBlocksDeletion() -> true
+
+            else -> false
+        }
+    }
+
     private fun List<Page>.findPagesByIds(pageIds: List<String>): List<Page> {
         if (pageIds.isEmpty()) return emptyList()
         return pageIds.mapNotNull { pageId ->
@@ -1320,12 +1402,17 @@ class HomeViewModel @Inject constructor(
     }
 
     private fun String.recoverStructuredActions(targetPage: Page): List<ChatAction> {
+        var createdTableTitle: String? = null
         val actions = actionSegments()
             .mapNotNull { segment ->
-                segment.recoverBlockMutationAction(targetPage)
-                    ?: segment.recoverTableRowAction(targetPage)
+                val action = segment.recoverBlockMutationAction(targetPage)
+                    ?: segment.recoverTableRowAction(targetPage, fallbackTableTitle = createdTableTitle)
                     ?: segment.recoverPropertyAction(targetPage)
                     ?: segment.recoverDatabaseAction(targetPage)
+                if (action != null && action.type.equals("CREATE_DATABASE", ignoreCase = true)) {
+                    createdTableTitle = action.tableTitle.takeIf { title -> title.isNotBlank() }
+                }
+                action
             }
         return if (actions.isNotEmpty()) {
             actions
@@ -1339,11 +1426,21 @@ class HomeViewModel @Inject constructor(
         }
     }
 
-    private fun String.recoverTableRowAction(targetPage: Page): ChatAction? {
+    private fun String.recoverTableRowAction(
+        targetPage: Page,
+        fallbackTableTitle: String? = null,
+    ): ChatAction? {
         if (!looksLikeTableRowRequest()) return null
         val document = PageBlockCodec.decodeDocument(targetPage.content)
-        val hasTable = document.blocks.any { block -> block.type == PageBlockType.DatabaseTable }
-        if (!hasTable) return null
+        val tableTitle = document.blocks
+            .firstOrNull { block -> block.type == PageBlockType.DatabaseTable }
+            ?.table
+            ?.title
+            ?.takeIf { title -> title.isNotBlank() }
+            ?: fallbackTableTitle.orEmpty()
+        if (tableTitle.isBlank() && document.blocks.none { block -> block.type == PageBlockType.DatabaseTable }) {
+            return null
+        }
 
         val rowPrompt = bestTableRowSegment()
         val rowText = rowPrompt.extractTableRowText(targetPage.title)
@@ -1374,6 +1471,7 @@ class HomeViewModel @Inject constructor(
             type = "ADD_TABLE_ROW",
             title = "",
             targetTitle = targetPage.title,
+            tableTitle = tableTitle,
             rowTitle = rowTitle,
             cellValues = cellValues,
         )

@@ -175,4 +175,36 @@ class AiActionRecoveryTest {
         assertEquals(LocalDate.now().toString(), rowAction.cellValues["Date"])
         assertNull(rowAction.cellValues["Task"])
     }
+
+    @Test
+    fun recoversCreateTableThenAddRowAsSeparateActions() {
+        val result = service.recoverActionFromPrompt(
+            prompt = """
+                buat jadual belanja bulanan, dan tambah row beli makan 4 ringgit harini
+
+                CYL_MENTION_CONTEXT:
+                The user selected these page mentions from the chat UI. Treat them as exact target pages for create/update/delete actions:
+                - @Belanja id=page-belanja
+            """.trimIndent(),
+            pages = listOf(
+                AiPageContext(
+                    id = "page-belanja",
+                    title = "Belanja",
+                ),
+            ),
+        )
+
+        val actions = assertNotNull(result).actions
+        assertEquals(2, actions.size)
+        assertEquals("CREATE_DATABASE", actions[0].type)
+        assertEquals("belanja bulanan", actions[0].tableTitle)
+
+        val rowAction = actions[1]
+        assertEquals("ADD_TABLE_ROW", rowAction.type)
+        assertEquals("belanja bulanan", rowAction.tableTitle)
+        assertEquals("beli makan", rowAction.rowTitle)
+        assertEquals("4", rowAction.cellValues["Amount"])
+        assertEquals(LocalDate.now().toString(), rowAction.cellValues["Date"])
+        assertNull(rowAction.cellValues["Task"])
+    }
 }
