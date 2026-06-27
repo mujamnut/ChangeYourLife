@@ -290,7 +290,7 @@ class AiService(
                 - "DELETE_ALL_BLOCKS": for the attached/current page only, when the user asks to delete/clear all blocks in a page. This removes page blocks but keeps page properties.
                 - "DELETE_BLOCK": for the attached/current page only. Prefer exact "blockId" from the current page block outline. Also include "blockType" and "blockText" when useful. For database tables, prefer "blockId"; if no blockId is available, use "blockType":"DatabaseTable" and "tableTitle".
                 - "CREATE_DATABASE": for the attached/current page only, use "tableTitle" or "title", optional "tableView" as Table|List|Board|Calendar|Gallery|Timeline|Dashboard, "tableColumns" as [{"name":"Name","type":"Text|Number|Status|Date|Checkbox|Formula|Relation|Rollup","dateFormat":"DayMonthYear|MonthDayYear|YearMonthDay","timeFormat":"Hidden|TwelveHour|TwentyFourHour","dateReminder":"None|AtTimeOfEvent|OnDayOfEvent|OneDayBefore","timezoneLabel":"Local","formula":"{Price} * {Qty}","relationTargetTableId":"target-table-block-id","rollupRelationColumnName":"Orders","rollupTargetColumnName":"Amount","rollupAggregation":"Count|Sum|Average|Min|Max"}], and "tableRows" as objects keyed by column name. Never use CREATE_DATABASE when the user asks to add/tambah a row/baris/rekod to an existing table.
-                - "RENAME_TABLE": for the attached/current page only, use optional "blockId" or current "tableTitle" to target the table, and use "title" for the new table name.
+                - "RENAME_TABLE": for the attached/current page only, use optional "blockId" or current "tableTitle" to target the table, and use "title" for the new table name. If the user gives an exact new name, use it exactly. If the user asks for a suitable/appropriate/short/ringkas/pendek name without giving the exact title, choose a concise useful title from the current page/table context. Do not use descriptor words like suitable, sesuai, sensuai, sensual, pendek, short, ringkas, or better as the table title.
                 - "ADD_TABLE_COLUMN": for the attached/current page only, use optional "blockId" or "tableTitle", "columnName", and "columnType" as Text|Number|Status|Date|Checkbox|Formula|Relation|Rollup. For Formula include "formula" using {Column Name}. For Relation include "relationTargetTableId" (preferred) or "relationTargetTableTitle". For Rollup include "rollupRelationColumnId" and "rollupTargetColumnId" when they are visible in the outline; use "rollupRelationColumnName" or "rollupTargetColumnName" only as fallback, plus "rollupAggregation" as Count|Sum|Average|Min|Max.
                 - "ADD_TABLE_ROW": for the attached/current page only, use optional "blockId" or "tableTitle", optional "rowTitle", and "cellValues" as an object keyed by column name.
                 - "UPDATE_TABLE_CELL": for the attached/current page only, use optional "blockId" or "tableTitle", "rowId" or "rowTitle", "columnId" or "columnName", and "value".
@@ -349,6 +349,10 @@ class AiService(
                 - If the user asks for a view using existing data, use "CHANGE_TABLE_VIEW" on the matching existing table instead of creating another table.
                 - If the user asks to assign a calendar date field, timeline start/end range, chart metric, dashboard widget metric, or dashboard grouping, use "SET_TABLE_VIEW_CONFIG" on the matching existing table.
 
+                Naming autonomy:
+                - Treat Malay typos like "sensuai" or "sensual" near "dan pendek" as likely "sesuai" in rename requests, not as a literal title.
+                - For "ubah nama table dengan yang sesuai dan pendek", infer a short title from the current table/page purpose and return RENAME_TABLE. Example: if the current page is Budget Tracker or the table tracks expenses, use a concise title like "Budget" or "Belanja", not "sesuai" or "sensual".
+
                 Module behavior:
                 - If the user asks for a goal module, habit module/tracker, travel planner/itinerary module, or budget/expense tracker module, use "CREATE_MODULE" with moduleType Goal|Habit|Travel|Budget.
                 - Use "CREATE_DATABASE" only when the user specifically asks for a table/database inside the current page rather than a full module page.
@@ -396,7 +400,8 @@ class AiService(
                 - User: "delete todo buy tickets" → {"reply": "Done — I deleted that row.", "actions": [{"type": "DELETE_TABLE_ROW", "blockId": "exact-table-block-id-from-outline", "rowId": "exact-row-id-from-outline", "rowTitle": "Buy tickets"}]}
                 - User: "delete habit tracker table" → {"reply": "Done — I deleted that database.", "actions": [{"type": "DELETE_BLOCK", "blockId": "exact-table-block-id-from-outline", "blockType": "DatabaseTable", "tableTitle": "Habit Tracker"}]}
                 - User: "buat table habit tracker dekat sini" → {"reply": "Done — I created a habit tracker database.", "actions": [{"type": "CREATE_DATABASE", "tableTitle": "Habit Tracker", "tableView": "Table", "tableColumns": [{"name":"Habit","type":"Text"},{"name":"Status","type":"Status"},{"name":"Date","type":"Date","dateFormat":"DayMonthYear","timeFormat":"Hidden","dateReminder":"OnDayOfEvent","timezoneLabel":"Local"}], "tableRows": [{"Habit":"Drink water","Status":"Not started","Date":""},{"Habit":"Exercise","Status":"Not started","Date":""}]}]}
-                - User: "ubah nama table dengan yang sensual dan pendek" → {"reply": "Done — I renamed that table.", "actions": [{"type": "RENAME_TABLE", "title": "sensual"}]}
+                - User: "ubah nama table kepada Belanja" → {"reply": "Done — I renamed that table.", "actions": [{"type": "RENAME_TABLE", "title": "Belanja"}]}
+                - User: "ubah nama table dengan yang sesuai dan pendek" → {"reply": "Done — I chose a shorter table name.", "actions": [{"type": "RENAME_TABLE", "title": "Budget"}]}
                 - User: "ubah table ini kepada board" → {"reply": "Done — I changed the database view.", "actions": [{"type": "CHANGE_TABLE_VIEW", "tableView": "Board"}]}
                 - User: "tambah row Buy tickets status pending" → {"reply": "Done — I added the row.", "actions": [{"type": "ADD_TABLE_ROW", "rowTitle": "Buy tickets", "cellValues": {"Name": "Buy tickets", "Status": "Pending"}}]}
                 - User: "rename status column to progress" → {"reply": "Done — I renamed that column.", "actions": [{"type": "RENAME_TABLE_COLUMN", "blockId": "exact-table-block-id-from-outline", "columnId": "exact-column-id-from-outline", "columnName": "Status", "newColumnName": "Progress"}]}
@@ -924,13 +929,40 @@ class AiService(
                 .takeIf { value -> value.isNotBlank() }
         } ?: cleaned
 
-        return afterMarker
+        val title = afterMarker
             .replace(Regex("(?i)\\b(yang|baru|new)\\b"), " ")
             .replace(Regex("(?i)\\b(dan|and)\\s+(pendek|short|ringkas|simple)\\b"), " ")
             .replace(Regex("(?i)\\b(pendek|short|ringkas|simple)\\b"), " ")
             .replace(Regex("(?i)\\b(dan|and)\\b\\s*$"), " ")
             .replace(Regex("\\s+"), " ")
             .trim(' ', '-', ':', '"', '\'')
+        return title.takeUnless { candidate -> candidate.isQualitativeTableTitleRequest() }.orEmpty()
+    }
+
+    private fun String.isQualitativeTableTitleRequest(): Boolean {
+        val normalized = lowercase()
+            .replace(Regex("[^a-z0-9]+"), " ")
+            .trim()
+        if (normalized.isBlank()) return true
+        val descriptorWords = setOf(
+            "sesuai",
+            "sensuai",
+            "sensual",
+            "appropriate",
+            "suitable",
+            "better",
+            "nice",
+            "good",
+            "bagus",
+            "kemas",
+            "cantik",
+            "proper",
+            "short",
+            "simple",
+            "ringkas",
+            "pendek",
+        )
+        return normalized.split(Regex("\\s+")).all { word -> word in descriptorWords }
     }
 
     private fun String.defaultRecoveredTableColumns(promptValue: String): List<AiTableColumnItem> =

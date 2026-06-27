@@ -1655,13 +1655,40 @@ class HomeViewModel @Inject constructor(
                 .takeIf { value -> value.isNotBlank() }
         } ?: cleaned
 
-        return afterMarker
+        val title = afterMarker
             .replace(Regex("(?i)\\b(yang|baru|new)\\b"), " ")
             .replace(Regex("(?i)\\b(dan|and)\\s+(pendek|short|ringkas|simple)\\b"), " ")
             .replace(Regex("(?i)\\b(pendek|short|ringkas|simple)\\b"), " ")
             .replace(Regex("(?i)\\b(dan|and)\\b\\s*$"), " ")
             .replace(Regex("\\s+"), " ")
             .trim(' ', '-', ':', '"', '\'')
+        return title.takeUnless { candidate -> candidate.isQualitativeTableTitleRequest() }.orEmpty()
+    }
+
+    private fun String.isQualitativeTableTitleRequest(): Boolean {
+        val normalized = lowercase()
+            .replace(Regex("[^a-z0-9]+"), " ")
+            .trim()
+        if (normalized.isBlank()) return true
+        val descriptorWords = setOf(
+            "sesuai",
+            "sensuai",
+            "sensual",
+            "appropriate",
+            "suitable",
+            "better",
+            "nice",
+            "good",
+            "bagus",
+            "kemas",
+            "cantik",
+            "proper",
+            "short",
+            "simple",
+            "ringkas",
+            "pendek",
+        )
+        return normalized.split(Regex("\\s+")).all { word -> word in descriptorWords }
     }
 
     private fun Page.hasAnyTable(): Boolean {
