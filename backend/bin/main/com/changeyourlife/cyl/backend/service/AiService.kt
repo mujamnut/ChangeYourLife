@@ -24,6 +24,7 @@ class AiService(
     private val json = Json {
         ignoreUnknownKeys = true
         encodeDefaults = true
+        coerceInputValues = true
     }
 
     private val httpClient = HttpClient.newBuilder()
@@ -110,8 +111,11 @@ class AiService(
             val response = httpClient.send(request, HttpResponse.BodyHandlers.ofString())
             if (response.statusCode() == 200) {
                 val apiResponse = json.decodeFromString<ApiResponse>(response.body())
-                apiResponse.choices.firstOrNull()?.message?.content
-                    ?: "Sorry, I generated an empty response."
+                apiResponse.choices.firstOrNull()
+                    ?.message
+                    ?.content
+                    ?.ifBlank { null }
+                    ?: "Sorry, the AI provider returned an empty response. Please try again or switch model."
             } else {
                 "Error: Backend AI request failed with status code ${response.statusCode()}.\nResponse: ${response.body()}"
             }
@@ -1178,7 +1182,11 @@ class AiService(
         val response = httpClient.send(request, HttpResponse.BodyHandlers.ofString())
         return if (response.statusCode() == 200) {
             val apiResponse = json.decodeFromString<ApiResponse>(response.body())
-            apiResponse.choices.firstOrNull()?.message?.content ?: throw Exception("No response choice")
+            apiResponse.choices.firstOrNull()
+                ?.message
+                ?.content
+                ?.ifBlank { null }
+                ?: throw Exception("AI provider returned an empty response.")
         } else {
             throw Exception("HTTP Error: ${response.statusCode()} - ${response.body()}")
         }
@@ -1250,8 +1258,8 @@ class AiService(
 
     @Serializable
     private data class ApiMessage(
-        val role: String,
-        val content: String
+        val role: String = "",
+        val content: String? = "",
     )
 
     @Serializable
