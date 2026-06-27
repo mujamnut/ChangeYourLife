@@ -287,6 +287,7 @@ class AiService(
                 - "ADD_PROPERTY": for the attached/current page only, use "propertyName", "propertyType" as Text|Number|Select|MultiSelect|Status|Date|Person|FilesMedia|Checkbox|Url|Email|Phone|Formula|Relation|Rollup|Button|Place|Id, and optional "value".
                 - "UPDATE_PROPERTY": for the attached/current page only, use "propertyName" and "value". Include "propertyType" if creating it when missing.
                 - "DELETE_PROPERTY": for the attached/current page only, use "propertyName".
+                - "DELETE_ALL_BLOCKS": for the attached/current page only, when the user asks to delete/clear all blocks in a page. This removes page blocks but keeps page properties.
                 - "DELETE_BLOCK": for the attached/current page only. Prefer exact "blockId" from the current page block outline. Also include "blockType" and "blockText" when useful. For database tables, prefer "blockId"; if no blockId is available, use "blockType":"DatabaseTable" and "tableTitle".
                 - "CREATE_DATABASE": for the attached/current page only, use "tableTitle" or "title", optional "tableView" as Table|List|Board|Calendar|Gallery|Timeline|Dashboard, "tableColumns" as [{"name":"Name","type":"Text|Number|Status|Date|Checkbox|Formula|Relation|Rollup","dateFormat":"DayMonthYear|MonthDayYear|YearMonthDay","timeFormat":"Hidden|TwelveHour|TwentyFourHour","dateReminder":"None|AtTimeOfEvent|OnDayOfEvent|OneDayBefore","timezoneLabel":"Local","formula":"{Price} * {Qty}","relationTargetTableId":"target-table-block-id","rollupRelationColumnName":"Orders","rollupTargetColumnName":"Amount","rollupAggregation":"Count|Sum|Average|Min|Max"}], and "tableRows" as objects keyed by column name.
                 - "ADD_TABLE_COLUMN": for the attached/current page only, use optional "blockId" or "tableTitle", "columnName", and "columnType" as Text|Number|Status|Date|Checkbox|Formula|Relation|Rollup. For Formula include "formula" using {Column Name}. For Relation include "relationTargetTableId" (preferred) or "relationTargetTableTitle". For Rollup include "rollupRelationColumnId" and "rollupTargetColumnId" when they are visible in the outline; use "rollupRelationColumnName" or "rollupTargetColumnName" only as fallback, plus "rollupAggregation" as Count|Sum|Average|Min|Max.
@@ -338,7 +339,7 @@ class AiService(
                 - If the target page/table/row is clearly the current/mentioned page and exactly one matching object is visible, act on it. Ask clarification only when multiple visible targets genuinely match.
                 - Never say you cannot modify the app when a supported action can represent the request.
                 - For Malay "boleh buatkan/tuliskan/masukkan dekat page ini", always return APPEND_BLOCK or CREATE_DATABASE/ADD_TABLE_ROW depending on the requested content.
-                - For Malay "padam/buang block", return DELETE_BLOCK. For "ubah/tukar block", return UPDATE_BLOCK. Use blockId from the outline when visible.
+                - For Malay "padam/buang semua block", return DELETE_ALL_BLOCKS. For Malay "padam/buang block" with a specific target, return DELETE_BLOCK. For "ubah/tukar block", return UPDATE_BLOCK. Use blockId from the outline when visible.
                 - For Malay "tambah/ubah/padam property", return ADD_PROPERTY, UPDATE_PROPERTY, or DELETE_PROPERTY.
 
                 Database view behavior:
@@ -384,6 +385,7 @@ class AiService(
                 - User: "padam property phone dalam @Contacts" → {"reply": "Siap — saya padam property itu.", "actions": [{"type": "DELETE_PROPERTY", "targetTitle": "Contacts", "propertyName": "Phone"}]}
                 - User: "ubah block meeting lama kepada meeting baru" → {"reply": "Siap — saya ubah block itu.", "actions": [{"type": "UPDATE_BLOCK", "blockText": "meeting lama", "content": "meeting baru"}]}
                 - User: "buang block quote motivasi" → {"reply": "Siap — saya buang block itu.", "actions": [{"type": "DELETE_BLOCK", "blockType": "Quote", "blockText": "motivasi"}]}
+                - User: "padam semua block dalam page ini" → {"reply": "Siap — saya padam semua block dalam page ini.", "actions": [{"type": "DELETE_ALL_BLOCKS"}]}
                 - User: "add a checklist item here to buy tickets" → {"reply": "Done — I added that item to the task table.", "actions": [{"type": "ADD_TABLE_ROW", "rowTitle": "Buy tickets", "cellValues": {"Task": "Buy tickets", "Status": "Not started", "Date": "", "Notes": ""}}]}
                 - User: "rename this page to Japan Trip" → {"reply": "Done — I renamed this page.", "actions": [{"type": "RENAME_CURRENT_PAGE", "title": "Japan Trip"}]}
                 - User: "delete status property" → {"reply": "Done — I deleted that property.", "actions": [{"type": "DELETE_PROPERTY", "propertyName": "Status"}]}
@@ -489,11 +491,13 @@ class AiService(
             return AiActionResult(
                 reply = visiblePrompt.recoveryReply(
                     malay = when (action.type) {
+                        "DELETE_ALL_BLOCKS" -> "Siap - saya padam semua block dalam page itu."
                         "DELETE_BLOCK" -> "Siap - saya buang block itu."
                         "UPDATE_BLOCK" -> "Siap - saya ubah block itu."
                         else -> "Siap - saya tambah block itu."
                     },
                     english = when (action.type) {
+                        "DELETE_ALL_BLOCKS" -> "Done - I deleted all blocks in that page."
                         "DELETE_BLOCK" -> "Done - I deleted that block."
                         "UPDATE_BLOCK" -> "Done - I updated that block."
                         else -> "Done - I added that block."
@@ -640,6 +644,12 @@ class AiService(
 
         val isDelete = listOf("padam", "buang", "hapus", "delete", "remove").any { token -> value.contains(token) }
         if (isDelete) {
+            if (requestsAllBlocksDeletion()) {
+                return AiActionItem(
+                    type = "DELETE_ALL_BLOCKS",
+                    targetTitle = targetPage.title,
+                )
+            }
             val reference = extractBlockReference(targetPage.title)
             val block = targetPage.findMatchingBlock(inferBlockType(), reference)
             return AiActionItem(
@@ -755,6 +765,17 @@ class AiService(
             )
             .replace(Regex("\\s+"), " ")
             .trim(' ', '-', ':')
+
+    private fun String.requestsAllBlocksDeletion(): Boolean {
+        val value = lowercase()
+        val hasDeleteIntent = listOf("padam", "buang", "hapus", "delete", "remove", "clear", "kosongkan")
+            .any { token -> value.contains(token) }
+        val hasAllIntent = listOf("semua", "all", "every", "keseluruhan", "seluruh")
+            .any { token -> value.contains(token) }
+        val hasBlockIntent = listOf("block", "blok", "blocks")
+            .any { token -> value.contains(token) }
+        return hasDeleteIntent && hasAllIntent && hasBlockIntent
+    }
 
     private fun String.looksLikePageWriteRequest(): Boolean {
         val value = lowercase()

@@ -74,4 +74,31 @@ class AiActionRecoveryTest {
         assertEquals("Table", action.tableView)
         assertEquals(listOf("Name", "Status", "Notes"), action.tableColumns.map { it.name })
     }
+
+    @Test
+    fun recoversDeleteAllBlocksForMentionedPage() {
+        val result = service.recoverActionFromPrompt(
+            prompt = """
+                padam semua block dalam page tersebut
+
+                CYL_MENTION_CONTEXT:
+                The user selected these page mentions from the chat UI. Treat them as exact target pages for create/update/delete actions:
+                - @Nota Ayam id=page-nota
+            """.trimIndent(),
+            pages = listOf(
+                AiPageContext(
+                    id = "page-nota",
+                    title = "Nota Ayam",
+                    blocks = listOf(
+                        AiBlockContext(id = "block-1", type = "Text", text = "Makan pagi"),
+                        AiBlockContext(id = "block-2", type = "Quote", text = "Jaga reban"),
+                    ),
+                ),
+            ),
+        )
+
+        val action = assertNotNull(result).actions.single()
+        assertEquals("DELETE_ALL_BLOCKS", action.type)
+        assertEquals("Nota Ayam", action.targetTitle)
+    }
 }

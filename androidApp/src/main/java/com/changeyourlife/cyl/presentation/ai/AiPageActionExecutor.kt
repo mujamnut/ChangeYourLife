@@ -104,6 +104,17 @@ class AiPageActionExecutor @Inject constructor(
                         "Deleted property: $propertyName"
                     }
 
+                    "DELETE_ALL_BLOCKS" -> {
+                        val deletedCount = workingDocument.blocks.countNestedBlocks()
+                        workingDocument = workingDocument.copy(blocks = emptyList())
+                        documentChanged = deletedCount > 0
+                        if (deletedCount > 0) {
+                            "Deleted all blocks"
+                        } else {
+                            "No blocks to delete"
+                        }
+                    }
+
                     "DELETE_BLOCK" -> {
                         val deleteResult = workingDocument.deleteMatchingBlock(action)
                         workingDocument = deleteResult.document
@@ -512,6 +523,7 @@ class AiPageActionExecutor @Inject constructor(
             "ADD_PROPERTY",
             "UPDATE_PROPERTY",
             "DELETE_PROPERTY",
+            "DELETE_ALL_BLOCKS",
             "DELETE_BLOCK",
             "UPDATE_BLOCK",
             "EDIT_BLOCK",
@@ -849,6 +861,10 @@ private fun PageBlock.withActionUpdate(action: ChatAction): PageBlock {
 
 private fun PageBlock.blockLabel(): String {
     return if (type == PageBlockType.DatabaseTable) table.title.ifBlank { "database table" } else text.ifBlank { type.name }
+}
+
+private fun List<PageBlock>.countNestedBlocks(): Int {
+    return sumOf { block -> 1 + block.children.countNestedBlocks() }
 }
 
 private fun PageBlock.deleteTableColumn(columnId: String, columnName: String): PageBlock {

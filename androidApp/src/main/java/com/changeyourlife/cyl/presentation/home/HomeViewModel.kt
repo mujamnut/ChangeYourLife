@@ -528,7 +528,8 @@ class HomeViewModel @Inject constructor(
         val results = mutableListOf<String>()
         val pageLinks = mutableListOf<AiChatPageLink>()
 
-        for (action in actions) {
+        for (rawAction in actions) {
+            val action = rawAction.normalizedForPrompt(userPrompt)
             Log.d("HomeViewModel", "Executing action: type=${action.type}, title=${action.title}, targetTitle=${action.targetTitle}")
             runCatching {
                 val actionType = action.type.trim().uppercase()
@@ -1262,6 +1263,13 @@ class HomeViewModel @Inject constructor(
 
         val isDelete = listOf("padam", "buang", "hapus", "delete", "remove").any { token -> value.contains(token) }
         if (isDelete) {
+            if (requestsAllBlocksDeletion()) {
+                return ChatAction(
+                    type = "DELETE_ALL_BLOCKS",
+                    title = "",
+                    targetTitle = targetPage.title,
+                )
+            }
             val blockText = extractBlockReference(targetPage.title)
             return ChatAction(
                 type = "DELETE_BLOCK",
@@ -1388,6 +1396,31 @@ class HomeViewModel @Inject constructor(
             )
             .replace(Regex("\\s+"), " ")
             .trim(' ', '-', ':')
+    }
+
+    private fun ChatAction.normalizedForPrompt(prompt: String): ChatAction {
+        return if (type.trim().equals("DELETE_BLOCK", ignoreCase = true) && prompt.requestsAllBlocksDeletion()) {
+            copy(
+                type = "DELETE_ALL_BLOCKS",
+                blockId = "",
+                blockText = "",
+                content = "",
+                blockType = "",
+            )
+        } else {
+            this
+        }
+    }
+
+    private fun String.requestsAllBlocksDeletion(): Boolean {
+        val value = lowercase()
+        val hasDeleteIntent = listOf("padam", "buang", "hapus", "delete", "remove", "clear", "kosongkan")
+            .any { token -> value.contains(token) }
+        val hasAllIntent = listOf("semua", "all", "every", "keseluruhan", "seluruh")
+            .any { token -> value.contains(token) }
+        val hasBlockIntent = listOf("block", "blok", "blocks")
+            .any { token -> value.contains(token) }
+        return hasDeleteIntent && hasAllIntent && hasBlockIntent
     }
 
     private fun String.inferWriteBlockType(): String {
