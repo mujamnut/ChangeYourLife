@@ -30,6 +30,7 @@ import com.changeyourlife.cyl.domain.repository.WorkspaceRepository
 import com.changeyourlife.cyl.domain.repository.AiPageContext
 import com.changeyourlife.cyl.domain.repository.AiRepository
 import com.changeyourlife.cyl.domain.repository.ChatAction
+import com.changeyourlife.cyl.domain.repository.ChatTableColumn
 import com.changeyourlife.cyl.presentation.ai.AiChatMessage
 import com.changeyourlife.cyl.presentation.ai.AiChatPageLink
 import com.changeyourlife.cyl.presentation.ai.AiPageActionExecutor
@@ -386,7 +387,10 @@ class HomeViewModel @Inject constructor(
         }
     }
 
-    fun sendChatMessage(prompt: String) {
+    fun sendChatMessage(
+        prompt: String,
+        mentionedPageIds: List<String> = emptyList(),
+    ) {
         if (prompt.isBlank() || isAiGeneratingChat.value) return
 
         isAiGeneratingChat.value = true
@@ -411,7 +415,16 @@ class HomeViewModel @Inject constructor(
             val pages = pageRepository.observePages(workspaceId)
                 .first()
                 .sortedByDescending { page -> page.updatedAt }
-            val pageContext = pages.map { page -> page.toAiPageContext() }
+            val textMentionedPageIds = pages
+                .findMentionedPages(prompt)
+                .map { page -> page.id }
+            val normalizedMentionedPageIds = (mentionedPageIds + textMentionedPageIds)
+                .filter { pageId -> pageId.isNotBlank() }
+                .distinct()
+            val explicitlyMentionedPages = pages.findPagesByIds(normalizedMentionedPageIds)
+            val pageContext = pages
+                .withMentionedPagesFirst(normalizedMentionedPageIds)
+                .map { page -> page.toAiPageContext() }
             val openTasks = taskRepository.observeOpenTasks(workspaceId)
                 .first()
             val taskContext = openTasks.map { task -> task.id to task.title }
@@ -439,27 +452,41 @@ class HomeViewModel @Inject constructor(
             // Pass only user/assistant messages — backend builds its own JSON-mode system prompt.
             // Sending a second system message here would conflict with the backend's action prompt
             // and cause Gemini to ignore the JSON instruction, returning actions: [] every time.
-            aiRepository.chatWithActions(updatedMessages.toRoleContentPairs(), pages = pageContext, tasks = taskContext)
+            val messagesForAi = currentMessages + userMessage.copy(
+                content = prompt.withMentionContext(explicitlyMentionedPages),
+            )
+            aiRepository.chatWithActions(messagesForAi.toRoleContentPairs(), pages = pageContext, tasks = taskContext)
                 .onSuccess { result ->
                     val executableActions = result.actions.ifEmpty {
                         recoverPageWriteActions(
                             prompt = prompt,
                             pages = pages,
                             assistantReply = result.reply,
+                            mentionedPageIds = normalizedMentionedPageIds,
                         )
                     }
                     val actionResults = if (executableActions.isNotEmpty()) {
-                        executeActions(executableActions, prompt)
+                        executeActions(executableActions, prompt, normalizedMentionedPageIds)
                     } else {
                         HomeAiExecutionResult()
                     }
                     isAiGeneratingChat.value = false
-                    val assistantReply = result.reply.ifBlank {
-                        if (actionResults.messages.any { it.startsWith("✅") }) {
+                    val actionSucceeded = actionResults.messages.any { message -> message.startsWith("✅") }
+                    val assistantReply = when {
+                        result.reply.isBackendActionFallback() && actionSucceeded -> {
+                            prompt.recoveredActionReply()
+                        }
+                        result.reply.isBackendActionFallback() && normalizedMentionedPageIds.isNotEmpty() -> {
+                            "Saya nampak page yang disebut, tapi arahan itu belum cukup jelas untuk saya ubah data dengan yakin."
+                        }
+                        result.reply.isBlank() -> {
+                            if (actionSucceeded) {
                             "Done — I handled that for you."
                         } else {
                             "I received your message, but the AI returned an empty reply."
                         }
+                        }
+                        else -> result.reply
                     }
                     val replyWithResults = if (actionResults.messages.isEmpty()) {
                         assistantReply
@@ -491,12 +518,13 @@ class HomeViewModel @Inject constructor(
     private suspend fun executeActions(
         actions: List<ChatAction>,
         userPrompt: String,
+        mentionedPageIds: List<String> = emptyList(),
     ): HomeAiExecutionResult {
         Log.d("HomeViewModel", "Executing AI actions: count=${actions.size}")
         val workspaceId = workspaceRepository.getActiveWorkspaceId()
             ?.takeIf { it.isNotBlank() }
             ?: CylDefaults.DefaultWorkspaceId
-        val mentionedPage = findMentionedPage(workspaceId, userPrompt)
+        val mentionedPage = findMentionedPage(workspaceId, userPrompt, mentionedPageIds)
         val results = mutableListOf<String>()
         val pageLinks = mutableListOf<AiChatPageLink>()
 
@@ -1021,12 +1049,20 @@ class HomeViewModel @Inject constructor(
         prompt: String,
         pages: List<Page>,
         assistantReply: String,
+        mentionedPageIds: List<String> = emptyList(),
     ): List<ChatAction> {
-        if (!prompt.looksLikePageMutationRequest()) return emptyList()
-        val targetPage = pages.findMentionedPage(prompt) ?: return emptyList()
+        val hasSelectedMention = mentionedPageIds.isNotEmpty()
+        if (!prompt.looksLikePageMutationRequest() && !(hasSelectedMention && prompt.looksLikePageActionIntent())) {
+            return emptyList()
+        }
+        val targetPage = pages.findPagesByIds(mentionedPageIds).firstOrNull()
+            ?: pages.findMentionedPage(prompt)
+            ?: pages.singleOrNull()
+            ?: return emptyList()
 
         prompt.recoverPropertyAction(targetPage)?.let { action -> return listOf(action) }
         prompt.recoverBlockMutationAction(targetPage)?.let { action -> return listOf(action) }
+        prompt.recoverDatabaseAction(targetPage)?.let { action -> return listOf(action) }
 
         if (!prompt.looksLikePageWriteRequest()) return emptyList()
         val content = assistantReply.asWritablePageContent()
@@ -1044,11 +1080,61 @@ class HomeViewModel @Inject constructor(
         )
     }
 
+    private fun List<Page>.findPagesByIds(pageIds: List<String>): List<Page> {
+        if (pageIds.isEmpty()) return emptyList()
+        return pageIds.mapNotNull { pageId ->
+            firstOrNull { page -> page.id == pageId }
+        }.distinctBy { page -> page.id }
+    }
+
+    private fun List<Page>.withMentionedPagesFirst(pageIds: List<String>): List<Page> {
+        val mentionedPages = findPagesByIds(pageIds)
+        if (mentionedPages.isEmpty()) return this
+        val mentionedIds = mentionedPages.map { page -> page.id }.toSet()
+        return mentionedPages + filterNot { page -> page.id in mentionedIds }
+    }
+
+    private fun String.withMentionContext(pages: List<Page>): String {
+        if (pages.isEmpty()) return this
+        val context = pages.joinToString(separator = "\n") { page ->
+            "- @${page.title.ifBlank { "Untitled page" }} id=${page.id}"
+        }
+        return """
+            $this
+
+            CYL_MENTION_CONTEXT:
+            The user selected these page mentions from the chat UI. Treat them as exact target pages for create/update/delete actions:
+            $context
+        """.trimIndent()
+    }
+
     private fun List<Page>.findMentionedPage(prompt: String): Page? {
+        return findMentionedPages(prompt).firstOrNull()
+    }
+
+    private fun List<Page>.findMentionedPages(prompt: String): List<Page> {
         val normalizedPrompt = prompt.lowercase()
-        return filter { page -> page.title.isNotBlank() }
+        val pagesWithTitle = filter { page -> page.title.isNotBlank() }
             .sortedByDescending { page -> page.title.length }
-            .firstOrNull { page -> normalizedPrompt.contains("@${page.title.lowercase()}") }
+        pagesWithTitle.firstOrNull { page ->
+            normalizedPrompt.contains("@${page.title.lowercase()}")
+        }?.let { return listOf(it) }
+
+        val mention = Regex("@([^\\n,.;:]+)")
+            .find(prompt)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.trim()
+            ?.lowercase()
+            .orEmpty()
+        if (mention.isBlank()) return emptyList()
+        return pagesWithTitle.filter { page ->
+            val title = page.title.lowercase()
+            title == mention ||
+                title.startsWith(mention) ||
+                mention.startsWith(title) ||
+                title.contains(mention)
+        }.take(1)
     }
 
     private fun String.looksLikePageWriteRequest(): Boolean {
@@ -1099,6 +1185,49 @@ class HomeViewModel @Inject constructor(
                 "delete",
                 "remove",
             ).any { token -> value.contains(token) }
+    }
+
+    private fun String.looksLikePageActionIntent(): Boolean {
+        val value = lowercase()
+        val mutationWords = listOf(
+            "buat",
+            "create",
+            "cipta",
+            "tambah",
+            "add",
+            "masukkan",
+            "letak",
+            "write",
+            "tulis",
+            "catat",
+            "ubah",
+            "tukar",
+            "edit",
+            "update",
+            "ganti",
+            "padam",
+            "buang",
+            "hapus",
+            "delete",
+            "remove",
+        ).any { token -> value.contains(token) }
+        val pageObjectWords = listOf(
+            "property",
+            "properties",
+            "prop",
+            "block",
+            "blok",
+            "table",
+            "database",
+            "row",
+            "column",
+            "task",
+            "todo",
+            "reminder",
+            "nota",
+            "note",
+        ).any { token -> value.contains(token) }
+        return mutationWords || pageObjectWords || looksLikePageWriteRequest()
     }
 
     private fun String.recoverPropertyAction(targetPage: Page): ChatAction? {
@@ -1157,6 +1286,30 @@ class HomeViewModel @Inject constructor(
         )
     }
 
+    private fun String.recoverDatabaseAction(targetPage: Page): ChatAction? {
+        val value = lowercase()
+        val hasDatabaseIntent = listOf("table", "database", "jadual").any { token -> value.contains(token) }
+        if (!hasDatabaseIntent) return null
+        val isCreate = listOf("buat", "create", "cipta", "tambah", "add", "masukkan").any { token ->
+            value.contains(token)
+        }
+        if (!isCreate) return null
+        val tableTitle = extractTableTitle(targetPage.title)
+            .ifBlank { "Table" }
+        return ChatAction(
+            type = "CREATE_DATABASE",
+            title = "",
+            targetTitle = targetPage.title,
+            tableTitle = tableTitle,
+            tableView = "Table",
+            tableColumns = listOf(
+                ChatTableColumn(name = "Name", type = "Text"),
+                ChatTableColumn(name = "Status", type = "Status"),
+                ChatTableColumn(name = "Notes", type = "Text"),
+            ),
+        )
+    }
+
     private fun String.asWritablePageContent(): String {
         val value = trim()
         if (value.isBlank()) return ""
@@ -1179,9 +1332,60 @@ class HomeViewModel @Inject constructor(
         return value
     }
 
+    private fun String.isBackendActionFallback(): Boolean {
+        val value = lowercase()
+        return listOf(
+            "belum dapat tukar arahan",
+            "tukar arahan itu kepada tindakan",
+            "couldn't convert that into a cyl action",
+            "could not convert that into a cyl action",
+            "try again with the page",
+            "mention page with @",
+        ).any { token -> value.contains(token) }
+    }
+
+    private fun String.recoveredActionReply(): String {
+        val value = lowercase()
+        val usesMalay = listOf(
+            "saya",
+            "awak",
+            "tolong",
+            "boleh",
+            "nak",
+            "buat",
+            "tulis",
+            "catat",
+            "tambah",
+            "masukkan",
+            "ubah",
+            "tukar",
+            "padam",
+            "buang",
+            "hapus",
+            "dekat",
+            "dalam",
+            "sini",
+        ).any { token -> value.contains(token) }
+        return if (usesMalay) {
+            "Siap - saya buat perubahan itu."
+        } else {
+            "Done - I made that change."
+        }
+    }
+
     private fun String.extractWriteFallbackContent(pageTitle: String): String {
         return removeMentionedPage(pageTitle)
             .replace(Regex("(?i)\\b(write|tulis|catat|masukkan|insert|append|draft|buat isi|tambah nota|add note)\\b"), "")
+            .replace(Regex("\\s+"), " ")
+            .trim(' ', '-', ':')
+    }
+
+    private fun String.extractTableTitle(pageTitle: String): String {
+        return removeMentionedPage(pageTitle)
+            .replace(
+                Regex("(?i)\\b(buat|create|cipta|tambah|add|masukkan|letak|table|database|jadual|dalam|dekat|di|page|ini|sini)\\b"),
+                " ",
+            )
             .replace(Regex("\\s+"), " ")
             .trim(' ', '-', ':')
     }
@@ -1315,15 +1519,35 @@ class HomeViewModel @Inject constructor(
     private suspend fun findMentionedPage(
         workspaceId: String,
         prompt: String,
+        mentionedPageIds: List<String> = emptyList(),
     ): Page? {
         val pages = pageRepository.observePages(workspaceId).first()
+        pages.findPagesByIds(mentionedPageIds).firstOrNull()?.let { page ->
+            return page
+        }
         val normalizedPrompt = prompt.lowercase()
-        return pages
+        val pagesWithTitle = pages
             .filter { page -> page.title.isNotBlank() }
             .sortedByDescending { page -> page.title.length }
-            .firstOrNull { page ->
-                normalizedPrompt.contains("@${page.title.lowercase()}")
-            }
+        pagesWithTitle.firstOrNull { page ->
+            normalizedPrompt.contains("@${page.title.lowercase()}")
+        }?.let { return it }
+
+        val mention = Regex("@([^\\n,.;:]+)")
+            .find(prompt)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.trim()
+            ?.lowercase()
+            .orEmpty()
+        if (mention.isBlank()) return null
+        return pagesWithTitle.firstOrNull { page ->
+            val title = page.title.lowercase()
+            title == mention ||
+                title.startsWith(mention) ||
+                mention.startsWith(title) ||
+                title.contains(mention)
+        }
     }
 
     private suspend fun resolveTargetPage(

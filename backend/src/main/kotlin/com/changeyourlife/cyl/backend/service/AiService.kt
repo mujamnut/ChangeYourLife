@@ -1,5 +1,6 @@
 package com.changeyourlife.cyl.backend.service
 
+import com.changeyourlife.cyl.backend.model.ai.AiBlockContext
 import com.changeyourlife.cyl.backend.model.ai.AiPageContext
 import com.changeyourlife.cyl.backend.model.ai.AiTaskContext
 import com.changeyourlife.cyl.backend.model.ai.ChatMessage
@@ -418,6 +419,9 @@ class AiService(
             val allMessages = listOf(ChatMessage(role = "system", content = systemPrompt)) + messages
             val responseText = chatCompletionsJson(allMessages, temperature = 0.1)
             val parsed = json.decodeFromString<AiActionJsonResponse>(responseText.cleanAiJson())
+            val latestPrompt = messages.lastOrNull { message ->
+                message.role.equals("user", ignoreCase = true)
+            }?.content.orEmpty()
             val reply = parsed.reply.ifBlank {
                 if (parsed.actions.isNotEmpty()) {
                     "Done — I handled that for you."
@@ -425,11 +429,533 @@ class AiService(
                     chat(messages).ifBlank { "I received your message, but the AI returned an empty reply." }
                 }
             }
-            AiActionResult(reply = reply, actions = parsed.actions)
+            val parsedResult = AiActionResult(reply = reply, actions = parsed.actions)
+            if (parsed.actions.isEmpty()) {
+                recoverActionFromPrompt(latestPrompt, pages) ?: parsedResult
+            } else {
+                parsedResult
+            }
         } catch (e: Exception) {
+            val latestPrompt = messages.lastOrNull { message ->
+                message.role.equals("user", ignoreCase = true)
+            }?.content.orEmpty()
+            recoverActionFromPrompt(latestPrompt, pages)?.let { recovered ->
+                return recovered
+            }
             val fallback = "Saya belum dapat tukar arahan itu kepada tindakan CYL dengan yakin. Cuba sebut nama page/table/row, atau mention page dengan @."
             AiActionResult(reply = fallback, actions = emptyList())
         }
+    }
+
+    internal fun recoverActionFromPrompt(
+        prompt: String,
+        pages: List<AiPageContext>,
+    ): AiActionResult? {
+        if (prompt.isBlank()) return null
+        val visiblePrompt = prompt.withoutMentionContext()
+        val targetPage = pages.findTargetPage(prompt)
+            ?: pages.findTargetPage(visiblePrompt)
+            ?: return null
+
+        visiblePrompt.recoverDatabaseAction(targetPage)?.let { action ->
+            return AiActionResult(
+                reply = visiblePrompt.recoveryReply(
+                    malay = "Siap - saya buat table itu.",
+                    english = "Done - I created that table.",
+                ),
+                actions = listOf(action),
+            )
+        }
+
+        visiblePrompt.recoverPropertyAction(targetPage)?.let { action ->
+            return AiActionResult(
+                reply = visiblePrompt.recoveryReply(
+                    malay = when (action.type) {
+                        "DELETE_PROPERTY" -> "Siap - saya padam property itu."
+                        "UPDATE_PROPERTY" -> "Siap - saya ubah property itu."
+                        else -> "Siap - saya tambah property itu."
+                    },
+                    english = when (action.type) {
+                        "DELETE_PROPERTY" -> "Done - I deleted that property."
+                        "UPDATE_PROPERTY" -> "Done - I updated that property."
+                        else -> "Done - I added that property."
+                    },
+                ),
+                actions = listOf(action),
+            )
+        }
+
+        visiblePrompt.recoverBlockAction(targetPage)?.let { action ->
+            return AiActionResult(
+                reply = visiblePrompt.recoveryReply(
+                    malay = when (action.type) {
+                        "DELETE_BLOCK" -> "Siap - saya buang block itu."
+                        "UPDATE_BLOCK" -> "Siap - saya ubah block itu."
+                        else -> "Siap - saya tambah block itu."
+                    },
+                    english = when (action.type) {
+                        "DELETE_BLOCK" -> "Done - I deleted that block."
+                        "UPDATE_BLOCK" -> "Done - I updated that block."
+                        else -> "Done - I added that block."
+                    },
+                ),
+                actions = listOf(action),
+            )
+        }
+
+        visiblePrompt.recoverWriteAction(targetPage)?.let { action ->
+            return AiActionResult(
+                reply = visiblePrompt.recoveryReply(
+                    malay = "Siap - saya tambah teks itu.",
+                    english = "Done - I added that text.",
+                ),
+                actions = listOf(action),
+            )
+        }
+
+        return null
+    }
+
+    private fun List<AiPageContext>.findTargetPage(prompt: String): AiPageContext? {
+        prompt.extractMentionContextPageIds().firstNotNullOfOrNull { pageId ->
+            firstOrNull { page -> page.id == pageId }
+        }?.let { return it }
+
+        val normalizedPrompt = prompt.lowercase()
+        val pagesWithTitle = filter { page -> page.title.isNotBlank() }
+            .sortedByDescending { page -> page.title.length }
+
+        pagesWithTitle.firstOrNull { page ->
+            normalizedPrompt.contains("@${page.title.lowercase()}")
+        }?.let { return it }
+
+        val mention = Regex("@([^\\n,.;:]+)")
+            .find(prompt)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.trim()
+            ?.lowercase()
+            .orEmpty()
+        if (mention.isNotBlank()) {
+            pagesWithTitle.firstOrNull { page ->
+                val title = page.title.lowercase()
+                title == mention ||
+                    title.startsWith(mention) ||
+                    mention.startsWith(title) ||
+                    title.contains(mention)
+            }?.let { return it }
+        }
+
+        return singleOrNull()?.takeIf { prompt.looksLikePageMutationRequest() }
+    }
+
+    private fun String.extractMentionContextPageIds(): List<String> {
+        val context = substringAfter("CYL_MENTION_CONTEXT:", missingDelimiterValue = "")
+        if (context.isBlank()) return emptyList()
+        return Regex("\\bid=([^\\s]+)")
+            .findAll(context)
+            .map { match -> match.groupValues.getOrNull(1).orEmpty().trim() }
+            .filter { pageId -> pageId.isNotBlank() }
+            .distinct()
+            .toList()
+    }
+
+    private fun String.withoutMentionContext(): String =
+        substringBefore("CYL_MENTION_CONTEXT:").trim()
+
+    private fun String.recoverWriteAction(targetPage: AiPageContext): AiActionItem? {
+        if (!looksLikePageWriteRequest()) return null
+        val content = extractWriteContent(targetPage.title).ifBlank { return null }
+        return AiActionItem(
+            type = "APPEND_BLOCK",
+            targetTitle = targetPage.title,
+            blockType = inferBlockType(),
+            content = content,
+        )
+    }
+
+    private fun String.recoverPropertyAction(targetPage: AiPageContext): AiActionItem? {
+        val value = lowercase()
+        val mentionsProperty = listOf("property", "properties", "prop").any { token -> value.contains(token) }
+        if (!mentionsProperty) return null
+
+        val actionType = when {
+            listOf("padam", "buang", "hapus", "delete", "remove").any { token -> value.contains(token) } -> "DELETE_PROPERTY"
+            listOf("ubah", "tukar", "edit", "update", "set", "jadikan", "change").any { token -> value.contains(token) } -> "UPDATE_PROPERTY"
+            listOf("tambah", "add", "create", "buat", "masukkan", "letak").any { token -> value.contains(token) } -> "ADD_PROPERTY"
+            else -> return null
+        }
+        val propertyName = extractPropertyName(targetPage.title)
+        if (propertyName.isBlank()) return null
+
+        return AiActionItem(
+            type = actionType,
+            targetTitle = targetPage.title,
+            propertyName = propertyName,
+            propertyType = inferPropertyType(),
+            value = extractPropertyValue(targetPage.title),
+        )
+    }
+
+    private fun String.recoverDatabaseAction(targetPage: AiPageContext): AiActionItem? {
+        val value = lowercase()
+        val hasDatabaseIntent = listOf("table", "database", "jadual").any { token -> value.contains(token) }
+        if (!hasDatabaseIntent) return null
+        val isCreate = listOf("buat", "create", "cipta", "tambah", "add", "masukkan", "letak").any { token ->
+            value.contains(token)
+        }
+        if (!isCreate) return null
+
+        val tableTitle = extractTableTitle(targetPage.title).ifBlank { "Table" }
+        return AiActionItem(
+            type = "CREATE_DATABASE",
+            targetTitle = targetPage.title,
+            tableTitle = tableTitle,
+            tableView = "Table",
+            tableColumns = listOf(
+                AiTableColumnItem(name = "Name", type = "Text"),
+                AiTableColumnItem(name = "Status", type = "Status"),
+                AiTableColumnItem(name = "Notes", type = "Text"),
+            ),
+        )
+    }
+
+    private fun String.recoverBlockAction(targetPage: AiPageContext): AiActionItem? {
+        val value = lowercase()
+        val hasBlockIntent = listOf(
+            "block",
+            "blok",
+            "heading",
+            "tajuk",
+            "todo",
+            "checklist",
+            "quote",
+            "petikan",
+            "divider",
+            "media",
+            "file",
+            "gambar",
+        ).any { token -> value.contains(token) }
+        if (!hasBlockIntent) return null
+
+        val isDelete = listOf("padam", "buang", "hapus", "delete", "remove").any { token -> value.contains(token) }
+        if (isDelete) {
+            val reference = extractBlockReference(targetPage.title)
+            val block = targetPage.findMatchingBlock(inferBlockType(), reference)
+            return AiActionItem(
+                type = "DELETE_BLOCK",
+                targetTitle = targetPage.title,
+                blockId = block?.id.orEmpty(),
+                blockType = block?.type ?: inferBlockType(),
+                blockText = reference.ifBlank { block?.text.orEmpty() },
+                content = reference.ifBlank { block?.text.orEmpty() },
+                tableTitle = block?.tableTitle.orEmpty(),
+            )
+        }
+
+        val isUpdate = listOf("ubah", "tukar", "edit", "update", "ganti", "jadikan", "change").any { token ->
+            value.contains(token)
+        }
+        if (isUpdate) {
+            val replacement = splitBlockReplacement(targetPage.title) ?: return null
+            val block = targetPage.findMatchingBlock(inferBlockType(), replacement.first)
+            return AiActionItem(
+                type = "UPDATE_BLOCK",
+                targetTitle = targetPage.title,
+                blockId = block?.id.orEmpty(),
+                blockType = block?.type ?: inferBlockType(),
+                blockText = replacement.first.ifBlank { block?.text.orEmpty() },
+                content = replacement.second,
+            )
+        }
+
+        val isAppend = listOf("tambah", "add", "buat", "masukkan", "letak", "tulis", "catat", "append").any { token ->
+            value.contains(token)
+        }
+        if (!isAppend) return null
+        val content = extractBlockReference(targetPage.title).ifBlank { return null }
+        return AiActionItem(
+            type = "APPEND_BLOCK",
+            targetTitle = targetPage.title,
+            blockType = inferBlockType(),
+            content = content,
+        )
+    }
+
+    private fun AiPageContext.findMatchingBlock(
+        requestedType: String,
+        reference: String,
+    ): AiBlockContext? {
+        val normalizedReference = reference.normalizeForAiMatch()
+        val candidates = blocks.filterNot { block -> block.type.equals("Property", ignoreCase = true) }
+        if (normalizedReference.isNotBlank()) {
+            candidates.firstOrNull { block ->
+                val blockText = block.text.normalizeForAiMatch()
+                blockText.isNotBlank() &&
+                    (blockText.contains(normalizedReference) || normalizedReference.contains(blockText))
+            }?.let { return it }
+
+            candidates.firstOrNull { block ->
+                val tableTitle = block.tableTitle.normalizeForAiMatch()
+                tableTitle.isNotBlank() && tableTitle.contains(normalizedReference)
+            }?.let { return it }
+        }
+
+        val normalizedType = requestedType.normalizeForAiMatch()
+        return candidates.firstOrNull { block ->
+            block.type.normalizeForAiMatch() == normalizedType ||
+                block.type.equals(requestedType, ignoreCase = true)
+        }
+    }
+
+    private fun String.looksLikePageMutationRequest(): Boolean {
+        val value = lowercase()
+        val mutationIntent = listOf(
+            "write",
+            "tulis",
+            "catat",
+            "masukkan",
+            "insert",
+            "append",
+            "tambah",
+            "add",
+            "buat",
+            "draft",
+            "ubah",
+            "tukar",
+            "edit",
+            "update",
+            "ganti",
+            "padam",
+            "buang",
+            "hapus",
+            "delete",
+            "remove",
+        ).any { token -> value.contains(token) }
+        val targetHint = listOf(
+            "@",
+            "page ini",
+            "current page",
+            "this page",
+            "sini",
+            "dalam page",
+            "dekat page",
+            "property",
+            "block",
+            "blok",
+        ).any { token -> value.contains(token) }
+        return mutationIntent && targetHint
+    }
+
+    private fun String.extractTableTitle(pageTitle: String): String =
+        removeTargetMention(pageTitle)
+            .replace(
+                Regex("(?i)\\b(buat|create|cipta|tambah|add|masukkan|letak|table|database|jadual|dalam|dekat|di|page|ini|sini|this|current)\\b"),
+                " ",
+            )
+            .replace(Regex("\\s+"), " ")
+            .trim(' ', '-', ':')
+
+    private fun String.looksLikePageWriteRequest(): Boolean {
+        val value = lowercase()
+        val hasWriteIntent = listOf(
+            "write",
+            "tulis",
+            "catat",
+            "masukkan",
+            "insert",
+            "append",
+            "add note",
+            "tambah nota",
+            "buat isi",
+            "draft",
+            "karangan",
+        ).any { token -> value.contains(token) }
+        if (!hasWriteIntent) return false
+
+        val nonWriteIntent = listOf(
+            "delete",
+            "hapus",
+            "buang",
+            "rename",
+            "table",
+            "database",
+            "row",
+            "column",
+            "property",
+            "block",
+            "blok",
+        ).any { token -> value.contains(token) }
+        return !nonWriteIntent
+    }
+
+    private fun String.extractWriteContent(pageTitle: String): String =
+        removeTargetMention(pageTitle)
+            .replace(Regex("(?i)\\b(write|tulis|catat|masukkan|insert|append|draft|buat isi|tambah nota|add note)\\b"), " ")
+            .replace(Regex("(?i)\\b(dalam|dekat|di|ke|to|into|page|ini|sini|this page|current page)\\b"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim(' ', '-', ':')
+
+    private fun String.extractPropertyName(pageTitle: String): String {
+        val typeWords = setOf(
+            "text",
+            "number",
+            "nombor",
+            "select",
+            "multi",
+            "multiselect",
+            "status",
+            "date",
+            "tarikh",
+            "person",
+            "files",
+            "media",
+            "checkbox",
+            "url",
+            "email",
+            "phone",
+            "telefon",
+            "formula",
+            "relation",
+            "rollup",
+            "button",
+            "place",
+            "tempat",
+            "id",
+        )
+        val cleaned = removeTargetMention(pageTitle)
+            .replace(
+                Regex(
+                    "(?i)\\b(tambah|add|create|buat|masukkan|letak|ubah|tukar|edit|update|set|jadikan|change|padam|buang|hapus|delete|remove|property|properties|prop|type|jenis|dalam|dekat|di|page|ini|sini|this|current)\\b",
+                ),
+                " ",
+            )
+            .replace(Regex("(?i)\\b(kepada|ke|as|sebagai|value|nilai|with|dengan)\\b.*$"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim(' ', '-', ':')
+
+        return cleaned
+            .split(" ")
+            .filter { token -> token.isNotBlank() && token.lowercase() !in typeWords }
+            .joinToString(" ")
+            .trim()
+    }
+
+    private fun String.extractPropertyValue(pageTitle: String): String {
+        val withoutMention = removeTargetMention(pageTitle)
+        val match = Regex("(?i)\\b(value|nilai|kepada|ke|as|sebagai|dengan|with)\\b\\s+(.+)$")
+            .find(withoutMention)
+            ?: return ""
+        return match.groupValues.getOrNull(2)
+            .orEmpty()
+            .replace(Regex("\\s+"), " ")
+            .trim(' ', '-', ':')
+    }
+
+    private fun String.inferPropertyType(): String {
+        val value = lowercase()
+        return when {
+            value.contains("number") || value.contains("nombor") || value.contains("jumlah") || value.contains("harga") -> "Number"
+            value.contains("multi-select") || value.contains("multiselect") || value.contains("multi select") -> "MultiSelect"
+            value.contains("select") -> "Select"
+            value.contains("status") -> "Status"
+            value.contains("date") || value.contains("tarikh") || value.contains("deadline") || value.contains("due") -> "Date"
+            value.contains("person") || value.contains("orang") -> "Person"
+            value.contains("file") || value.contains("media") || value.contains("gambar") -> "FilesMedia"
+            value.contains("checkbox") || value.contains("check") || value.contains("tick") || value.contains("siap") -> "Checkbox"
+            value.contains("url") || value.contains("link") -> "Url"
+            value.contains("email") -> "Email"
+            value.contains("phone") || value.contains("telefon") -> "Phone"
+            value.contains("formula") || value.contains("kira") -> "Formula"
+            value.contains("relation") || value.contains("hubungan") -> "Relation"
+            value.contains("rollup") -> "Rollup"
+            value.contains("button") -> "Button"
+            value.contains("place") || value.contains("tempat") || value.contains("lokasi") -> "Place"
+            value.contains("id") -> "Id"
+            else -> "Text"
+        }
+    }
+
+    private fun String.extractBlockReference(pageTitle: String): String =
+        removeTargetMention(pageTitle)
+            .replace(
+                Regex(
+                    "(?i)\\b(tambah|add|buat|masukkan|letak|tulis|catat|padam|buang|hapus|delete|remove|block|blok|text|heading|tajuk|todo|checklist|quote|petikan|divider|garisan|media|file|gambar|dalam|dekat|di|page|ini|sini|this|current)\\b",
+                ),
+                " ",
+            )
+            .replace(Regex("\\s+"), " ")
+            .trim(' ', '-', ':')
+
+    private fun String.splitBlockReplacement(pageTitle: String): Pair<String, String>? {
+        val cleaned = removeTargetMention(pageTitle)
+            .replace(
+                Regex("(?i)\\b(ubah|tukar|edit|update|ganti|jadikan|change|block|blok|text|heading|tajuk|todo|checklist|quote|petikan|divider|garisan|media|file|gambar|dalam|dekat|di|page|ini|sini|this|current)\\b"),
+                " ",
+            )
+            .replace(Regex("\\s+"), " ")
+            .trim(' ', '-', ':')
+        val parts = Regex("(?i)\\s+\\b(kepada|ke|jadi|menjadi|dengan|to|into|with)\\b\\s+")
+            .split(cleaned, limit = 2)
+        if (parts.size != 2) return null
+        val from = parts[0].trim(' ', '-', ':')
+        val to = parts[1].trim(' ', '-', ':')
+        if (from.isBlank() || to.isBlank()) return null
+        return from to to
+    }
+
+    private fun String.inferBlockType(): String {
+        val value = lowercase()
+        return when {
+            value.contains("database") || value.contains("table") -> "DatabaseTable"
+            value.contains("heading") || value.contains("tajuk") -> "Heading"
+            value.contains("bullet") || value.contains("list") || value.contains("senarai") -> "Bullet"
+            value.contains("quote") || value.contains("petikan") -> "Quote"
+            value.contains("todo") || value.contains("checklist") -> "Todo"
+            value.contains("divider") || value.contains("garisan") || value.contains("line") -> "Divider"
+            value.contains("media") || value.contains("file") || value.contains("gambar") -> "MediaFile"
+            else -> "Text"
+        }
+    }
+
+    private fun String.removeTargetMention(pageTitle: String): String =
+        replace("@$pageTitle", "", ignoreCase = true)
+            .replace(Regex("@[^\\s,.;:]+"), " ")
+
+    private fun String.normalizeForAiMatch(): String =
+        lowercase()
+            .replace(Regex("[^a-z0-9\\s]"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+
+    private fun String.recoveryReply(
+        malay: String,
+        english: String,
+    ): String = if (prefersMalayReply()) malay else english
+
+    private fun String.prefersMalayReply(): Boolean {
+        val value = lowercase()
+        return listOf(
+            "saya",
+            "awak",
+            "tolong",
+            "boleh",
+            "nak",
+            "tulis",
+            "catat",
+            "tambah",
+            "masukkan",
+            "ubah",
+            "tukar",
+            "padam",
+            "buang",
+            "hapus",
+            "dekat",
+            "dalam",
+            "sini",
+            "page ini",
+            "tarikh",
+        ).any { token -> value.contains(token) }
     }
 
     fun summarize(text: String): String {

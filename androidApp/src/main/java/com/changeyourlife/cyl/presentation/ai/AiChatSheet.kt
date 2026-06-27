@@ -65,20 +65,30 @@ fun AiChatSheet(
     mentionPages: List<Page>,
     isGenerating: Boolean,
     errorMessage: String?,
-    onSendMessage: (String) -> Unit,
+    onSendMessage: (String, List<String>) -> Unit,
     onClearHistory: () -> Unit,
     onCreateChatSession: () -> Unit,
     onDismissError: () -> Unit,
     onOpenPage: (String, String, String) -> Unit,
     onDismiss: () -> Unit,
     sheetState: SheetState,
+    attachedPageId: String? = null,
     attachedPageTitle: String? = null,
 ) {
+    val attachedMentionPageIds = rememberSaveable(attachedPageId) {
+        attachedPageId
+            ?.takeIf { it.isNotBlank() }
+            ?.let(::listOf)
+            .orEmpty()
+    }
     val attachedMention = attachedPageTitle
         ?.ifBlank { "Untitled page" }
         ?.let { "@$it " }
     var inputText by rememberSaveable(attachedMention) {
         mutableStateOf(attachedMention.orEmpty())
+    }
+    var selectedMentionPageIds by rememberSaveable(attachedPageId) {
+        mutableStateOf(attachedMentionPageIds)
     }
     val listState = rememberLazyListState()
     val context = LocalContext.current
@@ -272,6 +282,9 @@ fun AiChatSheet(
                     pages = mentionSuggestions,
                     onSelectPage = { page ->
                         inputText = inputText.insertMention(page.title.ifBlank { "Untitled page" })
+                        selectedMentionPageIds = (selectedMentionPageIds + page.id)
+                            .filter { id -> id.isNotBlank() }
+                            .distinct()
                     },
                     modifier = Modifier.padding(horizontal = 16.dp),
                 )
@@ -294,8 +307,16 @@ fun AiChatSheet(
                     keyboardActions = KeyboardActions(
                         onSend = {
                             if (inputText.isNotBlank() && !isGenerating) {
-                                onSendMessage(inputText.withAttachedMention(attachedMention))
+                                val message = inputText.withAttachedMention(attachedMention)
+                                onSendMessage(
+                                    message,
+                                    message.resolveMentionedPageIds(
+                                        pages = mentionPages,
+                                        knownPageIds = selectedMentionPageIds + attachedMentionPageIds,
+                                    ),
+                                )
                                 inputText = attachedMention.orEmpty()
+                                selectedMentionPageIds = attachedMentionPageIds
                             }
                         },
                     ),
@@ -304,8 +325,16 @@ fun AiChatSheet(
                 IconButton(
                     onClick = {
                         if (inputText.isNotBlank() && !isGenerating) {
-                            onSendMessage(inputText.withAttachedMention(attachedMention))
+                            val message = inputText.withAttachedMention(attachedMention)
+                            onSendMessage(
+                                message,
+                                message.resolveMentionedPageIds(
+                                    pages = mentionPages,
+                                    knownPageIds = selectedMentionPageIds + attachedMentionPageIds,
+                                ),
+                            )
                             inputText = attachedMention.orEmpty()
+                            selectedMentionPageIds = attachedMentionPageIds
                         }
                     },
                     enabled = inputText.isNotBlank() && !isGenerating,
@@ -438,4 +467,44 @@ private fun String.withAttachedMention(attachedMention: String?): String {
     } else {
         "$mention $message".trim()
     }
+}
+
+private fun String.resolveMentionedPageIds(
+    pages: List<Page>,
+    knownPageIds: List<String>,
+): List<String> {
+    val ids = LinkedHashSet<String>()
+    knownPageIds
+        .filter { id -> id.isNotBlank() }
+        .forEach(ids::add)
+
+    val normalizedMessage = lowercase()
+    pages
+        .filter { page -> page.id.isNotBlank() && page.title.isNotBlank() }
+        .sortedByDescending { page -> page.title.length }
+        .forEach { page ->
+            val title = page.title.lowercase()
+            if (normalizedMessage.contains("@$title")) {
+                ids += page.id
+            }
+        }
+
+    Regex("@([^\\n,.;:]+)")
+        .findAll(this)
+        .map { match -> match.groupValues.getOrNull(1).orEmpty().trim().lowercase() }
+        .filter { mention -> mention.isNotBlank() }
+        .forEach { mention ->
+            pages
+                .filter { page -> page.id.isNotBlank() && page.title.isNotBlank() }
+                .sortedByDescending { page -> page.title.length }
+                .firstOrNull { page ->
+                    val title = page.title.lowercase()
+                    title == mention ||
+                        title.startsWith(mention) ||
+                        mention.startsWith(title)
+                }
+                ?.let { page -> ids += page.id }
+        }
+
+    return ids.toList()
 }
