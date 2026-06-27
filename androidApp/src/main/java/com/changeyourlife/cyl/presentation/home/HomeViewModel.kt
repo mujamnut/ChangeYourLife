@@ -450,71 +450,20 @@ class HomeViewModel @Inject constructor(
                 return@launch
             }
 
-            // Pass only user/assistant messages — backend builds its own JSON-mode system prompt.
-            // Sending a second system message here would conflict with the backend's action prompt
-            // and cause Gemini to ignore the JSON instruction, returning actions: [] every time.
+            // Home AI chat is conversation-first. It does not execute backend/local actions.
             val messagesForAi = currentMessages + userMessage.copy(
                 content = prompt.withMentionContext(explicitlyMentionedPages),
             )
             aiRepository.chatWithActions(messagesForAi.toRoleContentPairs(), pages = pageContext, tasks = taskContext)
                 .onSuccess { result ->
-                    val shouldUseLocalPlan = result.actions.isNotEmpty() ||
-                        result.reply.isBackendActionFallback() ||
-                        result.reply.isBlank()
-                    val recoveredFallbackActions = if (shouldUseLocalPlan) {
-                        recoverPageWriteActions(
-                            prompt = prompt,
-                            pages = pages,
-                            assistantReply = result.reply,
-                            mentionedPageIds = normalizedMentionedPageIds,
-                        )
-                    } else {
-                        emptyList()
-                    }
-                    val executableActions = if (result.actions.isNotEmpty()) {
-                        result.actions.repairedWithLocalPlan(
-                            prompt = prompt,
-                            localActions = recoveredFallbackActions,
-                        )
-                    } else if (result.reply.isBackendActionFallback() || result.reply.isBlank()) {
-                        recoveredFallbackActions
-                    } else {
-                        emptyList()
-                    }
-                    val actionResults = if (executableActions.isNotEmpty()) {
-                        executeActions(executableActions, prompt, normalizedMentionedPageIds)
-                    } else {
-                        HomeAiExecutionResult()
-                    }
                     isAiGeneratingChat.value = false
-                    val actionSucceeded = actionResults.messages.any { message -> message.startsWith("✅") }
-                    val assistantReply = when {
-                        result.reply.isBackendActionFallback() && actionSucceeded -> {
-                            prompt.recoveredActionReply()
-                        }
-                        result.reply.isBackendActionFallback() && normalizedMentionedPageIds.isNotEmpty() -> {
-                            "Saya nampak page yang disebut, tapi arahan itu belum cukup jelas untuk saya ubah data dengan yakin."
-                        }
-                        result.reply.isBlank() -> {
-                            if (actionSucceeded) {
-                            "Done — I handled that for you."
-                        } else {
-                            "I received your message, but the AI returned an empty reply."
-                        }
-                        }
-                        else -> result.reply
+                    val assistantReply = result.reply.ifBlank {
+                        "I received your message, but the AI returned an empty reply."
                     }
-                    val replyWithResults = if (actionResults.messages.isEmpty()) {
-                        assistantReply
-                    } else {
-                        assistantReply + "\n\n" + actionResults.messages.joinToString("\n")
-                    }
-                    val assistantLinks = actionResults.pageLinks.distinctBy { link -> link.pageId }
                     chatHistoryRepository.appendMessage(
                         sessionId = session.id,
                         role = "assistant",
-                        content = replyWithResults,
-                        pageLinks = assistantLinks.toDomainChatPageLinks(),
+                        content = assistantReply,
                     )
                 }
                 .onFailure { error ->
