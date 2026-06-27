@@ -166,6 +166,7 @@ import com.changeyourlife.cyl.domain.model.PageTableSortDirection
 import com.changeyourlife.cyl.domain.model.PageTableView
 import com.changeyourlife.cyl.domain.model.PageTableViewConfig
 import com.changeyourlife.cyl.domain.model.PageTextSpan
+import com.changeyourlife.cyl.presentation.ai.AiChatMode
 import com.changeyourlife.cyl.presentation.ai.AiChatSheet
 import com.changeyourlife.cyl.presentation.ai.AiChatMessage
 import com.changeyourlife.cyl.presentation.ai.AiChatPageLink
@@ -185,7 +186,8 @@ fun PageEditorRoute(
     initialSearchTargetType: String = "",
     initialSearchTargetId: String = "",
     onOpenPage: (String, String, String) -> Unit,
-    onSendHomeAiMessage: (String, List<String>) -> Unit,
+    onSendHomeAiMessage: (String, List<String>, AiChatMode) -> Unit,
+    onHomeAiModeChange: (AiChatMode) -> Unit,
     onClearHomeAiHistory: () -> Unit,
     onCreateHomeChatSession: () -> Unit,
     onDismissHomeAiError: () -> Unit,
@@ -249,6 +251,7 @@ fun PageEditorRoute(
         },
         onUndoEditorChange = viewModel::undoLastEditorChange,
         onSendHomeAiMessage = onSendHomeAiMessage,
+        onHomeAiModeChange = onHomeAiModeChange,
         onClearHomeAiHistory = onClearHomeAiHistory,
         onCreateHomeChatSession = onCreateHomeChatSession,
         onDismissHomeAiError = onDismissHomeAiError,
@@ -315,7 +318,8 @@ private fun PageEditorScreen(
     onDeleteProperty: (String) -> Unit,
     onCreateChildPage: () -> Unit,
     onUndoEditorChange: () -> Unit,
-    onSendHomeAiMessage: (String, List<String>) -> Unit,
+    onSendHomeAiMessage: (String, List<String>, AiChatMode) -> Unit,
+    onHomeAiModeChange: (AiChatMode) -> Unit,
     onClearHomeAiHistory: () -> Unit,
     onCreateHomeChatSession: () -> Unit,
     onDismissHomeAiError: () -> Unit,
@@ -366,6 +370,8 @@ private fun PageEditorScreen(
                 mentionPages = homeAiState.allPages,
                 isGenerating = homeAiState.isAiGeneratingChat,
                 errorMessage = homeAiState.aiChatError,
+                aiMode = homeAiState.aiChatMode,
+                onAiModeChange = onHomeAiModeChange,
                 onSendMessage = onSendHomeAiMessage,
                 onClearHistory = onClearHomeAiHistory,
                 onCreateChatSession = onCreateHomeChatSession,
@@ -6910,7 +6916,8 @@ private fun PageEditorScreenPreview() {
             onAddChildBlock = { _, _ -> },
             onCreateChildPage = {},
             onUndoEditorChange = {},
-            onSendHomeAiMessage = { _, _ -> },
+            onSendHomeAiMessage = { _, _, _ -> },
+            onHomeAiModeChange = {},
             onClearHomeAiHistory = {},
             onCreateHomeChatSession = {},
             onDismissHomeAiError = {},

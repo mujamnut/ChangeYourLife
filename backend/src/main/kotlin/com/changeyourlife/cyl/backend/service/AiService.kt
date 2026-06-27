@@ -675,6 +675,7 @@ class AiService(
         val descriptorWords = setOf(
             "sesuai",
             "sensuai",
+            "sesual",
             "sensual",
             "appropriate",
             "suitable",

@@ -87,6 +87,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.changeyourlife.cyl.domain.model.ChatSession
 import com.changeyourlife.cyl.domain.model.Page
 import com.changeyourlife.cyl.domain.model.PageBlockType
+import com.changeyourlife.cyl.presentation.ai.AiChatMode
 import com.changeyourlife.cyl.presentation.ai.AiChatSheet
 import com.changeyourlife.cyl.presentation.ai.AiChatMessage
 import com.changeyourlife.cyl.presentation.ai.AiChatPageLink
@@ -139,6 +140,7 @@ fun HomeRoute(
         onNewWorkspaceNameChange = viewModel::updateNewWorkspaceName,
         onCreateWorkspace = viewModel::createWorkspace,
         onSendChatMessage = viewModel::sendChatMessage,
+        onAiModeChange = viewModel::updateAiChatMode,
         onClearChatHistory = viewModel::clearChatHistory,
         onCreateChatSession = viewModel::createNewChatSession,
         onSelectChatSession = viewModel::selectChatSession,
@@ -188,7 +190,8 @@ private fun HomeScreen(
     onDismissCreateWorkspace: () -> Unit,
     onNewWorkspaceNameChange: (String) -> Unit,
     onCreateWorkspace: () -> Unit,
-    onSendChatMessage: (String, List<String>) -> Unit,
+    onSendChatMessage: (String, List<String>, AiChatMode) -> Unit,
+    onAiModeChange: (AiChatMode) -> Unit,
     onClearChatHistory: () -> Unit,
     onCreateChatSession: () -> Unit,
     onSelectChatSession: (String) -> Unit,
@@ -224,6 +227,8 @@ private fun HomeScreen(
             mentionPages = uiState.allPages,
             isGenerating = uiState.isAiGeneratingChat,
             errorMessage = uiState.aiChatError,
+            aiMode = uiState.aiChatMode,
+            onAiModeChange = onAiModeChange,
             onSendMessage = onSendChatMessage,
             onClearHistory = onClearChatHistory,
             onCreateChatSession = onCreateChatSession,
@@ -1490,7 +1495,8 @@ private fun HomeRoutePreview() {
             onDismissCreateWorkspace = {},
             onNewWorkspaceNameChange = {},
             onCreateWorkspace = {},
-            onSendChatMessage = { _, _ -> },
+            onSendChatMessage = { _, _, _ -> },
+            onAiModeChange = {},
             onClearChatHistory = {},
             onCreateChatSession = {},
             onSelectChatSession = {},
