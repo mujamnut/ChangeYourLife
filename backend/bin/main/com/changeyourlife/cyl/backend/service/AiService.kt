@@ -367,6 +367,11 @@ class AiService(
                 - For Date cell values without time, use "YYYY-MM-DD". If the user gives only a relative time that cannot be converted confidently, leave Date blank and put the relative time in Notes.
                 - For completion, set the Status cell to "Done". For new work, set Status to "Not started" unless the user specifies another status.
 
+                Conversation vs edit behavior:
+                - If the user is only chatting, asking for ideas, planning, brainstorming, discussing what to do, asking "boleh?", "macam mana?", "apa plan?", "kenapa?", or asking for advice, return "actions": [] even when a page is mentioned.
+                - Only return actions when the user clearly asks you to apply a change to CYL data: create, add, write into the page, update, rename, delete, sort, filter, group, or configure.
+                - If the user asks for a plan first, explain the plan in "reply" and keep "actions": [] until they ask you to apply it.
+
                 If the user is not asking to create, update, or delete app data, return an empty actions array.
                 If the user says "this page", "current page", "page ini", "sini", or mentions an @page supplied in the latest message, use the current-page action types above.
                 If the user asks to update/delete/append to a page/table row but the target is unclear or not listed, do not return an action; ask a concise clarification in "reply".
@@ -441,7 +446,7 @@ class AiService(
             }
             val parsedResult = AiActionResult(reply = reply, actions = parsed.actions)
             val recoveredResult = recoverActionFromPrompt(latestPrompt, pages)
-            if (parsed.actions.shouldRecoverInstead(latestPrompt, recoveredResult?.actions.orEmpty())) {
+            if (parsed.actions.shouldRecoverInstead(latestPrompt, recoveredResult?.actions.orEmpty(), reply)) {
                 recoveredResult ?: parsedResult
             } else {
                 parsedResult
@@ -461,8 +466,9 @@ class AiService(
     private fun List<AiActionItem>.shouldRecoverInstead(
         prompt: String,
         recoveredActions: List<AiActionItem>,
+        reply: String,
     ): Boolean {
-        if (isEmpty()) return true
+        if (isEmpty()) return reply.isBlank() || reply.isActionFallbackReply()
         val hasCreateDatabase = any { action ->
             action.type.equals("CREATE_DATABASE", ignoreCase = true) ||
                 action.type.equals("CREATE_TABLE", ignoreCase = true)
@@ -478,6 +484,18 @@ class AiService(
         return (hasCreateDatabase && visiblePrompt.looksLikeTableRowRequest()) ||
             hasTaskLikeRowForNonTaskPrompt ||
             localCoversMoreSegments
+    }
+
+    private fun String.isActionFallbackReply(): Boolean {
+        val value = lowercase()
+        return listOf(
+            "belum dapat tukar arahan",
+            "tukar arahan itu kepada tindakan",
+            "couldn't convert that into a cyl action",
+            "could not convert that into a cyl action",
+            "try again with the page",
+            "mention page with @",
+        ).any { token -> value.contains(token) }
     }
 
     internal fun recoverActionFromPrompt(

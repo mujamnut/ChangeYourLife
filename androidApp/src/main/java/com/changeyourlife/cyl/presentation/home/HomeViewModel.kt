@@ -450,36 +450,6 @@ class HomeViewModel @Inject constructor(
                 return@launch
             }
 
-            val localStructuredActions = recoverPageStructuredActions(
-                prompt = prompt,
-                pages = pages,
-                mentionedPageIds = normalizedMentionedPageIds,
-            )
-            if (localStructuredActions.isNotEmpty()) {
-                val actionResults = executeActions(localStructuredActions, prompt, normalizedMentionedPageIds)
-                isAiGeneratingChat.value = false
-                val actionSucceeded = actionResults.messages.any { message -> message.startsWith("✅") }
-                val assistantReply = if (actionSucceeded) {
-                    prompt.recoveredActionReply()
-                } else {
-                    "Saya faham tindakan yang diminta, tapi perubahan itu gagal dilaksanakan."
-                }
-                val replyWithResults = if (actionResults.messages.isEmpty()) {
-                    assistantReply
-                } else {
-                    assistantReply + "\n\n" + actionResults.messages.joinToString("\n")
-                }
-                chatHistoryRepository.appendMessage(
-                    sessionId = session.id,
-                    role = "assistant",
-                    content = replyWithResults,
-                    pageLinks = actionResults.pageLinks
-                        .distinctBy { link -> link.pageId }
-                        .toDomainChatPageLinks(),
-                )
-                return@launch
-            }
-
             // Pass only user/assistant messages — backend builds its own JSON-mode system prompt.
             // Sending a second system message here would conflict with the backend's action prompt
             // and cause Gemini to ignore the JSON instruction, returning actions: [] every time.
@@ -488,16 +458,29 @@ class HomeViewModel @Inject constructor(
             )
             aiRepository.chatWithActions(messagesForAi.toRoleContentPairs(), pages = pageContext, tasks = taskContext)
                 .onSuccess { result ->
-                    val recoveredFallbackActions = recoverPageWriteActions(
-                        prompt = prompt,
-                        pages = pages,
-                        assistantReply = result.reply,
-                        mentionedPageIds = normalizedMentionedPageIds,
-                    )
-                    val executableActions = result.actions.repairedWithLocalPlan(
-                        prompt = prompt,
-                        localActions = recoveredFallbackActions,
-                    ).ifEmpty { recoveredFallbackActions }
+                    val shouldUseLocalPlan = result.actions.isNotEmpty() ||
+                        result.reply.isBackendActionFallback() ||
+                        result.reply.isBlank()
+                    val recoveredFallbackActions = if (shouldUseLocalPlan) {
+                        recoverPageWriteActions(
+                            prompt = prompt,
+                            pages = pages,
+                            assistantReply = result.reply,
+                            mentionedPageIds = normalizedMentionedPageIds,
+                        )
+                    } else {
+                        emptyList()
+                    }
+                    val executableActions = if (result.actions.isNotEmpty()) {
+                        result.actions.repairedWithLocalPlan(
+                            prompt = prompt,
+                            localActions = recoveredFallbackActions,
+                        )
+                    } else if (result.reply.isBackendActionFallback() || result.reply.isBlank()) {
+                        recoveredFallbackActions
+                    } else {
+                        emptyList()
+                    }
                     val actionResults = if (executableActions.isNotEmpty()) {
                         executeActions(executableActions, prompt, normalizedMentionedPageIds)
                     } else {

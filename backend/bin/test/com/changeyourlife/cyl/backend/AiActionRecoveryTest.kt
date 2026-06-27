@@ -348,4 +348,33 @@ class AiActionRecoveryTest {
 
         assertNull(result)
     }
+
+    @Test
+    fun doesNotRecoverPlanningChatWithMentionAsMutation() {
+        val result = service.recoverActionFromPrompt(
+            prompt = """
+                @Budget Tracker boleh plan macam mana nak susun budget bulanan?
+
+                CYL_MENTION_CONTEXT:
+                The user selected these page mentions from the chat UI. Treat them as exact target pages for create/update/delete actions:
+                - @Budget Tracker id=page-budget
+            """.trimIndent(),
+            pages = listOf(
+                AiPageContext(
+                    id = "page-budget",
+                    title = "Budget Tracker",
+                    blocks = listOf(
+                        AiBlockContext(
+                            id = "table-1",
+                            type = "DatabaseTable",
+                            text = "title=Budget; columns=Name Text, Amount Number; rows=",
+                            tableTitle = "Budget",
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        assertNull(result)
+    }
 }
