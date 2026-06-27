@@ -16,7 +16,7 @@ data class AppConfig(
     val openRouterModel: String,
 ) {
     companion object {
-        private const val DefaultOpenRouterModel = "openai/gpt-oss-120b:free"
+        private const val DefaultOpenRouterModel = "openai/gpt-oss-20b:free"
 
         fun fromEnvironment(environment: Map<String, String> = System.getenv()): AppConfig {
             return AppConfig(

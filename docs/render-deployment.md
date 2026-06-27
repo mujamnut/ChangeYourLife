@@ -26,7 +26,7 @@ Set these in Render:
 DATABASE_URL=postgresql://avnadmin:<password>@<host>:<port>/defaultdb?sslmode=require
 JWT_SECRET=replace-with-a-long-random-secret
 OPENROUTER_API_KEY=sk-or-v1-your-key-here
-OPENROUTER_MODEL=openai/gpt-oss-120b:free
+OPENROUTER_MODEL=openai/gpt-oss-20b:free
 RESEND_API_KEY=re_your-key-here
 EMAIL_FROM=ChangeYourLife <noreply@yourdomain.com>
 KTOR_DEVELOPMENT=false

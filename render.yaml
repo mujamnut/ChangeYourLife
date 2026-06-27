@@ -20,7 +20,7 @@ services:
       - key: OPENROUTER_API_KEY
         sync: false
       - key: OPENROUTER_MODEL
-        value: openai/gpt-oss-120b:free
+        value: openai/gpt-oss-20b:free
       - key: RESEND_API_KEY
         sync: false
       - key: EMAIL_FROM

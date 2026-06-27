@@ -9,7 +9,7 @@ sdk.dir=C\:/Users/<your-user>/AppData/Local/Android/Sdk
 # Backend AI provider. OpenRouter is used first when this key is present.
 # Do not commit your real key.
 # OPENROUTER_API_KEY=sk-or-v1-your-key-here
-# OPENROUTER_MODEL=openai/gpt-oss-120b:free
+# OPENROUTER_MODEL=openai/gpt-oss-20b:free
 
 # Backend PostgreSQL persistence.
 # Aiven PostgreSQL service URI normally needs sslmode=require.

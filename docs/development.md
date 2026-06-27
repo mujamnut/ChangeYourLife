@@ -53,7 +53,7 @@ For AI through OpenRouter, add this to `local.properties` and restart the backen
 
 ```properties
 OPENROUTER_API_KEY=sk-or-v1-your-key-here
-OPENROUTER_MODEL=openai/gpt-oss-120b:free
+OPENROUTER_MODEL=openai/gpt-oss-20b:free
 ```
 
 The backend chooses OpenRouter first when `OPENROUTER_API_KEY` is present, then Gemini, then GLM, then sandbox mode.

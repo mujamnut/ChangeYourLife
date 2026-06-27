@@ -19,7 +19,7 @@ class AiService(
     private val glmApiKey: String? = null,
     private val geminiApiKey: String? = null,
     private val openRouterApiKey: String? = null,
-    private val openRouterModel: String = "openai/gpt-oss-120b:free",
+    private val openRouterModel: String = "openai/gpt-oss-20b:free",
 ) {
     private val json = Json {
         ignoreUnknownKeys = true
@@ -39,7 +39,7 @@ class AiService(
     }
 
     val activeModel: String = when (activeProvider) {
-        "openrouter" -> openRouterModel.ifBlank { "openai/gpt-oss-120b:free" }
+        "openrouter" -> openRouterModel.ifBlank { "openai/gpt-oss-20b:free" }
         "gemini" -> "gemini-3.5-flash"
         "glm" -> "glm-4-flash"
         else -> "mock"
