@@ -136,6 +136,20 @@ class AiPageActionExecutor @Inject constructor(
                         "Created database: ${tableBlock.table.title}"
                     }
 
+                    "RENAME_TABLE", "RENAME_DATABASE", "UPDATE_TABLE_TITLE" -> {
+                        val newTitle = action.title
+                            .ifBlank { action.value }
+                            .ifBlank { action.content }
+                            .ifBlank { action.newColumnName }
+                            .ifBlank { error("Missing new table title") }
+                        val update = workingDocument.updateMatchingTable(action) { block ->
+                            block.copy(table = block.table.copy(title = newTitle))
+                        }
+                        workingDocument = update.document
+                        documentChanged = true
+                        "Renamed ${update.tableTitle} to $newTitle"
+                    }
+
                     "ADD_TABLE_COLUMN" -> {
                         val resolvedAction = action.withResolvedRelationTarget(workingDocument)
                         val columnName = action.columnName
@@ -532,6 +546,9 @@ class AiPageActionExecutor @Inject constructor(
             "UNCHECK_BLOCK",
             "CREATE_DATABASE",
             "CREATE_TABLE",
+            "RENAME_TABLE",
+            "RENAME_DATABASE",
+            "UPDATE_TABLE_TITLE",
             "ADD_TABLE_COLUMN",
             "DELETE_TABLE_COLUMN",
             "RENAME_TABLE_COLUMN",

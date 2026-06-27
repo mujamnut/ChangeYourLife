@@ -287,4 +287,36 @@ class AiActionRecoveryTest {
         assertEquals("Reban", action.targetTitle)
         assertEquals("ayam makan pagi", action.content)
     }
+
+    @Test
+    fun recoversMalayTableRenameFromMentionedPage() {
+        val result = service.recoverActionFromPrompt(
+            prompt = """
+                @Budget Tracker ubah nama table dengan yang sensual Dan pendek
+
+                CYL_MENTION_CONTEXT:
+                The user selected these page mentions from the chat UI. Treat them as exact target pages for create/update/delete actions:
+                - @Budget Tracker id=page-budget
+            """.trimIndent(),
+            pages = listOf(
+                AiPageContext(
+                    id = "page-budget",
+                    title = "Budget Tracker",
+                    blocks = listOf(
+                        AiBlockContext(
+                            id = "table-1",
+                            type = "DatabaseTable",
+                            text = "title=Budget; columns=Name Text, Amount Number; rows=",
+                            tableTitle = "Budget",
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        val action = assertNotNull(result).actions.single()
+        assertEquals("RENAME_TABLE", action.type)
+        assertEquals("Budget Tracker", action.targetTitle)
+        assertEquals("sensual", action.title)
+    }
 }

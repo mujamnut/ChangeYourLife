@@ -1509,6 +1509,20 @@ class PageEditorViewModel @Inject constructor(
                         "Created database: ${tableBlock.table.title}"
                     }
 
+                    "RENAME_TABLE", "RENAME_DATABASE", "UPDATE_TABLE_TITLE" -> {
+                        val newTitle = action.title
+                            .ifBlank { action.value }
+                            .ifBlank { action.content }
+                            .ifBlank { action.newColumnName }
+                            .ifBlank { error("Missing new table title") }
+                        val update = document.updateMatchingTable(action) { block ->
+                            block.copy(table = block.table.copy(title = newTitle))
+                        }
+                        document = update.document
+                        documentChanged = true
+                        "Renamed ${update.tableTitle} to $newTitle"
+                    }
+
                     "CREATE_MODULE", "CREATE_GOAL_MODULE", "CREATE_HABIT_MODULE",
                     "CREATE_TRAVEL_MODULE", "CREATE_BUDGET_MODULE" -> {
                         val moduleType = action.toModuleType()
@@ -2472,6 +2486,9 @@ class PageEditorViewModel @Inject constructor(
                     ?: title.ifBlank { "Module" }
             }"
             "SET_TABLE_VIEW_CONFIG", "CONFIGURE_TABLE_VIEW", "UPDATE_TABLE_VIEW_CONFIG" -> "Update table view setup"
+            "RENAME_TABLE", "RENAME_DATABASE", "UPDATE_TABLE_TITLE" -> "Rename table to ${
+                title.ifBlank { value }.ifBlank { content }.ifBlank { newColumnName }.ifBlank { "New table" }
+            }"
             "ADD_TABLE_COLUMN" -> "Add table column: ${columnName.ifBlank { propertyName }.ifBlank { title }.ifBlank { "Column" }}"
             "ADD_TABLE_ROW" -> "Add table row: ${rowTitle.ifBlank { title }.ifBlank { cellValues.values.firstOrNull().orEmpty() }.ifBlank { "New row" }}"
             "DELETE_TABLE_COLUMN" -> "Delete table column: ${columnName.ifBlank { propertyName }.ifBlank { title }.ifBlank { columnId }.ifBlank { "Column" }}"

@@ -290,6 +290,7 @@ class AiService(
                 - "DELETE_ALL_BLOCKS": for the attached/current page only, when the user asks to delete/clear all blocks in a page. This removes page blocks but keeps page properties.
                 - "DELETE_BLOCK": for the attached/current page only. Prefer exact "blockId" from the current page block outline. Also include "blockType" and "blockText" when useful. For database tables, prefer "blockId"; if no blockId is available, use "blockType":"DatabaseTable" and "tableTitle".
                 - "CREATE_DATABASE": for the attached/current page only, use "tableTitle" or "title", optional "tableView" as Table|List|Board|Calendar|Gallery|Timeline|Dashboard, "tableColumns" as [{"name":"Name","type":"Text|Number|Status|Date|Checkbox|Formula|Relation|Rollup","dateFormat":"DayMonthYear|MonthDayYear|YearMonthDay","timeFormat":"Hidden|TwelveHour|TwentyFourHour","dateReminder":"None|AtTimeOfEvent|OnDayOfEvent|OneDayBefore","timezoneLabel":"Local","formula":"{Price} * {Qty}","relationTargetTableId":"target-table-block-id","rollupRelationColumnName":"Orders","rollupTargetColumnName":"Amount","rollupAggregation":"Count|Sum|Average|Min|Max"}], and "tableRows" as objects keyed by column name. Never use CREATE_DATABASE when the user asks to add/tambah a row/baris/rekod to an existing table.
+                - "RENAME_TABLE": for the attached/current page only, use optional "blockId" or current "tableTitle" to target the table, and use "title" for the new table name.
                 - "ADD_TABLE_COLUMN": for the attached/current page only, use optional "blockId" or "tableTitle", "columnName", and "columnType" as Text|Number|Status|Date|Checkbox|Formula|Relation|Rollup. For Formula include "formula" using {Column Name}. For Relation include "relationTargetTableId" (preferred) or "relationTargetTableTitle". For Rollup include "rollupRelationColumnId" and "rollupTargetColumnId" when they are visible in the outline; use "rollupRelationColumnName" or "rollupTargetColumnName" only as fallback, plus "rollupAggregation" as Count|Sum|Average|Min|Max.
                 - "ADD_TABLE_ROW": for the attached/current page only, use optional "blockId" or "tableTitle", optional "rowTitle", and "cellValues" as an object keyed by column name.
                 - "UPDATE_TABLE_CELL": for the attached/current page only, use optional "blockId" or "tableTitle", "rowId" or "rowTitle", "columnId" or "columnName", and "value".
@@ -395,6 +396,7 @@ class AiService(
                 - User: "delete todo buy tickets" → {"reply": "Done — I deleted that row.", "actions": [{"type": "DELETE_TABLE_ROW", "blockId": "exact-table-block-id-from-outline", "rowId": "exact-row-id-from-outline", "rowTitle": "Buy tickets"}]}
                 - User: "delete habit tracker table" → {"reply": "Done — I deleted that database.", "actions": [{"type": "DELETE_BLOCK", "blockId": "exact-table-block-id-from-outline", "blockType": "DatabaseTable", "tableTitle": "Habit Tracker"}]}
                 - User: "buat table habit tracker dekat sini" → {"reply": "Done — I created a habit tracker database.", "actions": [{"type": "CREATE_DATABASE", "tableTitle": "Habit Tracker", "tableView": "Table", "tableColumns": [{"name":"Habit","type":"Text"},{"name":"Status","type":"Status"},{"name":"Date","type":"Date","dateFormat":"DayMonthYear","timeFormat":"Hidden","dateReminder":"OnDayOfEvent","timezoneLabel":"Local"}], "tableRows": [{"Habit":"Drink water","Status":"Not started","Date":""},{"Habit":"Exercise","Status":"Not started","Date":""}]}]}
+                - User: "ubah nama table dengan yang sensual dan pendek" → {"reply": "Done — I renamed that table.", "actions": [{"type": "RENAME_TABLE", "title": "sensual"}]}
                 - User: "ubah table ini kepada board" → {"reply": "Done — I changed the database view.", "actions": [{"type": "CHANGE_TABLE_VIEW", "tableView": "Board"}]}
                 - User: "tambah row Buy tickets status pending" → {"reply": "Done — I added the row.", "actions": [{"type": "ADD_TABLE_ROW", "rowTitle": "Buy tickets", "cellValues": {"Name": "Buy tickets", "Status": "Pending"}}]}
                 - User: "rename status column to progress" → {"reply": "Done — I renamed that column.", "actions": [{"type": "RENAME_TABLE_COLUMN", "blockId": "exact-table-block-id-from-outline", "columnId": "exact-column-id-from-outline", "columnName": "Status", "newColumnName": "Progress"}]}
@@ -518,6 +520,7 @@ class AiService(
             val action = segment.recoverBlockAction(targetPage)
                 ?: rowAction
                 ?: segment.recoverPropertyAction(targetPage)
+                ?: segment.recoverTableRenameAction(targetPage)
                 ?: segment.recoverDatabaseAction(targetPage)
                 ?: segment.takeUnless { it.looksLikeTableContextOnlyRequest() }?.recoverWriteAction(targetPage)
             if (action != null) {
@@ -534,6 +537,7 @@ class AiService(
                 recoverBlockAction(targetPage)
                     ?: recoverTableRowAction(targetPage)
                     ?: recoverPropertyAction(targetPage)
+                    ?: recoverTableRenameAction(targetPage)
                     ?: recoverDatabaseAction(targetPage)
                     ?: takeUnless { it.looksLikeTableContextOnlyRequest() }?.recoverWriteAction(targetPage),
             )
@@ -684,6 +688,25 @@ class AiService(
             tableTitle = tableTitle,
             tableView = "Table",
             tableColumns = tableTitle.defaultRecoveredTableColumns(lowercase()),
+        )
+    }
+
+    private fun String.recoverTableRenameAction(targetPage: AiPageContext): AiActionItem? {
+        val value = lowercase()
+        val hasTableIntent = listOf("table", "database", "jadual").any { token -> value.contains(token) }
+        if (!hasTableIntent || !targetPage.hasAnyTable()) return null
+        val hasRenameIntent = listOf("rename", "ubah nama", "tukar nama", "ganti nama", "change name", "jadikan nama")
+            .any { token -> value.contains(token) } ||
+            (
+                listOf("ubah", "tukar", "ganti", "jadikan", "change", "set").any { token -> value.contains(token) } &&
+                    listOf("nama", "name", "title").any { token -> value.contains(token) }
+                )
+        if (!hasRenameIntent) return null
+        val newTitle = extractNewTableTitle(targetPage.title).ifBlank { return null }
+        return AiActionItem(
+            type = "RENAME_TABLE",
+            title = newTitle,
+            targetTitle = targetPage.title,
         )
     }
 
@@ -872,6 +895,44 @@ class AiService(
             .replace(Regex("\\s+"), " ")
             .trim(' ', '-', ':')
 
+    private fun String.extractNewTableTitle(pageTitle: String): String {
+        val cleaned = removeTargetMention(pageTitle)
+            .replace(Regex("(?i)\\b(ubah|tukar|ganti|jadikan|change|set|rename|nama|name|title|table|database|jadual)\\b"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim(' ', '-', ':')
+        val afterMarker = listOf(
+            "dengan nama ",
+            "kepada ",
+            "menjadi ",
+            "jadikan ",
+            "dengan ",
+            "jadi ",
+            "to ",
+            "into ",
+            "as ",
+            " dengan nama ",
+            " kepada ",
+            " menjadi ",
+            " jadikan ",
+            " dengan ",
+            " jadi ",
+            " to ",
+            " into ",
+            " as ",
+        ).firstNotNullOfOrNull { marker ->
+            cleaned.substringAfter(marker, missingDelimiterValue = "")
+                .takeIf { value -> value.isNotBlank() }
+        } ?: cleaned
+
+        return afterMarker
+            .replace(Regex("(?i)\\b(yang|baru|new)\\b"), " ")
+            .replace(Regex("(?i)\\b(dan|and)\\s+(pendek|short|ringkas|simple)\\b"), " ")
+            .replace(Regex("(?i)\\b(pendek|short|ringkas|simple)\\b"), " ")
+            .replace(Regex("(?i)\\b(dan|and)\\b\\s*$"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim(' ', '-', ':', '"', '\'')
+    }
+
     private fun String.defaultRecoveredTableColumns(promptValue: String): List<AiTableColumnItem> =
         if (looksLikeExpenseText() || promptValue.looksLikeExpenseText()) {
             listOf(
@@ -928,9 +989,13 @@ class AiService(
             .any { token -> value.contains(token) } &&
             listOf("buat", "create", "cipta")
                 .any { token -> value.contains(token) }
+        val isExplicitNoteWrite = listOf("nota", "note", "memo", "isi", "content").any { token ->
+            value.contains(token)
+        } && looksLikePageWriteRequest()
         val hasExpenseDataHint = extractMoneyAmount() != null ||
             listOf("makan", "ringgit", "rm", "harga", "jumlah", "tarikh", "hari ini", "harini", "today")
             .any { token -> value.contains(token) }
+        if (isExplicitNoteWrite) return false
         if (hasCreateTableIntent && !hasRowIntent) return false
         return (hasRowIntent && hasAddIntent) || (hasExpenseDataHint && !hasCreateTableIntent)
     }

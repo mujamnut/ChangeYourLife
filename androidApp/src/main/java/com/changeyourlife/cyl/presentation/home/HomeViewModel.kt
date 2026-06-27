@@ -1452,6 +1452,7 @@ class HomeViewModel @Inject constructor(
             val action = segment.recoverBlockMutationAction(targetPage)
                 ?: rowAction
                 ?: segment.recoverPropertyAction(targetPage)
+                ?: segment.recoverTableRenameAction(targetPage)
                 ?: segment.recoverDatabaseAction(targetPage)
                 ?: segment.takeUnless { it.looksLikeTableContextOnlyRequest() }?.recoverWriteAction(targetPage)
             if (action != null) {
@@ -1468,10 +1469,30 @@ class HomeViewModel @Inject constructor(
                 recoverBlockMutationAction(targetPage)
                     ?: recoverTableRowAction(targetPage)
                     ?: recoverPropertyAction(targetPage)
+                    ?: recoverTableRenameAction(targetPage)
                     ?: recoverDatabaseAction(targetPage)
                     ?: takeUnless { it.looksLikeTableContextOnlyRequest() }?.recoverWriteAction(targetPage),
             )
         }
+    }
+
+    private fun String.recoverTableRenameAction(targetPage: Page): ChatAction? {
+        val value = lowercase()
+        val hasTableIntent = listOf("table", "database", "jadual").any { token -> value.contains(token) }
+        if (!hasTableIntent || !targetPage.hasAnyTable()) return null
+        val hasRenameIntent = listOf("rename", "ubah nama", "tukar nama", "ganti nama", "change name", "jadikan nama")
+            .any { token -> value.contains(token) } ||
+            (
+                listOf("ubah", "tukar", "ganti", "jadikan", "change", "set").any { token -> value.contains(token) } &&
+                    listOf("nama", "name", "title").any { token -> value.contains(token) }
+                )
+        if (!hasRenameIntent) return null
+        val newTitle = extractNewTableTitle(targetPage.title).ifBlank { return null }
+        return ChatAction(
+            type = "RENAME_TABLE",
+            title = newTitle,
+            targetTitle = targetPage.title,
+        )
     }
 
     private fun String.recoverTableRowAction(
@@ -1605,6 +1626,44 @@ class HomeViewModel @Inject constructor(
             .trim(' ', '-', ':')
     }
 
+    private fun String.extractNewTableTitle(pageTitle: String): String {
+        val cleaned = removeMentionedPage(pageTitle)
+            .replace(Regex("(?i)\\b(ubah|tukar|ganti|jadikan|change|set|rename|nama|name|title|table|database|jadual)\\b"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim(' ', '-', ':')
+        val afterMarker = listOf(
+            "dengan nama ",
+            "kepada ",
+            "menjadi ",
+            "jadikan ",
+            "dengan ",
+            "jadi ",
+            "to ",
+            "into ",
+            "as ",
+            " dengan nama ",
+            " kepada ",
+            " menjadi ",
+            " jadikan ",
+            " dengan ",
+            " jadi ",
+            " to ",
+            " into ",
+            " as ",
+        ).firstNotNullOfOrNull { marker ->
+            cleaned.substringAfter(marker, missingDelimiterValue = "")
+                .takeIf { value -> value.isNotBlank() }
+        } ?: cleaned
+
+        return afterMarker
+            .replace(Regex("(?i)\\b(yang|baru|new)\\b"), " ")
+            .replace(Regex("(?i)\\b(dan|and)\\s+(pendek|short|ringkas|simple)\\b"), " ")
+            .replace(Regex("(?i)\\b(pendek|short|ringkas|simple)\\b"), " ")
+            .replace(Regex("(?i)\\b(dan|and)\\b\\s*$"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim(' ', '-', ':', '"', '\'')
+    }
+
     private fun Page.hasAnyTable(): Boolean {
         return PageBlockCodec.decodeDocument(content)
             .blocks
@@ -1681,9 +1740,13 @@ class HomeViewModel @Inject constructor(
             .any { token -> value.contains(token) } &&
             listOf("buat", "create", "cipta")
                 .any { token -> value.contains(token) }
+        val isExplicitNoteWrite = listOf("nota", "note", "memo", "isi", "content").any { token ->
+            value.contains(token)
+        } && looksLikePageWriteRequest()
         val hasExpenseDataHint = extractMoneyAmount() != null ||
             listOf("makan", "ringgit", "rm", "harga", "jumlah", "tarikh", "hari ini", "harini", "today")
             .any { token -> value.contains(token) }
+        if (isExplicitNoteWrite) return false
         if (hasCreateTableIntent && !hasRowIntent) return false
         return (hasRowIntent && hasAddIntent) || (hasExpenseDataHint && !hasCreateTableIntent)
     }
