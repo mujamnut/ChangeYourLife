@@ -3,9 +3,11 @@ package com.changeyourlife.cyl.backend
 import com.changeyourlife.cyl.backend.model.ai.AiBlockContext
 import com.changeyourlife.cyl.backend.model.ai.AiPageContext
 import com.changeyourlife.cyl.backend.service.AiService
+import java.time.LocalDate
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 
 class AiActionRecoveryTest {
     private val service = AiService(openRouterApiKey = "test-key")
@@ -135,5 +137,42 @@ class AiActionRecoveryTest {
         assertEquals("beli makan", action.rowTitle)
         assertEquals("4", action.cellValues["Amount"])
         assertEquals("4", action.cellValues["Jumlah"])
+        assertNull(action.cellValues["Task"])
+    }
+
+    @Test
+    fun recoversMultipleMalayCommandsWithoutPuttingPromptIntoRow() {
+        val result = service.recoverActionFromPrompt(
+            prompt = """
+                padam semua block, Dan untuk catat duit bulanan, Dan tu dah untuk makan harini, sekali tarikh
+
+                CYL_MENTION_CONTEXT:
+                The user selected these page mentions from the chat UI. Treat them as exact target pages for create/update/delete actions:
+                - @Belanja Harian id=page-belanja
+            """.trimIndent(),
+            pages = listOf(
+                AiPageContext(
+                    id = "page-belanja",
+                    title = "Belanja Harian",
+                    blocks = listOf(
+                        AiBlockContext(id = "block-1", type = "Text", text = "old note"),
+                        AiBlockContext(
+                            id = "table-1",
+                            type = "DatabaseTable",
+                            text = "title=Expenses; columns=Name Text, Amount Number, Date Date; rows=",
+                            tableTitle = "Expenses",
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        val actions = assertNotNull(result).actions
+        assertEquals("DELETE_ALL_BLOCKS", actions[0].type)
+        val rowAction = actions[1]
+        assertEquals("ADD_TABLE_ROW", rowAction.type)
+        assertEquals("makan", rowAction.rowTitle)
+        assertEquals(LocalDate.now().toString(), rowAction.cellValues["Date"])
+        assertNull(rowAction.cellValues["Task"])
     }
 }

@@ -43,6 +43,7 @@ import com.changeyourlife.cyl.presentation.page.PageModuleTemplates
 import com.changeyourlife.cyl.presentation.page.PageModuleType
 import android.util.Log
 import dagger.hilt.android.lifecycle.HiltViewModel
+import java.time.LocalDate
 import javax.inject.Inject
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -1061,10 +1062,8 @@ class HomeViewModel @Inject constructor(
             ?: pages.singleOrNull()
             ?: return emptyList()
 
-        prompt.recoverPropertyAction(targetPage)?.let { action -> return listOf(action) }
-        prompt.recoverBlockMutationAction(targetPage)?.let { action -> return listOf(action) }
-        prompt.recoverTableRowAction(targetPage)?.let { action -> return listOf(action) }
-        prompt.recoverDatabaseAction(targetPage)?.let { action -> return listOf(action) }
+        val recoveredActions = prompt.recoverStructuredActions(targetPage)
+        if (recoveredActions.isNotEmpty()) return recoveredActions
 
         if (!prompt.looksLikePageWriteRequest()) return emptyList()
         val content = assistantReply.asWritablePageContent()
@@ -1320,20 +1319,41 @@ class HomeViewModel @Inject constructor(
         )
     }
 
+    private fun String.recoverStructuredActions(targetPage: Page): List<ChatAction> {
+        val actions = actionSegments()
+            .mapNotNull { segment ->
+                segment.recoverBlockMutationAction(targetPage)
+                    ?: segment.recoverTableRowAction(targetPage)
+                    ?: segment.recoverPropertyAction(targetPage)
+                    ?: segment.recoverDatabaseAction(targetPage)
+            }
+        return if (actions.isNotEmpty()) {
+            actions
+        } else {
+            listOfNotNull(
+                recoverBlockMutationAction(targetPage)
+                    ?: recoverTableRowAction(targetPage)
+                    ?: recoverPropertyAction(targetPage)
+                    ?: recoverDatabaseAction(targetPage),
+            )
+        }
+    }
+
     private fun String.recoverTableRowAction(targetPage: Page): ChatAction? {
         if (!looksLikeTableRowRequest()) return null
         val document = PageBlockCodec.decodeDocument(targetPage.content)
         val hasTable = document.blocks.any { block -> block.type == PageBlockType.DatabaseTable }
         if (!hasTable) return null
 
-        val rowText = extractTableRowText(targetPage.title)
+        val rowPrompt = bestTableRowSegment()
+        val rowText = rowPrompt.extractTableRowText(targetPage.title)
         if (rowText.isBlank()) return null
         val amount = rowText.extractMoneyAmount()
-        val rowTitle = rowText.removeMoneyAmount().ifBlank { rowText }
+        val rowTitle = rowText.removeMoneyAmount().removeDateRequestWords().ifBlank { rowText }
+        val dateValue = rowPrompt.inferredDateValue()
         val cellValues = buildMap {
             put("Name", rowTitle)
             put("Item", rowTitle)
-            put("Task", rowTitle)
             amount?.let { value ->
                 put("Amount", value)
                 put("Jumlah", value)
@@ -1341,6 +1361,10 @@ class HomeViewModel @Inject constructor(
                 put("Price", value)
                 put("Cost", value)
                 put("Total", value)
+            }
+            dateValue?.let { value ->
+                put("Date", value)
+                put("Tarikh", value)
             }
             if (amount != null && !rowText.equals(rowTitle, ignoreCase = true)) {
                 put("Notes", rowText)
@@ -1450,6 +1474,12 @@ class HomeViewModel @Inject constructor(
             normalizedType in setOf("CREATE_DATABASE", "CREATE_TABLE") && prompt.looksLikeTableRowRequest() && mentionedPage != null -> {
                 prompt.recoverTableRowAction(mentionedPage) ?: copy(type = "ADD_TABLE_ROW")
             }
+            normalizedType == "ADD_TABLE_ROW" &&
+                prompt.looksLikeTableRowRequest() &&
+                !prompt.looksLikeTaskRowRequest() &&
+                mentionedPage != null -> {
+                prompt.recoverTableRowAction(mentionedPage) ?: this
+            }
             else -> this
         }
     }
@@ -1469,15 +1499,53 @@ class HomeViewModel @Inject constructor(
         val value = lowercase()
         val hasRowIntent = listOf("row", "baris", "rekod", "record")
             .any { token -> value.contains(token) }
-        val hasAddIntent = listOf("tambah", "add", "masukkan", "letak", "insert", "create")
+        val hasAddIntent = listOf("tambah", "add", "masukkan", "letak", "insert", "create", "catat")
             .any { token -> value.contains(token) }
-        return hasRowIntent && hasAddIntent
+        val hasCreateTableIntent = listOf("table", "database", "jadual")
+            .any { token -> value.contains(token) } &&
+            listOf("buat", "create", "cipta")
+                .any { token -> value.contains(token) }
+        val hasExpenseDataHint = extractMoneyAmount() != null ||
+            listOf("makan", "ringgit", "rm", "harga", "jumlah", "tarikh", "hari ini", "harini", "today")
+            .any { token -> value.contains(token) }
+        if (hasCreateTableIntent && !hasRowIntent) return false
+        return (hasRowIntent && hasAddIntent) || (hasExpenseDataHint && !hasCreateTableIntent)
+    }
+
+    private fun String.looksLikeTaskRowRequest(): Boolean {
+        val value = lowercase()
+        return listOf("task", "todo", "reminder", "ingatkan", "deadline", "due", "appointment", "jadualkan")
+            .any { token -> value.contains(token) }
+    }
+
+    private fun String.actionSegments(): List<String> {
+        val splitText = replace(Regex("(?i)\\b(lepas tu|selepas tu|pastu|astu|then|next)\\b"), "\n")
+            .replace(
+                Regex("(?i)\\s*,\\s*(?=(dan\\s+)?(tu\\s+dah\\s+)?(untuk\\s+)?(tambah|add|masukkan|letak|buat|create|padam|buang|delete|hapus|catat|row|baris|rekod|makan|duit|belanja|harga|jumlah|ringgit|rm|tarikh|hari))"),
+                "\n",
+            )
+            .replace(
+                Regex("(?i)\\b(dan|and)\\s+(?=(tu\\s+dah\\s+)?(untuk\\s+)?(tambah|add|masukkan|letak|buat|create|padam|buang|delete|hapus|catat|row|baris|rekod|makan|duit|belanja|harga|jumlah|ringgit|rm|tarikh|hari))"),
+                "\n",
+            )
+        return splitText
+            .lineSequence()
+            .map { segment -> segment.trim(' ', ',', '.', ';', ':', '-') }
+            .filter { segment -> segment.isNotBlank() }
+            .toList()
+            .ifEmpty { listOf(trim()) }
+    }
+
+    private fun String.bestTableRowSegment(): String {
+        return actionSegments()
+            .lastOrNull { segment -> segment.looksLikeTableRowRequest() }
+            ?: this
     }
 
     private fun String.extractTableRowText(pageTitle: String): String {
         return removeMentionedPage(pageTitle)
             .replace(
-                Regex("(?i)\\b(tambah|add|masukkan|letak|insert|create|buat|satu|1|row|baris|rekod|record|dalam|dekat|di|ke|to|into|table|database|jadual|page|ini|tersebut|yang|saya|guna|pakai|use|used)\\b"),
+                Regex("(?i)\\b(tambah|add|masukkan|letak|insert|create|buat|catat|satu|1|row|baris|rekod|record|dalam|dekat|di|ke|to|into|table|database|jadual|page|ini|tersebut|yang|saya|guna|pakai|use|used|untuk|tu|dah|sekali)\\b"),
                 " ",
             )
             .replace(Regex("\\s+"), " ")
@@ -1496,7 +1564,20 @@ class HomeViewModel @Inject constructor(
     private fun String.removeMoneyAmount(): String {
         return replace(Regex("(?i)\\b(?:rm\\s*)?\\d+(?:[.,]\\d+)?\\s*(?:ringgit|rm)?\\b"), " ")
             .replace(Regex("\\s+"), " ")
-            .trim(' ', '-', ':')
+            .trim(' ', '-', ':', ',')
+    }
+
+    private fun String.removeDateRequestWords(): String {
+        return replace(Regex("(?i)\\b(hari\\s*ini|harini|today|tarikh|date|sekali)\\b"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim(' ', '-', ':', ',')
+    }
+
+    private fun String.inferredDateValue(): String? {
+        val value = lowercase()
+        val wantsToday = listOf("hari ini", "harini", "today").any { token -> value.contains(token) }
+        val wantsDate = wantsToday || listOf("tarikh", "date").any { token -> value.contains(token) }
+        return if (wantsDate) LocalDate.now().toString() else null
     }
 
     private fun String.inferWriteBlockType(): String {
