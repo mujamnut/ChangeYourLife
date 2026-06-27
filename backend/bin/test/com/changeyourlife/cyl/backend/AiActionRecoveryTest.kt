@@ -207,4 +207,84 @@ class AiActionRecoveryTest {
         assertEquals(LocalDate.now().toString(), rowAction.cellValues["Date"])
         assertNull(rowAction.cellValues["Task"])
     }
+
+    @Test
+    fun recoversExpenseContextAsDatabaseWithoutExplicitTableWord() {
+        val result = service.recoverActionFromPrompt(
+            prompt = """
+                untuk catat duit bulanan
+
+                CYL_MENTION_CONTEXT:
+                The user selected these page mentions from the chat UI. Treat them as exact target pages for create/update/delete actions:
+                - @Belanja id=page-belanja
+            """.trimIndent(),
+            pages = listOf(
+                AiPageContext(
+                    id = "page-belanja",
+                    title = "Belanja",
+                ),
+            ),
+        )
+
+        val action = assertNotNull(result).actions.single()
+        assertEquals("CREATE_DATABASE", action.type)
+        assertEquals("duit bulanan", action.tableTitle)
+        assertEquals(listOf("Name", "Amount", "Date", "Notes"), action.tableColumns.map { it.name })
+    }
+
+    @Test
+    fun recoversRowOnEmptyPageByCreatingTableFirst() {
+        val result = service.recoverActionFromPrompt(
+            prompt = """
+                tambah row beli makan 4 ringgit harini
+
+                CYL_MENTION_CONTEXT:
+                The user selected these page mentions from the chat UI. Treat them as exact target pages for create/update/delete actions:
+                - @Belanja id=page-belanja
+            """.trimIndent(),
+            pages = listOf(
+                AiPageContext(
+                    id = "page-belanja",
+                    title = "Belanja",
+                ),
+            ),
+        )
+
+        val actions = assertNotNull(result).actions
+        assertEquals(2, actions.size)
+        assertEquals("CREATE_DATABASE", actions[0].type)
+        assertEquals("Belanja", actions[0].tableTitle)
+
+        val rowAction = actions[1]
+        assertEquals("ADD_TABLE_ROW", rowAction.type)
+        assertEquals("Belanja", rowAction.tableTitle)
+        assertEquals("beli makan", rowAction.rowTitle)
+        assertEquals("4", rowAction.cellValues["Amount"])
+        assertEquals(LocalDate.now().toString(), rowAction.cellValues["Date"])
+        assertNull(rowAction.cellValues["Task"])
+    }
+
+    @Test
+    fun recoversMalayNoteWriteForMentionedPage() {
+        val result = service.recoverActionFromPrompt(
+            prompt = """
+                buat nota ayam makan pagi
+
+                CYL_MENTION_CONTEXT:
+                The user selected these page mentions from the chat UI. Treat them as exact target pages for create/update/delete actions:
+                - @Reban id=page-reban
+            """.trimIndent(),
+            pages = listOf(
+                AiPageContext(
+                    id = "page-reban",
+                    title = "Reban",
+                ),
+            ),
+        )
+
+        val action = assertNotNull(result).actions.single()
+        assertEquals("APPEND_BLOCK", action.type)
+        assertEquals("Reban", action.targetTitle)
+        assertEquals("ayam makan pagi", action.content)
+    }
 }

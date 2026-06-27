@@ -1231,6 +1231,11 @@ class HomeViewModel @Inject constructor(
             "append",
             "add note",
             "tambah nota",
+            "nota",
+            "note",
+            "isi",
+            "content",
+            "memo",
             "buat isi",
             "draft",
             "karangan",
@@ -1379,11 +1384,13 @@ class HomeViewModel @Inject constructor(
     private fun String.recoverDatabaseAction(targetPage: Page): ChatAction? {
         val value = lowercase()
         if (looksLikeTableRowRequest()) return null
+        val isTableContext = looksLikeTableContextOnlyRequest()
         val hasDatabaseIntent = listOf("table", "database", "jadual").any { token -> value.contains(token) }
-        if (!hasDatabaseIntent) return null
+        if (!hasDatabaseIntent && !isTableContext) return null
+        if (isTableContext && !hasDatabaseIntent && targetPage.hasAnyTable()) return null
         val isCreate = listOf("buat", "create", "cipta", "tambah", "add", "masukkan").any { token ->
             value.contains(token)
-        }
+        } || isTableContext
         if (!isCreate) return null
         val tableTitle = extractTableTitle(targetPage.title)
             .ifBlank { "Table" }
@@ -1393,27 +1400,67 @@ class HomeViewModel @Inject constructor(
             targetTitle = targetPage.title,
             tableTitle = tableTitle,
             tableView = "Table",
-            tableColumns = listOf(
-                ChatTableColumn(name = "Name", type = "Text"),
-                ChatTableColumn(name = "Status", type = "Status"),
-                ChatTableColumn(name = "Notes", type = "Text"),
-            ),
+            tableColumns = tableTitle.defaultRecoveredTableColumns(value),
+        )
+    }
+
+    private fun String.recoverImplicitDatabaseAction(targetPage: Page): ChatAction {
+        val tableTitle = when {
+            looksLikeExpenseText() -> targetPage.title.ifBlank { "Belanja" }
+            else -> targetPage.title.ifBlank { "Table" }
+        }
+        return ChatAction(
+            type = "CREATE_DATABASE",
+            title = "",
+            targetTitle = targetPage.title,
+            tableTitle = tableTitle,
+            tableView = "Table",
+            tableColumns = tableTitle.defaultRecoveredTableColumns(lowercase()),
+        )
+    }
+
+    private fun String.recoverWriteAction(targetPage: Page): ChatAction? {
+        if (!looksLikePageWriteRequest()) return null
+        val content = extractWriteFallbackContent(targetPage.title).ifBlank { return null }
+        return ChatAction(
+            type = "APPEND_BLOCK",
+            title = "",
+            targetTitle = targetPage.title,
+            blockType = inferWriteBlockType(),
+            content = content,
         )
     }
 
     private fun String.recoverStructuredActions(targetPage: Page): List<ChatAction> {
+        val actions = mutableListOf<ChatAction>()
         var createdTableTitle: String? = null
-        val actions = actionSegments()
-            .mapNotNull { segment ->
-                val action = segment.recoverBlockMutationAction(targetPage)
-                    ?: segment.recoverTableRowAction(targetPage, fallbackTableTitle = createdTableTitle)
-                    ?: segment.recoverPropertyAction(targetPage)
-                    ?: segment.recoverDatabaseAction(targetPage)
-                if (action != null && action.type.equals("CREATE_DATABASE", ignoreCase = true)) {
+        actionSegments().forEach { segment ->
+            val rowAction = segment.recoverTableRowAction(targetPage, fallbackTableTitle = createdTableTitle)
+            if (rowAction == null &&
+                segment.looksLikeTableRowRequest() &&
+                createdTableTitle.isNullOrBlank() &&
+                !targetPage.hasAnyTable()
+            ) {
+                val tableAction = segment.recoverImplicitDatabaseAction(targetPage)
+                createdTableTitle = tableAction.tableTitle
+                actions += tableAction
+                segment.recoverTableRowAction(targetPage, fallbackTableTitle = createdTableTitle)
+                    ?.let { action -> actions += action }
+                return@forEach
+            }
+
+            val action = segment.recoverBlockMutationAction(targetPage)
+                ?: rowAction
+                ?: segment.recoverPropertyAction(targetPage)
+                ?: segment.recoverDatabaseAction(targetPage)
+                ?: segment.takeUnless { it.looksLikeTableContextOnlyRequest() }?.recoverWriteAction(targetPage)
+            if (action != null) {
+                actions += action
+                if (action.type.equals("CREATE_DATABASE", ignoreCase = true)) {
                     createdTableTitle = action.tableTitle.takeIf { title -> title.isNotBlank() }
                 }
-                action
             }
+        }
         return if (actions.isNotEmpty()) {
             actions
         } else {
@@ -1421,7 +1468,8 @@ class HomeViewModel @Inject constructor(
                 recoverBlockMutationAction(targetPage)
                     ?: recoverTableRowAction(targetPage)
                     ?: recoverPropertyAction(targetPage)
-                    ?: recoverDatabaseAction(targetPage),
+                    ?: recoverDatabaseAction(targetPage)
+                    ?: takeUnless { it.looksLikeTableContextOnlyRequest() }?.recoverWriteAction(targetPage),
             )
         }
     }
@@ -1542,7 +1590,7 @@ class HomeViewModel @Inject constructor(
 
     private fun String.extractWriteFallbackContent(pageTitle: String): String {
         return removeMentionedPage(pageTitle)
-            .replace(Regex("(?i)\\b(write|tulis|catat|masukkan|insert|append|draft|buat isi|tambah nota|add note)\\b"), "")
+            .replace(Regex("(?i)\\b(tolong|please|buat|create|write|tulis|catat|masukkan|insert|append|draft|nota|note|memo|isi|content|buat isi|tambah nota|add note)\\b"), "")
             .replace(Regex("\\s+"), " ")
             .trim(' ', '-', ':')
     }
@@ -1550,11 +1598,41 @@ class HomeViewModel @Inject constructor(
     private fun String.extractTableTitle(pageTitle: String): String {
         return removeMentionedPage(pageTitle)
             .replace(
-                Regex("(?i)\\b(buat|create|cipta|tambah|add|masukkan|letak|table|database|jadual|dalam|dekat|di|page|ini|sini)\\b"),
+                Regex("(?i)\\b(buat|create|cipta|tambah|add|masukkan|letak|untuk|catat|rekod|record|table|database|jadual|dalam|dekat|di|page|ini|sini)\\b"),
                 " ",
             )
             .replace(Regex("\\s+"), " ")
             .trim(' ', '-', ':')
+    }
+
+    private fun Page.hasAnyTable(): Boolean {
+        return PageBlockCodec.decodeDocument(content)
+            .blocks
+            .any { block -> block.type == PageBlockType.DatabaseTable }
+    }
+
+    private fun String.defaultRecoveredTableColumns(promptValue: String): List<ChatTableColumn> {
+        return if (looksLikeExpenseText() || promptValue.looksLikeExpenseText()) {
+            listOf(
+                ChatTableColumn(name = "Name", type = "Text"),
+                ChatTableColumn(name = "Amount", type = "Number"),
+                ChatTableColumn(name = "Date", type = "Date"),
+                ChatTableColumn(name = "Notes", type = "Text"),
+            )
+        } else {
+            listOf(
+                ChatTableColumn(name = "Name", type = "Text"),
+                ChatTableColumn(name = "Status", type = "Status"),
+                ChatTableColumn(name = "Notes", type = "Text"),
+            )
+        }
+    }
+
+    private fun String.looksLikeExpenseText(): Boolean {
+        val value = lowercase()
+        return extractMoneyAmount() != null ||
+            listOf("duit", "belanja", "expense", "expenses", "spend", "makan", "ringgit", "rm", "harga", "jumlah")
+                .any { token -> value.contains(token) }
     }
 
     private fun ChatAction.normalizedForPrompt(prompt: String, mentionedPage: Page?): ChatAction {
@@ -1614,6 +1692,20 @@ class HomeViewModel @Inject constructor(
         val value = lowercase()
         return listOf("task", "todo", "reminder", "ingatkan", "deadline", "due", "appointment", "jadualkan")
             .any { token -> value.contains(token) }
+    }
+
+    private fun String.looksLikeTableContextOnlyRequest(): Boolean {
+        val value = lowercase()
+        val hasContextIntent = listOf("catat", "rekod", "record", "track", "tracking").any { token ->
+            value.contains(token)
+        } &&
+            listOf("duit", "belanja", "expense", "expenses", "spending").any { token ->
+                value.contains(token)
+            } &&
+            listOf("bulanan", "monthly", "bulan", "harian", "daily").any { token ->
+                value.contains(token)
+            }
+        return hasContextIntent && !looksLikeTableRowRequest()
     }
 
     private fun String.actionSegments(): List<String> {

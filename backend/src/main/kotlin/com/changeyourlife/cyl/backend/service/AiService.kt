@@ -498,19 +498,35 @@ class AiService(
     }
 
     private fun String.recoverStructuredActions(targetPage: AiPageContext): List<AiActionItem> {
+        val actions = mutableListOf<AiActionItem>()
         var createdTableTitle: String? = null
-        val actions = actionSegments()
-            .mapNotNull { segment ->
-                val action = segment.recoverBlockAction(targetPage)
-                    ?: segment.recoverTableRowAction(targetPage, fallbackTableTitle = createdTableTitle)
-                    ?: segment.recoverPropertyAction(targetPage)
-                    ?: segment.recoverDatabaseAction(targetPage)
-                    ?: segment.takeUnless { it.looksLikeTableContextOnlyRequest() }?.recoverWriteAction(targetPage)
-                if (action != null && action.type.equals("CREATE_DATABASE", ignoreCase = true)) {
+        actionSegments().forEach { segment ->
+            val rowAction = segment.recoverTableRowAction(targetPage, fallbackTableTitle = createdTableTitle)
+            if (rowAction == null &&
+                segment.looksLikeTableRowRequest() &&
+                createdTableTitle.isNullOrBlank() &&
+                !targetPage.hasAnyTable()
+            ) {
+                val tableAction = segment.recoverImplicitDatabaseAction(targetPage)
+                createdTableTitle = tableAction.tableTitle
+                actions += tableAction
+                segment.recoverTableRowAction(targetPage, fallbackTableTitle = createdTableTitle)
+                    ?.let { action -> actions += action }
+                return@forEach
+            }
+
+            val action = segment.recoverBlockAction(targetPage)
+                ?: rowAction
+                ?: segment.recoverPropertyAction(targetPage)
+                ?: segment.recoverDatabaseAction(targetPage)
+                ?: segment.takeUnless { it.looksLikeTableContextOnlyRequest() }?.recoverWriteAction(targetPage)
+            if (action != null) {
+                actions += action
+                if (action.type.equals("CREATE_DATABASE", ignoreCase = true)) {
                     createdTableTitle = action.tableTitle.takeIf { title -> title.isNotBlank() }
                 }
-                action
             }
+        }
         return if (actions.isNotEmpty()) {
             actions
         } else {
@@ -638,11 +654,13 @@ class AiService(
     private fun String.recoverDatabaseAction(targetPage: AiPageContext): AiActionItem? {
         val value = lowercase()
         if (looksLikeTableRowRequest()) return null
+        val isTableContext = looksLikeTableContextOnlyRequest()
         val hasDatabaseIntent = listOf("table", "database", "jadual").any { token -> value.contains(token) }
-        if (!hasDatabaseIntent) return null
+        if (!hasDatabaseIntent && !isTableContext) return null
+        if (isTableContext && !hasDatabaseIntent && targetPage.hasAnyTable()) return null
         val isCreate = listOf("buat", "create", "cipta", "tambah", "add", "masukkan", "letak").any { token ->
             value.contains(token)
-        }
+        } || isTableContext
         if (!isCreate) return null
 
         val tableTitle = extractTableTitle(targetPage.title).ifBlank { "Table" }
@@ -651,11 +669,21 @@ class AiService(
             targetTitle = targetPage.title,
             tableTitle = tableTitle,
             tableView = "Table",
-            tableColumns = listOf(
-                AiTableColumnItem(name = "Name", type = "Text"),
-                AiTableColumnItem(name = "Status", type = "Status"),
-                AiTableColumnItem(name = "Notes", type = "Text"),
-            ),
+            tableColumns = tableTitle.defaultRecoveredTableColumns(value),
+        )
+    }
+
+    private fun String.recoverImplicitDatabaseAction(targetPage: AiPageContext): AiActionItem {
+        val tableTitle = when {
+            looksLikeExpenseText() -> targetPage.title.ifBlank { "Belanja" }
+            else -> targetPage.title.ifBlank { "Table" }
+        }
+        return AiActionItem(
+            type = "CREATE_DATABASE",
+            targetTitle = targetPage.title,
+            tableTitle = tableTitle,
+            tableView = "Table",
+            tableColumns = tableTitle.defaultRecoveredTableColumns(lowercase()),
         )
     }
 
@@ -838,11 +866,34 @@ class AiService(
     private fun String.extractTableTitle(pageTitle: String): String =
         removeTargetMention(pageTitle)
             .replace(
-                Regex("(?i)\\b(buat|create|cipta|tambah|add|masukkan|letak|table|database|jadual|dalam|dekat|di|page|ini|sini|this|current)\\b"),
+                Regex("(?i)\\b(buat|create|cipta|tambah|add|masukkan|letak|untuk|catat|rekod|record|table|database|jadual|dalam|dekat|di|page|ini|sini|this|current)\\b"),
                 " ",
             )
             .replace(Regex("\\s+"), " ")
             .trim(' ', '-', ':')
+
+    private fun String.defaultRecoveredTableColumns(promptValue: String): List<AiTableColumnItem> =
+        if (looksLikeExpenseText() || promptValue.looksLikeExpenseText()) {
+            listOf(
+                AiTableColumnItem(name = "Name", type = "Text"),
+                AiTableColumnItem(name = "Amount", type = "Number"),
+                AiTableColumnItem(name = "Date", type = "Date"),
+                AiTableColumnItem(name = "Notes", type = "Text"),
+            )
+        } else {
+            listOf(
+                AiTableColumnItem(name = "Name", type = "Text"),
+                AiTableColumnItem(name = "Status", type = "Status"),
+                AiTableColumnItem(name = "Notes", type = "Text"),
+            )
+        }
+
+    private fun String.looksLikeExpenseText(): Boolean {
+        val value = lowercase()
+        return extractMoneyAmount() != null ||
+            listOf("duit", "belanja", "expense", "expenses", "spend", "makan", "ringgit", "rm", "harga", "jumlah")
+                .any { token -> value.contains(token) }
+    }
 
     private fun AiPageContext.hasAnyTable(): Boolean =
         blocks.any { block ->
@@ -892,9 +943,15 @@ class AiService(
 
     private fun String.looksLikeTableContextOnlyRequest(): Boolean {
         val value = lowercase()
-        val hasContextIntent = value.contains("catat") &&
-            listOf("duit", "belanja").any { token -> value.contains(token) } &&
-            listOf("bulanan", "monthly", "bulan").any { token -> value.contains(token) }
+        val hasContextIntent = listOf("catat", "rekod", "record", "track", "tracking").any { token ->
+            value.contains(token)
+        } &&
+            listOf("duit", "belanja", "expense", "expenses", "spending").any { token ->
+                value.contains(token)
+            } &&
+            listOf("bulanan", "monthly", "bulan", "harian", "daily").any { token ->
+                value.contains(token)
+            }
         return hasContextIntent && !looksLikeTableRowRequest()
     }
 
@@ -978,6 +1035,11 @@ class AiService(
             "append",
             "add note",
             "tambah nota",
+            "nota",
+            "note",
+            "isi",
+            "content",
+            "memo",
             "buat isi",
             "draft",
             "karangan",
@@ -1002,7 +1064,7 @@ class AiService(
 
     private fun String.extractWriteContent(pageTitle: String): String =
         removeTargetMention(pageTitle)
-            .replace(Regex("(?i)\\b(write|tulis|catat|masukkan|insert|append|draft|buat isi|tambah nota|add note)\\b"), " ")
+            .replace(Regex("(?i)\\b(tolong|please|buat|create|write|tulis|catat|masukkan|insert|append|draft|nota|note|memo|isi|content|buat isi|tambah nota|add note)\\b"), " ")
             .replace(Regex("(?i)\\b(dalam|dekat|di|ke|to|into|page|ini|sini|this page|current page)\\b"), " ")
             .replace(Regex("\\s+"), " ")
             .trim(' ', '-', ':')
