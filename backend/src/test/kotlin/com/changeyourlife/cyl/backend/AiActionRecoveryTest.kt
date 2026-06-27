@@ -101,4 +101,39 @@ class AiActionRecoveryTest {
         assertEquals("DELETE_ALL_BLOCKS", action.type)
         assertEquals("Nota Ayam", action.targetTitle)
     }
+
+    @Test
+    fun recoversAddRowInsteadOfCreatingDatabase() {
+        val result = service.recoverActionFromPrompt(
+            prompt = """
+                tambah satu row yang saya guna beli makan 4 ringgit
+
+                CYL_MENTION_CONTEXT:
+                The user selected these page mentions from the chat UI. Treat them as exact target pages for create/update/delete actions:
+                - @Belanja Harian id=page-belanja
+            """.trimIndent(),
+            pages = listOf(
+                AiPageContext(
+                    id = "page-belanja",
+                    title = "Belanja Harian",
+                    blocks = listOf(
+                        AiBlockContext(
+                            id = "table-1",
+                            type = "DatabaseTable",
+                            text = "title=Expenses; columns=Name Text, Amount Number; rows=",
+                            tableTitle = "Expenses",
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        val action = assertNotNull(result).actions.single()
+        assertEquals("ADD_TABLE_ROW", action.type)
+        assertEquals("Belanja Harian", action.targetTitle)
+        assertEquals("Expenses", action.tableTitle)
+        assertEquals("beli makan", action.rowTitle)
+        assertEquals("4", action.cellValues["Amount"])
+        assertEquals("4", action.cellValues["Jumlah"])
+    }
 }

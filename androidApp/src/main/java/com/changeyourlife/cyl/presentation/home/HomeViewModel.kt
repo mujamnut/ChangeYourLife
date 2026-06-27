@@ -529,7 +529,7 @@ class HomeViewModel @Inject constructor(
         val pageLinks = mutableListOf<AiChatPageLink>()
 
         for (rawAction in actions) {
-            val action = rawAction.normalizedForPrompt(userPrompt)
+            val action = rawAction.normalizedForPrompt(userPrompt, mentionedPage)
             Log.d("HomeViewModel", "Executing action: type=${action.type}, title=${action.title}, targetTitle=${action.targetTitle}")
             runCatching {
                 val actionType = action.type.trim().uppercase()
@@ -1063,6 +1063,7 @@ class HomeViewModel @Inject constructor(
 
         prompt.recoverPropertyAction(targetPage)?.let { action -> return listOf(action) }
         prompt.recoverBlockMutationAction(targetPage)?.let { action -> return listOf(action) }
+        prompt.recoverTableRowAction(targetPage)?.let { action -> return listOf(action) }
         prompt.recoverDatabaseAction(targetPage)?.let { action -> return listOf(action) }
 
         if (!prompt.looksLikePageWriteRequest()) return emptyList()
@@ -1296,6 +1297,7 @@ class HomeViewModel @Inject constructor(
 
     private fun String.recoverDatabaseAction(targetPage: Page): ChatAction? {
         val value = lowercase()
+        if (looksLikeTableRowRequest()) return null
         val hasDatabaseIntent = listOf("table", "database", "jadual").any { token -> value.contains(token) }
         if (!hasDatabaseIntent) return null
         val isCreate = listOf("buat", "create", "cipta", "tambah", "add", "masukkan").any { token ->
@@ -1315,6 +1317,41 @@ class HomeViewModel @Inject constructor(
                 ChatTableColumn(name = "Status", type = "Status"),
                 ChatTableColumn(name = "Notes", type = "Text"),
             ),
+        )
+    }
+
+    private fun String.recoverTableRowAction(targetPage: Page): ChatAction? {
+        if (!looksLikeTableRowRequest()) return null
+        val document = PageBlockCodec.decodeDocument(targetPage.content)
+        val hasTable = document.blocks.any { block -> block.type == PageBlockType.DatabaseTable }
+        if (!hasTable) return null
+
+        val rowText = extractTableRowText(targetPage.title)
+        if (rowText.isBlank()) return null
+        val amount = rowText.extractMoneyAmount()
+        val rowTitle = rowText.removeMoneyAmount().ifBlank { rowText }
+        val cellValues = buildMap {
+            put("Name", rowTitle)
+            put("Item", rowTitle)
+            put("Task", rowTitle)
+            amount?.let { value ->
+                put("Amount", value)
+                put("Jumlah", value)
+                put("Harga", value)
+                put("Price", value)
+                put("Cost", value)
+                put("Total", value)
+            }
+            if (amount != null && !rowText.equals(rowTitle, ignoreCase = true)) {
+                put("Notes", rowText)
+            }
+        }
+        return ChatAction(
+            type = "ADD_TABLE_ROW",
+            title = "",
+            targetTitle = targetPage.title,
+            rowTitle = rowTitle,
+            cellValues = cellValues,
         )
     }
 
@@ -1398,17 +1435,22 @@ class HomeViewModel @Inject constructor(
             .trim(' ', '-', ':')
     }
 
-    private fun ChatAction.normalizedForPrompt(prompt: String): ChatAction {
-        return if (type.trim().equals("DELETE_BLOCK", ignoreCase = true) && prompt.requestsAllBlocksDeletion()) {
-            copy(
-                type = "DELETE_ALL_BLOCKS",
-                blockId = "",
-                blockText = "",
-                content = "",
-                blockType = "",
-            )
-        } else {
-            this
+    private fun ChatAction.normalizedForPrompt(prompt: String, mentionedPage: Page?): ChatAction {
+        val normalizedType = type.trim().uppercase()
+        return when {
+            normalizedType == "DELETE_BLOCK" && prompt.requestsAllBlocksDeletion() -> {
+                copy(
+                    type = "DELETE_ALL_BLOCKS",
+                    blockId = "",
+                    blockText = "",
+                    content = "",
+                    blockType = "",
+                )
+            }
+            normalizedType in setOf("CREATE_DATABASE", "CREATE_TABLE") && prompt.looksLikeTableRowRequest() && mentionedPage != null -> {
+                prompt.recoverTableRowAction(mentionedPage) ?: copy(type = "ADD_TABLE_ROW")
+            }
+            else -> this
         }
     }
 
@@ -1421,6 +1463,40 @@ class HomeViewModel @Inject constructor(
         val hasBlockIntent = listOf("block", "blok", "blocks")
             .any { token -> value.contains(token) }
         return hasDeleteIntent && hasAllIntent && hasBlockIntent
+    }
+
+    private fun String.looksLikeTableRowRequest(): Boolean {
+        val value = lowercase()
+        val hasRowIntent = listOf("row", "baris", "rekod", "record")
+            .any { token -> value.contains(token) }
+        val hasAddIntent = listOf("tambah", "add", "masukkan", "letak", "insert", "create")
+            .any { token -> value.contains(token) }
+        return hasRowIntent && hasAddIntent
+    }
+
+    private fun String.extractTableRowText(pageTitle: String): String {
+        return removeMentionedPage(pageTitle)
+            .replace(
+                Regex("(?i)\\b(tambah|add|masukkan|letak|insert|create|buat|satu|1|row|baris|rekod|record|dalam|dekat|di|ke|to|into|table|database|jadual|page|ini|tersebut|yang|saya|guna|pakai|use|used)\\b"),
+                " ",
+            )
+            .replace(Regex("\\s+"), " ")
+            .trim(' ', '-', ':')
+    }
+
+    private fun String.extractMoneyAmount(): String? {
+        val match = Regex("(?i)(?:rm\\s*)?(\\d+(?:[.,]\\d+)?)\\s*(?:ringgit|rm)?")
+            .find(this)
+            ?: return null
+        return match.groupValues.getOrNull(1)
+            ?.replace(',', '.')
+            ?.takeIf { value -> value.isNotBlank() }
+    }
+
+    private fun String.removeMoneyAmount(): String {
+        return replace(Regex("(?i)\\b(?:rm\\s*)?\\d+(?:[.,]\\d+)?\\s*(?:ringgit|rm)?\\b"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim(' ', '-', ':')
     }
 
     private fun String.inferWriteBlockType(): String {

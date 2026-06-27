@@ -289,7 +289,7 @@ class AiService(
                 - "DELETE_PROPERTY": for the attached/current page only, use "propertyName".
                 - "DELETE_ALL_BLOCKS": for the attached/current page only, when the user asks to delete/clear all blocks in a page. This removes page blocks but keeps page properties.
                 - "DELETE_BLOCK": for the attached/current page only. Prefer exact "blockId" from the current page block outline. Also include "blockType" and "blockText" when useful. For database tables, prefer "blockId"; if no blockId is available, use "blockType":"DatabaseTable" and "tableTitle".
-                - "CREATE_DATABASE": for the attached/current page only, use "tableTitle" or "title", optional "tableView" as Table|List|Board|Calendar|Gallery|Timeline|Dashboard, "tableColumns" as [{"name":"Name","type":"Text|Number|Status|Date|Checkbox|Formula|Relation|Rollup","dateFormat":"DayMonthYear|MonthDayYear|YearMonthDay","timeFormat":"Hidden|TwelveHour|TwentyFourHour","dateReminder":"None|AtTimeOfEvent|OnDayOfEvent|OneDayBefore","timezoneLabel":"Local","formula":"{Price} * {Qty}","relationTargetTableId":"target-table-block-id","rollupRelationColumnName":"Orders","rollupTargetColumnName":"Amount","rollupAggregation":"Count|Sum|Average|Min|Max"}], and "tableRows" as objects keyed by column name.
+                - "CREATE_DATABASE": for the attached/current page only, use "tableTitle" or "title", optional "tableView" as Table|List|Board|Calendar|Gallery|Timeline|Dashboard, "tableColumns" as [{"name":"Name","type":"Text|Number|Status|Date|Checkbox|Formula|Relation|Rollup","dateFormat":"DayMonthYear|MonthDayYear|YearMonthDay","timeFormat":"Hidden|TwelveHour|TwentyFourHour","dateReminder":"None|AtTimeOfEvent|OnDayOfEvent|OneDayBefore","timezoneLabel":"Local","formula":"{Price} * {Qty}","relationTargetTableId":"target-table-block-id","rollupRelationColumnName":"Orders","rollupTargetColumnName":"Amount","rollupAggregation":"Count|Sum|Average|Min|Max"}], and "tableRows" as objects keyed by column name. Never use CREATE_DATABASE when the user asks to add/tambah a row/baris/rekod to an existing table.
                 - "ADD_TABLE_COLUMN": for the attached/current page only, use optional "blockId" or "tableTitle", "columnName", and "columnType" as Text|Number|Status|Date|Checkbox|Formula|Relation|Rollup. For Formula include "formula" using {Column Name}. For Relation include "relationTargetTableId" (preferred) or "relationTargetTableTitle". For Rollup include "rollupRelationColumnId" and "rollupTargetColumnId" when they are visible in the outline; use "rollupRelationColumnName" or "rollupTargetColumnName" only as fallback, plus "rollupAggregation" as Count|Sum|Average|Min|Max.
                 - "ADD_TABLE_ROW": for the attached/current page only, use optional "blockId" or "tableTitle", optional "rowTitle", and "cellValues" as an object keyed by column name.
                 - "UPDATE_TABLE_CELL": for the attached/current page only, use optional "blockId" or "tableTitle", "rowId" or "rowTitle", "columnId" or "columnName", and "value".
@@ -353,6 +353,7 @@ class AiService(
                 - Use "CREATE_DATABASE" only when the user specifically asks for a table/database inside the current page rather than a full module page.
 
                 Task/reminder table behavior:
+                - If the user asks to add/tambah a row/baris/rekod, always prefer ADD_TABLE_ROW on the existing/current table. Do not create a new database for row insertion.
                 - If the user asks to create a task, todo, reminder, due date, deadline, appointment, schedule, or anything with time, use a table, not a Todo block and not standalone task/reminder actions.
                 - If a suitable task-like table already exists in the current/mentioned page, use "ADD_TABLE_ROW" with that table.
                 - If no suitable task-like table exists in the current/mentioned page, use "CREATE_DATABASE" with tableTitle "Tasks", tableView "Table", and columns:
@@ -432,7 +433,7 @@ class AiService(
                 }
             }
             val parsedResult = AiActionResult(reply = reply, actions = parsed.actions)
-            if (parsed.actions.isEmpty()) {
+            if (parsed.actions.shouldRecoverInstead(latestPrompt)) {
                 recoverActionFromPrompt(latestPrompt, pages) ?: parsedResult
             } else {
                 parsedResult
@@ -447,6 +448,15 @@ class AiService(
             val fallback = "Saya belum dapat tukar arahan itu kepada tindakan CYL dengan yakin. Cuba sebut nama page/table/row, atau mention page dengan @."
             AiActionResult(reply = fallback, actions = emptyList())
         }
+    }
+
+    private fun List<AiActionItem>.shouldRecoverInstead(prompt: String): Boolean {
+        if (isEmpty()) return true
+        val hasCreateDatabase = any { action ->
+            action.type.equals("CREATE_DATABASE", ignoreCase = true) ||
+                action.type.equals("CREATE_TABLE", ignoreCase = true)
+        }
+        return hasCreateDatabase && prompt.withoutMentionContext().looksLikeTableRowRequest()
     }
 
     internal fun recoverActionFromPrompt(
@@ -464,6 +474,16 @@ class AiService(
                 reply = visiblePrompt.recoveryReply(
                     malay = "Siap - saya buat table itu.",
                     english = "Done - I created that table.",
+                ),
+                actions = listOf(action),
+            )
+        }
+
+        visiblePrompt.recoverTableRowAction(targetPage)?.let { action ->
+            return AiActionResult(
+                reply = visiblePrompt.recoveryReply(
+                    malay = "Siap - saya tambah row itu.",
+                    english = "Done - I added that row.",
                 ),
                 actions = listOf(action),
             )
@@ -603,6 +623,7 @@ class AiService(
 
     private fun String.recoverDatabaseAction(targetPage: AiPageContext): AiActionItem? {
         val value = lowercase()
+        if (looksLikeTableRowRequest()) return null
         val hasDatabaseIntent = listOf("table", "database", "jadual").any { token -> value.contains(token) }
         if (!hasDatabaseIntent) return null
         val isCreate = listOf("buat", "create", "cipta", "tambah", "add", "masukkan", "letak").any { token ->
@@ -621,6 +642,40 @@ class AiService(
                 AiTableColumnItem(name = "Status", type = "Status"),
                 AiTableColumnItem(name = "Notes", type = "Text"),
             ),
+        )
+    }
+
+    private fun String.recoverTableRowAction(targetPage: AiPageContext): AiActionItem? {
+        if (!looksLikeTableRowRequest()) return null
+        val tableTitle = targetPage.defaultTableTitle()
+        if (tableTitle == null && !targetPage.hasAnyTable()) return null
+
+        val rowText = extractTableRowText(targetPage.title)
+        if (rowText.isBlank()) return null
+        val amount = rowText.extractMoneyAmount()
+        val rowTitle = rowText.removeMoneyAmount().ifBlank { rowText }
+        val cellValues = buildMap {
+            put("Name", rowTitle)
+            put("Item", rowTitle)
+            put("Task", rowTitle)
+            amount?.let { value ->
+                put("Amount", value)
+                put("Jumlah", value)
+                put("Harga", value)
+                put("Price", value)
+                put("Cost", value)
+                put("Total", value)
+            }
+            if (amount != null && !rowText.equals(rowTitle, ignoreCase = true)) {
+                put("Notes", rowText)
+            }
+        }
+        return AiActionItem(
+            type = "ADD_TABLE_ROW",
+            targetTitle = targetPage.title,
+            tableTitle = tableTitle.orEmpty(),
+            rowTitle = rowTitle,
+            cellValues = cellValues,
         )
     }
 
@@ -763,6 +818,61 @@ class AiService(
                 Regex("(?i)\\b(buat|create|cipta|tambah|add|masukkan|letak|table|database|jadual|dalam|dekat|di|page|ini|sini|this|current)\\b"),
                 " ",
             )
+            .replace(Regex("\\s+"), " ")
+            .trim(' ', '-', ':')
+
+    private fun AiPageContext.hasAnyTable(): Boolean =
+        blocks.any { block ->
+            block.type.equals("DatabaseTable", ignoreCase = true) || block.tableTitle.isNotBlank()
+        }
+
+    private fun AiPageContext.defaultTableTitle(): String? {
+        blocks.firstOrNull { block ->
+            block.type.equals("DatabaseTable", ignoreCase = true) && block.tableTitle.isNotBlank()
+        }?.tableTitle?.let { return it }
+        blocks.firstOrNull { block ->
+            block.type.equals("DatabaseTable", ignoreCase = true)
+        }?.text?.let { text ->
+            Regex("(?i)title=([^;]+)")
+                .find(text)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?.trim()
+                ?.takeIf { it.isNotBlank() }
+                ?.let { return it }
+        }
+        return blocks.firstOrNull { block -> block.tableTitle.isNotBlank() }?.tableTitle
+    }
+
+    private fun String.looksLikeTableRowRequest(): Boolean {
+        val value = lowercase()
+        val hasRowIntent = listOf("row", "baris", "rekod", "record")
+            .any { token -> value.contains(token) }
+        val hasAddIntent = listOf("tambah", "add", "masukkan", "letak", "insert", "create")
+            .any { token -> value.contains(token) }
+        return hasRowIntent && hasAddIntent
+    }
+
+    private fun String.extractTableRowText(pageTitle: String): String =
+        removeTargetMention(pageTitle)
+            .replace(
+                Regex("(?i)\\b(tambah|add|masukkan|letak|insert|create|buat|satu|1|row|baris|rekod|record|dalam|dekat|di|ke|to|into|table|database|jadual|page|ini|tersebut|yang|saya|guna|pakai|use|used)\\b"),
+                " ",
+            )
+            .replace(Regex("\\s+"), " ")
+            .trim(' ', '-', ':')
+
+    private fun String.extractMoneyAmount(): String? {
+        val match = Regex("(?i)(?:rm\\s*)?(\\d+(?:[.,]\\d+)?)\\s*(?:ringgit|rm)?")
+            .find(this)
+            ?: return null
+        return match.groupValues.getOrNull(1)
+            ?.replace(',', '.')
+            ?.takeIf { value -> value.isNotBlank() }
+    }
+
+    private fun String.removeMoneyAmount(): String =
+        replace(Regex("(?i)\\b(?:rm\\s*)?\\d+(?:[.,]\\d+)?\\s*(?:ringgit|rm)?\\b"), " ")
             .replace(Regex("\\s+"), " ")
             .trim(' ', '-', ':')
 
