@@ -150,7 +150,7 @@ fun CylNavHost(
                 onOpenPage = { pageId, targetType, targetId ->
                     navController.navigate(Routes.pageEditor(pageId, targetType, targetId))
                 },
-                onSendHomeAiMessage = homeViewModel::sendChatMessage,
+                onSendAiMessage = homeViewModel::sendChatMessage,
                 onHomeAiModeChange = homeViewModel::updateAiChatMode,
                 onClearHomeAiHistory = homeViewModel::clearChatHistory,
                 onCreateHomeChatSession = homeViewModel::createNewChatSession,

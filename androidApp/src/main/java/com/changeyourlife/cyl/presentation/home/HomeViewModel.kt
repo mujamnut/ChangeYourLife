@@ -37,14 +37,11 @@ import com.changeyourlife.cyl.presentation.ai.AiChatMode
 import com.changeyourlife.cyl.presentation.ai.AiChatMessage
 import com.changeyourlife.cyl.presentation.ai.AiChatPageLink
 import com.changeyourlife.cyl.presentation.ai.AiPageActionExecutor
-import com.changeyourlife.cyl.presentation.ai.isTaskTableRowAction
 import com.changeyourlife.cyl.presentation.ai.toPageTableColumnFromAi
 import com.changeyourlife.cyl.presentation.ai.toRoleContentPairs
-import com.changeyourlife.cyl.presentation.ai.withTaskTableAction
 import com.changeyourlife.cyl.presentation.page.PageBlockCodec
 import com.changeyourlife.cyl.presentation.page.PageModuleTemplates
 import com.changeyourlife.cyl.presentation.page.PageModuleType
-import android.util.Log
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.time.LocalDate
 import javax.inject.Inject
@@ -417,6 +414,34 @@ class HomeViewModel @Inject constructor(
         mentionedPageIds: List<String> = emptyList(),
         mode: AiChatMode = aiChatMode.value,
     ) {
+        sendChatMessageScoped(
+            prompt = prompt,
+            mentionedPageIds = mentionedPageIds,
+            mode = mode,
+            attachedPageId = null,
+        )
+    }
+
+    fun sendChatMessage(
+        prompt: String,
+        mentionedPageIds: List<String>,
+        mode: AiChatMode,
+        attachedPageId: String?,
+    ) {
+        sendChatMessageScoped(
+            prompt = prompt,
+            mentionedPageIds = mentionedPageIds,
+            mode = mode,
+            attachedPageId = attachedPageId,
+        )
+    }
+
+    private fun sendChatMessageScoped(
+        prompt: String,
+        mentionedPageIds: List<String>,
+        mode: AiChatMode,
+        attachedPageId: String?,
+    ) {
         if (prompt.isBlank() || isAiGeneratingChat.value) return
 
         isAiGeneratingChat.value = true
@@ -444,9 +469,16 @@ class HomeViewModel @Inject constructor(
             val textMentionedPageIds = pages
                 .findMentionedPages(prompt)
                 .map { page -> page.id }
-            val normalizedMentionedPageIds = (mentionedPageIds + textMentionedPageIds)
+            val normalizedMentionedPageIds = (mentionedPageIds + textMentionedPageIds + listOfNotNull(attachedPageId))
                 .filter { pageId -> pageId.isNotBlank() }
                 .distinct()
+            val attachedPage = attachedPageId
+                ?.takeIf { pageId -> pageId.isNotBlank() }
+                ?.let { pageId -> pages.firstOrNull { page -> page.id == pageId } }
+            val scopedTargetPage = attachedPage
+                ?: normalizedMentionedPageIds
+                    .singleOrNull()
+                    ?.let { pageId -> pages.firstOrNull { page -> page.id == pageId } }
             val explicitlyMentionedPages = pages.findPagesByIds(normalizedMentionedPageIds)
             val pageContext = pages
                 .withMentionedPagesFirst(normalizedMentionedPageIds)
@@ -458,21 +490,23 @@ class HomeViewModel @Inject constructor(
             val allChatMessages = chatHistoryRepository.observeMessagesForScope(scopeId)
                 .first()
                 .filterNot { message -> message.id == savedUserMessage.id }
-            buildHomeAiSearchReply(
-                prompt = prompt,
-                pages = pages,
-                tasks = openTasks,
-                chatSessions = allChatSessions,
-                chatMessages = allChatMessages,
-            )?.let { searchReply ->
-                isAiGeneratingChat.value = false
-                chatHistoryRepository.appendMessage(
-                    sessionId = session.id,
-                    role = "assistant",
-                    content = searchReply.content,
-                    pageLinks = searchReply.pageLinks.toDomainChatPageLinks(),
-                )
-                return@launch
+            if (mode == AiChatMode.Planning) {
+                buildHomeAiSearchReply(
+                    prompt = prompt,
+                    pages = pages,
+                    tasks = openTasks,
+                    chatSessions = allChatSessions,
+                    chatMessages = allChatMessages,
+                )?.let { searchReply ->
+                    isAiGeneratingChat.value = false
+                    chatHistoryRepository.appendMessage(
+                        sessionId = session.id,
+                        role = "assistant",
+                        content = searchReply.content,
+                        pageLinks = searchReply.pageLinks.toDomainChatPageLinks(),
+                    )
+                    return@launch
+                }
             }
 
             val messagesForAi = currentMessages + userMessage.copy(
@@ -503,8 +537,10 @@ class HomeViewModel @Inject constructor(
                     }
                     val actionResults = if (actionsToExecute.isEmpty()) {
                         HomeAiExecutionResult()
+                    } else if (scopedTargetPage != null) {
+                        executePageScopedActions(scopedTargetPage, actionsToExecute)
                     } else {
-                        executeActions(actionsToExecute, prompt, normalizedMentionedPageIds)
+                        HomeAiExecutionResult()
                     }
                     val replyWithResults = listOf(
                         assistantReply,
@@ -532,329 +568,50 @@ class HomeViewModel @Inject constructor(
         }
     }
 
-    /** Executes actions returned by the AI via structured JSON. */
-    private suspend fun executeActions(
+    private suspend fun executePageScopedActions(
+        page: Page,
         actions: List<ChatAction>,
-        userPrompt: String,
-        mentionedPageIds: List<String> = emptyList(),
     ): HomeAiExecutionResult {
-        Log.d("HomeViewModel", "Executing AI actions: count=${actions.size}")
-        val workspaceId = workspaceRepository.getActiveWorkspaceId()
-            ?.takeIf { it.isNotBlank() }
-            ?: CylDefaults.DefaultWorkspaceId
-        val mentionedPage = findMentionedPage(workspaceId, userPrompt, mentionedPageIds)
-        val results = mutableListOf<String>()
-        val pageLinks = mutableListOf<AiChatPageLink>()
-
-        for (rawAction in actions) {
-            val action = rawAction.normalizedForPrompt(userPrompt, mentionedPage)
-            Log.d("HomeViewModel", "Executing action: type=${action.type}, title=${action.title}, targetTitle=${action.targetTitle}")
-            runCatching {
-                val actionType = action.type.trim().uppercase()
-                val requestedModuleType = action.requestedModuleType(actionType)
-                val sharedTargetPage = resolveTargetPage(workspaceId, action, mentionedPage)
-                when {
-                    sharedTargetPage != null && aiPageActionExecutor.supports(action) -> {
-                        val execution = aiPageActionExecutor.executeOnPage(
-                            page = sharedTargetPage,
-                            title = sharedTargetPage.title,
-                            document = PageBlockCodec.decodeDocument(sharedTargetPage.content),
-                            actions = listOf(action),
-                        )
-                        val didUpdatePage = execution.updatedTitle != null || execution.updatedDocument != null
-                        val updatedPage = if (didUpdatePage) {
-                            sharedTargetPage.copy(
-                                title = execution.updatedTitle ?: sharedTargetPage.title,
-                                content = execution.updatedDocument?.let(PageBlockCodec::encodeDocument)
-                                    ?: sharedTargetPage.content,
-                                updatedAt = System.currentTimeMillis(),
-                            ).also { pageRepository.upsertPage(it) }
-                        } else {
-                            sharedTargetPage
-                        }
-                        if (didUpdatePage) {
-                            pageLinks += updatedPage.toChatPageLink()
-                        }
-                        pageLinks += execution.pageLinks
-                        pageLinks += execution.createdPages.map { page -> page.toChatPageLink() }
-                        execution.messages.joinToString("\n").ifBlank {
-                            "✅ Updated page: ${updatedPage.title.ifBlank { "Untitled page" }}"
-                        }
-                    }
-
-                    requestedModuleType != null -> {
-                        val title = action.title.ifBlank { PageModuleTemplates.defaultTitle(requestedModuleType) }
-                        val page = pageRepository.createPage(
-                            workspaceId = workspaceId,
-                            title = title,
-                            content = PageModuleTemplates.contentFor(requestedModuleType),
-                        )
-                        Log.d("HomeViewModel", "Module page created successfully: id=${page.id}, type=${requestedModuleType.name}")
-                        pageLinks += page.toChatPageLink()
-                        "✅ Created ${requestedModuleType.label} module: ${page.title.ifBlank { requestedModuleType.defaultTitle }}"
-                    }
-
-                    actionType == "CREATE_PAGE" -> {
-                        val title = action.title.ifBlank { error("Missing page title") }
-                        val page = pageRepository.createPage(workspaceId, title, content = action.content)
-                        Log.d("HomeViewModel", "Page created successfully: id=${page.id}")
-                        pageLinks += page.toChatPageLink()
-                        "✅ Created page: ${page.title.ifBlank { "Untitled page" }}"
-                    }
-
-                    actionType == "UPDATE_PAGE" -> {
-                        val targetTitle = action.targetTitle.ifBlank { action.title }
-                        val page = findPageByTitle(workspaceId, targetTitle)
-                            ?: error("Could not find page: $targetTitle")
-                        val updatedPage = page.copy(
-                            title = action.title.ifBlank { page.title },
-                            content = action.content.ifBlank { page.content },
-                            updatedAt = System.currentTimeMillis(),
-                        )
-                        pageRepository.upsertPage(updatedPage)
-                        Log.d("HomeViewModel", "Page updated successfully: id=${page.id}")
-                        pageLinks += updatedPage.toChatPageLink()
-                        "✅ Updated page: ${updatedPage.title.ifBlank { "Untitled page" }}"
-                    }
-
-                    actionType == "APPEND_PAGE_BLOCK" || actionType == "APPEND_BLOCK" || actionType == "ADD_BLOCK" -> {
-                        val page = resolveTargetPage(workspaceId, action, mentionedPage)
-                            ?: error("Mention a page, for example @Penjagaan Ayam, or provide targetTitle.")
-                        val updatedPage = appendBlockToPage(page, action.blockType, action.content)
-                        pageRepository.upsertPage(updatedPage)
-                        Log.d("HomeViewModel", "Block appended successfully: pageId=${page.id}")
-                        pageLinks += updatedPage.toChatPageLink()
-                        "✅ Added ${action.blockType.ifBlank { "Text" }} block to: ${page.title.ifBlank { "Untitled page" }}"
-                    }
-
-                    actionType == "CREATE_DATABASE" || actionType == "CREATE_TABLE" -> {
-                        val tableBlock = action.toDatabaseBlock()
-                        val targetPage = resolveTargetPage(workspaceId, action, mentionedPage)
-                        if (targetPage != null) {
-                            val page = targetPage
-                            val updatedPage = appendBlockToPage(page, tableBlock)
-                            pageRepository.upsertPage(updatedPage)
-                            pageLinks += updatedPage.toChatPageLink()
-                            "✅ Created database ${tableBlock.table.title} in: ${updatedPage.title.ifBlank { "Untitled page" }}"
-                        } else {
-                            val pageTitle = action.title
-                                .ifBlank { action.tableTitle }
-                                .ifBlank { tableBlock.table.title }
-                                .ifBlank { "AI database" }
-                            val page = pageRepository.createPage(
-                                workspaceId = workspaceId,
-                                title = pageTitle,
-                                content = PageBlockCodec.encodeDocument(
-                                    PageBlockDocument(blocks = listOf(tableBlock)),
-                                ),
-                            )
-                            pageLinks += page.toChatPageLink()
-                            "✅ Created database page: ${page.title.ifBlank { "Untitled page" }}"
-                        }
-                    }
-
-                    actionType == "ADD_PROPERTY" || actionType == "UPDATE_PROPERTY" -> {
-                        val page = resolveTargetPage(workspaceId, action, mentionedPage)
-                            ?: error("Mention a page, for example @Penjagaan Ayam, or provide targetTitle.")
-                        val propertyName = action.propertyName
-                            .ifBlank { action.title }
-                            .ifBlank { error("Missing property name") }
-                        val updatedPage = updatePageDocument(page) { document ->
-                            document.upsertProperty(
-                                name = propertyName,
-                                type = action.propertyType.toPagePropertyType(),
-                                value = action.value.ifBlank { action.content },
-                            )
-                        }
-                        pageRepository.upsertPage(updatedPage)
-                        pageLinks += updatedPage.toChatPageLink()
-                        "✅ Updated property $propertyName in: ${updatedPage.title.ifBlank { "Untitled page" }}"
-                    }
-
-                    actionType == "DELETE_PROPERTY" -> {
-                        val page = resolveTargetPage(workspaceId, action, mentionedPage)
-                            ?: error("Mention a page, for example @Penjagaan Ayam, or provide targetTitle.")
-                        val propertyName = action.propertyName
-                            .ifBlank { action.title }
-                            .ifBlank { error("Missing property name") }
-                        val updatedPage = updatePageDocument(page) { document ->
-                            document.deletePropertyByName(propertyName)
-                        }
-                        pageRepository.upsertPage(updatedPage)
-                        pageLinks += updatedPage.toChatPageLink()
-                        "✅ Deleted property $propertyName from: ${updatedPage.title.ifBlank { "Untitled page" }}"
-                    }
-
-                    actionType == "ADD_TABLE_ROW" -> {
-                        if (action.isTaskTableRowAction()) {
-                            val targetPage = resolveTaskTablePage(workspaceId, action, mentionedPage)
-                            val mutation = PageBlockCodec.decodeDocument(targetPage.content).withTaskTableAction(action)
-                            val updatedPage = targetPage.copy(
-                                content = PageBlockCodec.encodeDocument(mutation.document),
-                                updatedAt = System.currentTimeMillis(),
-                            )
-                            pageRepository.upsertPage(updatedPage)
-                            pageLinks += updatedPage.toChatPageLink()
-                            "✅ Added task row ${mutation.rowTitle} to ${mutation.tableTitle}"
-                        } else {
-                            val page = resolveTargetPage(workspaceId, action, mentionedPage)
-                                ?: error("Mention a page, for example @Penjagaan Ayam, or provide targetTitle.")
-                            val update = updatePageTable(page, action) { block ->
-                                block.copy(
-                                    table = block.table.copy(
-                                        rows = block.table.rows + block.table.newRowFromAction(action),
-                                    ),
-                                )
-                            }
-                            pageRepository.upsertPage(update.page)
-                            pageLinks += update.page.toChatPageLink()
-                            "✅ Added row to ${update.tableTitle} in: ${update.page.title.ifBlank { "Untitled page" }}"
-                        }
-                    }
-
-                    actionType == "UPDATE_TABLE_CELL" -> {
-                        val page = resolveTargetPage(workspaceId, action, mentionedPage)
-                            ?: error("Mention a page, for example @Penjagaan Ayam, or provide targetTitle.")
-                        val rowTitle = action.rowTitle.ifBlank { action.title }
-                        val columnName = action.columnName.ifBlank { action.propertyName }
-                        val cellValue = action.value.ifBlank { action.content }
-                        val update = updatePageTable(page, action) { block ->
-                            block.updateCellByNames(
-                                rowId = action.rowId,
-                                rowTitle = rowTitle,
-                                columnId = action.columnId,
-                                columnName = columnName,
-                                value = cellValue,
-                            )
-                        }
-                        pageRepository.upsertPage(update.page)
-                        pageLinks += update.page.toChatPageLink()
-                        "✅ Updated ${columnName.ifBlank { action.columnId }} for ${rowTitle.ifBlank { action.rowId }} in: ${update.page.title.ifBlank { "Untitled page" }}"
-                    }
-
-                    actionType == "DELETE_TABLE_ROW" -> {
-                        val page = resolveTargetPage(workspaceId, action, mentionedPage)
-                            ?: error("Mention a page, for example @Penjagaan Ayam, or provide targetTitle.")
-                        val rowTitle = action.rowTitle.ifBlank { action.title }
-                        val update = updatePageTable(page, action) { block ->
-                            block.deleteTableRow(
-                                rowId = action.rowId,
-                                rowTitle = rowTitle,
-                            )
-                        }
-                        pageRepository.upsertPage(update.page)
-                        pageLinks += update.page.toChatPageLink()
-                        "✅ Deleted row ${rowTitle.ifBlank { action.rowId }} from ${update.tableTitle}"
-                    }
-
-                    actionType == "CREATE_SUBPAGE" -> {
-                        val parentTitle = action.targetTitle
-                        val parent = findPageByTitle(workspaceId, parentTitle)
-                            ?: error("Could not find parent page: $parentTitle")
-                        val title = action.title.ifBlank { error("Missing subpage title") }
-                        val page = pageRepository.createPage(
-                            workspaceId = workspaceId,
-                            title = title,
-                            content = action.content,
-                            parentPageId = parent.id,
-                        )
-                        Log.d("HomeViewModel", "Subpage created successfully: id=${page.id}")
-                        pageLinks += page.toChatPageLink()
-                        "✅ Created subpage: ${page.title.ifBlank { "Untitled page" }}"
-                    }
-
-                    actionType == "DELETE_PAGE" -> {
-                        val targetTitle = action.targetTitle.ifBlank { action.title }
-                        val page = findPageByTitle(workspaceId, targetTitle)
-                            ?: error("Could not find page: $targetTitle")
-                        val now = System.currentTimeMillis()
-                        pageRepository.upsertPage(
-                            page.copy(
-                                updatedAt = now,
-                                deletedAt = now,
-                            )
-                        )
-                        Log.d("HomeViewModel", "Page deleted successfully: id=${page.id}")
-                        "✅ Deleted page: ${page.title.ifBlank { "Untitled page" }}"
-                    }
-
-                    actionType == "CREATE_TASK" -> {
-                        val targetPage = resolveTaskTablePage(workspaceId, action, mentionedPage)
-                        val mutation = PageBlockCodec.decodeDocument(targetPage.content).withTaskTableAction(action)
-                        val updatedPage = targetPage.copy(
-                            content = PageBlockCodec.encodeDocument(mutation.document),
-                            updatedAt = System.currentTimeMillis(),
-                        )
-                        pageRepository.upsertPage(updatedPage)
-                        pageLinks += updatedPage.toChatPageLink()
-                        "✅ Added task row ${mutation.rowTitle} to ${mutation.tableTitle}"
-                    }
-
-                    actionType == "UPDATE_TASK" -> {
-                        val targetTitle = action.targetTitle.ifBlank { action.title }
-                        val task = findTaskByTitle(workspaceId, targetTitle)
-                            ?: error("Could not find task: $targetTitle")
-                        val updatedTask = task.copy(
-                            title = action.title.ifBlank { task.title },
-                            notes = action.content.ifBlank { task.notes },
-                            updatedAt = System.currentTimeMillis(),
-                        )
-                        taskRepository.upsertTask(updatedTask)
-                        Log.d("HomeViewModel", "Task updated successfully: id=${task.id}")
-                        "✅ Updated task: ${updatedTask.title}"
-                    }
-
-                    actionType == "COMPLETE_TASK" -> {
-                        val targetTitle = action.targetTitle.ifBlank { action.title }
-                        val task = findTaskByTitle(workspaceId, targetTitle)
-                            ?: error("Could not find task: $targetTitle")
-                        completeTaskAndReminder(task)
-                        Log.d("HomeViewModel", "Task completed successfully: id=${task.id}")
-                        "✅ Completed task: ${task.title}"
-                    }
-
-                    actionType == "DELETE_TASK" -> {
-                        val targetTitle = action.targetTitle.ifBlank { action.title }
-                        val task = findTaskByTitle(workspaceId, targetTitle)
-                            ?: error("Could not find task: $targetTitle")
-                        val now = System.currentTimeMillis()
-                        taskRepository.upsertTask(
-                            task.copy(
-                                updatedAt = now,
-                                deletedAt = now,
-                            )
-                        )
-                        Log.d("HomeViewModel", "Task deleted successfully: id=${task.id}")
-                        "✅ Deleted task: ${task.title}"
-                    }
-
-                    actionType == "CREATE_REMINDER" -> {
-                        val targetPage = resolveTaskTablePage(workspaceId, action, mentionedPage)
-                        val mutation = PageBlockCodec.decodeDocument(targetPage.content).withTaskTableAction(action)
-                        val updatedPage = targetPage.copy(
-                            content = PageBlockCodec.encodeDocument(mutation.document),
-                            updatedAt = System.currentTimeMillis(),
-                        )
-                        pageRepository.upsertPage(updatedPage)
-                        pageLinks += updatedPage.toChatPageLink()
-                        "✅ Added reminder row ${mutation.rowTitle} to ${mutation.tableTitle}"
-                    }
-
-                    else -> error("Unsupported action type: ${action.type}")
-                }
-            }.onSuccess { message ->
-                results += message.sanitizeAiUserVisibleText()
-            }.onFailure { error ->
-                Log.e("HomeViewModel", "Error executing AI action: ${action.type}", error)
-                results += "⚠️ ${action.type.toUserActionLabel()} failed: ${
-                    (error.localizedMessage ?: "Unknown error").sanitizeAiUserVisibleText()
-                        .ifBlank { "I could not complete that change." }
-                }"
+        val supportedActions = actions
+            .map { action ->
+                action.copy(
+                    targetTitle = action.targetTitle.ifBlank { page.title },
+                )
             }
+            .filter { action -> aiPageActionExecutor.supports(action) }
+        if (supportedActions.isEmpty()) return HomeAiExecutionResult()
+
+        val execution = aiPageActionExecutor.executeOnPage(
+            page = page,
+            title = page.title,
+            document = PageBlockCodec.decodeDocument(page.content),
+            actions = supportedActions,
+        )
+        val didUpdatePage = execution.updatedTitle != null || execution.updatedDocument != null
+        val updatedPage = if (didUpdatePage) {
+            page.copy(
+                title = execution.updatedTitle ?: page.title,
+                content = execution.updatedDocument?.let(PageBlockCodec::encodeDocument) ?: page.content,
+                updatedAt = System.currentTimeMillis(),
+            ).also { updatedPage -> pageRepository.upsertPage(updatedPage) }
+        } else {
+            page
         }
 
+        val pageLinks = buildList {
+            if (didUpdatePage) add(updatedPage.toChatPageLink())
+            addAll(execution.pageLinks)
+            addAll(execution.createdPages.map { createdPage -> createdPage.toChatPageLink() })
+        }.distinctBy { link -> "${link.pageId}:${link.targetType}:${link.targetId}" }
+
         return HomeAiExecutionResult(
-            messages = results,
+            messages = execution.messages.ifEmpty {
+                if (didUpdatePage) {
+                    listOf("Done: Updated ${updatedPage.title.ifBlank { "Untitled page" }}")
+                } else {
+                    emptyList()
+                }
+            },
             pageLinks = pageLinks,
         )
     }

@@ -89,14 +89,11 @@ fun AiChatSheet(
             ?.let(::listOf)
             .orEmpty()
     }
-    val attachedMention = attachedPageTitle
-        ?.ifBlank { "Untitled page" }
-        ?.let { "@$it " }
-    var inputText by rememberSaveable(attachedMention) {
-        mutableStateOf(attachedMention.orEmpty())
+    var inputText by rememberSaveable(attachedPageId) {
+        mutableStateOf("")
     }
     var selectedMentionPageIds by rememberSaveable(attachedPageId) {
-        mutableStateOf(attachedMentionPageIds)
+        mutableStateOf(emptyList<String>())
     }
     val effectiveMode = aiMode.takeIf { mode -> mode in availableModes }
         ?: availableModes.firstOrNull()
@@ -157,9 +154,9 @@ fun AiChatSheet(
                             modelLabel = modelLabel,
                             onModeChange = onAiModeChange,
                         )
-                        if (attachedPageTitle != null) {
+                        if (!attachedPageTitle.isNullOrBlank()) {
                             Text(
-                                text = "@${attachedPageTitle.ifBlank { "Untitled page" }}",
+                                text = "This page: ${attachedPageTitle.ifBlank { "Untitled page" }}",
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.primary,
                                 maxLines = 1,
@@ -329,7 +326,7 @@ fun AiChatSheet(
                     keyboardActions = KeyboardActions(
                         onSend = {
                             if (inputText.isNotBlank() && !isGenerating) {
-                                val message = inputText.withAttachedMention(attachedMention)
+                                val message = inputText.trim()
                                 onSendMessage(
                                     message,
                                     message.resolveMentionedPageIds(
@@ -338,8 +335,8 @@ fun AiChatSheet(
                                     ),
                                     effectiveMode,
                                 )
-                                inputText = attachedMention.orEmpty()
-                                selectedMentionPageIds = attachedMentionPageIds
+                                inputText = ""
+                                selectedMentionPageIds = emptyList()
                             }
                         },
                     ),
@@ -348,7 +345,7 @@ fun AiChatSheet(
                 IconButton(
                     onClick = {
                         if (inputText.isNotBlank() && !isGenerating) {
-                            val message = inputText.withAttachedMention(attachedMention)
+                            val message = inputText.trim()
                             onSendMessage(
                                 message,
                                 message.resolveMentionedPageIds(
@@ -357,8 +354,8 @@ fun AiChatSheet(
                                 ),
                                 effectiveMode,
                             )
-                            inputText = attachedMention.orEmpty()
-                            selectedMentionPageIds = attachedMentionPageIds
+                            inputText = ""
+                            selectedMentionPageIds = emptyList()
                         }
                     },
                     enabled = inputText.isNotBlank() && !isGenerating,
@@ -559,17 +556,6 @@ private fun String.insertMention(title: String): String {
     val mention = "@$title "
     if (atIndex < 0) return this + mention
     return substring(0, atIndex) + mention
-}
-
-private fun String.withAttachedMention(attachedMention: String?): String {
-    val message = trim()
-    val mention = attachedMention?.trim().orEmpty()
-    if (mention.isBlank()) return message
-    return if (message.contains(mention, ignoreCase = true)) {
-        message
-    } else {
-        "$mention $message".trim()
-    }
 }
 
 private fun String.resolveMentionedPageIds(

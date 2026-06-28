@@ -227,13 +227,10 @@ private fun HomeScreen(
             mentionPages = uiState.allPages,
             isGenerating = uiState.isAiGeneratingChat,
             errorMessage = uiState.aiChatError,
-            aiMode = AiChatMode.Planning,
-            availableModes = listOf(AiChatMode.Planning),
+            aiMode = uiState.aiChatMode,
             modelLabel = uiState.aiModelLabel,
-            onAiModeChange = {},
-            onSendMessage = { message, mentionedPageIds, _ ->
-                onSendChatMessage(message, mentionedPageIds, AiChatMode.Planning)
-            },
+            onAiModeChange = onAiModeChange,
+            onSendMessage = onSendChatMessage,
             onClearHistory = onClearChatHistory,
             onCreateChatSession = onCreateChatSession,
             onDismissError = onDismissChatError,
