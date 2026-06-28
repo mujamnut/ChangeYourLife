@@ -530,7 +530,9 @@ class HomeViewModel @Inject constructor(
                     }
                     val actionsToExecute = when (mode) {
                         AiChatMode.Planning -> emptyList()
-                        AiChatMode.Edit -> localActions
+                        AiChatMode.Edit -> localActions.ifEmpty {
+                            result.actions.filterNot { action -> action.isUnsafeQualitativeRename() }
+                        }
                         AiChatMode.Auto -> result.actions
                             .filterNot { action -> action.isUnsafeQualitativeRename() }
                             .repairedWithLocalPlan(prompt, localActions)

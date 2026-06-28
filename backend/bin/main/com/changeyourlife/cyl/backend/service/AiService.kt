@@ -13,7 +13,12 @@ import java.time.LocalDate
 import java.util.UUID
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.contentOrNull
 
 class AiService(
     private val glmApiKey: String? = null,
@@ -194,6 +199,21 @@ class AiService(
 
     data class AiActionResult(val reply: String, val actions: List<AiActionItem>)
 
+    @Serializable
+    private data class AiActionEnvelope(
+        val reply: String = "",
+        val actions: List<AiActionItem> = emptyList(),
+    )
+
+    private val tableRowActionTypes = setOf(
+        "ADD_TABLE_ROW",
+        "UPDATE_TABLE_ROW",
+        "DELETE_TABLE_ROW",
+        "UPDATE_TABLE_CELL",
+    )
+    private val legacyEnvelopeKeys = setOf("page", "targetpage", "targettitle", "action", "data", "rows", "row", "table", "tabletitle")
+    private val ignoredLegacyDataKeys = setOf("id", "rowid", "row_id", "uuid")
+
     fun chatWithActions(
         messages: List<ChatMessage>,
         pages: List<AiPageContext> = emptyList(),
@@ -201,16 +221,221 @@ class AiService(
         clientDate: String = "",
         clientTimezone: String = "",
     ): AiActionResult {
+        val userMessage = messages.lastOrNull { message -> message.role.equals("user", ignoreCase = true) }
+            ?.content
+            .orEmpty()
         val reply = if (isMockMode) {
-            val userMessage = messages.lastOrNull { message -> message.role.equals("user", ignoreCase = true) }
-                ?.content
-                .orEmpty()
             "[AI Sandbox Mode - No API Key]\nHere is a simulated response to your question: \"$userMessage\". Add OPENROUTER_API_KEY to enable live AI answers."
         } else {
             chat(messages).ifBlank { "I received your message, but the AI returned an empty reply." }
         }
+
+        recoverActionFromModelReply(
+            reply = reply,
+            prompt = userMessage,
+            pages = pages,
+        )?.let { return it }
+
+        recoverActionFromPrompt(
+            prompt = userMessage,
+            pages = pages,
+        )?.let { return it }
+
         return AiActionResult(reply = reply, actions = emptyList())
     }
+
+    internal fun recoverActionFromModelReply(
+        reply: String,
+        prompt: String,
+        pages: List<AiPageContext>,
+    ): AiActionResult? {
+        if (reply.isBlank()) return null
+        val cleaned = reply.cleanAiJson()
+        val jsonElement = runCatching { json.parseToJsonElement(cleaned) }.getOrNull() ?: return null
+        val jsonObject = jsonElement as? JsonObject ?: return null
+
+        runCatching { json.decodeFromString<AiActionEnvelope>(cleaned) }
+            .getOrNull()
+            ?.takeIf { envelope -> envelope.actions.isNotEmpty() }
+            ?.let { envelope ->
+                return AiActionResult(
+                    reply = envelope.reply.ifBlank {
+                        envelope.actions.recoveredReplyForPrompt(prompt)
+                    },
+                    actions = envelope.actions.map { action -> action.normalizedJsonAction(pages, prompt) },
+                )
+            }
+
+        runCatching { json.decodeFromString<AiActionItem>(cleaned) }
+            .getOrNull()
+            ?.takeIf { action -> action.type.isNotBlank() }
+            ?.let { action ->
+                val normalized = action.normalizedJsonAction(pages, prompt)
+                return AiActionResult(
+                    reply = listOf(normalized).recoveredReplyForPrompt(prompt),
+                    actions = listOf(normalized),
+                )
+            }
+
+        return jsonObject.toLegacyActionResult(prompt = prompt, pages = pages)
+    }
+
+    private fun AiActionItem.normalizedJsonAction(
+        pages: List<AiPageContext>,
+        prompt: String,
+    ): AiActionItem {
+        val explicitTarget = targetTitle.cleanAiPageTitle()
+            .ifBlank { title.cleanAiPageTitle().takeIf { type.equals("CREATE_DATABASE", ignoreCase = true).not() }.orEmpty() }
+        val targetPage = pages.findPageByAiTitle(explicitTarget)
+            ?: pages.findTargetPage(prompt)
+        return copy(
+            targetTitle = targetPage?.title ?: explicitTarget,
+            tableTitle = tableTitle.ifBlank {
+                if (type.uppercase() in tableRowActionTypes) targetPage?.defaultTableTitle().orEmpty() else ""
+            },
+        )
+    }
+
+    private fun List<AiActionItem>.recoveredReplyForPrompt(prompt: String): String =
+        prompt.withoutMentionContext().recoveryReply(
+            malay = recoveredMalayReply(),
+            english = recoveredEnglishReply(),
+        )
+
+    private fun JsonObject.toLegacyActionResult(
+        prompt: String,
+        pages: List<AiPageContext>,
+    ): AiActionResult? {
+        val action = stringValue("action").lowercase()
+        if (action.isBlank()) return null
+        val targetPage = pages.findPageByAiTitle(stringValue("page"))
+            ?: pages.findPageByAiTitle(stringValue("targetPage"))
+            ?: pages.findPageByAiTitle(stringValue("targetTitle"))
+            ?: pages.findTargetPage(prompt)
+            ?: return null
+        val dataRows = legacyDataRows()
+        if (dataRows.isEmpty()) return null
+
+        val tableTitle = stringValue("table")
+            .ifBlank { stringValue("tableTitle") }
+            .ifBlank { targetPage.defaultTableTitle().orEmpty() }
+
+        val actions = when (action) {
+            "add", "append", "create", "insert", "update", "upsert", "set" -> {
+                dataRows.mapNotNull { row ->
+                    val rowTitle = row.legacyRowTitle()
+                    val cellValues = row
+                        .filterKeys { key -> key.normalizedLegacyKey() !in ignoredLegacyDataKeys }
+                        .mapKeys { (key, _) -> key.toAiColumnName() }
+                    if (rowTitle.isBlank() && cellValues.isEmpty()) {
+                        null
+                    } else {
+                        AiActionItem(
+                            type = "ADD_TABLE_ROW",
+                            targetTitle = targetPage.title,
+                            tableTitle = tableTitle,
+                            rowTitle = rowTitle,
+                            cellValues = cellValues,
+                        )
+                    }
+                }
+            }
+            "delete", "remove", "padam", "buang" -> {
+                dataRows.mapNotNull { row ->
+                    row.legacyRowTitle().takeIf { rowTitle -> rowTitle.isNotBlank() }?.let { rowTitle ->
+                        AiActionItem(
+                            type = "DELETE_TABLE_ROW",
+                            targetTitle = targetPage.title,
+                            tableTitle = tableTitle,
+                            rowTitle = rowTitle,
+                        )
+                    }
+                }
+            }
+            else -> emptyList()
+        }
+
+        if (actions.isEmpty()) return null
+        return AiActionResult(
+            reply = actions.recoveredReplyForPrompt(prompt),
+            actions = actions,
+        )
+    }
+
+    private fun JsonObject.legacyDataRows(): List<Map<String, String>> {
+        val data = this["data"] ?: this["rows"] ?: this["row"]
+        val explicitRows = when (data) {
+            is JsonArray -> data.mapNotNull { item -> (item as? JsonObject)?.toPlainStringMap() }
+            is JsonObject -> listOf(data.toPlainStringMap())
+            else -> emptyList()
+        }
+        if (explicitRows.isNotEmpty()) return explicitRows
+
+        val inlineRow = toPlainStringMap()
+            .filterKeys { key -> key.normalizedLegacyKey() !in legacyEnvelopeKeys }
+        return listOf(inlineRow).filter { row -> row.isNotEmpty() }
+    }
+
+    private fun JsonObject.toPlainStringMap(): Map<String, String> =
+        entries.mapNotNull { (key, value) ->
+            key.takeIf { it.isNotBlank() }?.let {
+                it to value.plainString().trim()
+            }
+        }
+            .filter { (_, value) -> value.isNotBlank() }
+            .toMap()
+
+    private fun JsonElement.plainString(): String =
+        when (this) {
+            is JsonPrimitive -> contentOrNull ?: toString()
+            is JsonArray, is JsonObject -> toString()
+        }
+
+    private fun JsonObject.stringValue(key: String): String =
+        (this[key] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
+
+    private fun Map<String, String>.legacyRowTitle(): String {
+        val preferredKeys = listOf("name", "item", "title", "task", "category", "description", "note", "notes")
+        preferredKeys.firstNotNullOfOrNull { preferred ->
+            entries.firstOrNull { (key, value) ->
+                key.normalizedLegacyKey() == preferred && value.isNotBlank()
+            }?.value
+        }?.let { return it }
+        return entries.firstOrNull { (key, value) ->
+            key.normalizedLegacyKey() !in ignoredLegacyDataKeys && value.isNotBlank()
+        }?.value.orEmpty()
+    }
+
+    private fun List<AiPageContext>.findPageByAiTitle(rawTitle: String): AiPageContext? {
+        val normalized = rawTitle.cleanAiPageTitle().normalizeForAiMatch()
+        if (normalized.isBlank()) return null
+        return firstOrNull { page -> page.id == rawTitle.trim() }
+            ?: firstOrNull { page -> page.title.normalizeForAiMatch() == normalized }
+            ?: firstOrNull { page ->
+                val title = page.title.normalizeForAiMatch()
+                title.isNotBlank() && (title.contains(normalized) || normalized.contains(title))
+            }
+    }
+
+    private fun String.cleanAiPageTitle(): String =
+        trim().removePrefix("@").trim()
+
+    private fun String.toAiColumnName(): String =
+        trim()
+            .replace("_", " ")
+            .replace("-", " ")
+            .split(Regex("\\s+"))
+            .filter { part -> part.isNotBlank() }
+            .joinToString(" ") { part ->
+                part.replaceFirstChar { char -> char.uppercaseChar() }
+            }
+
+    private fun String.normalizedLegacyKey(): String =
+        trim()
+            .replace("_", "")
+            .replace("-", "")
+            .replace(" ", "")
+            .lowercase()
 
     internal fun recoverActionFromPrompt(
         prompt: String,

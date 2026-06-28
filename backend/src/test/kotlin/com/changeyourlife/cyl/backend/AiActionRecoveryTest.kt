@@ -141,6 +141,37 @@ class AiActionRecoveryTest {
     }
 
     @Test
+    fun recoversLegacyModelJsonReplyIntoTableRowAction() {
+        val result = service.recoverActionFromModelReply(
+            reply = """{"page":"@Budget Tracker","action":"update","data":[{"id":"id1","category":"fuel","amount":"5"}]}""",
+            prompt = "tambah fuel amount 5",
+            pages = listOf(
+                AiPageContext(
+                    id = "page-budget",
+                    title = "Budget Tracker",
+                    blocks = listOf(
+                        AiBlockContext(
+                            id = "table-1",
+                            type = "DatabaseTable",
+                            text = "title=Expenses; columns=Category Text, Amount Number; rows=",
+                            tableTitle = "Expenses",
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        val action = assertNotNull(result).actions.single()
+        assertEquals("ADD_TABLE_ROW", action.type)
+        assertEquals("Budget Tracker", action.targetTitle)
+        assertEquals("Expenses", action.tableTitle)
+        assertEquals("fuel", action.rowTitle)
+        assertEquals("fuel", action.cellValues["Category"])
+        assertEquals("5", action.cellValues["Amount"])
+        assertNull(action.cellValues["Id"])
+    }
+
+    @Test
     fun recoversMultipleMalayCommandsWithoutPuttingPromptIntoRow() {
         val result = service.recoverActionFromPrompt(
             prompt = """
