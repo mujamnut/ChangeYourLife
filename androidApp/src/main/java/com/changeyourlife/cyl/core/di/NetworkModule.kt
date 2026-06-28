@@ -8,7 +8,10 @@ import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
 import javax.inject.Singleton
+import java.net.InetAddress
+import java.net.UnknownHostException
 import kotlinx.serialization.json.Json
+import okhttp3.Dns
 import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
 import okhttp3.MediaType.Companion.toMediaType
@@ -31,6 +34,7 @@ object NetworkModule {
     @Singleton
     fun provideOkHttpClient(): OkHttpClient {
         return OkHttpClient.Builder()
+            .dns(CylRenderFallbackDns)
             .connectTimeout(90, TimeUnit.SECONDS)
             .readTimeout(90, TimeUnit.SECONDS)
             .writeTimeout(90, TimeUnit.SECONDS)
@@ -57,5 +61,25 @@ object NetworkModule {
     @Singleton
     fun provideAiApi(retrofit: Retrofit): AiApi {
         return retrofit.create(AiApi::class.java)
+    }
+}
+
+private object CylRenderFallbackDns : Dns {
+    private val fallbackAddresses = mapOf(
+        "changeyourlife.onrender.com" to listOf(
+            byteArrayOf(216.toByte(), 24, 57, 9),
+            byteArrayOf(216.toByte(), 24, 57, 8),
+        ),
+    )
+
+    override fun lookup(hostname: String): List<InetAddress> {
+        return try {
+            Dns.SYSTEM.lookup(hostname)
+        } catch (error: UnknownHostException) {
+            fallbackAddresses[hostname.lowercase()]
+                ?.map { address -> InetAddress.getByAddress(hostname, address) }
+                ?.takeIf { addresses -> addresses.isNotEmpty() }
+                ?: throw error
+        }
     }
 }

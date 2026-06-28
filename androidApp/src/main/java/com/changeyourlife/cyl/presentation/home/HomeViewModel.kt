@@ -3,6 +3,7 @@ package com.changeyourlife.cyl.presentation.home
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.changeyourlife.cyl.core.constants.CylDefaults
+import com.changeyourlife.cyl.core.network.toBackendConnectionMessage
 import com.changeyourlife.cyl.domain.model.Page
 import com.changeyourlife.cyl.domain.model.PageBlock
 import com.changeyourlife.cyl.domain.model.PageBlockDocument
@@ -3072,9 +3073,7 @@ private fun Throwable.toAiChatErrorMessage(): String {
     return if (this is HttpException && code() == 401) {
         "Your session expired after the backend change. Please log in again."
     } else {
-        "I couldn't reach the CYL backend: ${
-            localizedMessage ?: "Check your backend URL and make sure the server is running."
-        }"
+        "I couldn't reach the CYL backend: ${toBackendConnectionMessage()}"
     }
 }
 

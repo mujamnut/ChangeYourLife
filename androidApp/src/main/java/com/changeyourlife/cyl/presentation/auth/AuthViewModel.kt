@@ -3,6 +3,7 @@ package com.changeyourlife.cyl.presentation.auth
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.changeyourlife.cyl.core.network.toBackendConnectionMessage
 import com.changeyourlife.cyl.domain.repository.AuthRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
@@ -173,7 +174,7 @@ class AuthViewModel @Inject constructor(
 
     private fun Throwable.toUserMessage(): String {
         return when (this) {
-            is IOException -> "Cannot reach CYL backend. Start the backend and try again."
+            is IOException -> toBackendConnectionMessage()
             is SerializationException -> "Backend response could not be read. Check the server logs."
             is HttpException -> when (code()) {
                 400 -> "Check your email and password, then try again."
