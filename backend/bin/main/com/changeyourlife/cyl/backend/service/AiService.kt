@@ -685,7 +685,7 @@ class AiService(
         val rowText = rowPrompt.extractTableRowText(targetPage.title)
         if (rowText.isBlank()) return null
         val amount = rowText.extractMoneyAmount()
-        val rowTitle = rowText.removeMoneyAmount().removeDateRequestWords().ifBlank { rowText }
+        val rowTitle = rowText.removeMoneyAmount().removeMetricRequestWords().removeDateRequestWords().ifBlank { rowText }
         val dateValue = rowPrompt.inferredDateValue()
         val cellValues = buildMap {
             put("Name", rowTitle)
@@ -1030,6 +1030,11 @@ class AiService(
 
     private fun String.removeMoneyAmount(): String =
         replace(Regex("(?i)\\b(?:rm\\s*)?\\d+(?:[.,]\\d+)?\\s*(?:ringgit|rm)?\\b"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim(' ', '-', ':', ',')
+
+    private fun String.removeMetricRequestWords(): String =
+        replace(Regex("(?i)\\b(amount|jumlah|harga|price|cost|total|nilai|value)\\b"), " ")
             .replace(Regex("\\s+"), " ")
             .trim(' ', '-', ':', ',')
 

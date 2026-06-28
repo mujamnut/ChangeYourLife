@@ -359,7 +359,12 @@ private fun PageEditorScreen(
                 },
                 onUndoEditorChange = onUndoEditorChange,
                 onSearch = { isPageSearchSheetOpen = true },
-                onOpenAi = { isAiChatSheetOpen = true },
+                onOpenAi = {
+                    if (homeAiState.aiChatMode == AiChatMode.Planning) {
+                        onHomeAiModeChange(AiChatMode.Edit)
+                    }
+                    isAiChatSheetOpen = true
+                },
                 onCreateBlock = { isBlockPickerSheetOpen = true },
             )
         },

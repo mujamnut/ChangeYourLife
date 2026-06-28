@@ -2,6 +2,7 @@ package com.changeyourlife.cyl.backend
 
 import com.changeyourlife.cyl.backend.model.ai.AiBlockContext
 import com.changeyourlife.cyl.backend.model.ai.AiPageContext
+import com.changeyourlife.cyl.backend.model.ai.ChatMessage
 import com.changeyourlife.cyl.backend.service.AiService
 import java.time.LocalDate
 import kotlin.test.Test
@@ -169,6 +170,46 @@ class AiActionRecoveryTest {
         assertEquals("fuel", action.cellValues["Category"])
         assertEquals("5", action.cellValues["Amount"])
         assertNull(action.cellValues["Id"])
+    }
+
+    @Test
+    fun chatWithActionsRecoversActionWhenAiReplyHasNoStructuredActions() {
+        val sandboxService = AiService()
+        val result = sandboxService.chatWithActions(
+            messages = listOf(
+                ChatMessage(
+                    role = "user",
+                    content = """
+                        tambah fuel amount 5
+
+                        CYL_MENTION_CONTEXT:
+                        The user selected these page mentions from the chat UI. Treat them as exact target pages for create/update/delete actions:
+                        - @Budget Tracker id=page-budget
+                    """.trimIndent(),
+                ),
+            ),
+            pages = listOf(
+                AiPageContext(
+                    id = "page-budget",
+                    title = "Budget Tracker",
+                    blocks = listOf(
+                        AiBlockContext(
+                            id = "table-1",
+                            type = "DatabaseTable",
+                            text = "title=Expenses; columns=Category Text, Amount Number; rows=",
+                            tableTitle = "Expenses",
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        val action = result.actions.single()
+        assertEquals("ADD_TABLE_ROW", action.type)
+        assertEquals("Budget Tracker", action.targetTitle)
+        assertEquals("Expenses", action.tableTitle)
+        assertEquals("fuel", action.rowTitle)
+        assertEquals("5", action.cellValues["Amount"])
     }
 
     @Test
