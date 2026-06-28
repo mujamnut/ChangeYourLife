@@ -8,9 +8,15 @@ import com.changeyourlife.cyl.backend.service.AiService
 import com.changeyourlife.cyl.backend.model.ai.ChatMessage
 import com.changeyourlife.cyl.backend.model.auth.AuthResponse
 import com.changeyourlife.cyl.backend.model.auth.ForgotPasswordResponse
+import com.changeyourlife.cyl.backend.model.sync.PageListResponse
+import com.changeyourlife.cyl.backend.model.sync.PageSyncDto
+import com.changeyourlife.cyl.backend.model.sync.WorkspaceListResponse
+import com.changeyourlife.cyl.backend.model.sync.WorkspaceSyncDto
 import io.ktor.client.request.get
+import io.ktor.client.request.delete
 import io.ktor.client.request.header
 import io.ktor.client.request.post
+import io.ktor.client.request.put
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
@@ -229,6 +235,88 @@ class ApplicationTest {
             )
         }
         assertEquals(HttpStatusCode.OK, newLoginResponse.status)
+    }
+
+    @Test
+    fun authenticatedWorkspaceAndPageSyncRoundTrip() = testApplication {
+        application {
+            module(appConfig = inMemoryTestConfig())
+        }
+
+        val registerResponse = client.post("/auth/register") {
+            contentType(ContentType.Application.Json)
+            setBody(
+                """
+                {
+                  "email": "sync@example.com",
+                  "password": "sync-password",
+                  "displayName": "Sync User"
+                }
+                """.trimIndent(),
+            )
+        }
+        assertEquals(HttpStatusCode.Created, registerResponse.status)
+        val authResponse = Json.decodeFromString<AuthResponse>(registerResponse.bodyAsText())
+        val authHeader = "Bearer ${authResponse.token}"
+
+        val workspace = WorkspaceSyncDto(
+            id = "workspace-sync",
+            name = "Sync Workspace",
+            createdAt = 1L,
+            updatedAt = 2L,
+        )
+        val upsertWorkspaceResponse = client.put("/api/v1/workspaces/${workspace.id}") {
+            header(HttpHeaders.Authorization, authHeader)
+            contentType(ContentType.Application.Json)
+            setBody(Json.encodeToString(workspace))
+        }
+        assertEquals(HttpStatusCode.OK, upsertWorkspaceResponse.status)
+
+        val workspaceListResponse = client.get("/api/v1/workspaces") {
+            header(HttpHeaders.Authorization, authHeader)
+        }
+        assertEquals(HttpStatusCode.OK, workspaceListResponse.status)
+        val workspaceList = Json.decodeFromString<WorkspaceListResponse>(workspaceListResponse.bodyAsText())
+        assertEquals(listOf("workspace-sync"), workspaceList.workspaces.map { it.id })
+
+        val page = PageSyncDto(
+            id = "page-sync",
+            workspaceId = workspace.id,
+            title = "Synced Page",
+            content = """{"version":1,"blocks":[]}""",
+            sortOrder = 0,
+            createdAt = 3L,
+            updatedAt = 4L,
+        )
+        val upsertPageResponse = client.put("/api/v1/pages/${page.id}") {
+            header(HttpHeaders.Authorization, authHeader)
+            contentType(ContentType.Application.Json)
+            setBody(Json.encodeToString(page))
+        }
+        assertEquals(HttpStatusCode.OK, upsertPageResponse.status)
+
+        val pageListResponse = client.get("/api/v1/pages?workspaceId=${workspace.id}") {
+            header(HttpHeaders.Authorization, authHeader)
+        }
+        assertEquals(HttpStatusCode.OK, pageListResponse.status)
+        val pageList = Json.decodeFromString<PageListResponse>(pageListResponse.bodyAsText())
+        assertEquals(listOf("page-sync"), pageList.pages.map { it.id })
+
+        val deleteResponse = client.delete("/api/v1/pages/${page.id}") {
+            header(HttpHeaders.Authorization, authHeader)
+        }
+        assertEquals(HttpStatusCode.NoContent, deleteResponse.status)
+
+        val deletedPageListResponse = client.get("/api/v1/pages?workspaceId=${workspace.id}&includeDeleted=true") {
+            header(HttpHeaders.Authorization, authHeader)
+        }
+        val deletedPageList = Json.decodeFromString<PageListResponse>(deletedPageListResponse.bodyAsText())
+        assertTrue(deletedPageList.pages.first().deletedAt != null)
+
+        val restoreResponse = client.post("/api/v1/pages/${page.id}/restore") {
+            header(HttpHeaders.Authorization, authHeader)
+        }
+        assertEquals(HttpStatusCode.NoContent, restoreResponse.status)
     }
 
     private fun inMemoryTestConfig(): AppConfig {

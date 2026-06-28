@@ -1,8 +1,11 @@
 package com.changeyourlife.cyl.backend
 
 import com.changeyourlife.cyl.backend.config.AppConfig
+import com.changeyourlife.cyl.backend.data.InMemoryContentRepository
 import com.changeyourlife.cyl.backend.data.InMemoryUserRepository
+import com.changeyourlife.cyl.backend.data.PostgresContentRepository
 import com.changeyourlife.cyl.backend.data.PostgresUserRepository
+import com.changeyourlife.cyl.backend.domain.ContentRepository
 import com.changeyourlife.cyl.backend.domain.UserRepository
 import com.changeyourlife.cyl.backend.plugins.configureAuthentication
 import com.changeyourlife.cyl.backend.plugins.configureDatabase
@@ -47,6 +50,7 @@ fun main() {
 fun Application.module(
     appConfig: AppConfig = AppConfig.fromEnvironment(),
     userRepositoryOverride: UserRepository? = null,
+    contentRepositoryOverride: ContentRepository? = null,
 ) {
     configureSerialization()
     configureMonitoring()
@@ -57,6 +61,9 @@ fun Application.module(
     val userRepository = userRepositoryOverride
         ?: dataSource?.let { PostgresUserRepository(it) }
         ?: InMemoryUserRepository()
+    val contentRepository = contentRepositoryOverride
+        ?: dataSource?.let { PostgresContentRepository(it) }
+        ?: InMemoryContentRepository()
 
     val aiService = AiService(
         glmApiKey = appConfig.glmApiKey,
@@ -72,6 +79,7 @@ fun Application.module(
 
     configureRouting(
         userRepository = userRepository,
+        contentRepository = contentRepository,
         jwtService = JwtService(appConfig.jwt),
         databaseConfigured = dataSource != null,
         aiService = aiService,
