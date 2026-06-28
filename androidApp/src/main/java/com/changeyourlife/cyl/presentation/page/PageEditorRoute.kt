@@ -371,6 +371,7 @@ private fun PageEditorScreen(
                 isGenerating = homeAiState.isAiGeneratingChat,
                 errorMessage = homeAiState.aiChatError,
                 aiMode = homeAiState.aiChatMode,
+                modelLabel = homeAiState.aiModelLabel,
                 onAiModeChange = onHomeAiModeChange,
                 onSendMessage = onSendHomeAiMessage,
                 onClearHistory = onClearHomeAiHistory,

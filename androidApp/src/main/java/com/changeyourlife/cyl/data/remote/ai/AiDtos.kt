@@ -49,6 +49,14 @@ data class GeneratePlanResponseDto(
     val planJson: String
 )
 
+@Serializable
+data class AiStatusResponseDto(
+    val mode: String = "",
+    val provider: String = "",
+    val model: String = "",
+    val apiKeyConfigured: Boolean = false,
+)
+
 // Chat-with-actions: Gemini JSON-mode endpoint for reliable action detection
 @Serializable
 data class ChatWithActionsRequestDto(

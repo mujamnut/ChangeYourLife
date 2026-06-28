@@ -29,6 +29,7 @@ import com.changeyourlife.cyl.domain.repository.TaskRepository
 import com.changeyourlife.cyl.domain.repository.WorkspaceRepository
 import com.changeyourlife.cyl.domain.repository.AiPageContext
 import com.changeyourlife.cyl.domain.repository.AiRepository
+import com.changeyourlife.cyl.domain.repository.AiStatus
 import com.changeyourlife.cyl.domain.repository.ChatAction
 import com.changeyourlife.cyl.domain.repository.ChatTableColumn
 import com.changeyourlife.cyl.presentation.ai.AiChatMode
@@ -109,6 +110,7 @@ class HomeViewModel @Inject constructor(
     private val isAiGeneratingChat = MutableStateFlow(false)
     private val aiChatError = MutableStateFlow<String?>(null)
     private val aiChatMode = MutableStateFlow(AiChatMode.Planning)
+    private val aiModelLabel = MutableStateFlow("AI model")
     private val searchQuery = MutableStateFlow("")
     private val chatHistorySearchQuery = MutableStateFlow("")
 
@@ -233,10 +235,11 @@ class HomeViewModel @Inject constructor(
             chatHistorySearchResults = chatSearchResults,
         )
     }.let { baseState ->
-        combine(baseState, searchQuery) { state, query ->
+        combine(baseState, searchQuery, aiModelLabel) { state, query, modelLabel ->
             state.copy(
                 searchQuery = query,
                 searchResults = state.allPages.toSearchResults(query),
+                aiModelLabel = modelLabel,
             )
         }
     }.stateIn(
@@ -249,7 +252,18 @@ class HomeViewModel @Inject constructor(
         viewModelScope.launch {
             workspaceRepository.ensureDefaultWorkspace()
             startFreshHomeChatSessionOnLaunch()
+            refreshAiStatus()
         }
+    }
+
+    private suspend fun refreshAiStatus() {
+        aiRepository.status()
+            .onSuccess { status ->
+                aiModelLabel.value = status.toDisplayModelLabel()
+            }
+            .onFailure {
+                aiModelLabel.value = "AI model"
+            }
     }
 
     suspend fun createQuickPage(): Page {
@@ -468,7 +482,7 @@ class HomeViewModel @Inject constructor(
                     isAiGeneratingChat.value = false
                     val assistantReply = result.reply.ifBlank {
                         "I received your message, but the AI returned an empty reply."
-                    }
+                    }.sanitizeAiUserVisibleText()
                     val localActions = if (mode == AiChatMode.Planning) {
                         emptyList()
                     } else {
@@ -500,13 +514,13 @@ class HomeViewModel @Inject constructor(
                     chatHistoryRepository.appendMessage(
                         sessionId = session.id,
                         role = "assistant",
-                        content = replyWithResults,
+                        content = replyWithResults.sanitizeAiUserVisibleText(),
                         pageLinks = actionResults.pageLinks.toDomainChatPageLinks(),
                     )
                 }
                 .onFailure { error ->
                     isAiGeneratingChat.value = false
-                    val message = error.toAiChatErrorMessage()
+                    val message = error.toAiChatErrorMessage().sanitizeAiUserVisibleText()
                     aiChatError.value = message
                     chatHistoryRepository.appendMessage(
                         sessionId = session.id,
@@ -828,10 +842,13 @@ class HomeViewModel @Inject constructor(
                     else -> error("Unsupported action type: ${action.type}")
                 }
             }.onSuccess { message ->
-                results += message
+                results += message.sanitizeAiUserVisibleText()
             }.onFailure { error ->
                 Log.e("HomeViewModel", "Error executing AI action: ${action.type}", error)
-                results += "⚠️ Failed ${action.type}: ${error.localizedMessage ?: "Unknown error"}"
+                results += "⚠️ ${action.type.toUserActionLabel()} failed: ${
+                    (error.localizedMessage ?: "Unknown error").sanitizeAiUserVisibleText()
+                        .ifBlank { "I could not complete that change." }
+                }"
             }
         }
 
@@ -1160,13 +1177,13 @@ class HomeViewModel @Inject constructor(
     private fun String.withMentionContext(pages: List<Page>): String {
         if (pages.isEmpty()) return this
         val context = pages.joinToString(separator = "\n") { page ->
-            "- @${page.title.ifBlank { "Untitled page" }} id=${page.id}"
+            "- @${page.title.ifBlank { "Untitled page" }}"
         }
         return """
             $this
 
             CYL_MENTION_CONTEXT:
-            The user selected these page mentions from the chat UI. Treat them as exact target pages for create/update/delete actions:
+            The user selected these page mentions from the chat UI. Treat them as exact target pages for create/update/delete actions. Do not mention internal IDs in your reply:
             $context
         """.trimIndent()
     }
@@ -2997,6 +3014,60 @@ private data class HomeChatState(
     val mode: AiChatMode = AiChatMode.Planning,
 )
 
+private fun AiStatus.toDisplayModelLabel(): String {
+    val cleanModel = model.trim()
+    if (cleanModel.isNotBlank()) return cleanModel
+
+    return when {
+        mode.equals("sandbox", ignoreCase = true) -> "Sandbox AI"
+        provider.isNotBlank() -> provider.trim()
+        else -> "AI model"
+    }
+}
+
+private fun String.sanitizeAiUserVisibleText(): String {
+    return lineSequence()
+        .map { line ->
+            line
+                .replace(Regex("\\s*[\"']?\\b(pageId|blockId|rowId|columnId|targetId|workspaceId|user_id|provider_id|request_id|id)\\b[\"']?\\s*[:=]\\s*[\"']?[A-Za-z0-9._:-]{6,}[\"']?"), "")
+                .replace(Regex("\\s*\\((page|block|row|column|target)?\\s*id\\s*[:=]\\s*[A-Za-z0-9._:-]{6,}\\)", RegexOption.IGNORE_CASE), "")
+                .replace(Regex("\\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\\b"), "")
+                .replace(Regex("\\s+([,.;:])"), "$1")
+                .replace(Regex("[ \\t]{2,}"), " ")
+                .trim()
+        }
+        .filterNot { line -> line.equals("CYL_MENTION_CONTEXT:", ignoreCase = true) }
+        .joinToString("\n")
+        .replace(Regex("\\n{3,}"), "\n\n")
+        .trim()
+}
+
+private fun String.toUserActionLabel(): String {
+    return when (trim().uppercase()) {
+        "DELETE_BLOCK", "DELETE_ALL_BLOCKS" -> "Delete block"
+        "UPDATE_BLOCK", "EDIT_BLOCK" -> "Update block"
+        "APPEND_BLOCK", "APPEND_PAGE_BLOCK", "ADD_BLOCK" -> "Add block"
+        "ADD_TABLE_ROW" -> "Add row"
+        "UPDATE_TABLE_ROW", "RENAME_TABLE_ROW" -> "Update row"
+        "DELETE_TABLE_ROW" -> "Delete row"
+        "ADD_TABLE_COLUMN" -> "Add property"
+        "RENAME_TABLE_COLUMN", "UPDATE_TABLE_COLUMN" -> "Update property"
+        "DELETE_TABLE_COLUMN" -> "Delete property"
+        "RENAME_TABLE", "RENAME_DATABASE", "UPDATE_TABLE_TITLE" -> "Rename table"
+        "CREATE_DATABASE", "CREATE_TABLE" -> "Create table"
+        "UPDATE_TABLE_CELL" -> "Update cell"
+        "ADD_PROPERTY", "UPDATE_PROPERTY" -> "Update property"
+        "DELETE_PROPERTY" -> "Delete property"
+        "CREATE_PAGE" -> "Create page"
+        "UPDATE_PAGE" -> "Update page"
+        "DELETE_PAGE" -> "Delete page"
+        else -> split('_')
+            .filter { part -> part.isNotBlank() }
+            .joinToString(" ") { part -> part.lowercase().replaceFirstChar(Char::titlecase) }
+            .ifBlank { "Action" }
+    }
+}
+
 private fun Throwable.toAiChatErrorMessage(): String {
     return if (this is HttpException && code() == 401) {
         "Your session expired after the backend change. Please log in again."
@@ -3035,6 +3106,7 @@ data class HomeUiState(
     val isAiGeneratingChat: Boolean = false,
     val aiChatError: String? = null,
     val aiChatMode: AiChatMode = AiChatMode.Planning,
+    val aiModelLabel: String = "AI model",
 )
 
 private data class HomeAiExecutionResult(

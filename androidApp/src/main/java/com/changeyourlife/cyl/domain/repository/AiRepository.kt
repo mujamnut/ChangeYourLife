@@ -3,6 +3,7 @@ package com.changeyourlife.cyl.domain.repository
 import com.changeyourlife.cyl.domain.model.PageBlockDocument
 
 interface AiRepository {
+    suspend fun status(): Result<AiStatus>
     suspend fun chat(messages: List<Pair<String, String>>): Result<String>
     suspend fun chatWithActions(
         messages: List<Pair<String, String>>,
@@ -15,6 +16,13 @@ interface AiRepository {
     suspend fun generateTasks(content: String): Result<List<String>>
     suspend fun generatePlan(prompt: String): Result<PageBlockDocument>
 }
+
+data class AiStatus(
+    val mode: String = "",
+    val provider: String = "",
+    val model: String = "",
+    val apiKeyConfigured: Boolean = false,
+)
 
 data class ChatActionResult(
     val reply: String,

@@ -12,6 +12,7 @@ import com.changeyourlife.cyl.data.remote.ai.GeneratePlanRequestDto
 import com.changeyourlife.cyl.data.remote.ai.GenerateTasksRequestDto
 import com.changeyourlife.cyl.data.remote.ai.SummarizeRequestDto
 import com.changeyourlife.cyl.domain.model.PageBlockDocument
+import com.changeyourlife.cyl.domain.repository.AiStatus
 import com.changeyourlife.cyl.domain.repository.AiRepository
 import com.changeyourlife.cyl.domain.repository.AiPageContext
 import com.changeyourlife.cyl.domain.repository.ChatAction
@@ -38,6 +39,18 @@ class AiRepositoryImpl @Inject constructor(
     private fun clearSessionIfUnauthorized(error: Throwable) {
         if (error is HttpException && error.code() == 401) {
             tokenStore.clearToken()
+        }
+    }
+
+    override suspend fun status(): Result<AiStatus> = withContext(Dispatchers.IO) {
+        runCatching {
+            val response = aiApi.status()
+            AiStatus(
+                mode = response.mode,
+                provider = response.provider,
+                model = response.model,
+                apiKeyConfigured = response.apiKeyConfigured,
+            )
         }
     }
 

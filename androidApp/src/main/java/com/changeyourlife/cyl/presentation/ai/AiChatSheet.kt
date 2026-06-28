@@ -29,11 +29,13 @@ import androidx.compose.material.icons.automirrored.rounded.Article
 import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
@@ -56,6 +58,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.changeyourlife.cyl.domain.model.Page
 
@@ -67,6 +70,8 @@ fun AiChatSheet(
     isGenerating: Boolean,
     errorMessage: String?,
     aiMode: AiChatMode,
+    availableModes: List<AiChatMode> = AiChatMode.entries,
+    modelLabel: String = "AI model",
     onAiModeChange: (AiChatMode) -> Unit,
     onSendMessage: (String, List<String>, AiChatMode) -> Unit,
     onClearHistory: () -> Unit,
@@ -93,6 +98,9 @@ fun AiChatSheet(
     var selectedMentionPageIds by rememberSaveable(attachedPageId) {
         mutableStateOf(attachedMentionPageIds)
     }
+    val effectiveMode = aiMode.takeIf { mode -> mode in availableModes }
+        ?: availableModes.firstOrNull()
+        ?: AiChatMode.Planning
     val listState = rememberLazyListState()
     val context = LocalContext.current
     val mentionQuery = inputText.activeMentionQuery()
@@ -124,6 +132,7 @@ fun AiChatSheet(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Row(
+                    modifier = Modifier.weight(1f),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -133,17 +142,28 @@ fun AiChatSheet(
                         tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(20.dp),
                     )
-                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(3.dp),
+                    ) {
                         Text(
                             text = "CYL AI",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.SemiBold,
+                        )
+                        AiModeModelSelector(
+                            mode = effectiveMode,
+                            availableModes = availableModes,
+                            modelLabel = modelLabel,
+                            onModeChange = onAiModeChange,
                         )
                         if (attachedPageTitle != null) {
                             Text(
                                 text = "@${attachedPageTitle.ifBlank { "Untitled page" }}",
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.primary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
                             )
                         }
                     }
@@ -165,22 +185,6 @@ fun AiChatSheet(
                     }
                 }
             }
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                AiChatMode.entries.forEach { mode ->
-                    FilterChip(
-                        selected = mode == aiMode,
-                        onClick = { onAiModeChange(mode) },
-                        label = { Text(text = mode.label) },
-                    )
-                }
-            }
-
             if (errorMessage != null) {
                 Card(
                     modifier = Modifier
@@ -332,7 +336,7 @@ fun AiChatSheet(
                                         pages = mentionPages,
                                         knownPageIds = selectedMentionPageIds + attachedMentionPageIds,
                                     ),
-                                    aiMode,
+                                    effectiveMode,
                                 )
                                 inputText = attachedMention.orEmpty()
                                 selectedMentionPageIds = attachedMentionPageIds
@@ -351,7 +355,7 @@ fun AiChatSheet(
                                     pages = mentionPages,
                                     knownPageIds = selectedMentionPageIds + attachedMentionPageIds,
                                 ),
-                                aiMode,
+                                effectiveMode,
                             )
                             inputText = attachedMention.orEmpty()
                             selectedMentionPageIds = attachedMentionPageIds
@@ -369,6 +373,85 @@ fun AiChatSheet(
                         },
                     )
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AiModeModelSelector(
+    mode: AiChatMode,
+    availableModes: List<AiChatMode>,
+    modelLabel: String,
+    onModeChange: (AiChatMode) -> Unit,
+) {
+    var isMenuOpen by rememberSaveable { mutableStateOf(false) }
+    val canSwitchMode = availableModes.size > 1
+    val displayModel = modelLabel.compactAiModelLabel()
+    val selectorModifier = Modifier
+        .clip(RoundedCornerShape(999.dp))
+        .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+        .let { base ->
+            if (canSwitchMode) {
+                base.clickable { isMenuOpen = true }
+            } else {
+                base
+            }
+        }
+        .padding(start = 9.dp, end = if (canSwitchMode) 5.dp else 9.dp, top = 4.dp, bottom = 4.dp)
+
+    Box {
+        Row(
+            modifier = selectorModifier,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "${mode.label} - $displayModel",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (canSwitchMode) {
+                Icon(
+                    imageVector = Icons.Rounded.KeyboardArrowDown,
+                    contentDescription = "Change AI mode",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+        }
+
+        DropdownMenu(
+            expanded = isMenuOpen,
+            onDismissRequest = { isMenuOpen = false },
+        ) {
+            availableModes.forEach { option ->
+                DropdownMenuItem(
+                    text = {
+                        Column {
+                            Text(
+                                text = option.label,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = if (option == mode) FontWeight.SemiBold else FontWeight.Normal,
+                            )
+                            if (option == mode) {
+                                Text(
+                                    text = displayModel,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                    },
+                    onClick = {
+                        isMenuOpen = false
+                        onModeChange(option)
+                    },
+                )
             }
         }
     }
@@ -527,4 +610,12 @@ private fun String.resolveMentionedPageIds(
         }
 
     return ids.toList()
+}
+
+private fun String.compactAiModelLabel(): String {
+    val clean = trim().ifBlank { return "AI model" }
+    val model = clean.substringAfterLast('/')
+        .replace(":free", " free", ignoreCase = true)
+        .trim()
+    return model.ifBlank { clean }
 }
