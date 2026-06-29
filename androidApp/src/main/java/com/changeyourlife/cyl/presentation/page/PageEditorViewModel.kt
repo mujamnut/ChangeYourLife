@@ -23,6 +23,7 @@ import com.changeyourlife.cyl.domain.model.PageTableSort
 import com.changeyourlife.cyl.domain.model.PageTableSortDirection
 import com.changeyourlife.cyl.domain.model.PageTableView
 import com.changeyourlife.cyl.domain.model.PageTableViewConfig
+import com.changeyourlife.cyl.domain.model.PageSyncState
 import com.changeyourlife.cyl.domain.model.PageTextSpan
 import com.changeyourlife.cyl.domain.model.Reminder
 import com.changeyourlife.cyl.domain.model.TaskItem
@@ -72,6 +73,7 @@ class PageEditorViewModel @Inject constructor(
     private val pageId: String = checkNotNull(savedStateHandle["pageId"])
 
     private val _pendingChanges = MutableStateFlow<PageBlockDocument?>(null)
+    private val _pendingGranularDocumentSave = MutableStateFlow<PendingGranularDocumentSave?>(null)
     private val _pendingTitle = MutableStateFlow<String?>(null)
     private val _canUndoEditorChange = MutableStateFlow(false)
     private val _isAiGenerating = MutableStateFlow(false)
@@ -81,9 +83,13 @@ class PageEditorViewModel @Inject constructor(
     private val _dbState = combine(
         pageRepository.observePage(pageId),
         pageRepository.observeChildPages(pageId),
-    ) { page, childPages ->
+        pageRepository.observePageSyncState(pageId),
+    ) { page, childPages, syncState ->
         if (page == null) {
-            PageEditorUiState(isLoading = false)
+            PageEditorUiState(
+                isLoading = false,
+                syncState = syncState,
+            )
         } else {
             val document = PageBlockCodec.decodeDocument(page.content)
             PageEditorUiState(
@@ -93,6 +99,7 @@ class PageEditorViewModel @Inject constructor(
                 properties = document.properties,
                 blocks = document.blocks,
                 childPages = childPages,
+                syncState = syncState,
             )
         }
     }
@@ -186,6 +193,8 @@ class PageEditorViewModel @Inject constructor(
     }
 
     private suspend fun savePendingDocument(pendingDoc: PageBlockDocument) {
+        if (savePendingGranularDocument(pendingDoc)) return
+
         val page = pageRepository.getPage(pageId) ?: return
         val normalizedDoc = pendingDoc.normalizedForEditor()
         pageRepository.upsertPage(
@@ -194,8 +203,181 @@ class PageEditorViewModel @Inject constructor(
                 updatedAt = System.currentTimeMillis(),
             ),
         )
+        _pendingGranularDocumentSave.value = null
         if (_pendingChanges.value == pendingDoc) {
             _pendingChanges.value = null
+        }
+    }
+
+    private suspend fun savePendingGranularDocument(pendingDoc: PageBlockDocument): Boolean {
+        val pendingSave = _pendingGranularDocumentSave.value ?: return false
+        val normalizedDoc = pendingDoc.normalizedForEditor()
+        if (pendingSave.document != normalizedDoc) return false
+
+        val page = pageRepository.getPage(pageId) ?: return false
+        val baseDocument = PageBlockCodec.decodeDocument(page.content).normalizedForEditor()
+        if (pendingSave.applyTo(baseDocument).normalizedForEditor() != normalizedDoc) {
+            return false
+        }
+
+        val saved = when (pendingSave) {
+            is PendingGranularDocumentSave.BlockText -> {
+                pageRepository.updateBlockText(
+                    pageId = pageId,
+                    blockId = pendingSave.blockId,
+                    text = pendingSave.text,
+                )
+            }
+
+            is PendingGranularDocumentSave.BlockPatch -> {
+                pageRepository.updateBlock(
+                    pageId = pageId,
+                    block = pendingSave.block,
+                )
+            }
+
+            is PendingGranularDocumentSave.PropertyValue -> {
+                pageRepository.updatePropertyValue(
+                    pageId = pageId,
+                    propertyId = pendingSave.propertyId,
+                    value = pendingSave.value,
+                )
+            }
+
+            is PendingGranularDocumentSave.TableCellValue -> {
+                pageRepository.updateTableCellValue(
+                    pageId = pageId,
+                    rowId = pendingSave.rowId,
+                    columnId = pendingSave.columnId,
+                    value = pendingSave.value,
+                )
+            }
+
+            is PendingGranularDocumentSave.TablePatch -> {
+                pageRepository.updateTable(
+                    pageId = pageId,
+                    tableBlockId = pendingSave.tableBlockId,
+                    table = pendingSave.table,
+                )
+            }
+
+            is PendingGranularDocumentSave.TableColumnPatch -> {
+                pageRepository.updateTableColumn(
+                    pageId = pageId,
+                    tableBlockId = pendingSave.tableBlockId,
+                    column = pendingSave.column,
+                )
+            }
+
+            is PendingGranularDocumentSave.TableRowPatch -> {
+                pageRepository.updateTableRow(
+                    pageId = pageId,
+                    tableBlockId = pendingSave.tableBlockId,
+                    row = pendingSave.row,
+                )
+            }
+        }
+        if (!saved) return false
+
+        if (_pendingGranularDocumentSave.value == pendingSave) {
+            _pendingGranularDocumentSave.value = null
+        }
+        if (_pendingChanges.value == pendingDoc || _pendingChanges.value == normalizedDoc) {
+            _pendingChanges.value = null
+        }
+        return true
+    }
+
+    private fun PendingGranularDocumentSave.applyTo(document: PageBlockDocument): PageBlockDocument {
+        return when (this) {
+            is PendingGranularDocumentSave.BlockText -> {
+                document.copy(
+                    blocks = updateBlockById(document.blocks, blockId) { block ->
+                        block.copy(text = text)
+                    },
+                )
+            }
+
+            is PendingGranularDocumentSave.BlockPatch -> {
+                document.copy(
+                    blocks = updateBlockById(document.blocks, block.id) { currentBlock ->
+                        currentBlock.copy(
+                            text = block.text,
+                            richTextSpans = block.richTextSpans,
+                            mediaAttachments = block.mediaAttachments,
+                            isChecked = block.isChecked,
+                        )
+                    },
+                )
+            }
+
+            is PendingGranularDocumentSave.PropertyValue -> {
+                document.copy(
+                    properties = document.properties.map { property ->
+                        if (property.id == propertyId) {
+                            property.copy(value = value)
+                        } else {
+                            property
+                        }
+                    },
+                )
+            }
+
+            is PendingGranularDocumentSave.TableCellValue -> {
+                document.copy(
+                    blocks = updateTableCellValueInBlocks(
+                        blocks = document.blocks,
+                        rowId = rowId,
+                        columnId = columnId,
+                        value = value,
+                    ),
+                )
+            }
+
+            is PendingGranularDocumentSave.TablePatch -> {
+                document.copy(
+                    blocks = updateBlockById(document.blocks, tableBlockId) { block ->
+                        block.copy(
+                            table = block.table.copy(
+                                title = table.title,
+                                view = table.view,
+                                viewConfig = table.viewConfig,
+                                sort = table.sort,
+                                filter = table.filter,
+                                groupByColumnId = table.groupByColumnId,
+                            ),
+                        )
+                    },
+                )
+            }
+
+            is PendingGranularDocumentSave.TableColumnPatch -> {
+                document.copy(
+                    blocks = updateBlockById(document.blocks, tableBlockId) { block ->
+                        block.copy(
+                            table = block.table.copy(
+                                columns = block.table.columns.map { existing ->
+                                    if (existing.id == column.id) column else existing
+                                },
+                            ),
+                        )
+                    },
+                )
+            }
+
+            is PendingGranularDocumentSave.TableRowPatch -> {
+                document.copy(
+                    blocks = updateBlockById(document.blocks, tableBlockId) { block ->
+                        block.copy(
+                            table = block.table.copy(
+                                rows = block.table.rows.map { existing ->
+                                    if (existing.id == row.id) row else existing
+                                },
+                            ),
+                        )
+                    },
+                )
+            }
         }
     }
 
@@ -227,10 +409,136 @@ class PageEditorViewModel @Inject constructor(
         recordUndo: Boolean = false,
     ) {
         val normalized = updated.normalizedForEditor()
+        _pendingGranularDocumentSave.value = null
         if (recordUndo && previous != null && previous.normalizedForEditor() != normalized) {
             pushEditorUndoSnapshot(previous)
         }
         _pendingChanges.value = normalized
+    }
+
+    private fun queueGranularPendingDocument(
+        updated: PageBlockDocument,
+        pendingSave: (PageBlockDocument) -> PendingGranularDocumentSave,
+    ) {
+        val normalized = updated.normalizedForEditor()
+        _pendingGranularDocumentSave.value = pendingSave(normalized)
+        _pendingChanges.value = normalized
+    }
+
+    private fun queueBlockPatchPendingDocument(
+        blockId: String,
+        updated: PageBlockDocument,
+        previous: PageBlockDocument? = null,
+        recordUndo: Boolean = false,
+    ) {
+        val normalized = updated.normalizedForEditor()
+        val block = normalized.findBlock(blockId)
+        if (block == null) {
+            queueDocumentUpdate(updated, previous = previous, recordUndo = recordUndo)
+            return
+        }
+        if (recordUndo && previous != null && previous.normalizedForEditor() != normalized) {
+            pushEditorUndoSnapshot(previous)
+        }
+        _pendingGranularDocumentSave.value = PendingGranularDocumentSave.BlockPatch(
+            document = normalized,
+            block = block,
+        )
+        _pendingChanges.value = normalized
+    }
+
+    private fun queueTablePatchPendingDocument(
+        tableBlockId: String,
+        updated: PageBlockDocument,
+        previous: PageBlockDocument? = null,
+        recordUndo: Boolean = false,
+    ) {
+        val normalized = updated.normalizedForEditor()
+        val table = normalized.findTableBlock(tableBlockId)?.table
+        if (table == null) {
+            queueDocumentUpdate(updated, previous = previous, recordUndo = recordUndo)
+            return
+        }
+        if (recordUndo && previous != null && previous.normalizedForEditor() != normalized) {
+            pushEditorUndoSnapshot(previous)
+        }
+        _pendingGranularDocumentSave.value = PendingGranularDocumentSave.TablePatch(
+            document = normalized,
+            tableBlockId = tableBlockId,
+            table = table,
+        )
+        _pendingChanges.value = normalized
+    }
+
+    private fun queueTableColumnPatchPendingDocument(
+        tableBlockId: String,
+        columnId: String,
+        updated: PageBlockDocument,
+        previous: PageBlockDocument? = null,
+        recordUndo: Boolean = false,
+    ) {
+        val normalized = updated.normalizedForEditor()
+        val column = normalized
+            .findTableBlock(tableBlockId)
+            ?.table
+            ?.columns
+            ?.firstOrNull { tableColumn -> tableColumn.id == columnId }
+        if (column == null) {
+            queueDocumentUpdate(updated, previous = previous, recordUndo = recordUndo)
+            return
+        }
+        if (recordUndo && previous != null && previous.normalizedForEditor() != normalized) {
+            pushEditorUndoSnapshot(previous)
+        }
+        _pendingGranularDocumentSave.value = PendingGranularDocumentSave.TableColumnPatch(
+            document = normalized,
+            tableBlockId = tableBlockId,
+            column = column,
+        )
+        _pendingChanges.value = normalized
+    }
+
+    private fun queueTableRowPatchPendingDocument(
+        tableBlockId: String,
+        rowId: String,
+        updated: PageBlockDocument,
+        previous: PageBlockDocument? = null,
+        recordUndo: Boolean = false,
+    ) {
+        val normalized = updated.normalizedForEditor()
+        val row = normalized
+            .findTableBlock(tableBlockId)
+            ?.table
+            ?.rows
+            ?.firstOrNull { tableRow -> tableRow.id == rowId }
+        if (row == null) {
+            queueDocumentUpdate(updated, previous = previous, recordUndo = recordUndo)
+            return
+        }
+        if (recordUndo && previous != null && previous.normalizedForEditor() != normalized) {
+            pushEditorUndoSnapshot(previous)
+        }
+        _pendingGranularDocumentSave.value = PendingGranularDocumentSave.TableRowPatch(
+            document = normalized,
+            tableBlockId = tableBlockId,
+            row = row,
+        )
+        _pendingChanges.value = normalized
+    }
+
+    private fun queueGranularDocumentUpdate(
+        previous: PageBlockDocument,
+        fallback: PageBlockDocument,
+        mutation: suspend () -> Boolean,
+    ) {
+        viewModelScope.launch {
+            flushPendingEdits()
+            if (mutation()) {
+                pushEditorUndoSnapshot(previous)
+            } else {
+                queueDocumentUpdate(fallback, previous = previous, recordUndo = true)
+            }
+        }
     }
 
     private fun pushEditorUndoSnapshot(document: PageBlockDocument) {
@@ -249,6 +557,20 @@ class PageEditorViewModel @Inject constructor(
         _canUndoEditorChange.value = editorUndoSnapshots.isNotEmpty()
     }
 
+    fun keepLocalConflict() {
+        viewModelScope.launch {
+            pageRepository.keepLocalPageConflict(pageId)
+        }
+    }
+
+    fun useRemoteConflict() {
+        _pendingChanges.value = null
+        _pendingTitle.value = null
+        viewModelScope.launch {
+            pageRepository.useRemotePageConflict(pageId)
+        }
+    }
+
     fun updateTitle(title: String) {
         _pendingTitle.value = title
     }
@@ -265,7 +587,13 @@ class PageEditorViewModel @Inject constructor(
                     )
                 },
             )
-            _pendingChanges.value = updated
+            queueGranularPendingDocument(updated) { normalized ->
+                PendingGranularDocumentSave.BlockText(
+                    document = normalized,
+                    blockId = blockId,
+                    text = text,
+                )
+            }
         }
     }
 
@@ -285,7 +613,7 @@ class PageEditorViewModel @Inject constructor(
                     )
                 },
             )
-            _pendingChanges.value = updated
+            queueBlockPatchPendingDocument(blockId, updated)
         }
     }
 
@@ -302,7 +630,7 @@ class PageEditorViewModel @Inject constructor(
                     block.copy(mediaAttachments = block.mediaAttachments + attachments)
                 },
             )
-            _pendingChanges.value = updated
+            queueBlockPatchPendingDocument(blockId, updated)
         }
     }
 
@@ -322,7 +650,7 @@ class PageEditorViewModel @Inject constructor(
                     )
                 },
             )
-            _pendingChanges.value = updated
+            queueBlockPatchPendingDocument(blockId, updated)
         }
     }
 
@@ -335,7 +663,12 @@ class PageEditorViewModel @Inject constructor(
                     block.copy(isChecked = !block.isChecked)
                 },
             )
-            _pendingChanges.value = updated
+            queueBlockPatchPendingDocument(
+                blockId = blockId,
+                updated = updated,
+                previous = document,
+                recordUndo = true,
+            )
         }
     }
 
@@ -343,10 +676,19 @@ class PageEditorViewModel @Inject constructor(
         val currentUiState = uiState.value
         if (currentUiState.page != null) {
             val document = currentDocument(currentUiState) ?: return
+            val newBlock = PageBlockCodec.newBlock(type)
             val updated = document.copy(
-                blocks = document.blocks + PageBlockCodec.newBlock(type),
+                blocks = document.blocks + newBlock,
             )
-            queueDocumentUpdate(updated, previous = document, recordUndo = true)
+            queueGranularDocumentUpdate(
+                previous = document,
+                fallback = updated,
+            ) {
+                pageRepository.addBlock(
+                    pageId = pageId,
+                    block = newBlock,
+                )
+            }
         }
     }
 
@@ -354,12 +696,22 @@ class PageEditorViewModel @Inject constructor(
         val currentUiState = uiState.value
         if (currentUiState.page != null) {
             val document = currentDocument(currentUiState) ?: return
+            val newBlock = PageBlockCodec.newBlock(type)
             val updated = document.copy(
-                blocks = updateBlockById(document.blocks, parentBlockId) { block ->
-                    block.copy(children = block.children + PageBlockCodec.newBlock(type))
+                blocks = updateBlockById(document.blocks, parentBlockId) { existingBlock ->
+                    existingBlock.copy(children = existingBlock.children + newBlock)
                 },
             )
-            queueDocumentUpdate(updated, previous = document, recordUndo = true)
+            queueGranularDocumentUpdate(
+                previous = document,
+                fallback = updated,
+            ) {
+                pageRepository.addBlock(
+                    pageId = pageId,
+                    block = newBlock,
+                    parentBlockId = parentBlockId,
+                )
+            }
         }
     }
 
@@ -370,7 +722,15 @@ class PageEditorViewModel @Inject constructor(
             val blocks = deleteBlockRecursive(document.blocks, blockId)
                 .ifEmpty { listOf(PageBlockCodec.newBlock(PageBlockType.Text)) }
             val updated = document.copy(blocks = blocks)
-            queueDocumentUpdate(updated, previous = document, recordUndo = true)
+            queueGranularDocumentUpdate(
+                previous = document,
+                fallback = updated,
+            ) {
+                pageRepository.deleteBlock(
+                    pageId = pageId,
+                    blockId = blockId,
+                )
+            }
         }
     }
 
@@ -381,7 +741,18 @@ class PageEditorViewModel @Inject constructor(
             val updated = document.copy(
                 blocks = moveBlockInBlocks(document.blocks, blockId, -1),
             )
-            queueDocumentUpdate(updated, previous = document, recordUndo = true)
+            val targetIndex = document.blocks.findBlockMoveTargetIndex(blockId, -1) ?: return
+            if (updated == document) return
+            queueGranularDocumentUpdate(
+                previous = document,
+                fallback = updated,
+            ) {
+                pageRepository.moveBlock(
+                    pageId = pageId,
+                    blockId = blockId,
+                    targetIndex = targetIndex,
+                )
+            }
         }
     }
 
@@ -392,7 +763,18 @@ class PageEditorViewModel @Inject constructor(
             val updated = document.copy(
                 blocks = moveBlockInBlocks(document.blocks, blockId, 1),
             )
-            queueDocumentUpdate(updated, previous = document, recordUndo = true)
+            val targetIndex = document.blocks.findBlockMoveTargetIndex(blockId, 1) ?: return
+            if (updated == document) return
+            queueGranularDocumentUpdate(
+                previous = document,
+                fallback = updated,
+            ) {
+                pageRepository.moveBlock(
+                    pageId = pageId,
+                    blockId = blockId,
+                    targetIndex = targetIndex,
+                )
+            }
         }
     }
 
@@ -405,7 +787,7 @@ class PageEditorViewModel @Inject constructor(
                     block.copy(table = block.table.copy(title = title))
                 },
             )
-            _pendingChanges.value = updated
+            queueTablePatchPendingDocument(blockId, updated)
         }
     }
 
@@ -421,7 +803,7 @@ class PageEditorViewModel @Inject constructor(
                     block.copy(table = block.table.copy(view = view))
                 },
             )
-            _pendingChanges.value = updated
+            queueTablePatchPendingDocument(blockId, updated)
         }
     }
 
@@ -437,7 +819,7 @@ class PageEditorViewModel @Inject constructor(
                     block.copy(table = block.table.copy(viewConfig = config))
                 },
             )
-            _pendingChanges.value = updated
+            queueTablePatchPendingDocument(blockId, updated)
         }
     }
 
@@ -462,7 +844,7 @@ class PageEditorViewModel @Inject constructor(
                     )
                 },
             )
-            _pendingChanges.value = updated
+            queueTablePatchPendingDocument(blockId, updated)
         }
     }
 
@@ -487,7 +869,7 @@ class PageEditorViewModel @Inject constructor(
                     )
                 },
             )
-            _pendingChanges.value = updated
+            queueTablePatchPendingDocument(blockId, updated)
         }
     }
 
@@ -503,7 +885,7 @@ class PageEditorViewModel @Inject constructor(
                     block.copy(table = block.table.copy(groupByColumnId = columnId))
                 },
             )
-            _pendingChanges.value = updated
+            queueTablePatchPendingDocument(blockId, updated)
         }
     }
 
@@ -530,7 +912,7 @@ class PageEditorViewModel @Inject constructor(
                     )
                 },
             )
-            _pendingChanges.value = updated
+            queueTableColumnPatchPendingDocument(blockId, columnId, updated)
         }
     }
 
@@ -582,7 +964,13 @@ class PageEditorViewModel @Inject constructor(
                     )
                 },
             )
-            queueDocumentUpdate(updated, previous = document, recordUndo = true)
+            queueTableColumnPatchPendingDocument(
+                tableBlockId = blockId,
+                columnId = columnId,
+                updated = updated,
+                previous = document,
+                recordUndo = true,
+            )
         }
     }
 
@@ -617,7 +1005,13 @@ class PageEditorViewModel @Inject constructor(
                     )
                 },
             )
-            queueDocumentUpdate(updated, previous = document, recordUndo = true)
+            queueTableColumnPatchPendingDocument(
+                tableBlockId = blockId,
+                columnId = columnId,
+                updated = updated,
+                previous = document,
+                recordUndo = true,
+            )
         }
     }
 
@@ -644,7 +1038,7 @@ class PageEditorViewModel @Inject constructor(
                     )
                 },
             )
-            _pendingChanges.value = updated
+            queueTableColumnPatchPendingDocument(blockId, columnId, updated)
         }
     }
 
@@ -671,7 +1065,7 @@ class PageEditorViewModel @Inject constructor(
                     )
                 },
             )
-            _pendingChanges.value = updated
+            queueTableColumnPatchPendingDocument(blockId, columnId, updated)
         }
     }
 
@@ -704,7 +1098,7 @@ class PageEditorViewModel @Inject constructor(
                     )
                 },
             )
-            _pendingChanges.value = updated
+            queueTableColumnPatchPendingDocument(blockId, columnId, updated)
         }
     }
 
@@ -717,6 +1111,7 @@ class PageEditorViewModel @Inject constructor(
         val currentUiState = uiState.value
         if (currentUiState.page != null) {
             val document = currentDocument(currentUiState) ?: return
+            var coercedCellValue: String? = null
             val updated = document.copy(
                 blocks = updateBlockById(document.blocks, blockId) { block ->
                     val column = block.table.columns.firstOrNull { tableColumn -> tableColumn.id == columnId }
@@ -724,11 +1119,13 @@ class PageEditorViewModel @Inject constructor(
                     if (column.type == PageTableColumnType.Formula || column.type == PageTableColumnType.Rollup) {
                         return@updateBlockById block
                     }
+                    val nextValue = column.type.coerceManualCellValue(value)
+                    coercedCellValue = nextValue
                     block.copy(
                         table = block.table.copy(
                             rows = block.table.rows.map { row ->
                                 if (row.id == rowId) {
-                                    row.copy(cells = row.cells + (columnId to column.type.coerceManualCellValue(value)))
+                                    row.copy(cells = row.cells + (columnId to nextValue))
                                 } else {
                                     row
                                 }
@@ -737,7 +1134,16 @@ class PageEditorViewModel @Inject constructor(
                     )
                 },
             )
-            _pendingChanges.value = updated
+            coercedCellValue?.let { nextValue ->
+                queueGranularPendingDocument(updated) { normalized ->
+                    PendingGranularDocumentSave.TableCellValue(
+                        document = normalized,
+                        rowId = rowId,
+                        columnId = columnId,
+                        value = nextValue,
+                    )
+                }
+            }
         }
     }
 
@@ -757,12 +1163,13 @@ class PageEditorViewModel @Inject constructor(
         val currentUiState = uiState.value
         if (currentUiState.page != null) {
             val document = currentDocument(currentUiState) ?: return
+            val tableBlock = document.findTableBlock(blockId) ?: return
+            val column = PageBlockCodec.newTableColumn(
+                name = name.trim().ifBlank { "Column ${tableBlock.table.columns.size + 1}" },
+                type = type,
+            )
             val updated = document.copy(
                 blocks = updateBlockById(document.blocks, blockId) { block ->
-                    val column = PageBlockCodec.newTableColumn(
-                        name = name.trim().ifBlank { "Column ${block.table.columns.size + 1}" },
-                        type = type,
-                    )
                     block.copy(
                         table = block.table.copy(
                             columns = block.table.columns + column,
@@ -773,7 +1180,16 @@ class PageEditorViewModel @Inject constructor(
                     )
                 },
             )
-            queueDocumentUpdate(updated, previous = document, recordUndo = true)
+            queueGranularDocumentUpdate(
+                previous = document,
+                fallback = updated,
+            ) {
+                pageRepository.addTableColumn(
+                    pageId = pageId,
+                    tableBlockId = blockId,
+                    column = column,
+                )
+            }
         }
     }
 
@@ -785,18 +1201,19 @@ class PageEditorViewModel @Inject constructor(
         val currentUiState = uiState.value
         if (currentUiState.page != null) {
             val document = currentDocument(currentUiState) ?: return
+            val tableBlock = document.findTableBlock(blockId) ?: return
+            val anchorIndex = tableBlock.table.columns.indexOfFirst { column -> column.id == anchorColumnId }
+            val insertIndex = when {
+                anchorIndex == -1 -> tableBlock.table.columns.size
+                side == TableColumnInsertSide.Left -> anchorIndex
+                else -> anchorIndex + 1
+            }.coerceIn(0, tableBlock.table.columns.size)
+            val column = PageBlockCodec.newTableColumn(
+                name = "Property ${tableBlock.table.columns.size + 1}",
+                type = PageTableColumnType.Text,
+            )
             val updated = document.copy(
                 blocks = updateBlockById(document.blocks, blockId) { block ->
-                    val anchorIndex = block.table.columns.indexOfFirst { column -> column.id == anchorColumnId }
-                    val insertIndex = when {
-                        anchorIndex == -1 -> block.table.columns.size
-                        side == TableColumnInsertSide.Left -> anchorIndex
-                        else -> anchorIndex + 1
-                    }.coerceIn(0, block.table.columns.size)
-                    val column = PageBlockCodec.newTableColumn(
-                        name = "Property ${block.table.columns.size + 1}",
-                        type = PageTableColumnType.Text,
-                    )
                     block.copy(
                         table = block.table.copy(
                             columns = block.table.columns.toMutableList().apply {
@@ -809,7 +1226,17 @@ class PageEditorViewModel @Inject constructor(
                     )
                 },
             )
-            queueDocumentUpdate(updated, previous = document, recordUndo = true)
+            queueGranularDocumentUpdate(
+                previous = document,
+                fallback = updated,
+            ) {
+                pageRepository.addTableColumn(
+                    pageId = pageId,
+                    tableBlockId = blockId,
+                    column = column,
+                    targetIndex = insertIndex,
+                )
+            }
         }
     }
 
@@ -820,11 +1247,14 @@ class PageEditorViewModel @Inject constructor(
         val currentUiState = uiState.value
         if (currentUiState.page != null) {
             val document = currentDocument(currentUiState) ?: return
+            var duplicatedColumn: PageTableColumn? = null
+            var insertIndex: Int? = null
+            var cellValues: Map<String, String> = emptyMap()
             val updated = document.copy(
                 blocks = updateBlockById(document.blocks, blockId) { block ->
                     val sourceIndex = block.table.columns.indexOfFirst { column -> column.id == columnId }
                     val sourceColumn = block.table.columns.getOrNull(sourceIndex) ?: return@updateBlockById block
-                    val duplicatedColumn = PageBlockCodec
+                    val nextColumn = PageBlockCodec
                         .newTableColumn("${sourceColumn.name.ifBlank { "Property" }} copy", sourceColumn.type)
                         .copy(
                             dateFormat = sourceColumn.dateFormat,
@@ -837,15 +1267,20 @@ class PageEditorViewModel @Inject constructor(
                             rollupTargetColumnId = sourceColumn.rollupTargetColumnId,
                             rollupAggregation = sourceColumn.rollupAggregation,
                         )
+                    duplicatedColumn = nextColumn
+                    insertIndex = sourceIndex + 1
+                    cellValues = block.table.rows.associate { row ->
+                        row.id to row.cells[columnId].orEmpty()
+                    }
                     block.copy(
                         table = block.table.copy(
                             columns = block.table.columns.toMutableList().apply {
-                                add(sourceIndex + 1, duplicatedColumn)
+                                add(sourceIndex + 1, nextColumn)
                             },
                             rows = block.table.rows.map { row ->
                                 row.copy(
                                     cells = row.cells + (
-                                        duplicatedColumn.id to row.cells[columnId].orEmpty()
+                                        nextColumn.id to row.cells[columnId].orEmpty()
                                         ),
                                 )
                             },
@@ -853,7 +1288,23 @@ class PageEditorViewModel @Inject constructor(
                     )
                 },
             )
-            queueDocumentUpdate(updated, previous = document, recordUndo = true)
+            val columnToAdd = duplicatedColumn
+            if (columnToAdd == null || insertIndex == null) {
+                queueDocumentUpdate(updated, previous = document, recordUndo = true)
+                return
+            }
+            queueGranularDocumentUpdate(
+                previous = document,
+                fallback = updated,
+            ) {
+                pageRepository.addTableColumn(
+                    pageId = pageId,
+                    tableBlockId = blockId,
+                    column = columnToAdd,
+                    cellValues = cellValues,
+                    targetIndex = insertIndex,
+                )
+            }
         }
     }
 
@@ -864,6 +1315,8 @@ class PageEditorViewModel @Inject constructor(
         val currentUiState = uiState.value
         if (currentUiState.page != null) {
             val document = currentDocument(currentUiState) ?: return
+            val tableBlock = document.findTableBlock(blockId) ?: return
+            if (tableBlock.table.columns.size <= 1) return
             val updated = document.copy(
                 blocks = updateBlockById(document.blocks, blockId) { block ->
                     if (block.table.columns.size <= 1) {
@@ -897,7 +1350,16 @@ class PageEditorViewModel @Inject constructor(
                     }
                 },
             )
-            queueDocumentUpdate(updated, previous = document, recordUndo = true)
+            queueGranularDocumentUpdate(
+                previous = document,
+                fallback = updated,
+            ) {
+                pageRepository.deleteTableColumn(
+                    pageId = pageId,
+                    tableBlockId = blockId,
+                    columnId = columnId,
+                )
+            }
         }
     }
 
@@ -905,16 +1367,27 @@ class PageEditorViewModel @Inject constructor(
         val currentUiState = uiState.value
         if (currentUiState.page != null) {
             val document = currentDocument(currentUiState) ?: return
+            val tableBlock = document.findTableBlock(blockId) ?: return
+            val row = PageBlockCodec.newTableRow(tableBlock.table.columns)
             val updated = document.copy(
                 blocks = updateBlockById(document.blocks, blockId) { block ->
                     block.copy(
                         table = block.table.copy(
-                            rows = block.table.rows + PageBlockCodec.newTableRow(block.table.columns),
+                            rows = block.table.rows + row,
                         ),
                     )
                 },
             )
-            queueDocumentUpdate(updated, previous = document, recordUndo = true)
+            queueGranularDocumentUpdate(
+                previous = document,
+                fallback = updated,
+            ) {
+                pageRepository.addTableRow(
+                    pageId = pageId,
+                    tableBlockId = blockId,
+                    row = row,
+                )
+            }
         }
     }
 
@@ -934,7 +1407,16 @@ class PageEditorViewModel @Inject constructor(
                     )
                 },
             )
-            queueDocumentUpdate(updated, previous = document, recordUndo = true)
+            queueGranularDocumentUpdate(
+                previous = document,
+                fallback = updated,
+            ) {
+                pageRepository.deleteTableRow(
+                    pageId = pageId,
+                    tableBlockId = blockId,
+                    rowId = rowId,
+                )
+            }
         }
     }
 
@@ -969,7 +1451,13 @@ class PageEditorViewModel @Inject constructor(
                     )
                 },
             )
-            queueDocumentUpdate(updated, previous = document, recordUndo = true)
+            queueTableRowPatchPendingDocument(
+                tableBlockId = tableBlockId,
+                rowId = rowId,
+                updated = updated,
+                previous = document,
+                recordUndo = true,
+            )
         }
     }
 
@@ -1005,7 +1493,13 @@ class PageEditorViewModel @Inject constructor(
                     )
                 },
             )
-            queueDocumentUpdate(updated, previous = document, recordUndo = true)
+            queueTableRowPatchPendingDocument(
+                tableBlockId = tableBlockId,
+                rowId = rowId,
+                updated = updated,
+                previous = document,
+                recordUndo = true,
+            )
         }
     }
 
@@ -1019,7 +1513,7 @@ class PageEditorViewModel @Inject constructor(
         val currentUiState = uiState.value
         if (currentUiState.page != null) {
             val document = currentDocument(currentUiState) ?: return
-            _pendingChanges.value = document.copy(
+            val updated = document.copy(
                 blocks = updateBlockById(document.blocks, tableBlockId) { block ->
                     block.copy(
                         table = block.table.copy(
@@ -1039,6 +1533,13 @@ class PageEditorViewModel @Inject constructor(
                         ),
                     )
                 },
+            )
+            queueTableRowPatchPendingDocument(
+                tableBlockId = tableBlockId,
+                rowId = rowId,
+                updated = updated,
+                previous = document,
+                recordUndo = true,
             )
         }
     }
@@ -1075,7 +1576,13 @@ class PageEditorViewModel @Inject constructor(
                     )
                 },
             )
-            queueDocumentUpdate(updated, previous = document, recordUndo = true)
+            queueTableRowPatchPendingDocument(
+                tableBlockId = tableBlockId,
+                rowId = rowId,
+                updated = updated,
+                previous = document,
+                recordUndo = true,
+            )
         }
     }
 
@@ -1106,7 +1613,13 @@ class PageEditorViewModel @Inject constructor(
                     )
                 },
             )
-            queueDocumentUpdate(updated, previous = document, recordUndo = true)
+            queueTableRowPatchPendingDocument(
+                tableBlockId = tableBlockId,
+                rowId = rowId,
+                updated = updated,
+                previous = document,
+                recordUndo = true,
+            )
         }
     }
 
@@ -1133,7 +1646,13 @@ class PageEditorViewModel @Inject constructor(
                     )
                 },
             )
-            queueDocumentUpdate(updated, previous = document, recordUndo = true)
+            queueTableRowPatchPendingDocument(
+                tableBlockId = tableBlockId,
+                rowId = rowId,
+                updated = updated,
+                previous = document,
+                recordUndo = true,
+            )
         }
     }
 
@@ -1163,7 +1682,13 @@ class PageEditorViewModel @Inject constructor(
                     )
                 },
             )
-            queueDocumentUpdate(updated, previous = document, recordUndo = true)
+            queueTableRowPatchPendingDocument(
+                tableBlockId = tableBlockId,
+                rowId = rowId,
+                updated = updated,
+                previous = document,
+                recordUndo = true,
+            )
         }
     }
 
@@ -1175,13 +1700,22 @@ class PageEditorViewModel @Inject constructor(
         if (currentUiState.page != null) {
             val document = currentDocument(currentUiState) ?: return
             val normalizedName = name.ifBlank { "Untitled property" }
-            val updated = document.copy(
-                properties = document.properties + PageBlockCodec.newProperty(
-                    type = type,
-                    name = normalizedName,
-                ),
+            val property = PageBlockCodec.newProperty(
+                type = type,
+                name = normalizedName,
             )
-            queueDocumentUpdate(updated, previous = document, recordUndo = true)
+            val updated = document.copy(
+                properties = document.properties + property,
+            )
+            queueGranularDocumentUpdate(
+                previous = document,
+                fallback = updated,
+            ) {
+                pageRepository.addProperty(
+                    pageId = pageId,
+                    property = property,
+                )
+            }
         }
     }
 
@@ -1221,7 +1755,13 @@ class PageEditorViewModel @Inject constructor(
                     }
                 },
             )
-            _pendingChanges.value = updated
+            queueGranularPendingDocument(updated) { normalized ->
+                PendingGranularDocumentSave.PropertyValue(
+                    document = normalized,
+                    propertyId = propertyId,
+                    value = value,
+                )
+            }
         }
     }
 
@@ -1232,7 +1772,15 @@ class PageEditorViewModel @Inject constructor(
             val updated = document.copy(
                 properties = document.properties.filterNot { property -> property.id == propertyId },
             )
-            queueDocumentUpdate(updated, previous = document, recordUndo = true)
+            queueGranularDocumentUpdate(
+                previous = document,
+                fallback = updated,
+            ) {
+                pageRepository.deleteProperty(
+                    pageId = pageId,
+                    propertyId = propertyId,
+                )
+            }
         }
     }
 
@@ -1259,6 +1807,38 @@ class PageEditorViewModel @Inject constructor(
                 transform(block)
             } else {
                 block.copy(children = updateBlockById(block.children, blockId, transform))
+            }
+        }
+    }
+
+    private fun updateTableCellValueInBlocks(
+        blocks: List<PageBlock>,
+        rowId: String,
+        columnId: String,
+        value: String,
+    ): List<PageBlock> {
+        return blocks.map { block ->
+            val updatedChildren = updateTableCellValueInBlocks(
+                blocks = block.children,
+                rowId = rowId,
+                columnId = columnId,
+                value = value,
+            )
+            if (block.type == PageBlockType.DatabaseTable) {
+                block.copy(
+                    table = block.table.copy(
+                        rows = block.table.rows.map { row ->
+                            if (row.id == rowId) {
+                                row.copy(cells = row.cells + (columnId to value))
+                            } else {
+                                row
+                            }
+                        },
+                    ),
+                    children = updatedChildren,
+                )
+            } else {
+                block.copy(children = updatedChildren)
             }
         }
     }
@@ -1371,6 +1951,21 @@ class PageEditorViewModel @Inject constructor(
         return blocks.map { block ->
             block.copy(children = moveBlockInBlocks(block.children, blockId, direction))
         }
+    }
+
+    private fun List<PageBlock>.findBlockMoveTargetIndex(
+        blockId: String,
+        direction: Int,
+    ): Int? {
+        val index = indexOfFirst { block -> block.id == blockId }
+        if (index != -1) {
+            val targetIndex = index + direction
+            return targetIndex.takeIf { it in indices }
+        }
+        for (block in this) {
+            block.children.findBlockMoveTargetIndex(blockId, direction)?.let { return it }
+        }
+        return null
     }
 
     fun clearAiError() {
@@ -2913,6 +3508,18 @@ class PageEditorViewModel @Inject constructor(
         return walk(blocks)
     }
 
+    private fun PageBlockDocument.findBlock(blockId: String): PageBlock? {
+        if (blockId.isBlank()) return null
+        fun walk(blocks: List<PageBlock>): PageBlock? {
+            blocks.forEach { block ->
+                if (block.id == blockId) return block
+                walk(block.children)?.let { return it }
+            }
+            return null
+        }
+        return walk(blocks)
+    }
+
     private fun PageBlockDocument.updateMatchingTable(
         action: ChatAction,
         transform: (PageBlock) -> PageBlock,
@@ -3851,6 +4458,52 @@ class PageEditorViewModel @Inject constructor(
     }
 }
 
+private sealed interface PendingGranularDocumentSave {
+    val document: PageBlockDocument
+
+    data class BlockText(
+        override val document: PageBlockDocument,
+        val blockId: String,
+        val text: String,
+    ) : PendingGranularDocumentSave
+
+    data class BlockPatch(
+        override val document: PageBlockDocument,
+        val block: PageBlock,
+    ) : PendingGranularDocumentSave
+
+    data class PropertyValue(
+        override val document: PageBlockDocument,
+        val propertyId: String,
+        val value: String,
+    ) : PendingGranularDocumentSave
+
+    data class TableCellValue(
+        override val document: PageBlockDocument,
+        val rowId: String,
+        val columnId: String,
+        val value: String,
+    ) : PendingGranularDocumentSave
+
+    data class TablePatch(
+        override val document: PageBlockDocument,
+        val tableBlockId: String,
+        val table: PageTable,
+    ) : PendingGranularDocumentSave
+
+    data class TableColumnPatch(
+        override val document: PageBlockDocument,
+        val tableBlockId: String,
+        val column: PageTableColumn,
+    ) : PendingGranularDocumentSave
+
+    data class TableRowPatch(
+        override val document: PageBlockDocument,
+        val tableBlockId: String,
+        val row: PageTableRow,
+    ) : PendingGranularDocumentSave
+}
+
 data class PageEditorUiState(
     val isLoading: Boolean = true,
     val page: Page? = null,
@@ -3862,6 +4515,7 @@ data class PageEditorUiState(
     val isAiGenerating: Boolean = false,
     val aiError: String? = null,
     val canUndoEditorChange: Boolean = false,
+    val syncState: PageSyncState = PageSyncState(),
 )
 
 private data class PageEditorAiState(

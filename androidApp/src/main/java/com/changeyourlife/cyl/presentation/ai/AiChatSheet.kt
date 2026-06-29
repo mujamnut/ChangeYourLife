@@ -216,7 +216,10 @@ fun AiChatSheet(
                     }
                 }
 
-                items(messages) { message ->
+                items(
+                    items = messages,
+                    key = { message -> message.id.ifBlank { "${message.role}:${message.content.hashCode()}" } },
+                ) { message ->
                     val isUser = message.role == "user"
                     val messageText = message.content.ifBlank { "No response content." }
                     Box(
@@ -267,6 +270,9 @@ fun AiChatSheet(
                                     links = message.pageLinks,
                                     onOpenPage = onOpenPage,
                                 )
+                            }
+                            if (!isUser && message.actionMetadata?.hasDetails == true) {
+                                AiChatActionDetails(metadata = message.actionMetadata)
                             }
                         }
                     }
@@ -372,6 +378,152 @@ fun AiChatSheet(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun AiChatActionDetails(metadata: AiChatActionMetadata) {
+    var isExpanded by rememberSaveable { mutableStateOf(false) }
+    val validationCount = metadata.validationIssues.size
+    val executedCount = metadata.executedActions.size
+    val proposedCount = metadata.proposedActions.size
+    val summary = when {
+        validationCount > 0 -> "$validationCount issue${if (validationCount == 1) "" else "s"}"
+        executedCount > 0 -> "$executedCount action${if (executedCount == 1) "" else "s"} applied"
+        proposedCount > 0 -> "$proposedCount action${if (proposedCount == 1) "" else "s"} proposed"
+        else -> "Action details"
+    }
+    val summaryColor = if (validationCount > 0) {
+        MaterialTheme.colorScheme.error
+    } else {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    }
+
+    Column(
+        modifier = Modifier.widthIn(max = 300.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        TextButton(
+            onClick = { isExpanded = !isExpanded },
+            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+        ) {
+            Text(
+                text = summary,
+                style = MaterialTheme.typography.labelMedium,
+                color = summaryColor,
+            )
+            Icon(
+                imageVector = Icons.Rounded.KeyboardArrowDown,
+                contentDescription = if (isExpanded) "Hide action details" else "Show action details",
+                tint = summaryColor,
+                modifier = Modifier.size(16.dp),
+            )
+        }
+        if (isExpanded) {
+            Card(
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                ),
+            ) {
+                Column(
+                    modifier = Modifier.padding(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    if (metadata.mode.isNotBlank() || metadata.schemaName.isNotBlank()) {
+                        Text(
+                            text = listOfNotNull(
+                                metadata.mode.takeIf { it.isNotBlank() }?.lowercase()
+                                    ?.replaceFirstChar { char -> char.titlecase() },
+                                metadata.schemaName.takeIf { it.isNotBlank() }?.let { "${it} v${metadata.schemaVersion}" },
+                            ).joinToString(" - "),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    AiActionMetadataSection(
+                        title = "Proposed",
+                        items = metadata.proposedActions,
+                    )
+                    AiActionMetadataSection(
+                        title = "Applied",
+                        items = metadata.executedActions,
+                    )
+                    AiValidationIssueSection(issues = metadata.validationIssues)
+                    if (metadata.executionMessages.isNotEmpty()) {
+                        AiActionTextSection(
+                            title = "Result",
+                            lines = metadata.executionMessages,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AiActionMetadataSection(
+    title: String,
+    items: List<AiChatActionMetadataItem>,
+) {
+    if (items.isEmpty()) return
+    AiActionTextSection(
+        title = title,
+        lines = items.map { item ->
+            listOf(item.type.prettyActionType(), item.target)
+                .filter { value -> value.isNotBlank() }
+                .joinToString(": ")
+        },
+    )
+}
+
+@Composable
+private fun AiValidationIssueSection(issues: List<AiChatActionValidationIssue>) {
+    if (issues.isEmpty()) return
+    AiActionTextSection(
+        title = "Rejected",
+        lines = issues.map { issue ->
+            listOf(issue.field, issue.message.ifBlank { issue.code })
+                .filter { value -> value.isNotBlank() }
+                .joinToString(": ")
+        },
+        isWarning = true,
+    )
+}
+
+@Composable
+private fun AiActionTextSection(
+    title: String,
+    lines: List<String>,
+    isWarning: Boolean = false,
+) {
+    if (lines.isEmpty()) return
+    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontWeight = FontWeight.SemiBold,
+        )
+        lines
+            .filter { line -> line.isNotBlank() }
+            .take(4)
+            .forEach { line ->
+                Text(
+                    text = line,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (isWarning) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
     }
 }
 
@@ -604,4 +756,11 @@ private fun String.compactAiModelLabel(): String {
         .replace(":free", " free", ignoreCase = true)
         .trim()
     return model.ifBlank { clean }
+}
+
+private fun String.prettyActionType(): String {
+    return lowercase()
+        .split('_')
+        .filter { part -> part.isNotBlank() }
+        .joinToString(" ") { part -> part.replaceFirstChar { char -> char.titlecase() } }
 }

@@ -6,6 +6,7 @@ data class ChatMessage(
     val role: String,
     val content: String,
     val pageLinks: List<ChatPageLink>,
+    val actionMetadata: ChatActionMetadata? = null,
     val createdAt: Long,
 )
 
@@ -22,4 +23,26 @@ data class ChatPageLink(
     val title: String,
     val targetType: String = "",
     val targetId: String = "",
+)
+
+data class ChatActionMetadata(
+    val mode: String = "",
+    val schemaName: String = "",
+    val schemaVersion: Int = 1,
+    val proposedActions: List<ChatActionMetadataItem> = emptyList(),
+    val executedActions: List<ChatActionMetadataItem> = emptyList(),
+    val executionMessages: List<String> = emptyList(),
+    val validationIssues: List<ChatActionValidationMetadata> = emptyList(),
+)
+
+data class ChatActionMetadataItem(
+    val type: String,
+    val target: String = "",
+)
+
+data class ChatActionValidationMetadata(
+    val actionIndex: Int? = null,
+    val field: String = "",
+    val code: String = "",
+    val message: String = "",
 )

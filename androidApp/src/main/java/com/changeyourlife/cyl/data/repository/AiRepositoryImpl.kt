@@ -17,6 +17,7 @@ import com.changeyourlife.cyl.domain.repository.AiRepository
 import com.changeyourlife.cyl.domain.repository.AiPageContext
 import com.changeyourlife.cyl.domain.repository.ChatAction
 import com.changeyourlife.cyl.domain.repository.ChatActionResult
+import com.changeyourlife.cyl.domain.repository.ChatActionValidationIssue
 import com.changeyourlife.cyl.domain.repository.ChatTableColumn
 import com.changeyourlife.cyl.presentation.page.PageBlockCodec
 import java.time.LocalDate
@@ -103,6 +104,16 @@ class AiRepositoryImpl @Inject constructor(
             val response = aiApi.chatWithActions(header, request)
             ChatActionResult(
                 reply = response.reply,
+                schemaName = response.schemaName,
+                schemaVersion = response.schemaVersion,
+                validationIssues = response.validationIssues.map { issue ->
+                    ChatActionValidationIssue(
+                        actionIndex = issue.actionIndex,
+                        field = issue.field,
+                        code = issue.code,
+                        message = issue.message,
+                    )
+                },
                 actions = response.actions.map {
                     ChatAction(
                         type = it.type.normalizedChatActionType(),

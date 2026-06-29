@@ -165,6 +165,7 @@ import com.changeyourlife.cyl.domain.model.PageTableRollupAggregation
 import com.changeyourlife.cyl.domain.model.PageTableSortDirection
 import com.changeyourlife.cyl.domain.model.PageTableView
 import com.changeyourlife.cyl.domain.model.PageTableViewConfig
+import com.changeyourlife.cyl.domain.model.PageSyncState
 import com.changeyourlife.cyl.domain.model.PageTextSpan
 import com.changeyourlife.cyl.presentation.ai.AiChatMode
 import com.changeyourlife.cyl.presentation.ai.AiChatSheet
@@ -250,6 +251,8 @@ fun PageEditorRoute(
             }
         },
         onUndoEditorChange = viewModel::undoLastEditorChange,
+        onKeepLocalConflict = viewModel::keepLocalConflict,
+        onUseRemoteConflict = viewModel::useRemoteConflict,
         onSendAiMessage = onSendAiMessage,
         onHomeAiModeChange = onHomeAiModeChange,
         onClearHomeAiHistory = onClearHomeAiHistory,
@@ -318,6 +321,8 @@ private fun PageEditorScreen(
     onDeleteProperty: (String) -> Unit,
     onCreateChildPage: () -> Unit,
     onUndoEditorChange: () -> Unit,
+    onKeepLocalConflict: () -> Unit,
+    onUseRemoteConflict: () -> Unit,
     onSendAiMessage: (String, List<String>, AiChatMode, String?) -> Unit,
     onHomeAiModeChange: (AiChatMode) -> Unit,
     onClearHomeAiHistory: () -> Unit,
@@ -345,6 +350,7 @@ private fun PageEditorScreen(
                 blockCount = uiState.blocks.size,
                 isSaving = uiState.isSaving,
                 isAiGenerating = homeAiState.isAiGeneratingChat,
+                syncState = uiState.syncState,
                 onBack = onBack,
             )
         },
@@ -497,6 +503,15 @@ private fun PageEditorScreen(
                         )
                     }
 
+                    if (uiState.syncState.hasConflict) {
+                        item(key = "page-sync-conflict") {
+                            PageSyncConflictBanner(
+                                onKeepLocal = onKeepLocalConflict,
+                                onUseRemote = onUseRemoteConflict,
+                            )
+                        }
+                    }
+
                     items(
                         items = uiState.blocks,
                         key = { block -> block.id },
@@ -559,8 +574,22 @@ private fun PageEditorTopBar(
     blockCount: Int,
     isSaving: Boolean,
     isAiGenerating: Boolean,
+    syncState: PageSyncState,
     onBack: () -> Unit,
 ) {
+    val syncLabel = when {
+        syncState.hasConflict -> "Sync conflict"
+        isSaving -> "Saving..."
+        syncState.isPendingPush -> "Waiting to sync"
+        syncState.lastSyncedAt == 0L -> "Not synced yet"
+        else -> "Saved"
+    }
+    val syncColor = if (syncState.hasConflict) {
+        MaterialTheme.colorScheme.error
+    } else {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    }
+
     TopAppBar(
         title = {
             Column {
@@ -585,13 +614,13 @@ private fun PageEditorTopBar(
                 }
                 Text(
                     text = buildString {
-                        append(if (isSaving) "Saving..." else "Saved")
+                        append(syncLabel)
                         append(" · ")
                         append("$blockCount ")
                         append(if (blockCount == 1) "block" else "blocks")
                     },
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = syncColor,
                     maxLines = 1,
                 )
             }
@@ -605,6 +634,65 @@ private fun PageEditorTopBar(
             }
         },
     )
+}
+
+@Composable
+private fun PageSyncConflictBanner(
+    onKeepLocal: () -> Unit,
+    onUseRemote: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.errorContainer,
+        ),
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.Top,
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Info,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onErrorContainer,
+                    modifier = Modifier.size(20.dp),
+                )
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text(
+                        text = "Sync conflict",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                    )
+                    Text(
+                        text = "This page changed locally and on the server. Choose which version should win.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                    )
+                }
+            }
+            Row(
+                horizontalArrangement = Arrangement.End,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                TextButton(onClick = onUseRemote) {
+                    Text("Use server")
+                }
+                TextButton(onClick = onKeepLocal) {
+                    Text("Keep mine")
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -6924,6 +7012,8 @@ private fun PageEditorScreenPreview() {
             onAddChildBlock = { _, _ -> },
             onCreateChildPage = {},
             onUndoEditorChange = {},
+            onKeepLocalConflict = {},
+            onUseRemoteConflict = {},
             onSendAiMessage = { _, _, _, _ -> },
             onHomeAiModeChange = {},
             onClearHomeAiHistory = {},

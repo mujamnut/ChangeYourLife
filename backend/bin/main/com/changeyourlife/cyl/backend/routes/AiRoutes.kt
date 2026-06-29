@@ -64,6 +64,7 @@ fun Route.aiRoutes(aiService: AiService) {
                 call.respond(
                     ChatWithActionsResponse(
                         reply = result.reply,
+                        validationIssues = result.validationIssues,
                         actions = result.actions.map {
                             AiAction(
                                 type = it.type,

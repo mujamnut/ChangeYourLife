@@ -1,6 +1,7 @@
 package com.changeyourlife.cyl.domain.repository
 
 import com.changeyourlife.cyl.domain.model.ChatMessage
+import com.changeyourlife.cyl.domain.model.ChatActionMetadata
 import com.changeyourlife.cyl.domain.model.ChatPageLink
 import com.changeyourlife.cyl.domain.model.ChatSession
 import kotlinx.coroutines.flow.Flow
@@ -24,6 +25,7 @@ interface ChatHistoryRepository {
         role: String,
         content: String,
         pageLinks: List<ChatPageLink> = emptyList(),
+        actionMetadata: ChatActionMetadata? = null,
     ): ChatMessage
 
     suspend fun clearMessages(sessionId: String)

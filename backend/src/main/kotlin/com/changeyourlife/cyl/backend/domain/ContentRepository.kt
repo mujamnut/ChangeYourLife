@@ -38,6 +38,32 @@ interface ContentRepository {
 
     suspend fun upsertPage(userId: String, page: PageRecord): PageRecord?
 
+    suspend fun updatePageBlockText(
+        userId: String,
+        pageId: String,
+        blockId: String,
+        text: String,
+        updatedAt: Long,
+    ): PageRecord?
+
+    suspend fun updatePagePropertyValue(
+        userId: String,
+        pageId: String,
+        propertyId: String = "",
+        propertyName: String = "",
+        value: String,
+        updatedAt: Long,
+    ): PageRecord?
+
+    suspend fun updatePageTableCellValue(
+        userId: String,
+        pageId: String,
+        rowId: String,
+        columnId: String,
+        value: String,
+        updatedAt: Long,
+    ): PageRecord?
+
     suspend fun softDeletePage(userId: String, pageId: String, deletedAt: Long): Boolean
 
     suspend fun restorePage(userId: String, pageId: String, restoredAt: Long): Boolean

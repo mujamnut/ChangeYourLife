@@ -4,6 +4,7 @@ import retrofit2.http.Body
 import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.Header
+import retrofit2.http.PATCH
 import retrofit2.http.POST
 import retrofit2.http.PUT
 import retrofit2.http.Path
@@ -48,6 +49,148 @@ interface SyncApi {
         @Header("Authorization") authorization: String,
         @Path("id") id: String,
         @Body page: PageSyncDto,
+    ): PageSyncDto
+
+    @POST("api/v1/pages/{id}/blocks")
+    suspend fun addPageBlock(
+        @Header("Authorization") authorization: String,
+        @Path("id") id: String,
+        @Body request: PageBlockCreateRequestDto,
+    ): PageSyncDto
+
+    @DELETE("api/v1/pages/{id}/blocks/{blockId}")
+    suspend fun deletePageBlock(
+        @Header("Authorization") authorization: String,
+        @Path("id") id: String,
+        @Path("blockId") blockId: String,
+    ): PageSyncDto
+
+    @PATCH("api/v1/pages/{id}/blocks/{blockId}/position")
+    suspend fun movePageBlock(
+        @Header("Authorization") authorization: String,
+        @Path("id") id: String,
+        @Path("blockId") blockId: String,
+        @Body request: PageElementPositionPatchRequestDto,
+    ): PageSyncDto
+
+    @PATCH("api/v1/pages/{id}/blocks/{blockId}")
+    suspend fun updatePageBlockText(
+        @Header("Authorization") authorization: String,
+        @Path("id") id: String,
+        @Path("blockId") blockId: String,
+        @Body request: PageBlockPatchRequestDto,
+    ): PageSyncDto
+
+    @POST("api/v1/pages/{id}/properties")
+    suspend fun addPageProperty(
+        @Header("Authorization") authorization: String,
+        @Path("id") id: String,
+        @Body request: PagePropertyCreateRequestDto,
+    ): PageSyncDto
+
+    @PATCH("api/v1/pages/{id}/properties")
+    suspend fun updatePagePropertyValue(
+        @Header("Authorization") authorization: String,
+        @Path("id") id: String,
+        @Body request: PagePropertyValuePatchRequestDto,
+    ): PageSyncDto
+
+    @DELETE("api/v1/pages/{id}/properties/{propertyId}")
+    suspend fun deletePageProperty(
+        @Header("Authorization") authorization: String,
+        @Path("id") id: String,
+        @Path("propertyId") propertyId: String,
+    ): PageSyncDto
+
+    @PATCH("api/v1/pages/{id}/properties/{propertyId}/position")
+    suspend fun movePageProperty(
+        @Header("Authorization") authorization: String,
+        @Path("id") id: String,
+        @Path("propertyId") propertyId: String,
+        @Body request: PageElementPositionPatchRequestDto,
+    ): PageSyncDto
+
+    @POST("api/v1/pages/{id}/tables/{tableBlockId}/columns")
+    suspend fun addPageTableColumn(
+        @Header("Authorization") authorization: String,
+        @Path("id") id: String,
+        @Path("tableBlockId") tableBlockId: String,
+        @Body request: PageTableColumnCreateRequestDto,
+    ): PageSyncDto
+
+    @DELETE("api/v1/pages/{id}/tables/{tableBlockId}/columns/{columnId}")
+    suspend fun deletePageTableColumn(
+        @Header("Authorization") authorization: String,
+        @Path("id") id: String,
+        @Path("tableBlockId") tableBlockId: String,
+        @Path("columnId") columnId: String,
+    ): PageSyncDto
+
+    @PATCH("api/v1/pages/{id}/tables/{tableBlockId}/columns/{columnId}/position")
+    suspend fun movePageTableColumn(
+        @Header("Authorization") authorization: String,
+        @Path("id") id: String,
+        @Path("tableBlockId") tableBlockId: String,
+        @Path("columnId") columnId: String,
+        @Body request: PageElementPositionPatchRequestDto,
+    ): PageSyncDto
+
+    @POST("api/v1/pages/{id}/tables/{tableBlockId}/rows")
+    suspend fun addPageTableRow(
+        @Header("Authorization") authorization: String,
+        @Path("id") id: String,
+        @Path("tableBlockId") tableBlockId: String,
+        @Body request: PageTableRowCreateRequestDto,
+    ): PageSyncDto
+
+    @PATCH("api/v1/pages/{id}/tables/{tableBlockId}/rows/{rowId}")
+    suspend fun updatePageTableRow(
+        @Header("Authorization") authorization: String,
+        @Path("id") id: String,
+        @Path("tableBlockId") tableBlockId: String,
+        @Path("rowId") rowId: String,
+        @Body request: PageTableRowPatchRequestDto,
+    ): PageSyncDto
+
+    @DELETE("api/v1/pages/{id}/tables/{tableBlockId}/rows/{rowId}")
+    suspend fun deletePageTableRow(
+        @Header("Authorization") authorization: String,
+        @Path("id") id: String,
+        @Path("tableBlockId") tableBlockId: String,
+        @Path("rowId") rowId: String,
+    ): PageSyncDto
+
+    @PATCH("api/v1/pages/{id}/tables/{tableBlockId}/rows/{rowId}/position")
+    suspend fun movePageTableRow(
+        @Header("Authorization") authorization: String,
+        @Path("id") id: String,
+        @Path("tableBlockId") tableBlockId: String,
+        @Path("rowId") rowId: String,
+        @Body request: PageElementPositionPatchRequestDto,
+    ): PageSyncDto
+
+    @PATCH("api/v1/pages/{id}/table-cells")
+    suspend fun updatePageTableCellValue(
+        @Header("Authorization") authorization: String,
+        @Path("id") id: String,
+        @Body request: PageTableCellValuePatchRequestDto,
+    ): PageSyncDto
+
+    @PATCH("api/v1/pages/{id}/tables/{tableBlockId}")
+    suspend fun updatePageTable(
+        @Header("Authorization") authorization: String,
+        @Path("id") id: String,
+        @Path("tableBlockId") tableBlockId: String,
+        @Body request: PageTablePatchRequestDto,
+    ): PageSyncDto
+
+    @PATCH("api/v1/pages/{id}/tables/{tableBlockId}/columns/{columnId}")
+    suspend fun updatePageTableColumn(
+        @Header("Authorization") authorization: String,
+        @Path("id") id: String,
+        @Path("tableBlockId") tableBlockId: String,
+        @Path("columnId") columnId: String,
+        @Body request: PageTableColumnPatchRequestDto,
     ): PageSyncDto
 
     @DELETE("api/v1/pages/{id}")

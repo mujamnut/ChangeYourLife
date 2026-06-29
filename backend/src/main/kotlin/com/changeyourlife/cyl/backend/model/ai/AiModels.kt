@@ -2,6 +2,9 @@ package com.changeyourlife.cyl.backend.model.ai
 
 import kotlinx.serialization.Serializable
 
+const val CYL_ACTION_SCHEMA_NAME = "CYL_ACTION_SCHEMA"
+const val CYL_ACTION_SCHEMA_VERSION = 1
+
 @Serializable
 data class ChatMessage(
     val role: String,
@@ -164,7 +167,18 @@ data class AiAction(
 )
 
 @Serializable
+data class AiActionValidationIssue(
+    val actionIndex: Int? = null,
+    val field: String = "",
+    val code: String,
+    val message: String,
+)
+
+@Serializable
 data class ChatWithActionsResponse(
     val reply: String,
-    val actions: List<AiAction> = emptyList()
+    val actions: List<AiAction> = emptyList(),
+    val schemaName: String = CYL_ACTION_SCHEMA_NAME,
+    val schemaVersion: Int = CYL_ACTION_SCHEMA_VERSION,
+    val validationIssues: List<AiActionValidationIssue> = emptyList(),
 )

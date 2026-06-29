@@ -7,6 +7,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import com.changeyourlife.cyl.data.local.CylDatabase
 import com.changeyourlife.cyl.data.local.dao.ChatMessageDao
 import com.changeyourlife.cyl.data.local.dao.PageDao
+import com.changeyourlife.cyl.data.local.dao.PageContentDao
 import com.changeyourlife.cyl.data.local.dao.ReminderDao
 import com.changeyourlife.cyl.data.local.dao.TaskDao
 import com.changeyourlife.cyl.data.local.dao.WorkspaceDao
@@ -28,9 +29,12 @@ object DatabaseModule {
             CylDatabase::class.java,
             "cyl.db",
         )
+            .addMigrations(MIGRATION_1_2)
             .addMigrations(MIGRATION_2_3)
             .addMigrations(MIGRATION_3_4)
-            .fallbackToDestructiveMigration(true)
+            .addMigrations(MIGRATION_4_5)
+            .addMigrations(MIGRATION_5_6)
+            .addMigrations(MIGRATION_6_7)
             .build()
     }
 
@@ -42,6 +46,11 @@ object DatabaseModule {
     @Provides
     fun providePageDao(database: CylDatabase): PageDao {
         return database.pageDao()
+    }
+
+    @Provides
+    fun providePageContentDao(database: CylDatabase): PageContentDao {
+        return database.pageContentDao()
     }
 
     @Provides
@@ -59,7 +68,82 @@ object DatabaseModule {
         return database.chatMessageDao()
     }
 
-    private val MIGRATION_2_3 = object : Migration(2, 3) {
+    val MIGRATION_1_2 = object : Migration(1, 2) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `pages` (
+                    `id` TEXT NOT NULL,
+                    `workspaceId` TEXT NOT NULL,
+                    `parentPageId` TEXT,
+                    `title` TEXT NOT NULL,
+                    `content` TEXT NOT NULL,
+                    `sortOrder` INTEGER NOT NULL,
+                    `createdAt` INTEGER NOT NULL,
+                    `updatedAt` INTEGER NOT NULL,
+                    `deletedAt` INTEGER,
+                    PRIMARY KEY(`id`),
+                    FOREIGN KEY(`workspaceId`) REFERENCES `workspaces`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+                """.trimIndent(),
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_pages_workspaceId` ON `pages` (`workspaceId`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_pages_parentPageId` ON `pages` (`parentPageId`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_pages_updatedAt` ON `pages` (`updatedAt`)")
+
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `tasks` (
+                    `id` TEXT NOT NULL,
+                    `workspaceId` TEXT NOT NULL,
+                    `pageId` TEXT,
+                    `title` TEXT NOT NULL,
+                    `notes` TEXT NOT NULL,
+                    `isCompleted` INTEGER NOT NULL,
+                    `dueAt` INTEGER,
+                    `priority` INTEGER NOT NULL,
+                    `createdAt` INTEGER NOT NULL,
+                    `updatedAt` INTEGER NOT NULL,
+                    `deletedAt` INTEGER,
+                    PRIMARY KEY(`id`),
+                    FOREIGN KEY(`workspaceId`) REFERENCES `workspaces`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE,
+                    FOREIGN KEY(`pageId`) REFERENCES `pages`(`id`) ON UPDATE NO ACTION ON DELETE SET NULL
+                )
+                """.trimIndent(),
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_tasks_workspaceId` ON `tasks` (`workspaceId`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_tasks_pageId` ON `tasks` (`pageId`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_tasks_dueAt` ON `tasks` (`dueAt`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_tasks_updatedAt` ON `tasks` (`updatedAt`)")
+
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `reminders` (
+                    `id` TEXT NOT NULL,
+                    `workspaceId` TEXT NOT NULL,
+                    `pageId` TEXT,
+                    `taskId` TEXT,
+                    `title` TEXT NOT NULL,
+                    `remindAt` INTEGER NOT NULL,
+                    `isDone` INTEGER NOT NULL,
+                    `createdAt` INTEGER NOT NULL,
+                    `updatedAt` INTEGER NOT NULL,
+                    `deletedAt` INTEGER,
+                    PRIMARY KEY(`id`),
+                    FOREIGN KEY(`workspaceId`) REFERENCES `workspaces`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE,
+                    FOREIGN KEY(`pageId`) REFERENCES `pages`(`id`) ON UPDATE NO ACTION ON DELETE SET NULL,
+                    FOREIGN KEY(`taskId`) REFERENCES `tasks`(`id`) ON UPDATE NO ACTION ON DELETE SET NULL
+                )
+                """.trimIndent(),
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_reminders_workspaceId` ON `reminders` (`workspaceId`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_reminders_pageId` ON `reminders` (`pageId`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_reminders_taskId` ON `reminders` (`taskId`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_reminders_remindAt` ON `reminders` (`remindAt`)")
+        }
+    }
+
+    val MIGRATION_2_3 = object : Migration(2, 3) {
         override fun migrate(db: SupportSQLiteDatabase) {
             db.execSQL(
                 """
@@ -79,7 +163,7 @@ object DatabaseModule {
         }
     }
 
-    private val MIGRATION_3_4 = object : Migration(3, 4) {
+    val MIGRATION_3_4 = object : Migration(3, 4) {
         override fun migrate(db: SupportSQLiteDatabase) {
             db.execSQL(
                 """
@@ -104,6 +188,149 @@ object DatabaseModule {
                 GROUP BY `scopeId`
                 """.trimIndent(),
             )
+        }
+    }
+
+    val MIGRATION_4_5 = object : Migration(4, 5) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE `workspaces` ADD COLUMN `syncStatus` TEXT NOT NULL DEFAULT 'Synced'")
+            db.execSQL("ALTER TABLE `workspaces` ADD COLUMN `remoteUpdatedAt` INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE `workspaces` ADD COLUMN `lastSyncedAt` INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE `pages` ADD COLUMN `syncStatus` TEXT NOT NULL DEFAULT 'Synced'")
+            db.execSQL("ALTER TABLE `pages` ADD COLUMN `remoteUpdatedAt` INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE `pages` ADD COLUMN `lastSyncedAt` INTEGER NOT NULL DEFAULT 0")
+        }
+    }
+
+    val MIGRATION_5_6 = object : Migration(5, 6) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `page_blocks` (
+                    `id` TEXT NOT NULL,
+                    `pageId` TEXT NOT NULL,
+                    `parentBlockId` TEXT,
+                    `type` TEXT NOT NULL,
+                    `text` TEXT NOT NULL,
+                    `richTextJson` TEXT NOT NULL,
+                    `mediaJson` TEXT NOT NULL,
+                    `isChecked` INTEGER NOT NULL,
+                    `sortOrder` INTEGER NOT NULL,
+                    `metadataJson` TEXT NOT NULL,
+                    `createdAt` INTEGER NOT NULL,
+                    `updatedAt` INTEGER NOT NULL,
+                    `deletedAt` INTEGER,
+                    PRIMARY KEY(`id`),
+                    FOREIGN KEY(`pageId`) REFERENCES `pages`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+                """.trimIndent(),
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_page_blocks_pageId_sortOrder` ON `page_blocks` (`pageId`, `sortOrder`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_page_blocks_parentBlockId` ON `page_blocks` (`parentBlockId`)")
+
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `page_properties` (
+                    `id` TEXT NOT NULL,
+                    `pageId` TEXT NOT NULL,
+                    `name` TEXT NOT NULL,
+                    `type` TEXT NOT NULL,
+                    `value` TEXT NOT NULL,
+                    `sortOrder` INTEGER NOT NULL,
+                    `metadataJson` TEXT NOT NULL,
+                    `createdAt` INTEGER NOT NULL,
+                    `updatedAt` INTEGER NOT NULL,
+                    `deletedAt` INTEGER,
+                    PRIMARY KEY(`id`),
+                    FOREIGN KEY(`pageId`) REFERENCES `pages`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+                """.trimIndent(),
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_page_properties_pageId_sortOrder` ON `page_properties` (`pageId`, `sortOrder`)")
+
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `page_tables` (
+                    `id` TEXT NOT NULL,
+                    `pageId` TEXT NOT NULL,
+                    `blockId` TEXT NOT NULL,
+                    `title` TEXT NOT NULL,
+                    `view` TEXT NOT NULL,
+                    `viewConfigJson` TEXT NOT NULL,
+                    `sortJson` TEXT NOT NULL,
+                    `filterJson` TEXT NOT NULL,
+                    `groupByColumnId` TEXT NOT NULL,
+                    `createdAt` INTEGER NOT NULL,
+                    `updatedAt` INTEGER NOT NULL,
+                    `deletedAt` INTEGER,
+                    PRIMARY KEY(`id`),
+                    FOREIGN KEY(`pageId`) REFERENCES `pages`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE,
+                    FOREIGN KEY(`blockId`) REFERENCES `page_blocks`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+                """.trimIndent(),
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_page_tables_pageId` ON `page_tables` (`pageId`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_page_tables_blockId` ON `page_tables` (`blockId`)")
+
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `page_table_columns` (
+                    `id` TEXT NOT NULL,
+                    `tableId` TEXT NOT NULL,
+                    `name` TEXT NOT NULL,
+                    `type` TEXT NOT NULL,
+                    `sortOrder` INTEGER NOT NULL,
+                    `configJson` TEXT NOT NULL,
+                    `createdAt` INTEGER NOT NULL,
+                    `updatedAt` INTEGER NOT NULL,
+                    `deletedAt` INTEGER,
+                    PRIMARY KEY(`id`),
+                    FOREIGN KEY(`tableId`) REFERENCES `page_tables`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+                """.trimIndent(),
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_page_table_columns_tableId_sortOrder` ON `page_table_columns` (`tableId`, `sortOrder`)")
+
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `page_table_rows` (
+                    `id` TEXT NOT NULL,
+                    `tableId` TEXT NOT NULL,
+                    `sortOrder` INTEGER NOT NULL,
+                    `contentJson` TEXT NOT NULL,
+                    `createdAt` INTEGER NOT NULL,
+                    `updatedAt` INTEGER NOT NULL,
+                    `deletedAt` INTEGER,
+                    PRIMARY KEY(`id`),
+                    FOREIGN KEY(`tableId`) REFERENCES `page_tables`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+                """.trimIndent(),
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_page_table_rows_tableId_sortOrder` ON `page_table_rows` (`tableId`, `sortOrder`)")
+
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `page_table_cells` (
+                    `rowId` TEXT NOT NULL,
+                    `columnId` TEXT NOT NULL,
+                    `value` TEXT NOT NULL,
+                    `valueJson` TEXT NOT NULL,
+                    `createdAt` INTEGER NOT NULL,
+                    `updatedAt` INTEGER NOT NULL,
+                    `deletedAt` INTEGER,
+                    PRIMARY KEY(`rowId`, `columnId`),
+                    FOREIGN KEY(`rowId`) REFERENCES `page_table_rows`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE,
+                    FOREIGN KEY(`columnId`) REFERENCES `page_table_columns`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+                """.trimIndent(),
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_page_table_cells_columnId` ON `page_table_cells` (`columnId`)")
+        }
+    }
+
+    val MIGRATION_6_7 = object : Migration(6, 7) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE `chat_messages` ADD COLUMN `actionMetadataJson` TEXT NOT NULL DEFAULT ''")
         }
     }
 }

@@ -1,6 +1,7 @@
 package com.changeyourlife.cyl.data.local.entity
 
 import androidx.room.Entity
+import androidx.room.ColumnInfo
 import androidx.room.Index
 import androidx.room.PrimaryKey
 
@@ -17,5 +18,7 @@ data class ChatMessageEntity(
     val role: String,
     val content: String,
     val pageLinksJson: String,
+    @ColumnInfo(defaultValue = "''")
+    val actionMetadataJson: String,
     val createdAt: Long,
 )

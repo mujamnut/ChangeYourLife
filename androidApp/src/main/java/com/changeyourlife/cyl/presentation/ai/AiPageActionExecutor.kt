@@ -45,13 +45,22 @@ class AiPageActionExecutor @Inject constructor(
         var workingDocument = document
         var titleChanged = false
         var documentChanged = false
+        var directPageChanged = false
         val messages = mutableListOf<String>()
+        val validationIssues = mutableListOf<AiPageActionValidationIssue>()
         val createdPages = mutableListOf<Page>()
         val createdTasks = mutableListOf<TaskItem>()
         val createdReminders = mutableListOf<Reminder>()
 
-        for (action in actions) {
+        for ((actionIndex, action) in actions.withIndex()) {
             val actionType = action.type.normalizedActionType()
+            val validationIssue = workingDocument.validateActionTarget(action, actionIndex)
+            if (validationIssue != null) {
+                val issue = validationIssue
+                validationIssues += issue
+                messages += "Rejected ${action.type}: ${issue.message}"
+                continue
+            }
             runCatching {
                 when (actionType) {
                     "RENAME_CURRENT_PAGE", "RENAME_PAGE" -> {
@@ -77,8 +86,20 @@ class AiPageActionExecutor @Inject constructor(
 
                     "APPEND_BLOCK", "APPEND_PAGE_BLOCK", "ADD_BLOCK" -> {
                         val block = action.toPageBlock()
-                        workingDocument = workingDocument.copy(blocks = workingDocument.blocks + block)
-                        documentChanged = true
+                        val updatedDirectly = !documentChanged && pageRepository.addBlock(
+                            pageId = page.id,
+                            block = block,
+                            targetIndex = action.targetIndex?.toAiZeroBasedIndex(),
+                        )
+                        if (updatedDirectly) {
+                            refreshPageDocument(page.id)?.let { refreshedDocument ->
+                                workingDocument = refreshedDocument
+                            }
+                            directPageChanged = true
+                        } else {
+                            workingDocument = workingDocument.copy(blocks = workingDocument.blocks + block)
+                            documentChanged = true
+                        }
                         "Added ${block.type.name} block"
                     }
 
@@ -86,12 +107,38 @@ class AiPageActionExecutor @Inject constructor(
                         val propertyName = action.propertyName
                             .ifBlank { action.title }
                             .ifBlank { error("Missing property name") }
-                        workingDocument = workingDocument.upsertProperty(
-                            name = propertyName,
-                            type = action.propertyType.toPagePropertyType(),
-                            value = action.value.ifBlank { action.content },
-                        )
-                        documentChanged = true
+                        val value = action.value.ifBlank { action.content }
+                        val updatedDirectly = if (!documentChanged && actionType == "UPDATE_PROPERTY" && value.isNotBlank()) {
+                            pageRepository.updatePropertyValue(
+                                pageId = page.id,
+                                propertyName = propertyName,
+                                value = value,
+                            )
+                        } else if (!documentChanged && actionType == "ADD_PROPERTY") {
+                            pageRepository.addProperty(
+                                pageId = page.id,
+                                property = PageBlockCodec.newProperty(
+                                    type = action.propertyType.toPagePropertyType(),
+                                    name = propertyName,
+                                ).copy(value = value),
+                                targetIndex = action.targetIndex?.toAiZeroBasedIndex(),
+                            )
+                        } else {
+                            false
+                        }
+                        if (updatedDirectly) {
+                            refreshPageDocument(page.id)?.let { refreshedDocument ->
+                                workingDocument = refreshedDocument
+                            }
+                            directPageChanged = true
+                        } else {
+                            workingDocument = workingDocument.upsertProperty(
+                                name = propertyName,
+                                type = action.propertyType.toPagePropertyType(),
+                                value = value,
+                            )
+                            documentChanged = true
+                        }
                         "Updated property: $propertyName"
                     }
 
@@ -99,8 +146,21 @@ class AiPageActionExecutor @Inject constructor(
                         val propertyName = action.propertyName
                             .ifBlank { action.title }
                             .ifBlank { error("Missing property name") }
-                        workingDocument = workingDocument.deletePropertyByName(propertyName)
-                        documentChanged = true
+                        val propertyId = workingDocument.properties.firstOrNull { property ->
+                            property.name.normalizedAiKey() == propertyName.normalizedAiKey()
+                        }?.id.orEmpty()
+                        val updatedDirectly = !documentChanged &&
+                            propertyId.isNotBlank() &&
+                            pageRepository.deleteProperty(page.id, propertyId)
+                        if (updatedDirectly) {
+                            refreshPageDocument(page.id)?.let { refreshedDocument ->
+                                workingDocument = refreshedDocument
+                            }
+                            directPageChanged = true
+                        } else {
+                            workingDocument = workingDocument.deletePropertyByName(propertyName)
+                            documentChanged = true
+                        }
                         "Deleted property: $propertyName"
                     }
 
@@ -116,23 +176,66 @@ class AiPageActionExecutor @Inject constructor(
                     }
 
                     "DELETE_BLOCK" -> {
-                        val deleteResult = workingDocument.deleteMatchingBlock(action)
-                        workingDocument = deleteResult.document
-                        documentChanged = true
-                        "Deleted block: ${deleteResult.label}"
+                        val updatedDirectly = !documentChanged &&
+                            action.blockId.isNotBlank() &&
+                            pageRepository.deleteBlock(page.id, action.blockId)
+                        if (updatedDirectly) {
+                            refreshPageDocument(page.id)?.let { refreshedDocument ->
+                                workingDocument = refreshedDocument
+                            }
+                            directPageChanged = true
+                            "Deleted block"
+                        } else {
+                            val deleteResult = workingDocument.deleteMatchingBlock(action)
+                            workingDocument = deleteResult.document
+                            documentChanged = true
+                            "Deleted block: ${deleteResult.label}"
+                        }
                     }
 
                     "UPDATE_BLOCK", "EDIT_BLOCK", "UPDATE_TODO", "CHECK_BLOCK", "UNCHECK_BLOCK" -> {
-                        val updateResult = workingDocument.updateMatchingBlock(action)
-                        workingDocument = updateResult.document
-                        documentChanged = true
-                        "Updated block: ${updateResult.label}"
+                        val nextText = action.content.ifBlank { action.value }
+                        val canDirectUpdate = actionType in setOf("UPDATE_BLOCK", "EDIT_BLOCK") &&
+                            !documentChanged &&
+                            action.blockId.isNotBlank() &&
+                            action.blockType.isBlank() &&
+                            nextText.isNotBlank()
+                        if (canDirectUpdate) {
+                            val updated = pageRepository.updateBlockText(
+                                pageId = page.id,
+                                blockId = action.blockId,
+                                text = nextText,
+                            )
+                            if (!updated) error("Could not find block to update")
+                            refreshPageDocument(page.id)?.let { refreshedDocument ->
+                                workingDocument = refreshedDocument
+                            }
+                            directPageChanged = true
+                            "Updated block"
+                        } else {
+                            val updateResult = workingDocument.updateMatchingBlock(action)
+                            workingDocument = updateResult.document
+                            documentChanged = true
+                            "Updated block: ${updateResult.label}"
+                        }
                     }
 
                     "CREATE_DATABASE", "CREATE_TABLE" -> {
                         val tableBlock = action.toDatabaseBlock()
-                        workingDocument = workingDocument.copy(blocks = workingDocument.blocks + tableBlock)
-                        documentChanged = true
+                        val updatedDirectly = !documentChanged && pageRepository.addBlock(
+                            pageId = page.id,
+                            block = tableBlock,
+                            targetIndex = action.targetIndex?.toAiZeroBasedIndex(),
+                        )
+                        if (updatedDirectly) {
+                            refreshPageDocument(page.id)?.let { refreshedDocument ->
+                                workingDocument = refreshedDocument
+                            }
+                            directPageChanged = true
+                        } else {
+                            workingDocument = workingDocument.copy(blocks = workingDocument.blocks + tableBlock)
+                            documentChanged = true
+                        }
                         "Created database: ${tableBlock.table.title}"
                     }
 
@@ -157,7 +260,8 @@ class AiPageActionExecutor @Inject constructor(
                             .ifBlank { action.title }
                             .ifBlank { error("Missing column name") }
                         val columnType = action.columnType.ifBlank { action.propertyType }.toPageTableColumnType()
-                        val update = workingDocument.updateMatchingTable(resolvedAction) { block ->
+                        val targetTable = workingDocument.blocks.findMatchingTable(resolvedAction)
+                        val directColumn = targetTable?.let { block ->
                             val column = PageBlockCodec.newTableColumn(columnName, columnType)
                                 .withActionConfig(
                                     action = resolvedAction,
@@ -170,28 +274,78 @@ class AiPageActionExecutor @Inject constructor(
                                         document = workingDocument,
                                     ),
                                 )
-                            block.copy(
-                                table = block.table.copy(
-                                    columns = block.table.columns + column,
-                                    rows = block.table.rows.map { row ->
-                                        row.copy(cells = row.cells + (column.id to ""))
-                                    },
-                                ),
-                            )
+                            column
                         }
-                        workingDocument = update.document
-                        documentChanged = true
-                        "Added column $columnName to ${update.tableTitle}"
+                        val updatedDirectly = !documentChanged &&
+                            targetTable != null &&
+                            directColumn != null &&
+                            pageRepository.addTableColumn(
+                                pageId = page.id,
+                                tableBlockId = targetTable.id,
+                                column = directColumn,
+                                targetIndex = action.targetIndex?.toAiZeroBasedIndex(),
+                            )
+                        if (updatedDirectly) {
+                            refreshPageDocument(page.id)?.let { refreshedDocument ->
+                                workingDocument = refreshedDocument
+                            }
+                            directPageChanged = true
+                            "Added column $columnName to ${targetTable.table.title}"
+                        } else {
+                            val update = workingDocument.updateMatchingTable(resolvedAction) { block ->
+                                val column = PageBlockCodec.newTableColumn(columnName, columnType)
+                                    .withActionConfig(
+                                        action = resolvedAction,
+                                        resolvedRollupTargetColumnId = block.resolveRollupTargetColumnId(
+                                            action = resolvedAction,
+                                            relationColumn = block.table.findColumn(
+                                                columnId = resolvedAction.rollupRelationColumnId,
+                                                columnName = resolvedAction.rollupRelationColumnName,
+                                            ),
+                                            document = workingDocument,
+                                        ),
+                                    )
+                                block.copy(
+                                    table = block.table.copy(
+                                        columns = block.table.columns + column,
+                                        rows = block.table.rows.map { row ->
+                                            row.copy(cells = row.cells + (column.id to ""))
+                                        },
+                                    ),
+                                )
+                            }
+                            workingDocument = update.document
+                            documentChanged = true
+                            "Added column $columnName to ${update.tableTitle}"
+                        }
                     }
 
                     "DELETE_TABLE_COLUMN" -> {
                         val columnName = action.columnName.ifBlank { action.propertyName }.ifBlank { action.title }
-                        val update = workingDocument.updateMatchingTable(action) { block ->
-                            block.deleteTableColumn(action.columnId, columnName)
+                        val targetTable = workingDocument.blocks.findMatchingTable(action)
+                        val targetColumn = targetTable?.table?.findColumn(action.columnId, columnName)
+                        val updatedDirectly = !documentChanged &&
+                            targetTable != null &&
+                            targetColumn != null &&
+                            pageRepository.deleteTableColumn(
+                                pageId = page.id,
+                                tableBlockId = targetTable.id,
+                                columnId = targetColumn.id,
+                            )
+                        if (updatedDirectly) {
+                            refreshPageDocument(page.id)?.let { refreshedDocument ->
+                                workingDocument = refreshedDocument
+                            }
+                            directPageChanged = true
+                            "Deleted column ${targetColumn.name} from ${targetTable.table.title}"
+                        } else {
+                            val update = workingDocument.updateMatchingTable(action) { block ->
+                                block.deleteTableColumn(action.columnId, columnName)
+                            }
+                            workingDocument = update.document
+                            documentChanged = true
+                            "Deleted column ${columnName.ifBlank { action.columnId }} from ${update.tableTitle}"
                         }
-                        workingDocument = update.document
-                        documentChanged = true
-                        "Deleted column ${columnName.ifBlank { action.columnId }} from ${update.tableTitle}"
                     }
 
                     "RENAME_TABLE_COLUMN", "UPDATE_TABLE_COLUMN" -> {
@@ -246,16 +400,35 @@ class AiPageActionExecutor @Inject constructor(
                     "REORDER_TABLE_COLUMN", "MOVE_TABLE_COLUMN" -> {
                         val columnName = action.columnName.ifBlank { action.propertyName }.ifBlank { action.title }
                         val targetIndex = action.targetIndex ?: error("Missing target index")
-                        val update = workingDocument.updateMatchingTable(action) { block ->
-                            block.reorderTableColumn(
-                                columnId = action.columnId,
-                                columnName = columnName,
-                                targetIndex = targetIndex,
+                        val targetTable = workingDocument.blocks.findMatchingTable(action)
+                        val targetColumn = targetTable?.table?.findColumn(action.columnId, columnName)
+                        val updatedDirectly = !documentChanged &&
+                            targetTable != null &&
+                            targetColumn != null &&
+                            pageRepository.moveTableColumn(
+                                pageId = page.id,
+                                tableBlockId = targetTable.id,
+                                columnId = targetColumn.id,
+                                targetIndex = targetIndex.toAiZeroBasedIndex(),
                             )
+                        if (updatedDirectly) {
+                            refreshPageDocument(page.id)?.let { refreshedDocument ->
+                                workingDocument = refreshedDocument
+                            }
+                            directPageChanged = true
+                            "Moved column in ${targetTable.table.title}"
+                        } else {
+                            val update = workingDocument.updateMatchingTable(action) { block ->
+                                block.reorderTableColumn(
+                                    columnId = action.columnId,
+                                    columnName = columnName,
+                                    targetIndex = targetIndex,
+                                )
+                            }
+                            workingDocument = update.document
+                            documentChanged = true
+                            "Moved column in ${update.tableTitle}"
                         }
-                        workingDocument = update.document
-                        documentChanged = true
-                        "Moved column in ${update.tableTitle}"
                     }
 
                     "ADD_TABLE_ROW" -> {
@@ -265,23 +438,60 @@ class AiPageActionExecutor @Inject constructor(
                             documentChanged = true
                             "Added task row ${mutation.rowTitle} to ${mutation.tableTitle}"
                         } else {
-                            val update = workingDocument.updateMatchingTable(action) { block ->
-                                block.copy(table = block.table.copy(rows = block.table.rows + block.table.newRowFromAction(action)))
+                            val targetTable = workingDocument.blocks.findMatchingTable(action)
+                            val row = targetTable?.table?.newRowFromAction(action)
+                            val updatedDirectly = !documentChanged &&
+                                targetTable != null &&
+                                row != null &&
+                                pageRepository.addTableRow(
+                                    pageId = page.id,
+                                    tableBlockId = targetTable.id,
+                                    row = row,
+                                    targetIndex = action.targetIndex?.toAiZeroBasedIndex(),
+                                )
+                            if (updatedDirectly) {
+                                refreshPageDocument(page.id)?.let { refreshedDocument ->
+                                    workingDocument = refreshedDocument
+                                }
+                                directPageChanged = true
+                                "Added row to ${targetTable.table.title}"
+                            } else {
+                                val update = workingDocument.updateMatchingTable(action) { block ->
+                                    block.copy(table = block.table.copy(rows = block.table.rows + block.table.newRowFromAction(action)))
+                                }
+                                workingDocument = update.document
+                                documentChanged = true
+                                "Added row to ${update.tableTitle}"
                             }
-                            workingDocument = update.document
-                            documentChanged = true
-                            "Added row to ${update.tableTitle}"
                         }
                     }
 
                     "DELETE_TABLE_ROW" -> {
                         val rowTitle = action.rowTitle.ifBlank { action.title }
-                        val update = workingDocument.updateMatchingTable(action) { block ->
-                            block.deleteTableRow(action.rowId, rowTitle)
+                        val targetTable = workingDocument.blocks.findMatchingTable(action)
+                        val targetRow = targetTable?.table?.findRow(action.rowId, rowTitle)
+                        val updatedDirectly = !documentChanged &&
+                            targetTable != null &&
+                            targetRow != null &&
+                            pageRepository.deleteTableRow(
+                                pageId = page.id,
+                                tableBlockId = targetTable.id,
+                                rowId = targetRow.id,
+                            )
+                        if (updatedDirectly) {
+                            refreshPageDocument(page.id)?.let { refreshedDocument ->
+                                workingDocument = refreshedDocument
+                            }
+                            directPageChanged = true
+                            "Deleted row ${rowTitle.ifBlank { targetRow.id }} from ${targetTable.table.title}"
+                        } else {
+                            val update = workingDocument.updateMatchingTable(action) { block ->
+                                block.deleteTableRow(action.rowId, rowTitle)
+                            }
+                            workingDocument = update.document
+                            documentChanged = true
+                            "Deleted row ${rowTitle.ifBlank { action.rowId }} from ${update.tableTitle}"
                         }
-                        workingDocument = update.document
-                        documentChanged = true
-                        "Deleted row ${rowTitle.ifBlank { action.rowId }} from ${update.tableTitle}"
                     }
 
                     "UPDATE_TABLE_ROW", "RENAME_TABLE_ROW" -> {
@@ -298,16 +508,35 @@ class AiPageActionExecutor @Inject constructor(
                     "REORDER_TABLE_ROW", "MOVE_TABLE_ROW" -> {
                         val rowTitle = action.rowTitle.ifBlank { action.title }
                         val targetIndex = action.targetIndex ?: error("Missing target index")
-                        val update = workingDocument.updateMatchingTable(action) { block ->
-                            block.reorderTableRow(
-                                rowId = action.rowId,
-                                rowTitle = rowTitle,
-                                targetIndex = targetIndex,
+                        val targetTable = workingDocument.blocks.findMatchingTable(action)
+                        val targetRow = targetTable?.table?.findRow(action.rowId, rowTitle)
+                        val updatedDirectly = !documentChanged &&
+                            targetTable != null &&
+                            targetRow != null &&
+                            pageRepository.moveTableRow(
+                                pageId = page.id,
+                                tableBlockId = targetTable.id,
+                                rowId = targetRow.id,
+                                targetIndex = targetIndex.toAiZeroBasedIndex(),
                             )
+                        if (updatedDirectly) {
+                            refreshPageDocument(page.id)?.let { refreshedDocument ->
+                                workingDocument = refreshedDocument
+                            }
+                            directPageChanged = true
+                            "Moved row in ${targetTable.table.title}"
+                        } else {
+                            val update = workingDocument.updateMatchingTable(action) { block ->
+                                block.reorderTableRow(
+                                    rowId = action.rowId,
+                                    rowTitle = rowTitle,
+                                    targetIndex = targetIndex,
+                                )
+                            }
+                            workingDocument = update.document
+                            documentChanged = true
+                            "Moved row in ${update.tableTitle}"
                         }
-                        workingDocument = update.document
-                        documentChanged = true
-                        "Moved row in ${update.tableTitle}"
                     }
 
                     "ADD_ROW_PAGE_BLOCK", "APPEND_ROW_PAGE_BLOCK", "ADD_TABLE_ROW_BLOCK" -> {
@@ -362,18 +591,34 @@ class AiPageActionExecutor @Inject constructor(
                     "UPDATE_TABLE_CELL" -> {
                         val columnName = action.columnName.ifBlank { action.propertyName }
                         val rowTitle = action.rowTitle.ifBlank { action.title }
-                        val update = workingDocument.updateMatchingTable(action) { block ->
-                            block.updateCellByNames(
+                        val value = action.value.ifBlank { action.content }
+                        if (!documentChanged && action.rowId.isNotBlank() && action.columnId.isNotBlank()) {
+                            val updated = pageRepository.updateTableCellValue(
+                                pageId = page.id,
                                 rowId = action.rowId,
-                                rowTitle = rowTitle,
                                 columnId = action.columnId,
-                                columnName = columnName,
-                                value = action.value.ifBlank { action.content },
+                                value = value,
                             )
+                            if (!updated) error("Could not find table cell")
+                            refreshPageDocument(page.id)?.let { refreshedDocument ->
+                                workingDocument = refreshedDocument
+                            }
+                            directPageChanged = true
+                            "Updated ${columnName.ifBlank { action.columnId }} for ${rowTitle.ifBlank { action.rowId }}"
+                        } else {
+                            val update = workingDocument.updateMatchingTable(action) { block ->
+                                block.updateCellByNames(
+                                    rowId = action.rowId,
+                                    rowTitle = rowTitle,
+                                    columnId = action.columnId,
+                                    columnName = columnName,
+                                    value = value,
+                                )
+                            }
+                            workingDocument = update.document
+                            documentChanged = true
+                            "Updated ${columnName.ifBlank { action.columnId }} for ${rowTitle.ifBlank { action.rowId }} in ${update.tableTitle}"
                         }
-                        workingDocument = update.document
-                        documentChanged = true
-                        "Updated ${columnName.ifBlank { action.columnId }} for ${rowTitle.ifBlank { action.rowId }} in ${update.tableTitle}"
                     }
 
                     "CHANGE_TABLE_VIEW", "SET_TABLE_VIEW" -> {
@@ -507,7 +752,7 @@ class AiPageActionExecutor @Inject constructor(
         }
 
         val pageLinks = buildList {
-            if (titleChanged || documentChanged) {
+            if (titleChanged || documentChanged || directPageChanged) {
                 add(AiChatPageLink(pageId = page.id, title = workingTitle.ifBlank { "Untitled page" }))
             }
             createdPages.forEach { createdPage ->
@@ -523,7 +768,14 @@ class AiPageActionExecutor @Inject constructor(
             createdTasks = createdTasks,
             createdReminders = createdReminders,
             pageLinks = pageLinks,
+            validationIssues = validationIssues,
         )
+    }
+
+    private suspend fun refreshPageDocument(pageId: String): PageBlockDocument? {
+        return pageRepository.getPage(pageId)?.let { refreshedPage ->
+            PageBlockCodec.decodeDocument(refreshedPage.content)
+        }
     }
 
     companion object {
@@ -610,7 +862,227 @@ data class AiPageActionExecutionResult(
     val createdTasks: List<TaskItem> = emptyList(),
     val createdReminders: List<Reminder> = emptyList(),
     val pageLinks: List<AiChatPageLink> = emptyList(),
+    val validationIssues: List<AiPageActionValidationIssue> = emptyList(),
 )
+
+data class AiPageActionValidationIssue(
+    val actionIndex: Int? = null,
+    val field: String = "",
+    val code: String = "",
+    val message: String = "",
+)
+
+private fun PageBlockDocument.validateActionTarget(
+    action: ChatAction,
+    actionIndex: Int,
+): AiPageActionValidationIssue? {
+    fun targetNotFound(field: String, targetKind: String, targetLabel: String): AiPageActionValidationIssue {
+        val label = targetLabel.ifBlank { "target $targetKind" }
+        return AiPageActionValidationIssue(
+            actionIndex = actionIndex,
+            field = field,
+            code = "target_not_found",
+            message = "Could not find $targetKind: $label.",
+        )
+    }
+
+    fun targetTable(): PageBlock? = blocks.findMatchingTable(action)
+
+    fun tableIssue(): AiPageActionValidationIssue? {
+        return if (targetTable() == null) {
+            targetNotFound(
+                field = "tableTitle",
+                targetKind = "table",
+                targetLabel = action.tableTitle.ifBlank { action.title },
+            )
+        } else {
+            null
+        }
+    }
+
+    fun missingColumnIssue(
+        table: PageBlock,
+        field: String,
+        columnId: String,
+        columnName: String,
+    ): AiPageActionValidationIssue? {
+        if (columnId.isBlank() && columnName.isBlank()) return null
+        return if (table.table.findColumn(columnId, columnName) == null) {
+            targetNotFound(
+                field = field,
+                targetKind = "column",
+                targetLabel = columnName.ifBlank { columnId },
+            )
+        } else {
+            null
+        }
+    }
+
+    fun columnIssue(table: PageBlock): AiPageActionValidationIssue? {
+        val actionType = action.type.normalizedActionType()
+        val columnId = when (actionType) {
+            "GROUP_TABLE", "SET_TABLE_GROUP" -> action.groupByColumnId
+            else -> action.columnId
+        }
+        val columnName = when (actionType) {
+            "GROUP_TABLE", "SET_TABLE_GROUP" -> action.groupByColumnName
+            else -> action.columnName
+        }
+            .ifBlank { action.propertyName }
+            .ifBlank { action.title }
+        return missingColumnIssue(
+            table = table,
+            field = if (actionType in setOf("GROUP_TABLE", "SET_TABLE_GROUP")) {
+                "groupByColumnName"
+            } else {
+                "columnName"
+            },
+            columnId = columnId,
+            columnName = columnName,
+        ) ?: if (columnId.isBlank() && columnName.isBlank()) {
+            targetNotFound(
+                field = "columnName",
+                targetKind = "column",
+                targetLabel = "",
+            )
+        } else {
+            null
+        }
+    }
+
+    fun viewConfigColumnIssue(table: PageBlock): AiPageActionValidationIssue? {
+        return missingColumnIssue(
+            table = table,
+            field = "calendarDateColumnName",
+            columnId = action.calendarDateColumnId,
+            columnName = action.calendarDateColumnName,
+        ) ?: missingColumnIssue(
+            table = table,
+            field = "timelineStartColumnName",
+            columnId = action.timelineStartColumnId,
+            columnName = action.timelineStartColumnName,
+        ) ?: missingColumnIssue(
+            table = table,
+            field = "timelineEndColumnName",
+            columnId = action.timelineEndColumnId,
+            columnName = action.timelineEndColumnName,
+        ) ?: missingColumnIssue(
+            table = table,
+            field = "dashboardMetricColumnName",
+            columnId = action.dashboardMetricColumnId,
+            columnName = action.dashboardMetricColumnName,
+        ) ?: missingColumnIssue(
+            table = table,
+            field = "dashboardGroupColumnName",
+            columnId = action.dashboardGroupColumnId,
+            columnName = action.dashboardGroupColumnName,
+        ) ?: missingColumnIssue(
+            table = table,
+            field = "groupByColumnName",
+            columnId = action.groupByColumnId,
+            columnName = action.groupByColumnName,
+        )
+    }
+
+    fun rowIssue(table: PageBlock): AiPageActionValidationIssue? {
+        val rowTitle = action.rowTitle.ifBlank { action.targetTitle }.ifBlank { action.title }
+        return if (table.table.findRow(action.rowId, rowTitle) == null) {
+            targetNotFound(
+                field = "rowTitle",
+                targetKind = "row",
+                targetLabel = rowTitle,
+            )
+        } else {
+            null
+        }
+    }
+
+    fun rowPageBlockIssue(table: PageBlock): AiPageActionValidationIssue? {
+        val rowTitle = action.rowTitle.ifBlank { action.targetTitle }.ifBlank { action.title }
+        val row = table.table.findRow(action.rowId, rowTitle)
+            ?: return rowIssue(table)
+        val effectiveAction = action.copy(blockId = action.rowBlockId.ifBlank { action.blockId })
+        return if (row.blocks.anyMatchingBlock(effectiveAction)) {
+            null
+        } else {
+            targetNotFound(
+                field = "rowBlockId",
+                targetKind = "row content block",
+                targetLabel = action.blockText.ifBlank { action.content }.ifBlank { action.title },
+            )
+        }
+    }
+
+    return when (action.type.normalizedActionType()) {
+        "DELETE_BLOCK", "UPDATE_BLOCK", "EDIT_BLOCK", "UPDATE_TODO", "CHECK_BLOCK", "UNCHECK_BLOCK" -> {
+            if (blocks.anyMatchingBlock(action)) {
+                null
+            } else {
+                targetNotFound(
+                    field = "blockText",
+                    targetKind = "block",
+                    targetLabel = action.blockText.ifBlank { action.title }.ifBlank { action.content },
+                )
+            }
+        }
+
+        "UPDATE_PROPERTY", "DELETE_PROPERTY" -> {
+            val propertyName = action.propertyName.ifBlank { action.title }
+            if (properties.any { property -> property.name.normalizedAiKey() == propertyName.normalizedAiKey() }) {
+                null
+            } else {
+                targetNotFound(
+                    field = "propertyName",
+                    targetKind = "property",
+                    targetLabel = propertyName,
+                )
+            }
+        }
+
+        "RENAME_TABLE", "RENAME_DATABASE", "UPDATE_TABLE_TITLE",
+        "ADD_TABLE_COLUMN", "ADD_TABLE_ROW",
+        "CHANGE_TABLE_VIEW", "SET_TABLE_VIEW",
+        "CLEAR_TABLE_SORT", "CLEAR_TABLE_FILTER", "CLEAR_TABLE_GROUP" -> tableIssue()
+
+        "SET_TABLE_VIEW_CONFIG", "CONFIGURE_TABLE_VIEW", "UPDATE_TABLE_VIEW_CONFIG" -> {
+            val table = targetTable() ?: return tableIssue()
+            viewConfigColumnIssue(table)
+        }
+
+        "DELETE_TABLE_COLUMN", "RENAME_TABLE_COLUMN", "UPDATE_TABLE_COLUMN",
+        "UPDATE_TABLE_COLUMN_TYPE", "CHANGE_TABLE_COLUMN_TYPE", "SET_TABLE_COLUMN_TYPE",
+        "UPDATE_TABLE_COLUMN_CONFIG", "SET_TABLE_COLUMN_CONFIG",
+        "UPDATE_FORMULA_COLUMN", "UPDATE_RELATION_COLUMN", "UPDATE_ROLLUP_COLUMN",
+        "REORDER_TABLE_COLUMN", "MOVE_TABLE_COLUMN",
+        "SORT_TABLE", "SET_TABLE_SORT",
+        "FILTER_TABLE", "SET_TABLE_FILTER",
+        "GROUP_TABLE", "SET_TABLE_GROUP" -> {
+            val table = targetTable() ?: return tableIssue()
+            columnIssue(table)
+        }
+
+        "DELETE_TABLE_ROW", "UPDATE_TABLE_ROW", "RENAME_TABLE_ROW",
+        "REORDER_TABLE_ROW", "MOVE_TABLE_ROW",
+        "ADD_ROW_PAGE_BLOCK", "APPEND_ROW_PAGE_BLOCK", "ADD_TABLE_ROW_BLOCK" -> {
+            val table = targetTable() ?: return tableIssue()
+            rowIssue(table)
+        }
+
+        "UPDATE_ROW_PAGE_BLOCK", "EDIT_ROW_PAGE_BLOCK", "UPDATE_TABLE_ROW_BLOCK",
+        "CHECK_ROW_PAGE_BLOCK", "UNCHECK_ROW_PAGE_BLOCK",
+        "DELETE_ROW_PAGE_BLOCK", "DELETE_TABLE_ROW_BLOCK" -> {
+            val table = targetTable() ?: return tableIssue()
+            rowPageBlockIssue(table)
+        }
+
+        "UPDATE_TABLE_CELL" -> {
+            val table = targetTable() ?: return tableIssue()
+            rowIssue(table) ?: columnIssue(table)
+        }
+
+        else -> null
+    }
+}
 
 private data class DocumentTableUpdateResult(
     val document: PageBlockDocument,
@@ -649,6 +1121,10 @@ private fun ChatAction.toDatabaseBlock(): PageBlock {
             rows = buildTableRows(columns),
         ),
     )
+}
+
+private fun Int.toAiZeroBasedIndex(): Int {
+    return (this - 1).coerceAtLeast(0)
 }
 
 private fun ChatAction.buildTableColumns(): List<PageTableColumn> {
@@ -794,6 +1270,12 @@ private fun PageBlockDocument.updateMatchingBlock(action: ChatAction): DocumentB
     val result = blocks.updateMatchingBlock(action)
     if (!result.changed) error("Could not find block to update")
     return DocumentBlockMutationResult(document = copy(blocks = result.blocks), label = result.label)
+}
+
+private fun List<PageBlock>.anyMatchingBlock(action: ChatAction): Boolean {
+    return any { block ->
+        block.matchesBlockAction(action) || block.children.anyMatchingBlock(action)
+    }
 }
 
 private fun List<PageBlock>.deleteMatchingBlock(action: ChatAction): BlockMutationResult {

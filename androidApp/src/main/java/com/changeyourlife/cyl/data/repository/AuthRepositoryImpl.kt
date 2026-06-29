@@ -7,6 +7,7 @@ import com.changeyourlife.cyl.data.remote.auth.LoginRequestDto
 import com.changeyourlife.cyl.data.remote.auth.RegisterRequestDto
 import com.changeyourlife.cyl.data.remote.auth.ResetPasswordRequestDto
 import com.changeyourlife.cyl.data.remote.auth.toDomain
+import com.changeyourlife.cyl.data.sync.SessionSyncCoordinator
 import com.changeyourlife.cyl.domain.model.AuthSession
 import com.changeyourlife.cyl.domain.model.AuthUser
 import com.changeyourlife.cyl.domain.repository.AuthRepository
@@ -19,6 +20,7 @@ import kotlinx.coroutines.flow.map
 class AuthRepositoryImpl @Inject constructor(
     private val authApi: AuthApi,
     private val tokenStore: AuthTokenStore,
+    private val sessionSyncCoordinator: SessionSyncCoordinator,
 ) : AuthRepository {
     override val authState: Flow<AuthState> = tokenStore.token.map { token ->
         if (token.isNullOrBlank()) {
@@ -42,6 +44,7 @@ class AuthRepositoryImpl @Inject constructor(
                 ),
             ).toDomain()
             tokenStore.saveToken(session.token)
+            runCatching { sessionSyncCoordinator.syncAfterAuth() }
             session
         }
     }
@@ -58,6 +61,7 @@ class AuthRepositoryImpl @Inject constructor(
                 ),
             ).toDomain()
             tokenStore.saveToken(session.token)
+            runCatching { sessionSyncCoordinator.syncAfterAuth() }
             session
         }
     }

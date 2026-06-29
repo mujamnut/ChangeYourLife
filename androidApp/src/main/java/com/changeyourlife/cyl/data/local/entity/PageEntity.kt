@@ -31,5 +31,7 @@ data class PageEntity(
     val createdAt: Long,
     val updatedAt: Long,
     val deletedAt: Long?,
+    val syncStatus: String = SyncStatus.Synced,
+    val remoteUpdatedAt: Long = updatedAt,
+    val lastSyncedAt: Long = 0L,
 )
-

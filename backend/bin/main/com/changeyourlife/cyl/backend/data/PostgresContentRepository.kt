@@ -5,6 +5,7 @@ import com.changeyourlife.cyl.backend.domain.PageRecord
 import com.changeyourlife.cyl.backend.domain.WorkspaceRecord
 import java.sql.PreparedStatement
 import java.sql.ResultSet
+import java.util.UUID
 import javax.sql.DataSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -17,7 +18,12 @@ class PostgresContentRepository(
             dataSource.connection.use { connection ->
                 connection.prepareStatement(
                     """
-                    SELECT id, user_id, name, created_at, updated_at, deleted_at
+                    SELECT COALESCE(client_id, id) AS id,
+                           user_id,
+                           name,
+                           created_at,
+                           updated_at,
+                           deleted_at
                     FROM workspaces
                     WHERE user_id = ?
                       AND (? OR deleted_at IS NULL)
@@ -37,27 +43,30 @@ class PostgresContentRepository(
 
     override suspend fun upsertWorkspace(workspace: WorkspaceRecord): WorkspaceRecord? =
         withContext(Dispatchers.IO) {
-            val existingOwner = workspaceOwner(workspace.id)
-            if (existingOwner != null && existingOwner != workspace.userId) return@withContext null
-
             dataSource.connection.use { connection ->
                 connection.prepareStatement(
                     """
-                    INSERT INTO workspaces (id, user_id, name, created_at, updated_at, deleted_at)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    ON CONFLICT (id) DO UPDATE SET
+                    INSERT INTO workspaces (id, user_id, client_id, name, created_at, updated_at, deleted_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT (user_id, client_id) DO UPDATE SET
                         name = EXCLUDED.name,
                         updated_at = EXCLUDED.updated_at,
                         deleted_at = EXCLUDED.deleted_at
-                    RETURNING id, user_id, name, created_at, updated_at, deleted_at
+                    RETURNING COALESCE(client_id, id) AS id,
+                              user_id,
+                              name,
+                              created_at,
+                              updated_at,
+                              deleted_at
                     """.trimIndent(),
                 ).use { statement ->
-                    statement.setString(1, workspace.id)
+                    statement.setString(1, UUID.randomUUID().toString())
                     statement.setString(2, workspace.userId)
-                    statement.setString(3, workspace.name)
-                    statement.setLong(4, workspace.createdAt)
-                    statement.setLong(5, workspace.updatedAt)
-                    statement.setNullableLong(6, workspace.deletedAt)
+                    statement.setString(3, workspace.id)
+                    statement.setString(4, workspace.name)
+                    statement.setLong(5, workspace.createdAt)
+                    statement.setLong(6, workspace.updatedAt)
+                    statement.setNullableLong(7, workspace.deletedAt)
                     statement.executeQuery().use { resultSet ->
                         if (resultSet.next()) resultSet.toWorkspaceRecord() else null
                     }
@@ -70,6 +79,8 @@ class PostgresContentRepository(
             dataSource.connection.use { connection ->
                 connection.autoCommit = false
                 try {
+                    val serverWorkspaceId = connection.resolveWorkspaceServerId(userId, workspaceId)
+                        ?: return@withContext false
                     val updated = connection.prepareStatement(
                         """
                         UPDATE workspaces
@@ -79,7 +90,7 @@ class PostgresContentRepository(
                     ).use { statement ->
                         statement.setLong(1, deletedAt)
                         statement.setLong(2, deletedAt)
-                        statement.setString(3, workspaceId)
+                        statement.setString(3, serverWorkspaceId)
                         statement.setString(4, userId)
                         statement.executeUpdate()
                     }
@@ -93,7 +104,7 @@ class PostgresContentRepository(
                         ).use { statement ->
                             statement.setLong(1, deletedAt)
                             statement.setLong(2, deletedAt)
-                            statement.setString(3, workspaceId)
+                            statement.setString(3, serverWorkspaceId)
                             statement.executeUpdate()
                         }
                     }
@@ -115,7 +126,7 @@ class PostgresContentRepository(
             connection.prepareStatement(
                 """
                 SELECT pages.id,
-                       pages.workspace_id,
+                       COALESCE(workspaces.client_id, workspaces.id) AS workspace_id,
                        pages.parent_page_id,
                        pages.title,
                        pages.content,
@@ -126,7 +137,7 @@ class PostgresContentRepository(
                 FROM pages
                 INNER JOIN workspaces ON workspaces.id = pages.workspace_id
                 WHERE workspaces.user_id = ?
-                  AND pages.workspace_id = ?
+                  AND COALESCE(workspaces.client_id, workspaces.id) = ?
                   AND (? OR pages.deleted_at IS NULL)
                 ORDER BY pages.sort_order ASC, pages.updated_at DESC
                 """.trimIndent(),
@@ -149,7 +160,7 @@ class PostgresContentRepository(
                 connection.prepareStatement(
                     """
                     SELECT pages.id,
-                           pages.workspace_id,
+                           COALESCE(workspaces.client_id, workspaces.id) AS workspace_id,
                            pages.parent_page_id,
                            pages.title,
                            pages.content,
@@ -177,12 +188,12 @@ class PostgresContentRepository(
 
     override suspend fun upsertPage(userId: String, page: PageRecord): PageRecord? =
         withContext(Dispatchers.IO) {
-            if (!workspaceBelongsToUser(userId, page.workspaceId)) return@withContext null
-            val existingWorkspaceId = pageWorkspace(page.id)
-            if (existingWorkspaceId != null && !workspaceBelongsToUser(userId, existingWorkspaceId)) return@withContext null
+            val serverWorkspaceId = resolveWorkspaceServerId(userId, page.workspaceId) ?: return@withContext null
+            val existingWorkspaceId = pageWorkspaceServerId(page.id)
+            if (existingWorkspaceId != null && !workspaceServerIdBelongsToUser(userId, existingWorkspaceId)) return@withContext null
             if (page.parentPageId != null) {
-                val parentWorkspaceId = pageWorkspace(page.parentPageId) ?: return@withContext null
-                if (parentWorkspaceId != page.workspaceId) return@withContext null
+                val parentWorkspaceId = pageWorkspaceServerId(page.parentPageId) ?: return@withContext null
+                if (parentWorkspaceId != serverWorkspaceId) return@withContext null
             }
 
             dataSource.connection.use { connection ->
@@ -206,7 +217,7 @@ class PostgresContentRepository(
                     """.trimIndent(),
                 ).use { statement ->
                     statement.setString(1, page.id)
-                    statement.setString(2, page.workspaceId)
+                    statement.setString(2, serverWorkspaceId)
                     statement.setString(3, page.parentPageId)
                     statement.setString(4, page.title)
                     statement.setString(5, page.content)
@@ -215,11 +226,57 @@ class PostgresContentRepository(
                     statement.setLong(8, page.updatedAt)
                     statement.setNullableLong(9, page.deletedAt)
                     statement.executeQuery().use { resultSet ->
-                        if (resultSet.next()) resultSet.toPageRecord() else null
+                        if (resultSet.next()) resultSet.toPageRecord(workspaceId = page.workspaceId) else null
                     }
                 }
             }
         }
+
+    override suspend fun updatePageBlockText(
+        userId: String,
+        pageId: String,
+        blockId: String,
+        text: String,
+        updatedAt: Long,
+    ): PageRecord? = updatePageContent(userId, pageId, updatedAt) { content ->
+        PageContentJsonMutator.updateBlockText(
+            content = content,
+            blockId = blockId,
+            text = text,
+        )
+    }
+
+    override suspend fun updatePagePropertyValue(
+        userId: String,
+        pageId: String,
+        propertyId: String,
+        propertyName: String,
+        value: String,
+        updatedAt: Long,
+    ): PageRecord? = updatePageContent(userId, pageId, updatedAt) { content ->
+        PageContentJsonMutator.updatePropertyValue(
+            content = content,
+            propertyId = propertyId,
+            propertyName = propertyName,
+            value = value,
+        )
+    }
+
+    override suspend fun updatePageTableCellValue(
+        userId: String,
+        pageId: String,
+        rowId: String,
+        columnId: String,
+        value: String,
+        updatedAt: Long,
+    ): PageRecord? = updatePageContent(userId, pageId, updatedAt) { content ->
+        PageContentJsonMutator.updateTableCellValue(
+            content = content,
+            rowId = rowId,
+            columnId = columnId,
+            value = value,
+        )
+    }
 
     override suspend fun softDeletePage(userId: String, pageId: String, deletedAt: Long): Boolean =
         withContext(Dispatchers.IO) {
@@ -289,24 +346,76 @@ class PostgresContentRepository(
         }
     }
 
-    private fun workspaceOwner(workspaceId: String): String? {
+    private fun resolveWorkspaceServerId(userId: String, workspaceId: String): String? {
         dataSource.connection.use { connection ->
+            return connection.resolveWorkspaceServerId(userId, workspaceId)
+        }
+    }
+
+    private suspend fun updatePageContent(
+        userId: String,
+        pageId: String,
+        updatedAt: Long,
+        transform: (String) -> String?,
+    ): PageRecord? = withContext(Dispatchers.IO) {
+        dataSource.connection.use { connection ->
+            val currentContent = connection.selectOwnedPageContent(
+                userId = userId,
+                pageId = pageId,
+            ) ?: return@withContext null
+            val updatedContent = transform(currentContent) ?: return@withContext null
+
             connection.prepareStatement(
-                "SELECT user_id FROM workspaces WHERE id = ? LIMIT 1",
+                """
+                WITH updated AS (
+                    UPDATE pages
+                    SET content = ?, updated_at = ?
+                    WHERE id = ?
+                      AND deleted_at IS NULL
+                      AND workspace_id IN (
+                          SELECT id FROM workspaces WHERE user_id = ?
+                      )
+                    RETURNING *
+                )
+                SELECT updated.id,
+                       COALESCE(workspaces.client_id, workspaces.id) AS workspace_id,
+                       updated.parent_page_id,
+                       updated.title,
+                       updated.content,
+                       updated.sort_order,
+                       updated.created_at,
+                       updated.updated_at,
+                       updated.deleted_at
+                FROM updated
+                INNER JOIN workspaces ON workspaces.id = updated.workspace_id
+                """.trimIndent(),
             ).use { statement ->
-                statement.setString(1, workspaceId)
+                statement.setString(1, updatedContent)
+                statement.setLong(2, updatedAt)
+                statement.setString(3, pageId)
+                statement.setString(4, userId)
                 statement.executeQuery().use { resultSet ->
-                    return if (resultSet.next()) resultSet.getString("user_id") else null
+                    if (resultSet.next()) resultSet.toPageRecord() else null
                 }
             }
         }
     }
 
-    private fun workspaceBelongsToUser(userId: String, workspaceId: String): Boolean {
-        return workspaceOwner(workspaceId) == userId
+    private fun workspaceServerIdBelongsToUser(userId: String, workspaceServerId: String): Boolean {
+        dataSource.connection.use { connection ->
+            connection.prepareStatement(
+                "SELECT 1 FROM workspaces WHERE id = ? AND user_id = ? LIMIT 1",
+            ).use { statement ->
+                statement.setString(1, workspaceServerId)
+                statement.setString(2, userId)
+                statement.executeQuery().use { resultSet ->
+                    return resultSet.next()
+                }
+            }
+        }
     }
 
-    private fun pageWorkspace(pageId: String): String? {
+    private fun pageWorkspaceServerId(pageId: String): String? {
         dataSource.connection.use { connection ->
             connection.prepareStatement(
                 "SELECT workspace_id FROM pages WHERE id = ? LIMIT 1",
@@ -316,6 +425,44 @@ class PostgresContentRepository(
                     return if (resultSet.next()) resultSet.getString("workspace_id") else null
                 }
             }
+        }
+    }
+}
+
+private fun java.sql.Connection.resolveWorkspaceServerId(userId: String, workspaceId: String): String? {
+    prepareStatement(
+        """
+        SELECT id
+        FROM workspaces
+        WHERE user_id = ?
+          AND COALESCE(client_id, id) = ?
+        LIMIT 1
+        """.trimIndent(),
+    ).use { statement ->
+        statement.setString(1, userId)
+        statement.setString(2, workspaceId)
+        statement.executeQuery().use { resultSet ->
+            return if (resultSet.next()) resultSet.getString("id") else null
+        }
+    }
+}
+
+private fun java.sql.Connection.selectOwnedPageContent(userId: String, pageId: String): String? {
+    prepareStatement(
+        """
+        SELECT pages.content
+        FROM pages
+        INNER JOIN workspaces ON workspaces.id = pages.workspace_id
+        WHERE workspaces.user_id = ?
+          AND pages.id = ?
+          AND pages.deleted_at IS NULL
+        LIMIT 1
+        """.trimIndent(),
+    ).use { statement ->
+        statement.setString(1, userId)
+        statement.setString(2, pageId)
+        statement.executeQuery().use { resultSet ->
+            return if (resultSet.next()) resultSet.getString("content") else null
         }
     }
 }
@@ -343,6 +490,20 @@ private fun ResultSet.toPageRecord(): PageRecord {
     return PageRecord(
         id = getString("id"),
         workspaceId = getString("workspace_id"),
+        parentPageId = getString("parent_page_id"),
+        title = getString("title"),
+        content = getString("content"),
+        sortOrder = getInt("sort_order"),
+        createdAt = getLong("created_at"),
+        updatedAt = getLong("updated_at"),
+        deletedAt = getNullableLong("deleted_at"),
+    )
+}
+
+private fun ResultSet.toPageRecord(workspaceId: String): PageRecord {
+    return PageRecord(
+        id = getString("id"),
+        workspaceId = workspaceId,
         parentPageId = getString("parent_page_id"),
         title = getString("title"),
         content = getString("content"),

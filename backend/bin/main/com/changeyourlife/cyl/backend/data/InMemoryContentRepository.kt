@@ -6,11 +6,11 @@ import com.changeyourlife.cyl.backend.domain.WorkspaceRecord
 import java.util.concurrent.ConcurrentHashMap
 
 class InMemoryContentRepository : ContentRepository {
-    private val workspacesById = ConcurrentHashMap<String, WorkspaceRecord>()
-    private val pagesById = ConcurrentHashMap<String, PageRecord>()
+    private val workspacesByKey = ConcurrentHashMap<String, WorkspaceRecord>()
+    private val pagesByKey = ConcurrentHashMap<String, PageRecord>()
 
     override suspend fun listWorkspaces(userId: String, includeDeleted: Boolean): List<WorkspaceRecord> {
-        return workspacesById.values
+        return workspacesByKey.values
             .asSequence()
             .filter { workspace -> workspace.userId == userId }
             .filter { workspace -> includeDeleted || workspace.deletedAt == null }
@@ -19,18 +19,19 @@ class InMemoryContentRepository : ContentRepository {
     }
 
     override suspend fun upsertWorkspace(workspace: WorkspaceRecord): WorkspaceRecord? {
-        val existing = workspacesById[workspace.id]
-        if (existing != null && existing.userId != workspace.userId) return null
-        workspacesById[workspace.id] = workspace
+        workspacesByKey[workspace.key] = workspace
         return workspace
     }
 
     override suspend fun softDeleteWorkspace(userId: String, workspaceId: String, deletedAt: Long): Boolean {
-        val workspace = workspacesById[workspaceId] ?: return false
-        if (workspace.userId != userId) return false
-        workspacesById[workspaceId] = workspace.copy(deletedAt = deletedAt, updatedAt = deletedAt)
-        pagesById.replaceAll { _, page ->
-            if (page.workspaceId == workspaceId) page.copy(deletedAt = deletedAt, updatedAt = deletedAt) else page
+        val workspace = workspacesByKey[workspaceKey(userId, workspaceId)] ?: return false
+        workspacesByKey[workspace.key] = workspace.copy(deletedAt = deletedAt, updatedAt = deletedAt)
+        pagesByKey.replaceAll { key, page ->
+            if (key.startsWith("$userId:") && page.workspaceId == workspaceId) {
+                page.copy(deletedAt = deletedAt, updatedAt = deletedAt)
+            } else {
+                page
+            }
         }
         return true
     }
@@ -40,10 +41,12 @@ class InMemoryContentRepository : ContentRepository {
         workspaceId: String,
         includeDeleted: Boolean,
     ): List<PageRecord> {
-        val workspace = workspacesById[workspaceId]
-        if (workspace?.userId != userId) return emptyList()
-        return pagesById.values
+        val workspace = workspacesByKey[workspaceKey(userId, workspaceId)] ?: return emptyList()
+        if (workspace.deletedAt != null && !includeDeleted) return emptyList()
+        return pagesByKey.entries
             .asSequence()
+            .filter { entry -> entry.key.startsWith("$userId:") }
+            .map { entry -> entry.value }
             .filter { page -> page.workspaceId == workspaceId }
             .filter { page -> includeDeleted || page.deletedAt == null }
             .sortedWith(compareBy<PageRecord> { it.sortOrder }.thenByDescending { it.updatedAt })
@@ -51,43 +54,126 @@ class InMemoryContentRepository : ContentRepository {
     }
 
     override suspend fun getPage(userId: String, pageId: String, includeDeleted: Boolean): PageRecord? {
-        val page = pagesById[pageId] ?: return null
-        val workspace = workspacesById[page.workspaceId] ?: return null
-        if (workspace.userId != userId) return null
+        val page = pagesByKey[pageKey(userId, pageId)] ?: return null
+        val workspace = workspacesByKey[workspaceKey(userId, page.workspaceId)] ?: return null
         if (!includeDeleted && page.deletedAt != null) return null
+        if (!includeDeleted && workspace.deletedAt != null) return null
         return page
     }
 
     override suspend fun upsertPage(userId: String, page: PageRecord): PageRecord? {
-        val workspace = workspacesById[page.workspaceId] ?: return null
-        if (workspace.userId != userId) return null
-        val existing = pagesById[page.id]
-        if (existing != null && workspacesById[existing.workspaceId]?.userId != userId) return null
-        pagesById[page.id] = page
+        workspacesByKey[workspaceKey(userId, page.workspaceId)] ?: return null
+        if (page.parentPageId != null) {
+            val parent = pagesByKey[pageKey(userId, page.parentPageId)] ?: return null
+            if (parent.workspaceId != page.workspaceId) return null
+        }
+        pagesByKey[pageKey(userId, page.id)] = page
         return page
+    }
+
+    override suspend fun updatePageBlockText(
+        userId: String,
+        pageId: String,
+        blockId: String,
+        text: String,
+        updatedAt: Long,
+    ): PageRecord? {
+        return mutatePageContent(userId, pageId, updatedAt) { content ->
+            PageContentJsonMutator.updateBlockText(
+                content = content,
+                blockId = blockId,
+                text = text,
+            )
+        }
+    }
+
+    override suspend fun updatePagePropertyValue(
+        userId: String,
+        pageId: String,
+        propertyId: String,
+        propertyName: String,
+        value: String,
+        updatedAt: Long,
+    ): PageRecord? {
+        return mutatePageContent(userId, pageId, updatedAt) { content ->
+            PageContentJsonMutator.updatePropertyValue(
+                content = content,
+                propertyId = propertyId,
+                propertyName = propertyName,
+                value = value,
+            )
+        }
+    }
+
+    override suspend fun updatePageTableCellValue(
+        userId: String,
+        pageId: String,
+        rowId: String,
+        columnId: String,
+        value: String,
+        updatedAt: Long,
+    ): PageRecord? {
+        return mutatePageContent(userId, pageId, updatedAt) { content ->
+            PageContentJsonMutator.updateTableCellValue(
+                content = content,
+                rowId = rowId,
+                columnId = columnId,
+                value = value,
+            )
+        }
     }
 
     override suspend fun softDeletePage(userId: String, pageId: String, deletedAt: Long): Boolean {
         val page = getPage(userId, pageId, includeDeleted = true) ?: return false
-        pagesById[pageId] = page.copy(deletedAt = deletedAt, updatedAt = deletedAt)
-        pagesById.replaceAll { _, existing ->
-            if (existing.parentPageId == pageId) existing.copy(deletedAt = deletedAt, updatedAt = deletedAt) else existing
+        pagesByKey[pageKey(userId, pageId)] = page.copy(deletedAt = deletedAt, updatedAt = deletedAt)
+        pagesByKey.replaceAll { key, existing ->
+            if (key.startsWith("$userId:") && existing.parentPageId == pageId) {
+                existing.copy(deletedAt = deletedAt, updatedAt = deletedAt)
+            } else {
+                existing
+            }
         }
         return true
     }
 
     override suspend fun restorePage(userId: String, pageId: String, restoredAt: Long): Boolean {
         val page = getPage(userId, pageId, includeDeleted = true) ?: return false
-        pagesById[pageId] = page.copy(deletedAt = null, updatedAt = restoredAt)
-        pagesById.replaceAll { _, existing ->
-            if (existing.parentPageId == pageId) existing.copy(deletedAt = null, updatedAt = restoredAt) else existing
+        pagesByKey[pageKey(userId, pageId)] = page.copy(deletedAt = null, updatedAt = restoredAt)
+        pagesByKey.replaceAll { key, existing ->
+            if (key.startsWith("$userId:") && existing.parentPageId == pageId) {
+                existing.copy(deletedAt = null, updatedAt = restoredAt)
+            } else {
+                existing
+            }
         }
         return true
     }
 
     override suspend fun deletePagePermanently(userId: String, pageId: String): Boolean {
         val page = getPage(userId, pageId, includeDeleted = true) ?: return false
-        pagesById.entries.removeIf { entry -> entry.key == page.id || entry.value.parentPageId == page.id }
+        pagesByKey.entries.removeIf { entry ->
+            entry.key.startsWith("$userId:") && (entry.value.id == page.id || entry.value.parentPageId == page.id)
+        }
         return true
     }
+
+    private suspend fun mutatePageContent(
+        userId: String,
+        pageId: String,
+        updatedAt: Long,
+        transform: (String) -> String?,
+    ): PageRecord? {
+        val page = getPage(userId, pageId, includeDeleted = false) ?: return null
+        val updatedContent = transform(page.content) ?: return null
+        val updatedPage = page.copy(content = updatedContent, updatedAt = updatedAt)
+        pagesByKey[pageKey(userId, pageId)] = updatedPage
+        return updatedPage
+    }
 }
+
+private val WorkspaceRecord.key: String
+    get() = workspaceKey(userId, id)
+
+private fun workspaceKey(userId: String, workspaceId: String): String = "$userId:$workspaceId"
+
+private fun pageKey(userId: String, pageId: String): String = "$userId:$pageId"

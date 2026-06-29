@@ -173,6 +173,21 @@ class AiActionRecoveryTest {
     }
 
     @Test
+    fun modelJsonUnsupportedActionIsReportedButNotExecutable() {
+        val result = service.recoverActionFromModelReply(
+            reply = """{"reply":"Saya akan cuba.","actions":[{"type":"MAKE_MAGIC","title":"Budget"}]}""",
+            prompt = "@Budget buat magic",
+            pages = listOf(AiPageContext(id = "page-budget", title = "Budget")),
+        )
+
+        val recovered = assertNotNull(result)
+        assertEquals(emptyList(), recovered.actions)
+        val issue = recovered.validationIssues.single()
+        assertEquals("type", issue.field)
+        assertEquals("unsupported_action_type", issue.code)
+    }
+
+    @Test
     fun chatWithActionsRecoversActionWhenAiReplyHasNoStructuredActions() {
         val sandboxService = AiService()
         val result = sandboxService.chatWithActions(

@@ -163,7 +163,18 @@ data class AiActionDto(
 )
 
 @Serializable
+data class AiActionValidationIssueDto(
+    val actionIndex: Int? = null,
+    val field: String = "",
+    val code: String = "",
+    val message: String = "",
+)
+
+@Serializable
 data class ChatWithActionsResponseDto(
     val reply: String,
-    val actions: List<AiActionDto> = emptyList()
+    val actions: List<AiActionDto> = emptyList(),
+    val schemaName: String = "",
+    val schemaVersion: Int = 1,
+    val validationIssues: List<AiActionValidationIssueDto> = emptyList(),
 )

@@ -6,15 +6,28 @@ import com.changeyourlife.cyl.backend.config.EmailConfig
 import com.changeyourlife.cyl.backend.config.JwtConfig
 import com.changeyourlife.cyl.backend.service.AiService
 import com.changeyourlife.cyl.backend.model.ai.ChatMessage
+import com.changeyourlife.cyl.backend.model.ai.ChatWithActionsResponse
 import com.changeyourlife.cyl.backend.model.auth.AuthResponse
 import com.changeyourlife.cyl.backend.model.auth.ForgotPasswordResponse
+import com.changeyourlife.cyl.backend.model.sync.PageBlockCreateRequest
+import com.changeyourlife.cyl.backend.model.sync.PageBlockPatchRequest
+import com.changeyourlife.cyl.backend.model.sync.PageElementPositionPatchRequest
 import com.changeyourlife.cyl.backend.model.sync.PageListResponse
+import com.changeyourlife.cyl.backend.model.sync.PagePropertyCreateRequest
+import com.changeyourlife.cyl.backend.model.sync.PagePropertyValuePatchRequest
 import com.changeyourlife.cyl.backend.model.sync.PageSyncDto
+import com.changeyourlife.cyl.backend.model.sync.PageTableCellValuePatchRequest
+import com.changeyourlife.cyl.backend.model.sync.PageTableColumnCreateRequest
+import com.changeyourlife.cyl.backend.model.sync.PageTableColumnPatchRequest
+import com.changeyourlife.cyl.backend.model.sync.PageTablePatchRequest
+import com.changeyourlife.cyl.backend.model.sync.PageTableRowCreateRequest
+import com.changeyourlife.cyl.backend.model.sync.PageTableRowPatchRequest
 import com.changeyourlife.cyl.backend.model.sync.WorkspaceListResponse
 import com.changeyourlife.cyl.backend.model.sync.WorkspaceSyncDto
 import io.ktor.client.request.get
 import io.ktor.client.request.delete
 import io.ktor.client.request.header
+import io.ktor.client.request.patch
 import io.ktor.client.request.post
 import io.ktor.client.request.put
 import io.ktor.client.request.setBody
@@ -25,6 +38,9 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.contentType
 import io.ktor.server.testing.testApplication
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -91,7 +107,7 @@ class ApplicationTest {
     @Test
     fun healthReturnsOk() = testApplication {
         application {
-            module()
+            module(appConfig = inMemoryTestConfig())
         }
 
         val response = client.get("/health")
@@ -102,7 +118,7 @@ class ApplicationTest {
     @Test
     fun aiStatusReturnsSandboxModeByDefault() = testApplication {
         application {
-            module()
+            module(appConfig = inMemoryTestConfig())
         }
 
         val response = client.get("/ai/status")
@@ -116,9 +132,46 @@ class ApplicationTest {
     }
 
     @Test
+    fun chatActionsReturnsActionSchemaContract() = testApplication {
+        application {
+            module(appConfig = inMemoryTestConfig())
+        }
+        val authHeader = registerAndReturnAuthHeader(
+            email = "ai-contract@example.com",
+            password = "strong-password",
+        )
+
+        val response = client.post("/ai/chat-actions") {
+            header(HttpHeaders.Authorization, authHeader)
+            contentType(ContentType.Application.Json)
+            setBody(
+                """
+                {
+                  "messages": [
+                    {
+                      "role": "user",
+                      "content": "hello"
+                    }
+                  ],
+                  "pages": []
+                }
+                """.trimIndent(),
+            )
+        }
+
+        assertEquals(HttpStatusCode.OK, response.status)
+        val body = Json.decodeFromString<ChatWithActionsResponse>(response.bodyAsText())
+        assertEquals("CYL_ACTION_SCHEMA", body.schemaName)
+        assertEquals(1, body.schemaVersion)
+        assertTrue(body.reply.isNotBlank())
+        assertEquals(emptyList(), body.actions)
+        assertEquals(emptyList(), body.validationIssues)
+    }
+
+    @Test
     fun registerLoginAndMeReturnAuthenticatedUser() = testApplication {
         application {
-            module()
+            module(appConfig = inMemoryTestConfig())
         }
 
         val registerResponse = client.post("/auth/register") {
@@ -317,6 +370,586 @@ class ApplicationTest {
             header(HttpHeaders.Authorization, authHeader)
         }
         assertEquals(HttpStatusCode.NoContent, restoreResponse.status)
+    }
+
+    @Test
+    fun pageGranularPatchRoutesUpdateContentJson() = testApplication {
+        application {
+            module(appConfig = inMemoryTestConfig())
+        }
+
+        val authHeader = registerAndReturnAuthHeader(
+            email = "granular-sync@example.com",
+            password = "sync-password",
+        )
+        val workspace = WorkspaceSyncDto(
+            id = "workspace-granular",
+            name = "Granular Workspace",
+            createdAt = 1L,
+            updatedAt = 1L,
+        )
+        assertEquals(
+            HttpStatusCode.OK,
+            client.put("/api/v1/workspaces/${workspace.id}") {
+                header(HttpHeaders.Authorization, authHeader)
+                contentType(ContentType.Application.Json)
+                setBody(Json.encodeToString(workspace))
+            }.status,
+        )
+
+        val page = PageSyncDto(
+            id = "page-granular",
+            workspaceId = workspace.id,
+            title = "Granular Page",
+            content = """
+                {
+                  "version": 1,
+                  "properties": [
+                    { "id": "property-mood", "name": "Mood", "type": "Text", "value": "Old" }
+                  ],
+                  "blocks": [
+                    { "id": "block-note", "type": "Text", "text": "Before" },
+                    {
+                      "id": "block-table",
+                      "type": "DatabaseTable",
+                      "table": {
+                        "title": "Budget",
+                        "columns": [
+                          { "id": "column-amount", "name": "Amount", "type": "Number" }
+                        ],
+                        "rows": [
+                          { "id": "row-food", "cells": { "column-amount": "4" } }
+                        ]
+                      }
+                    }
+                  ]
+                }
+            """.trimIndent(),
+            sortOrder = 0,
+            createdAt = 2L,
+            updatedAt = 2L,
+        )
+        assertEquals(
+            HttpStatusCode.OK,
+            client.put("/api/v1/pages/${page.id}") {
+                header(HttpHeaders.Authorization, authHeader)
+                contentType(ContentType.Application.Json)
+                setBody(Json.encodeToString(page))
+            }.status,
+        )
+
+        val blockResponse = client.patch("/api/v1/pages/${page.id}/blocks/block-note") {
+            header(HttpHeaders.Authorization, authHeader)
+            contentType(ContentType.Application.Json)
+            setBody(
+                Json.encodeToString(
+                    PageBlockPatchRequest(
+                        text = "After",
+                        richTextSpans = buildJsonArray {
+                            add(
+                                buildJsonObject {
+                                    put("start", 0)
+                                    put("end", 5)
+                                    put("bold", true)
+                                },
+                            )
+                        },
+                        mediaAttachments = buildJsonArray {
+                            add(
+                                buildJsonObject {
+                                    put("id", "media-1")
+                                    put("uri", "content://file/1")
+                                    put("name", "receipt.png")
+                                    put("mimeType", "image/png")
+                                    put("sizeBytes", 123L)
+                                },
+                            )
+                        },
+                        isChecked = true,
+                    ),
+                ),
+            )
+        }
+        assertEquals(HttpStatusCode.OK, blockResponse.status)
+        val blockPage = Json.decodeFromString<PageSyncDto>(blockResponse.bodyAsText())
+        assertTrue(blockPage.content.contains("\"text\":\"After\""), blockPage.content)
+        assertTrue(blockPage.content.contains("\"richTextSpans\""), blockPage.content)
+        assertTrue(blockPage.content.contains("\"mediaAttachments\""), blockPage.content)
+        assertTrue(blockPage.content.contains("\"isChecked\":true"), blockPage.content)
+
+        val propertyResponse = client.patch("/api/v1/pages/${page.id}/properties") {
+            header(HttpHeaders.Authorization, authHeader)
+            contentType(ContentType.Application.Json)
+            setBody(
+                Json.encodeToString(
+                    PagePropertyValuePatchRequest(
+                        propertyName = "Mood",
+                        value = "Good",
+                    ),
+                ),
+            )
+        }
+        assertEquals(HttpStatusCode.OK, propertyResponse.status)
+        val propertyPage = Json.decodeFromString<PageSyncDto>(propertyResponse.bodyAsText())
+        assertTrue(propertyPage.content.contains("\"value\":\"Good\""), propertyPage.content)
+
+        val cellResponse = client.patch("/api/v1/pages/${page.id}/table-cells") {
+            header(HttpHeaders.Authorization, authHeader)
+            contentType(ContentType.Application.Json)
+            setBody(
+                Json.encodeToString(
+                    PageTableCellValuePatchRequest(
+                        rowId = "row-food",
+                        columnId = "column-amount",
+                        value = "5",
+                    ),
+                ),
+            )
+        }
+        assertEquals(HttpStatusCode.OK, cellResponse.status)
+        val cellPage = Json.decodeFromString<PageSyncDto>(cellResponse.bodyAsText())
+        assertTrue(cellPage.content.contains("\"column-amount\":\"5\""), cellPage.content)
+    }
+
+    @Test
+    fun pageGranularTableAndColumnPatchRoutesUpdateContentJson() = testApplication {
+        application {
+            module(appConfig = inMemoryTestConfig())
+        }
+
+        val authHeader = registerAndReturnAuthHeader(
+            email = "granular-table-config@example.com",
+            password = "sync-password",
+        )
+        val workspace = WorkspaceSyncDto(
+            id = "workspace-table-config",
+            name = "Table Config Workspace",
+            createdAt = 1L,
+            updatedAt = 1L,
+        )
+        assertEquals(
+            HttpStatusCode.OK,
+            client.put("/api/v1/workspaces/${workspace.id}") {
+                header(HttpHeaders.Authorization, authHeader)
+                contentType(ContentType.Application.Json)
+                setBody(Json.encodeToString(workspace))
+            }.status,
+        )
+
+        val page = PageSyncDto(
+            id = "page-table-config",
+            workspaceId = workspace.id,
+            title = "Table Config Page",
+            content = """
+                {
+                  "version": 1,
+                  "properties": [],
+                  "blocks": [
+                    {
+                      "id": "block-table",
+                      "type": "DatabaseTable",
+                      "table": {
+                        "title": "Budget",
+                        "view": "Table",
+                        "columns": [
+                          { "id": "column-name", "name": "Name", "type": "Text" },
+                          { "id": "column-date", "name": "Date", "type": "Date" }
+                        ],
+                        "rows": [
+                          { "id": "row-food", "cells": { "column-name": "Food", "column-date": "2026-06-30" } }
+                        ]
+                      }
+                    }
+                  ]
+                }
+            """.trimIndent(),
+            sortOrder = 0,
+            createdAt = 2L,
+            updatedAt = 2L,
+        )
+        assertEquals(
+            HttpStatusCode.OK,
+            client.put("/api/v1/pages/${page.id}") {
+                header(HttpHeaders.Authorization, authHeader)
+                contentType(ContentType.Application.Json)
+                setBody(Json.encodeToString(page))
+            }.status,
+        )
+
+        val tableResponse = client.patch("/api/v1/pages/${page.id}/tables/block-table") {
+            header(HttpHeaders.Authorization, authHeader)
+            contentType(ContentType.Application.Json)
+            setBody(
+                Json.encodeToString(
+                    PageTablePatchRequest(
+                        title = "Expenses",
+                        view = "Calendar",
+                        calendarDateColumnId = "column-date",
+                        sortColumnId = "column-name",
+                        sortDirection = "Descending",
+                        filterColumnId = "column-name",
+                        filterQuery = "Food",
+                        groupByColumnId = "column-date",
+                    ),
+                ),
+            )
+        }
+        assertEquals(HttpStatusCode.OK, tableResponse.status)
+        val tableContent = Json.decodeFromString<PageSyncDto>(tableResponse.bodyAsText()).content
+        assertTrue(tableContent.contains("\"title\":\"Expenses\""), tableContent)
+        assertTrue(tableContent.contains("\"view\":\"Calendar\""), tableContent)
+        assertTrue(tableContent.contains("\"calendarDateColumnId\":\"column-date\""), tableContent)
+        assertTrue(tableContent.contains("\"direction\":\"Descending\""), tableContent)
+        assertTrue(tableContent.contains("\"query\":\"Food\""), tableContent)
+        assertTrue(tableContent.contains("\"groupByColumnId\":\"column-date\""), tableContent)
+
+        val columnResponse = client.patch("/api/v1/pages/${page.id}/tables/block-table/columns/column-date") {
+            header(HttpHeaders.Authorization, authHeader)
+            contentType(ContentType.Application.Json)
+            setBody(
+                Json.encodeToString(
+                    PageTableColumnPatchRequest(
+                        name = "Deadline",
+                        dateFormat = "MonthDayYear",
+                        timeFormat = "TwelveHour",
+                        dateReminder = "AtTimeOfEvent",
+                        timezoneLabel = "GMT+8",
+                    ),
+                ),
+            )
+        }
+        assertEquals(HttpStatusCode.OK, columnResponse.status)
+        val columnContent = Json.decodeFromString<PageSyncDto>(columnResponse.bodyAsText()).content
+        assertTrue(columnContent.contains("\"name\":\"Deadline\""), columnContent)
+        assertTrue(columnContent.contains("\"dateFormat\":\"MonthDayYear\""), columnContent)
+        assertTrue(columnContent.contains("\"timeFormat\":\"TwelveHour\""), columnContent)
+        assertTrue(columnContent.contains("\"dateReminder\":\"AtTimeOfEvent\""), columnContent)
+        assertTrue(columnContent.contains("\"timezoneLabel\":\"GMT+8\""), columnContent)
+    }
+
+    @Test
+    fun pageGranularCreateDeleteAndReorderRoutesUpdateContentJson() = testApplication {
+        application {
+            module(appConfig = inMemoryTestConfig())
+        }
+
+        val authHeader = registerAndReturnAuthHeader(
+            email = "granular-mutations@example.com",
+            password = "sync-password",
+        )
+        val workspace = WorkspaceSyncDto(
+            id = "workspace-mutations",
+            name = "Mutation Workspace",
+            createdAt = 1L,
+            updatedAt = 1L,
+        )
+        assertEquals(
+            HttpStatusCode.OK,
+            client.put("/api/v1/workspaces/${workspace.id}") {
+                header(HttpHeaders.Authorization, authHeader)
+                contentType(ContentType.Application.Json)
+                setBody(Json.encodeToString(workspace))
+            }.status,
+        )
+
+        val page = PageSyncDto(
+            id = "page-mutations",
+            workspaceId = workspace.id,
+            title = "Mutation Page",
+            content = """
+                {
+                  "version": 1,
+                  "properties": [
+                    { "id": "property-existing", "name": "Existing", "type": "Text", "value": "A" }
+                  ],
+                  "blocks": [
+                    { "id": "block-first", "type": "Text", "text": "First" },
+                    {
+                      "id": "block-table",
+                      "type": "DatabaseTable",
+                      "table": {
+                        "title": "Budget",
+                        "columns": [
+                          { "id": "column-name", "name": "Name", "type": "Text" }
+                        ],
+                        "rows": [
+                          { "id": "row-first", "cells": { "column-name": "Food" } }
+                        ]
+                      }
+                    }
+                  ]
+                }
+            """.trimIndent(),
+            sortOrder = 0,
+            createdAt = 2L,
+            updatedAt = 2L,
+        )
+        assertEquals(
+            HttpStatusCode.OK,
+            client.put("/api/v1/pages/${page.id}") {
+                header(HttpHeaders.Authorization, authHeader)
+                contentType(ContentType.Application.Json)
+                setBody(Json.encodeToString(page))
+            }.status,
+        )
+
+        val addBlockResponse = client.post("/api/v1/pages/${page.id}/blocks") {
+            header(HttpHeaders.Authorization, authHeader)
+            contentType(ContentType.Application.Json)
+            setBody(
+                Json.encodeToString(
+                    PageBlockCreateRequest(
+                        blockId = "block-second",
+                        type = "Text",
+                        text = "Second",
+                    ),
+                ),
+            )
+        }
+        assertEquals(HttpStatusCode.OK, addBlockResponse.status)
+        assertTrue(addBlockResponse.bodyAsText().contains("block-second"))
+
+        val moveBlockResponse = client.patch("/api/v1/pages/${page.id}/blocks/block-second/position") {
+            header(HttpHeaders.Authorization, authHeader)
+            contentType(ContentType.Application.Json)
+            setBody(Json.encodeToString(PageElementPositionPatchRequest(targetIndex = 0)))
+        }
+        assertEquals(HttpStatusCode.OK, moveBlockResponse.status)
+        val movedBlockContent = Json.decodeFromString<PageSyncDto>(moveBlockResponse.bodyAsText()).content
+        assertTrue(movedBlockContent.indexOf("block-second") < movedBlockContent.indexOf("block-first"), movedBlockContent)
+
+        val addPropertyResponse = client.post("/api/v1/pages/${page.id}/properties") {
+            header(HttpHeaders.Authorization, authHeader)
+            contentType(ContentType.Application.Json)
+            setBody(
+                Json.encodeToString(
+                    PagePropertyCreateRequest(
+                        propertyId = "property-created",
+                        name = "Created",
+                        value = "B",
+                    ),
+                ),
+            )
+        }
+        assertEquals(HttpStatusCode.OK, addPropertyResponse.status)
+        assertTrue(addPropertyResponse.bodyAsText().contains("property-created"))
+
+        val movePropertyResponse = client.patch("/api/v1/pages/${page.id}/properties/property-created/position") {
+            header(HttpHeaders.Authorization, authHeader)
+            contentType(ContentType.Application.Json)
+            setBody(Json.encodeToString(PageElementPositionPatchRequest(targetIndex = 0)))
+        }
+        assertEquals(HttpStatusCode.OK, movePropertyResponse.status)
+        val movedPropertyContent = Json.decodeFromString<PageSyncDto>(movePropertyResponse.bodyAsText()).content
+        assertTrue(
+            movedPropertyContent.indexOf("property-created") < movedPropertyContent.indexOf("property-existing"),
+            movedPropertyContent,
+        )
+
+        val addColumnResponse = client.post("/api/v1/pages/${page.id}/tables/block-table/columns") {
+            header(HttpHeaders.Authorization, authHeader)
+            contentType(ContentType.Application.Json)
+            setBody(
+                Json.encodeToString(
+                    PageTableColumnCreateRequest(
+                        columnId = "column-amount",
+                        name = "Amount",
+                        type = "Number",
+                        cellValues = mapOf("row-first" to "4"),
+                    ),
+                ),
+            )
+        }
+        assertEquals(HttpStatusCode.OK, addColumnResponse.status)
+        val addedColumnContent = Json.decodeFromString<PageSyncDto>(addColumnResponse.bodyAsText()).content
+        assertTrue(addedColumnContent.contains("column-amount"), addedColumnContent)
+        assertTrue(addedColumnContent.contains("\"column-amount\":\"4\""), addedColumnContent)
+
+        val moveColumnResponse = client.patch("/api/v1/pages/${page.id}/tables/block-table/columns/column-amount/position") {
+            header(HttpHeaders.Authorization, authHeader)
+            contentType(ContentType.Application.Json)
+            setBody(Json.encodeToString(PageElementPositionPatchRequest(targetIndex = 0)))
+        }
+        assertEquals(HttpStatusCode.OK, moveColumnResponse.status)
+        val movedColumnContent = Json.decodeFromString<PageSyncDto>(moveColumnResponse.bodyAsText()).content
+        assertTrue(movedColumnContent.indexOf("column-amount") < movedColumnContent.indexOf("column-name"), movedColumnContent)
+
+        val addRowResponse = client.post("/api/v1/pages/${page.id}/tables/block-table/rows") {
+            header(HttpHeaders.Authorization, authHeader)
+            contentType(ContentType.Application.Json)
+            setBody(
+                Json.encodeToString(
+                    PageTableRowCreateRequest(
+                        rowId = "row-second",
+                        cells = mapOf("column-name" to "Fuel", "column-amount" to "5"),
+                    ),
+                ),
+            )
+        }
+        assertEquals(HttpStatusCode.OK, addRowResponse.status)
+        assertTrue(addRowResponse.bodyAsText().contains("row-second"))
+
+        val updateRowPageResponse = client.patch("/api/v1/pages/${page.id}/tables/block-table/rows/row-second") {
+            header(HttpHeaders.Authorization, authHeader)
+            contentType(ContentType.Application.Json)
+            setBody(
+                Json.encodeToString(
+                    PageTableRowPatchRequest(
+                        blocks = buildJsonArray {
+                            add(
+                                buildJsonObject {
+                                    put("id", "row-block-note")
+                                    put("type", "Text")
+                                    put("text", "Row notes")
+                                },
+                            )
+                        },
+                    ),
+                ),
+            )
+        }
+        assertEquals(HttpStatusCode.OK, updateRowPageResponse.status)
+        val rowPageContent = Json.decodeFromString<PageSyncDto>(updateRowPageResponse.bodyAsText()).content
+        assertTrue(rowPageContent.contains("row-block-note"), rowPageContent)
+        assertTrue(rowPageContent.contains("\"text\":\"Row notes\""), rowPageContent)
+
+        val moveRowResponse = client.patch("/api/v1/pages/${page.id}/tables/block-table/rows/row-second/position") {
+            header(HttpHeaders.Authorization, authHeader)
+            contentType(ContentType.Application.Json)
+            setBody(Json.encodeToString(PageElementPositionPatchRequest(targetIndex = 0)))
+        }
+        assertEquals(HttpStatusCode.OK, moveRowResponse.status)
+        val movedRowContent = Json.decodeFromString<PageSyncDto>(moveRowResponse.bodyAsText()).content
+        assertTrue(movedRowContent.indexOf("row-second") < movedRowContent.indexOf("row-first"), movedRowContent)
+
+        assertEquals(
+            HttpStatusCode.OK,
+            client.delete("/api/v1/pages/${page.id}/tables/block-table/rows/row-second") {
+                header(HttpHeaders.Authorization, authHeader)
+            }.status,
+        )
+        assertEquals(
+            HttpStatusCode.OK,
+            client.delete("/api/v1/pages/${page.id}/tables/block-table/columns/column-amount") {
+                header(HttpHeaders.Authorization, authHeader)
+            }.status,
+        )
+        assertEquals(
+            HttpStatusCode.OK,
+            client.delete("/api/v1/pages/${page.id}/properties/property-created") {
+                header(HttpHeaders.Authorization, authHeader)
+            }.status,
+        )
+        val deleteBlockResponse = client.delete("/api/v1/pages/${page.id}/blocks/block-second") {
+            header(HttpHeaders.Authorization, authHeader)
+        }
+        assertEquals(HttpStatusCode.OK, deleteBlockResponse.status)
+        val finalContent = Json.decodeFromString<PageSyncDto>(deleteBlockResponse.bodyAsText()).content
+        assertTrue(!finalContent.contains("block-second"), finalContent)
+        assertTrue(!finalContent.contains("property-created"), finalContent)
+        assertTrue(!finalContent.contains("column-amount"), finalContent)
+        assertTrue(!finalContent.contains("row-second"), finalContent)
+    }
+
+    @Test
+    fun syncRoutesKeepWorkspaceAndPageOwnershipIsolated() = testApplication {
+        application {
+            module(appConfig = inMemoryTestConfig())
+        }
+
+        val firstUserAuth = registerAndReturnAuthHeader(
+            email = "sync-owner-a@example.com",
+            password = "sync-password",
+        )
+        val secondUserAuth = registerAndReturnAuthHeader(
+            email = "sync-owner-b@example.com",
+            password = "sync-password",
+        )
+
+        val sharedClientWorkspaceId = "local-default-workspace"
+        val firstWorkspace = WorkspaceSyncDto(
+            id = sharedClientWorkspaceId,
+            name = "First User Workspace",
+            createdAt = 1L,
+            updatedAt = 1L,
+        )
+        val secondWorkspace = WorkspaceSyncDto(
+            id = sharedClientWorkspaceId,
+            name = "Second User Workspace",
+            createdAt = 2L,
+            updatedAt = 2L,
+        )
+
+        assertEquals(
+            HttpStatusCode.OK,
+            client.put("/api/v1/workspaces/$sharedClientWorkspaceId") {
+                header(HttpHeaders.Authorization, firstUserAuth)
+                contentType(ContentType.Application.Json)
+                setBody(Json.encodeToString(firstWorkspace))
+            }.status,
+        )
+        assertEquals(
+            HttpStatusCode.OK,
+            client.put("/api/v1/workspaces/$sharedClientWorkspaceId") {
+                header(HttpHeaders.Authorization, secondUserAuth)
+                contentType(ContentType.Application.Json)
+                setBody(Json.encodeToString(secondWorkspace))
+            }.status,
+        )
+
+        val firstPage = PageSyncDto(
+            id = "first-user-page",
+            workspaceId = sharedClientWorkspaceId,
+            title = "Private Page",
+            content = """{"version":1,"blocks":[]}""",
+            sortOrder = 0,
+            createdAt = 3L,
+            updatedAt = 3L,
+        )
+        val firstPageResponse = client.put("/api/v1/pages/${firstPage.id}") {
+            header(HttpHeaders.Authorization, firstUserAuth)
+            contentType(ContentType.Application.Json)
+            setBody(Json.encodeToString(firstPage))
+        }
+        assertEquals(HttpStatusCode.OK, firstPageResponse.status)
+
+        val secondUserCannotReadFirstPage = client.get("/api/v1/pages/${firstPage.id}") {
+            header(HttpHeaders.Authorization, secondUserAuth)
+        }
+        assertEquals(HttpStatusCode.NotFound, secondUserCannotReadFirstPage.status)
+
+        val firstUserPagesResponse = client.get("/api/v1/pages?workspaceId=$sharedClientWorkspaceId") {
+            header(HttpHeaders.Authorization, firstUserAuth)
+        }
+        val secondUserPagesResponse = client.get("/api/v1/pages?workspaceId=$sharedClientWorkspaceId") {
+            header(HttpHeaders.Authorization, secondUserAuth)
+        }
+        val firstUserPages = Json.decodeFromString<PageListResponse>(firstUserPagesResponse.bodyAsText())
+        val secondUserPages = Json.decodeFromString<PageListResponse>(secondUserPagesResponse.bodyAsText())
+
+        assertEquals(listOf("first-user-page"), firstUserPages.pages.map { it.id })
+        assertTrue(secondUserPages.pages.isEmpty())
+    }
+
+    private suspend fun io.ktor.server.testing.ApplicationTestBuilder.registerAndReturnAuthHeader(
+        email: String,
+        password: String,
+    ): String {
+        val response = client.post("/auth/register") {
+            contentType(ContentType.Application.Json)
+            setBody(
+                """
+                {
+                  "email": "$email",
+                  "password": "$password",
+                  "displayName": "Sync Owner"
+                }
+                """.trimIndent(),
+            )
+        }
+        assertEquals(HttpStatusCode.Created, response.status)
+        val authResponse = Json.decodeFromString<AuthResponse>(response.bodyAsText())
+        return "Bearer ${authResponse.token}"
     }
 
     private fun inMemoryTestConfig(): AppConfig {

@@ -1,6 +1,7 @@
 package com.changeyourlife.cyl.backend.service
 
 import com.changeyourlife.cyl.backend.model.ai.AiBlockContext
+import com.changeyourlife.cyl.backend.model.ai.AiActionValidationIssue
 import com.changeyourlife.cyl.backend.model.ai.AiPageContext
 import com.changeyourlife.cyl.backend.model.ai.AiTaskContext
 import com.changeyourlife.cyl.backend.model.ai.ChatMessage
@@ -197,7 +198,11 @@ class AiService(
         val delayMinutes: Long? = null
     )
 
-    data class AiActionResult(val reply: String, val actions: List<AiActionItem>)
+    data class AiActionResult(
+        val reply: String,
+        val actions: List<AiActionItem>,
+        val validationIssues: List<AiActionValidationIssue> = emptyList(),
+    )
 
     @Serializable
     private data class AiActionEnvelope(
@@ -213,6 +218,238 @@ class AiService(
     )
     private val legacyEnvelopeKeys = setOf("page", "targetpage", "targettitle", "action", "data", "rows", "row", "table", "tabletitle")
     private val ignoredLegacyDataKeys = setOf("id", "rowid", "row_id", "uuid")
+    private val supportedActionTypes = setOf(
+        "RENAME_CURRENT_PAGE",
+        "RENAME_PAGE",
+        "UPDATE_PAGE",
+        "APPEND_BLOCK",
+        "APPEND_PAGE_BLOCK",
+        "ADD_BLOCK",
+        "ADD_PROPERTY",
+        "UPDATE_PROPERTY",
+        "DELETE_PROPERTY",
+        "DELETE_ALL_BLOCKS",
+        "DELETE_BLOCK",
+        "UPDATE_BLOCK",
+        "EDIT_BLOCK",
+        "UPDATE_TODO",
+        "CHECK_BLOCK",
+        "UNCHECK_BLOCK",
+        "CREATE_DATABASE",
+        "CREATE_TABLE",
+        "RENAME_TABLE",
+        "RENAME_DATABASE",
+        "UPDATE_TABLE_TITLE",
+        "ADD_TABLE_COLUMN",
+        "DELETE_TABLE_COLUMN",
+        "RENAME_TABLE_COLUMN",
+        "UPDATE_TABLE_COLUMN",
+        "UPDATE_TABLE_COLUMN_TYPE",
+        "CHANGE_TABLE_COLUMN_TYPE",
+        "SET_TABLE_COLUMN_TYPE",
+        "UPDATE_TABLE_COLUMN_CONFIG",
+        "SET_TABLE_COLUMN_CONFIG",
+        "UPDATE_FORMULA_COLUMN",
+        "UPDATE_RELATION_COLUMN",
+        "UPDATE_ROLLUP_COLUMN",
+        "REORDER_TABLE_COLUMN",
+        "MOVE_TABLE_COLUMN",
+        "ADD_TABLE_ROW",
+        "DELETE_TABLE_ROW",
+        "UPDATE_TABLE_ROW",
+        "RENAME_TABLE_ROW",
+        "REORDER_TABLE_ROW",
+        "MOVE_TABLE_ROW",
+        "ADD_ROW_PAGE_BLOCK",
+        "APPEND_ROW_PAGE_BLOCK",
+        "ADD_TABLE_ROW_BLOCK",
+        "UPDATE_ROW_PAGE_BLOCK",
+        "EDIT_ROW_PAGE_BLOCK",
+        "UPDATE_TABLE_ROW_BLOCK",
+        "CHECK_ROW_PAGE_BLOCK",
+        "UNCHECK_ROW_PAGE_BLOCK",
+        "DELETE_ROW_PAGE_BLOCK",
+        "DELETE_TABLE_ROW_BLOCK",
+        "UPDATE_TABLE_CELL",
+        "CHANGE_TABLE_VIEW",
+        "SET_TABLE_VIEW",
+        "SET_TABLE_VIEW_CONFIG",
+        "CONFIGURE_TABLE_VIEW",
+        "UPDATE_TABLE_VIEW_CONFIG",
+        "SORT_TABLE",
+        "SET_TABLE_SORT",
+        "CLEAR_TABLE_SORT",
+        "FILTER_TABLE",
+        "SET_TABLE_FILTER",
+        "CLEAR_TABLE_FILTER",
+        "GROUP_TABLE",
+        "SET_TABLE_GROUP",
+        "CLEAR_TABLE_GROUP",
+        "CREATE_SUBPAGE",
+        "CREATE_PAGE",
+        "CREATE_TASK",
+        "CREATE_REMINDER",
+    )
+
+    private data class AiActionSchemaValidation(
+        val actions: List<AiActionItem>,
+        val issues: List<AiActionValidationIssue>,
+    )
+
+    private fun List<AiActionItem>.validatedForActionSchema(): AiActionSchemaValidation {
+        val validActions = mutableListOf<AiActionItem>()
+        val issues = mutableListOf<AiActionValidationIssue>()
+        forEachIndexed { index, action ->
+            val normalizedType = action.type.normalizedActionType()
+            when {
+                normalizedType.isBlank() -> {
+                    issues += AiActionValidationIssue(
+                        actionIndex = index,
+                        field = "type",
+                        code = "missing_action_type",
+                        message = "Action type is required.",
+                    )
+                }
+                normalizedType !in supportedActionTypes -> {
+                    issues += AiActionValidationIssue(
+                        actionIndex = index,
+                        field = "type",
+                        code = "unsupported_action_type",
+                        message = "Unsupported CYL action type: $normalizedType.",
+                    )
+                }
+                else -> {
+                    val normalizedAction = action.copy(type = normalizedType)
+                    val requirementIssues = normalizedAction.requiredFieldIssues(actionIndex = index)
+                    if (requirementIssues.isEmpty()) {
+                        validActions += normalizedAction
+                    } else {
+                        issues += requirementIssues
+                    }
+                }
+            }
+        }
+        return AiActionSchemaValidation(actions = validActions, issues = issues)
+    }
+
+    private fun AiActionItem.requiredFieldIssues(actionIndex: Int): List<AiActionValidationIssue> {
+        fun issue(field: String, message: String): AiActionValidationIssue =
+            AiActionValidationIssue(
+                actionIndex = actionIndex,
+                field = field,
+                code = "missing_required_field",
+                message = message,
+            )
+
+        fun hasAny(vararg values: String?): Boolean = values.any { value -> !value.isNullOrBlank() }
+
+        return when (type) {
+            "APPEND_BLOCK", "APPEND_PAGE_BLOCK", "ADD_BLOCK" -> {
+                if (blockType.normalizedActionType() == "DIVIDER" || hasAny(content, title)) emptyList()
+                else listOf(issue("content", "Block content is required unless the block is a divider."))
+            }
+            "DELETE_BLOCK" -> {
+                if (hasAny(blockId, blockText, content, title)) emptyList()
+                else listOf(issue("blockId", "Delete block action needs blockId, blockText, content, or title."))
+            }
+            "UPDATE_BLOCK", "EDIT_BLOCK", "UPDATE_TODO", "CHECK_BLOCK", "UNCHECK_BLOCK" -> {
+                buildList {
+                    if (!hasAny(blockId, blockText, title)) {
+                        add(issue("blockId", "Update block action needs blockId, blockText, or title."))
+                    }
+                    if (type in setOf("UPDATE_BLOCK", "EDIT_BLOCK") && !hasAny(content, value)) {
+                        add(issue("content", "Update block action needs replacement content."))
+                    }
+                }
+            }
+            "ADD_PROPERTY", "UPDATE_PROPERTY", "DELETE_PROPERTY" -> {
+                if (hasAny(propertyName, title)) emptyList()
+                else listOf(issue("propertyName", "Property action needs propertyName or title."))
+            }
+            "CREATE_DATABASE", "CREATE_TABLE" -> {
+                if (hasAny(tableTitle, title, content)) emptyList()
+                else listOf(issue("tableTitle", "Create table action needs tableTitle, title, or content."))
+            }
+            "RENAME_TABLE", "RENAME_DATABASE", "UPDATE_TABLE_TITLE" -> {
+                if (hasAny(title, value, content, newColumnName)) emptyList()
+                else listOf(issue("title", "Rename table action needs a new title."))
+            }
+            "ADD_TABLE_COLUMN" -> {
+                if (hasAny(columnName, propertyName, title)) emptyList()
+                else listOf(issue("columnName", "Add table column action needs columnName, propertyName, or title."))
+            }
+            "DELETE_TABLE_COLUMN", "UPDATE_TABLE_COLUMN_TYPE", "CHANGE_TABLE_COLUMN_TYPE", "SET_TABLE_COLUMN_TYPE",
+            "UPDATE_TABLE_COLUMN_CONFIG", "SET_TABLE_COLUMN_CONFIG", "UPDATE_FORMULA_COLUMN", "UPDATE_RELATION_COLUMN",
+            "UPDATE_ROLLUP_COLUMN" -> {
+                if (hasAny(columnId, columnName, propertyName, title)) emptyList()
+                else listOf(issue("columnName", "Column action needs columnId, columnName, propertyName, or title."))
+            }
+            "RENAME_TABLE_COLUMN", "UPDATE_TABLE_COLUMN" -> {
+                buildList {
+                    if (!hasAny(columnId, columnName, propertyName, title)) {
+                        add(issue("columnName", "Rename column action needs columnId, columnName, propertyName, or title."))
+                    }
+                    if (!hasAny(newColumnName, value, content)) {
+                        add(issue("newColumnName", "Rename column action needs newColumnName, value, or content."))
+                    }
+                }
+            }
+            "REORDER_TABLE_COLUMN", "MOVE_TABLE_COLUMN" -> {
+                buildList {
+                    if (!hasAny(columnId, columnName, propertyName, title)) {
+                        add(issue("columnName", "Move column action needs columnId, columnName, propertyName, or title."))
+                    }
+                    if (targetIndex == null) add(issue("targetIndex", "Move column action needs targetIndex."))
+                }
+            }
+            "ADD_TABLE_ROW" -> {
+                if (hasAny(rowTitle, title, content) || cellValues.isNotEmpty() || tableRows.isNotEmpty()) emptyList()
+                else listOf(issue("rowTitle", "Add row action needs rowTitle, title, content, cellValues, or tableRows."))
+            }
+            "DELETE_TABLE_ROW" -> {
+                if (hasAny(rowId, rowTitle, title)) emptyList()
+                else listOf(issue("rowTitle", "Delete row action needs rowId, rowTitle, or title."))
+            }
+            "UPDATE_TABLE_ROW", "RENAME_TABLE_ROW" -> {
+                buildList {
+                    if (!hasAny(rowId, rowTitle, title)) {
+                        add(issue("rowTitle", "Update row action needs rowId, rowTitle, or title."))
+                    }
+                    if (!hasAny(newRowTitle, value, content) && cellValues.isEmpty()) {
+                        add(issue("value", "Update row action needs newRowTitle, value, content, or cellValues."))
+                    }
+                }
+            }
+            "REORDER_TABLE_ROW", "MOVE_TABLE_ROW" -> {
+                buildList {
+                    if (!hasAny(rowId, rowTitle, title)) {
+                        add(issue("rowTitle", "Move row action needs rowId, rowTitle, or title."))
+                    }
+                    if (targetIndex == null) add(issue("targetIndex", "Move row action needs targetIndex."))
+                }
+            }
+            "ADD_ROW_PAGE_BLOCK", "APPEND_ROW_PAGE_BLOCK", "ADD_TABLE_ROW_BLOCK",
+            "UPDATE_ROW_PAGE_BLOCK", "EDIT_ROW_PAGE_BLOCK", "UPDATE_TABLE_ROW_BLOCK",
+            "CHECK_ROW_PAGE_BLOCK", "UNCHECK_ROW_PAGE_BLOCK", "DELETE_ROW_PAGE_BLOCK", "DELETE_TABLE_ROW_BLOCK" -> {
+                if (hasAny(rowId, rowTitle, targetTitle, title)) emptyList()
+                else listOf(issue("rowTitle", "Row page block action needs rowId, rowTitle, targetTitle, or title."))
+            }
+            "UPDATE_TABLE_CELL" -> {
+                buildList {
+                    if (!hasAny(rowId, rowTitle, title)) add(issue("rowTitle", "Cell update needs rowId, rowTitle, or title."))
+                    if (!hasAny(columnId, columnName, propertyName)) {
+                        add(issue("columnName", "Cell update needs columnId, columnName, or propertyName."))
+                    }
+                    if (!hasAny(value, content)) add(issue("value", "Cell update needs value or content."))
+                }
+            }
+            "SORT_TABLE", "SET_TABLE_SORT", "FILTER_TABLE", "SET_TABLE_FILTER", "GROUP_TABLE", "SET_TABLE_GROUP" -> {
+                if (hasAny(columnId, columnName, propertyName, title, groupByColumnId, groupByColumnName)) emptyList()
+                else listOf(issue("columnName", "Table rule action needs a target column."))
+            }
+            else -> emptyList()
+        }
+    }
 
     fun chatWithActions(
         messages: List<ChatMessage>,
@@ -230,16 +467,23 @@ class AiService(
             chat(messages).ifBlank { "I received your message, but the AI returned an empty reply." }
         }
 
-        recoverActionFromModelReply(
+        val modelResult = recoverActionFromModelReply(
             reply = reply,
             prompt = userMessage,
             pages = pages,
-        )?.let { return it }
+        )
+        if (modelResult != null && modelResult.actions.isNotEmpty()) return modelResult
 
-        recoverActionFromPrompt(
+        val promptResult = recoverActionFromPrompt(
             prompt = userMessage,
             pages = pages,
-        )?.let { return it }
+        )
+        if (promptResult != null) {
+            return promptResult.copy(
+                validationIssues = modelResult?.validationIssues.orEmpty() + promptResult.validationIssues,
+            )
+        }
+        if (modelResult != null) return modelResult
 
         return AiActionResult(reply = reply, actions = emptyList())
     }
@@ -258,11 +502,14 @@ class AiService(
             .getOrNull()
             ?.takeIf { envelope -> envelope.actions.isNotEmpty() }
             ?.let { envelope ->
+                val normalizedActions = envelope.actions.map { action -> action.normalizedJsonAction(pages, prompt) }
+                val validation = normalizedActions.validatedForActionSchema()
                 return AiActionResult(
                     reply = envelope.reply.ifBlank {
-                        envelope.actions.recoveredReplyForPrompt(prompt)
+                        validation.actions.ifEmpty { normalizedActions }.recoveredReplyForPrompt(prompt)
                     },
-                    actions = envelope.actions.map { action -> action.normalizedJsonAction(pages, prompt) },
+                    actions = validation.actions,
+                    validationIssues = validation.issues,
                 )
             }
 
@@ -271,9 +518,11 @@ class AiService(
             ?.takeIf { action -> action.type.isNotBlank() }
             ?.let { action ->
                 val normalized = action.normalizedJsonAction(pages, prompt)
+                val validation = listOf(normalized).validatedForActionSchema()
                 return AiActionResult(
                     reply = listOf(normalized).recoveredReplyForPrompt(prompt),
-                    actions = listOf(normalized),
+                    actions = validation.actions,
+                    validationIssues = validation.issues,
                 )
             }
 
@@ -284,14 +533,16 @@ class AiService(
         pages: List<AiPageContext>,
         prompt: String,
     ): AiActionItem {
+        val normalizedType = type.normalizedActionType()
         val explicitTarget = targetTitle.cleanAiPageTitle()
-            .ifBlank { title.cleanAiPageTitle().takeIf { type.equals("CREATE_DATABASE", ignoreCase = true).not() }.orEmpty() }
+            .ifBlank { title.cleanAiPageTitle().takeIf { normalizedType != "CREATE_DATABASE" }.orEmpty() }
         val targetPage = pages.findPageByAiTitle(explicitTarget)
             ?: pages.findTargetPage(prompt)
         return copy(
+            type = normalizedType,
             targetTitle = targetPage?.title ?: explicitTarget,
             tableTitle = tableTitle.ifBlank {
-                if (type.uppercase() in tableRowActionTypes) targetPage?.defaultTableTitle().orEmpty() else ""
+                if (normalizedType in tableRowActionTypes) targetPage?.defaultTableTitle().orEmpty() else ""
             },
         )
     }
@@ -356,9 +607,11 @@ class AiService(
         }
 
         if (actions.isEmpty()) return null
+        val validation = actions.validatedForActionSchema()
         return AiActionResult(
             reply = actions.recoveredReplyForPrompt(prompt),
-            actions = actions,
+            actions = validation.actions,
+            validationIssues = validation.issues,
         )
     }
 
@@ -449,16 +702,35 @@ class AiService(
 
         val recoveredActions = visiblePrompt.recoverStructuredActions(targetPage)
         if (recoveredActions.isNotEmpty()) {
+            val validation = recoveredActions.validatedForActionSchema()
             return AiActionResult(
                 reply = visiblePrompt.recoveryReply(
-                    malay = recoveredActions.recoveredMalayReply(),
-                    english = recoveredActions.recoveredEnglishReply(),
+                    malay = validation.actions.ifEmpty { recoveredActions }.recoveredMalayReply(),
+                    english = validation.actions.ifEmpty { recoveredActions }.recoveredEnglishReply(),
                 ),
-                actions = recoveredActions,
+                actions = validation.actions,
+                validationIssues = validation.issues,
             )
         }
 
-        return null
+        val fallbackActions = listOfNotNull(
+            visiblePrompt.recoverBlockAction(targetPage)
+                ?: visiblePrompt.recoverTableRowAction(targetPage)
+                ?: visiblePrompt.recoverPropertyAction(targetPage)
+                ?: visiblePrompt.recoverTableRenameAction(targetPage)
+                ?: visiblePrompt.recoverDatabaseAction(targetPage)
+                ?: visiblePrompt.takeUnless { it.looksLikeTableContextOnlyRequest() }?.recoverWriteAction(targetPage),
+        )
+        if (fallbackActions.isEmpty()) return null
+        val validation = fallbackActions.validatedForActionSchema()
+        return AiActionResult(
+            reply = visiblePrompt.recoveryReply(
+                malay = validation.actions.ifEmpty { fallbackActions }.recoveredMalayReply(),
+                english = validation.actions.ifEmpty { fallbackActions }.recoveredEnglishReply(),
+            ),
+            actions = validation.actions,
+            validationIssues = validation.issues,
+        )
     }
 
     private fun String.recoverStructuredActions(targetPage: AiPageContext): List<AiActionItem> {
@@ -1260,6 +1532,12 @@ class AiService(
             .replace(Regex("[^a-z0-9\\s]"), " ")
             .replace(Regex("\\s+"), " ")
             .trim()
+
+    private fun String.normalizedActionType(): String =
+        trim()
+            .uppercase()
+            .replace(Regex("[^A-Z0-9]+"), "_")
+            .trim('_')
 
     private fun String.recoveryReply(
         malay: String,

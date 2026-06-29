@@ -20,6 +20,9 @@ import com.changeyourlife.cyl.domain.model.TaskItem
 import com.changeyourlife.cyl.domain.model.Workspace
 import com.changeyourlife.cyl.domain.repository.AuthRepository
 import com.changeyourlife.cyl.domain.repository.AiBlockContext
+import com.changeyourlife.cyl.domain.model.ChatActionMetadata
+import com.changeyourlife.cyl.domain.model.ChatActionMetadataItem
+import com.changeyourlife.cyl.domain.model.ChatActionValidationMetadata
 import com.changeyourlife.cyl.domain.model.ChatMessage
 import com.changeyourlife.cyl.domain.model.ChatPageLink
 import com.changeyourlife.cyl.domain.model.ChatSession
@@ -33,6 +36,9 @@ import com.changeyourlife.cyl.domain.repository.AiRepository
 import com.changeyourlife.cyl.domain.repository.AiStatus
 import com.changeyourlife.cyl.domain.repository.ChatAction
 import com.changeyourlife.cyl.domain.repository.ChatTableColumn
+import com.changeyourlife.cyl.presentation.ai.AiChatActionMetadata
+import com.changeyourlife.cyl.presentation.ai.AiChatActionMetadataItem
+import com.changeyourlife.cyl.presentation.ai.AiChatActionValidationIssue
 import com.changeyourlife.cyl.presentation.ai.AiChatMode
 import com.changeyourlife.cyl.presentation.ai.AiChatMessage
 import com.changeyourlife.cyl.presentation.ai.AiChatPageLink
@@ -550,11 +556,28 @@ class HomeViewModel @Inject constructor(
                     )
                         .filter { message -> message.isNotBlank() }
                         .joinToString("\n\n")
+                    val actionMetadata = ChatActionMetadata(
+                        mode = mode.name,
+                        schemaName = result.schemaName,
+                        schemaVersion = result.schemaVersion,
+                        proposedActions = result.actions.map { action -> action.toMetadataItem() },
+                        executedActions = actionsToExecute.map { action -> action.toMetadataItem() },
+                        executionMessages = actionResults.messages,
+                        validationIssues = result.validationIssues.map { issue ->
+                            ChatActionValidationMetadata(
+                                actionIndex = issue.actionIndex,
+                                field = issue.field,
+                                code = issue.code,
+                                message = issue.message,
+                            )
+                        } + actionResults.validationIssues,
+                    )
                     chatHistoryRepository.appendMessage(
                         sessionId = session.id,
                         role = "assistant",
                         content = replyWithResults.sanitizeAiUserVisibleText(),
                         pageLinks = actionResults.pageLinks.toDomainChatPageLinks(),
+                        actionMetadata = actionMetadata,
                     )
                 }
                 .onFailure { error ->
@@ -615,6 +638,14 @@ class HomeViewModel @Inject constructor(
                 }
             },
             pageLinks = pageLinks,
+            validationIssues = execution.validationIssues.map { issue ->
+                ChatActionValidationMetadata(
+                    actionIndex = issue.actionIndex,
+                    field = issue.field,
+                    code = issue.code,
+                    message = issue.message,
+                )
+            },
         )
     }
 
@@ -2109,6 +2140,7 @@ class HomeViewModel @Inject constructor(
     private fun List<ChatMessage>.toAiChatMessages(): List<AiChatMessage> {
         return map { message ->
             AiChatMessage(
+                id = message.id,
                 role = message.role,
                 content = message.content,
                 pageLinks = message.pageLinks.map { link ->
@@ -2117,6 +2149,34 @@ class HomeViewModel @Inject constructor(
                         title = link.title,
                         targetType = link.targetType,
                         targetId = link.targetId,
+                    )
+                },
+                actionMetadata = message.actionMetadata?.let { metadata ->
+                    AiChatActionMetadata(
+                        mode = metadata.mode,
+                        schemaName = metadata.schemaName,
+                        schemaVersion = metadata.schemaVersion,
+                        proposedActions = metadata.proposedActions.map { action ->
+                            AiChatActionMetadataItem(
+                                type = action.type,
+                                target = action.target,
+                            )
+                        },
+                        executedActions = metadata.executedActions.map { action ->
+                            AiChatActionMetadataItem(
+                                type = action.type,
+                                target = action.target,
+                            )
+                        },
+                        executionMessages = metadata.executionMessages,
+                        validationIssues = metadata.validationIssues.map { issue ->
+                            AiChatActionValidationIssue(
+                                actionIndex = issue.actionIndex,
+                                field = issue.field,
+                                code = issue.code,
+                                message = issue.message,
+                            )
+                        },
                     )
                 },
             )
@@ -2132,6 +2192,30 @@ class HomeViewModel @Inject constructor(
                 targetId = link.targetId,
             )
         }
+    }
+
+    private fun ChatAction.toMetadataItem(): ChatActionMetadataItem {
+        val target = listOf(
+            targetTitle,
+            title,
+            tableTitle,
+            rowTitle,
+            newRowTitle,
+            columnName,
+            newColumnName,
+            propertyName,
+            blockText,
+            content,
+        )
+            .map { value -> value.trim() }
+            .filter { value -> value.isNotBlank() }
+            .distinct()
+            .joinToString(" / ")
+            .take(120)
+        return ChatActionMetadataItem(
+            type = type,
+            target = target,
+        )
     }
 
     private fun Page.toAiPageContext(): AiPageContext {
@@ -2870,6 +2954,7 @@ data class HomeUiState(
 private data class HomeAiExecutionResult(
     val messages: List<String> = emptyList(),
     val pageLinks: List<AiChatPageLink> = emptyList(),
+    val validationIssues: List<ChatActionValidationMetadata> = emptyList(),
 )
 
 private data class HomeTableUpdateResult(

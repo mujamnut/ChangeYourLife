@@ -26,7 +26,17 @@ data class AiStatus(
 
 data class ChatActionResult(
     val reply: String,
-    val actions: List<ChatAction> = emptyList()
+    val actions: List<ChatAction> = emptyList(),
+    val schemaName: String = "",
+    val schemaVersion: Int = 1,
+    val validationIssues: List<ChatActionValidationIssue> = emptyList(),
+)
+
+data class ChatActionValidationIssue(
+    val actionIndex: Int? = null,
+    val field: String = "",
+    val code: String = "",
+    val message: String = "",
 )
 
 data class AiPageContext(

@@ -3,6 +3,9 @@ package com.changeyourlife.cyl.data.repository
 import com.changeyourlife.cyl.data.local.dao.ChatMessageDao
 import com.changeyourlife.cyl.data.local.entity.ChatMessageEntity
 import com.changeyourlife.cyl.data.local.entity.ChatSessionEntity
+import com.changeyourlife.cyl.domain.model.ChatActionMetadata
+import com.changeyourlife.cyl.domain.model.ChatActionMetadataItem
+import com.changeyourlife.cyl.domain.model.ChatActionValidationMetadata
 import com.changeyourlife.cyl.domain.model.ChatMessage
 import com.changeyourlife.cyl.domain.model.ChatPageLink
 import com.changeyourlife.cyl.domain.model.ChatSession
@@ -63,6 +66,7 @@ class ChatHistoryRepositoryImpl @Inject constructor(
         role: String,
         content: String,
         pageLinks: List<ChatPageLink>,
+        actionMetadata: ChatActionMetadata?,
     ): ChatMessage {
         val now = System.currentTimeMillis()
         val messageCount = chatMessageDao.getMessageCount(sessionId)
@@ -92,6 +96,7 @@ class ChatHistoryRepositoryImpl @Inject constructor(
             role = role,
             content = content,
             pageLinks = pageLinks,
+            actionMetadata = actionMetadata,
             createdAt = now,
         )
         chatMessageDao.upsertMessage(message.toEntity(json))
@@ -147,6 +152,12 @@ private fun ChatMessageEntity.toDomain(json: Json): ChatMessage {
         pageLinks = runCatching {
             json.decodeFromString<List<ChatPageLinkDto>>(pageLinksJson).map { it.toDomain() }
         }.getOrDefault(emptyList()),
+        actionMetadata = actionMetadataJson
+            .takeIf { it.isNotBlank() }
+            ?.let { metadataJson ->
+                runCatching { json.decodeFromString<ChatActionMetadataDto>(metadataJson).toDomain() }
+                    .getOrNull()
+            },
         createdAt = createdAt,
     )
 }
@@ -158,6 +169,9 @@ private fun ChatMessage.toEntity(json: Json): ChatMessageEntity {
         role = role,
         content = content,
         pageLinksJson = json.encodeToString(pageLinks.map { it.toDto() }),
+        actionMetadataJson = actionMetadata?.let { metadata ->
+            json.encodeToString(metadata.toDto())
+        }.orEmpty(),
         createdAt = createdAt,
     )
 }
@@ -168,6 +182,31 @@ private data class ChatPageLinkDto(
     val title: String,
     val targetType: String = "",
     val targetId: String = "",
+)
+
+@Serializable
+private data class ChatActionMetadataDto(
+    val mode: String = "",
+    val schemaName: String = "",
+    val schemaVersion: Int = 1,
+    val proposedActions: List<ChatActionMetadataItemDto> = emptyList(),
+    val executedActions: List<ChatActionMetadataItemDto> = emptyList(),
+    val executionMessages: List<String> = emptyList(),
+    val validationIssues: List<ChatActionValidationMetadataDto> = emptyList(),
+)
+
+@Serializable
+private data class ChatActionMetadataItemDto(
+    val type: String = "",
+    val target: String = "",
+)
+
+@Serializable
+private data class ChatActionValidationMetadataDto(
+    val actionIndex: Int? = null,
+    val field: String = "",
+    val code: String = "",
+    val message: String = "",
 )
 
 private fun ChatPageLinkDto.toDomain(): ChatPageLink {
@@ -185,6 +224,62 @@ private fun ChatPageLink.toDto(): ChatPageLinkDto {
         title = title,
         targetType = targetType,
         targetId = targetId,
+    )
+}
+
+private fun ChatActionMetadataDto.toDomain(): ChatActionMetadata {
+    return ChatActionMetadata(
+        mode = mode,
+        schemaName = schemaName,
+        schemaVersion = schemaVersion,
+        proposedActions = proposedActions.map { it.toDomain() },
+        executedActions = executedActions.map { it.toDomain() },
+        executionMessages = executionMessages,
+        validationIssues = validationIssues.map { it.toDomain() },
+    )
+}
+
+private fun ChatActionMetadata.toDto(): ChatActionMetadataDto {
+    return ChatActionMetadataDto(
+        mode = mode,
+        schemaName = schemaName,
+        schemaVersion = schemaVersion,
+        proposedActions = proposedActions.map { it.toDto() },
+        executedActions = executedActions.map { it.toDto() },
+        executionMessages = executionMessages,
+        validationIssues = validationIssues.map { it.toDto() },
+    )
+}
+
+private fun ChatActionMetadataItemDto.toDomain(): ChatActionMetadataItem {
+    return ChatActionMetadataItem(
+        type = type,
+        target = target,
+    )
+}
+
+private fun ChatActionMetadataItem.toDto(): ChatActionMetadataItemDto {
+    return ChatActionMetadataItemDto(
+        type = type,
+        target = target,
+    )
+}
+
+private fun ChatActionValidationMetadataDto.toDomain(): ChatActionValidationMetadata {
+    return ChatActionValidationMetadata(
+        actionIndex = actionIndex,
+        field = field,
+        code = code,
+        message = message,
+    )
+}
+
+private fun ChatActionValidationMetadata.toDto(): ChatActionValidationMetadataDto {
+    return ChatActionValidationMetadataDto(
+        actionIndex = actionIndex,
+        field = field,
+        code = code,
+        message = message,
     )
 }
 
