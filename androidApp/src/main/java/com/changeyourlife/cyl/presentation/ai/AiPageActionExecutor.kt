@@ -872,6 +872,8 @@ data class AiPageActionValidationIssue(
     val message: String = "",
 )
 
+private val FormulaColumnReferenceRegex = Regex("""\{([^}]+)}""")
+
 private fun PageBlockDocument.validateActionTarget(
     action: ChatAction,
     actionIndex: Int,
@@ -984,6 +986,98 @@ private fun PageBlockDocument.validateActionTarget(
         )
     }
 
+    fun missingTableIssue(field: String, tableId: String, tableTitle: String): AiPageActionValidationIssue? {
+        if (tableId.isBlank() && tableTitle.isBlank()) return null
+        val found = if (tableId.isNotBlank()) {
+            findTableBlock(tableId) != null
+        } else {
+            findTableBlockId(tableTitle) != null
+        }
+        return if (found) {
+            null
+        } else {
+            targetNotFound(
+                field = field,
+                targetKind = "table",
+                targetLabel = tableTitle.ifBlank { tableId },
+            )
+        }
+    }
+
+    fun relationConfigIssue(): AiPageActionValidationIssue? {
+        return missingTableIssue(
+            field = "relationTargetTableTitle",
+            tableId = action.relationTargetTableId,
+            tableTitle = action.relationTargetTableTitle,
+        )
+    }
+
+    fun formulaConfigIssue(table: PageBlock): AiPageActionValidationIssue? {
+        val missingReference = FormulaColumnReferenceRegex.findAll(action.formula)
+            .map { match -> match.groupValues.getOrNull(1).orEmpty().trim() }
+            .filter { columnName -> columnName.isNotBlank() }
+            .firstOrNull { columnName -> table.table.findColumn(columnName = columnName) == null }
+            ?: return null
+        return targetNotFound(
+            field = "formula",
+            targetKind = "formula column",
+            targetLabel = missingReference,
+        )
+    }
+
+    fun rollupConfigIssue(table: PageBlock): AiPageActionValidationIssue? {
+        val relationColumn = table.table.findColumn(
+            columnId = action.rollupRelationColumnId,
+            columnName = action.rollupRelationColumnName,
+        )
+        if ((action.rollupRelationColumnId.isNotBlank() || action.rollupRelationColumnName.isNotBlank()) &&
+            relationColumn == null
+        ) {
+            return targetNotFound(
+                field = "rollupRelationColumnName",
+                targetKind = "column",
+                targetLabel = action.rollupRelationColumnName.ifBlank { action.rollupRelationColumnId },
+            )
+        }
+
+        val targetColumnId = action.rollupTargetColumnId
+        val targetColumnName = action.rollupTargetColumnName
+        if (targetColumnId.isBlank() && targetColumnName.isBlank()) return null
+
+        val targetTable = relationColumn
+            ?.relationTargetTableId
+            ?.takeIf { tableId -> tableId.isNotBlank() }
+            ?.let { tableId -> findTableBlock(tableId) }
+            ?: action.relationTargetTableId
+                .takeIf { tableId -> tableId.isNotBlank() }
+                ?.let { tableId -> findTableBlock(tableId) }
+            ?: action.relationTargetTableTitle
+                .takeIf { tableTitle -> tableTitle.isNotBlank() }
+                ?.let { tableTitle ->
+                    findTableBlockId(tableTitle)?.let { tableId -> findTableBlock(tableId) }
+                }
+
+        if (targetTable == null) {
+            return AiPageActionValidationIssue(
+                actionIndex = actionIndex,
+                field = "relationTargetTableTitle",
+                code = "target_not_found",
+                message = "Could not find rollup target table for ${targetColumnName.ifBlank { targetColumnId }}.",
+            )
+        }
+
+        return missingColumnIssue(
+            table = targetTable,
+            field = "rollupTargetColumnName",
+            columnId = targetColumnId,
+            columnName = targetColumnName,
+        )
+    }
+
+    fun columnConfigIssue(table: PageBlock): AiPageActionValidationIssue? {
+        return formulaConfigIssue(table) ?: relationConfigIssue() ?: rollupConfigIssue(table)
+    }
+
     fun rowIssue(table: PageBlock): AiPageActionValidationIssue? {
         val rowTitle = action.rowTitle.ifBlank { action.targetTitle }.ifBlank { action.title }
         return if (table.table.findRow(action.rowId, rowTitle) == null) {
@@ -1058,7 +1152,7 @@ private fun PageBlockDocument.validateActionTarget(
         "FILTER_TABLE", "SET_TABLE_FILTER",
         "GROUP_TABLE", "SET_TABLE_GROUP" -> {
             val table = targetTable() ?: return tableIssue()
-            columnIssue(table)
+            columnIssue(table) ?: columnConfigIssue(table)
         }
 
         "DELETE_TABLE_ROW", "UPDATE_TABLE_ROW", "RENAME_TABLE_ROW",

@@ -92,18 +92,20 @@ Goal: AI faham arahan Malay/English dan execute action secara konsisten.
 - Android AI executor sekarang buat semantic validation sebelum execute: block/property/table/row/column target mesti wujud untuk update/delete/move/sort/filter/group/cell/row-page actions.
 - Semantic validation issue dari executor disimpan dalam chat action metadata supaya rejected action boleh dilihat balik di `Action details`.
 - Android AI executor regression test cover missing block/column/view-config target supaya action tidak mutate page bila target tidak sah.
+- Android AI executor sekarang validate relation target table dan rollup target table/column sebelum simpan column config.
+- Android AI executor sekarang validate formula reference `{Column}` supaya formula tidak rujuk column yang tidak wujud.
 
 ### Belum Kukuh
 
 - Action schema sudah ada type/required-field validation dan semantic target validation asas, tapi semantic validation masih belum lengkap untuk semua edge case.
 - AI kadang balas JSON/text tapi action tidak execute.
 - Recovery logic masih banyak dan ad hoc.
-- Belum semua action diuji: block, property, row, column, date, formula, relation, rollup.
+- Belum semua action diuji: date, formula evaluator penuh, media, reminder, dan row page nested block.
 
 ### Next Work
 
-- Luaskan semantic validation untuk config kompleks: formula, relation, rollup, media, date/reminder, dan row page nested block.
-- Tambah regression test untuk lebih banyak action: date, formula, relation, rollup, row page block, dan media.
+- Luaskan semantic validation untuk config kompleks: media, date/reminder, formula evaluator penuh, dan row page nested block.
+- Tambah regression test untuk lebih banyak action: date, row page block, media, dan formula edge cases.
 
 ## Milestone 3: Editor/Page Core
 

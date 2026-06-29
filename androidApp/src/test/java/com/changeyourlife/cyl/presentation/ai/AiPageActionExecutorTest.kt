@@ -186,27 +186,54 @@ class AiPageActionExecutorTest {
             actions = listOf(
                 ChatAction(
                     type = "MOVE_TABLE_COLUMN",
+                    title = "Missing amount",
                     tableTitle = "Budget",
                     columnName = "Missing amount",
                     targetIndex = 1,
                 ),
                 ChatAction(
                     type = "UPDATE_BLOCK",
+                    title = "Missing block",
                     blockText = "Missing block",
                     content = "New note",
                 ),
                 ChatAction(
                     type = "SET_TABLE_VIEW_CONFIG",
+                    title = "Budget dashboard",
                     tableTitle = "Budget",
                     dashboardMetricColumnName = "Missing amount",
+                ),
+                ChatAction(
+                    type = "UPDATE_FORMULA_COLUMN",
+                    title = "Name",
+                    tableTitle = "Budget",
+                    columnName = "Name",
+                    formula = "{Amount} + 1",
+                ),
+                ChatAction(
+                    type = "UPDATE_RELATION_COLUMN",
+                    title = "Name",
+                    tableTitle = "Budget",
+                    columnName = "Name",
+                    relationTargetTableTitle = "Projects",
+                ),
+                ChatAction(
+                    type = "UPDATE_ROLLUP_COLUMN",
+                    title = "Name",
+                    tableTitle = "Budget",
+                    columnName = "Name",
+                    rollupTargetColumnName = "Amount",
                 ),
             ),
         )
 
-        assertEquals(3, result.validationIssues.size)
+        assertEquals(6, result.validationIssues.size)
         assertEquals("columnName", result.validationIssues[0].field)
         assertEquals("blockText", result.validationIssues[1].field)
         assertEquals("dashboardMetricColumnName", result.validationIssues[2].field)
+        assertEquals("formula", result.validationIssues[3].field)
+        assertEquals("relationTargetTableTitle", result.validationIssues[4].field)
+        assertEquals("relationTargetTableTitle", result.validationIssues[5].field)
         assertEquals(0, pageRepository.moveTableColumnCalls.size)
         assertEquals(0, pageRepository.upsertPageCalls)
         assertNull(result.updatedDocument)
