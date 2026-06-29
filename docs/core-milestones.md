@@ -89,17 +89,20 @@ Goal: AI faham arahan Malay/English dan execute action secara konsisten.
 - Backend regression test sudah cover arahan multi-step Malay: padam block + tambah row, buat table + tambah row, dan elak prompt penuh masuk sebagai row.
 - Assistant chat message sekarang simpan action metadata: mode, schema, proposed actions, executed actions, execution messages, dan validation issues.
 - Chat sheet boleh buka `Action details` pada mesej assistant untuk lihat proposed/applied/rejected/result tanpa memaparkan id teknikal dalam bubble utama.
+- Android AI executor sekarang buat semantic validation sebelum execute: block/property/table/row/column target mesti wujud untuk update/delete/move/sort/filter/group/cell/row-page actions.
+- Semantic validation issue dari executor disimpan dalam chat action metadata supaya rejected action boleh dilihat balik di `Action details`.
+- Android AI executor regression test cover missing block/column/view-config target supaya action tidak mutate page bila target tidak sah.
 
 ### Belum Kukuh
 
-- Action schema sudah ada type/required-field validation, tapi semantic validation masih belum lengkap untuk semua edge case.
+- Action schema sudah ada type/required-field validation dan semantic target validation asas, tapi semantic validation masih belum lengkap untuk semua edge case.
 - AI kadang balas JSON/text tapi action tidak execute.
 - Recovery logic masih banyak dan ad hoc.
 - Belum semua action diuji: block, property, row, column, date, formula, relation, rollup.
 
 ### Next Work
 
-- Tambah semantic validation untuk target sebenar: page/table/row/column/property mesti wujud sebelum execute.
+- Luaskan semantic validation untuk config kompleks: formula, relation, rollup, media, date/reminder, dan row page nested block.
 - Tambah regression test untuk lebih banyak action: date, formula, relation, rollup, row page block, dan media.
 
 ## Milestone 3: Editor/Page Core
