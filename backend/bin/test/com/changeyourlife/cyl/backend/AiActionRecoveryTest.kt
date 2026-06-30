@@ -344,6 +344,27 @@ class AiActionRecoveryTest {
     }
 
     @Test
+    fun chatWithActionsRecoversHomeCreateExpensePageBeforeMarkdownAnswer() {
+        val sandboxService = AiService()
+        val result = sandboxService.chatWithActions(
+            messages = listOf(
+                ChatMessage(
+                    role = "user",
+                    content = "buatkan halaman pengeluaran bulan 7 dengan gaji 1488",
+                ),
+            ),
+            pages = emptyList(),
+        )
+
+        val action = result.actions.single()
+        assertEquals("CREATE_PAGE", action.type)
+        assertEquals("July Monthly Expenses", action.title)
+        assertEquals("Monthly Expenses", action.tableTitle)
+        assertEquals("Salary", action.tableRows.single()["Category"])
+        assertEquals("1488", action.tableRows.single()["Budget"])
+    }
+
+    @Test
     fun recoversMultipleMalayCommandsWithoutPuttingPromptIntoRow() {
         val result = service.recoverActionFromPrompt(
             prompt = """

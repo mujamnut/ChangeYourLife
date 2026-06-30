@@ -78,4 +78,19 @@ class AiPromptActionRecoveryTest {
         assertEquals("1488", action.tableRows.single()["Actual"])
         assertEquals("0", action.tableRows.single()["Variance"])
     }
+
+    @Test
+    fun recoversMalayIndonesianExpensePagePromptWithoutNewKeyword() {
+        val result = recovery.recoverActionFromPrompt(
+            prompt = "buatkan halaman pengeluaran bulan 7 dengan gaji 1488",
+            pages = emptyList(),
+        )
+
+        val action = assertNotNull(result).actions.single()
+        assertEquals("CREATE_PAGE", action.type)
+        assertEquals("July Monthly Expenses", action.title)
+        assertEquals("Monthly Expenses", action.tableTitle)
+        assertEquals("Salary", action.tableRows.single()["Category"])
+        assertEquals("1488", action.tableRows.single()["Budget"])
+    }
 }

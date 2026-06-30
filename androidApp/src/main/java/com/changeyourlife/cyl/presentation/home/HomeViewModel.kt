@@ -532,7 +532,7 @@ class HomeViewModel @Inject constructor(
             aiRepository.chatWithActions(messagesForAi.toRoleContentPairs(), pages = pageContext, tasks = taskContext)
                 .onSuccess { result ->
                     isAiGeneratingChat.value = false
-                    val assistantReply = result.reply.ifBlank {
+                    val backendReply = result.reply.ifBlank {
                         "I received your message, but the AI returned an empty reply."
                     }.sanitizeAiUserVisibleText()
                     val actionDecision = AiActionExecutionPolicy.decide(
@@ -545,6 +545,11 @@ class HomeViewModel @Inject constructor(
                         scopedTargetPage = scopedTargetPage,
                         actions = actionsToExecute,
                     )
+                    val assistantReply = if (mode == AiChatMode.Planning && result.actions.isNotEmpty()) {
+                        "Saya nampak arahan untuk ubah app, tapi mode sekarang Planning. Tukar ke Edit atau Auto untuk apply perubahan ini."
+                    } else {
+                        backendReply
+                    }
                     val replyWithResults = listOf(
                         assistantReply,
                         actionResults.messages.joinToString("\n"),

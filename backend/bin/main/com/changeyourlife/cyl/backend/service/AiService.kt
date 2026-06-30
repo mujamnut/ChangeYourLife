@@ -215,6 +215,13 @@ class AiService(
         val userMessage = messages.lastOrNull { message -> message.role.equals("user", ignoreCase = true) }
             ?.content
             .orEmpty()
+        recoverActionFromPrompt(
+            prompt = userMessage,
+            pages = pages,
+        )?.takeIf { result -> result.actions.isNotEmpty() }?.let { result ->
+            return result
+        }
+
         val reply = if (isMockMode) {
             "[AI Sandbox Mode - No API Key]\nHere is a simulated response to your question: \"$userMessage\". Add OPENROUTER_API_KEY to enable live AI answers."
         } else {
@@ -227,10 +234,7 @@ class AiService(
             pages = pages,
         )
 
-        val promptResult = recoverActionFromPrompt(
-            prompt = userMessage,
-            pages = pages,
-        )
+        val promptResult = recoverActionFromPrompt(prompt = userMessage, pages = pages)
         selectActionResultForPrompt(
             prompt = userMessage,
             modelResult = modelResult,

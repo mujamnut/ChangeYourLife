@@ -282,10 +282,10 @@ class AiPromptActionRecovery(
         }
         val hasPageIntent = listOf("page", "halaman").any { token -> value.contains(token) }
         val hasNewIntent = listOf("baru", "new").any { token -> value.contains(token) }
-        if (!hasCreateIntent || !hasPageIntent || !hasNewIntent) return null
+        val isExpensePage = looksLikeMonthlyExpensePage()
+        if (!hasCreateIntent || !hasPageIntent || (!hasNewIntent && !isExpensePage)) return null
         if (listOf("subpage", "sub page", "sub-page").any { token -> value.contains(token) }) return null
 
-        val isExpensePage = looksLikeMonthlyExpensePage()
         val pageTitle = when {
             isExpensePage -> listOfNotNull(extractRequestedMonthName(), "Monthly Expenses").joinToString(" ")
             else -> extractCreatePageTitle().ifBlank { "Untitled page" }
@@ -315,9 +315,15 @@ class AiPromptActionRecovery(
     private fun String.looksLikeMonthlyExpensePage(): Boolean {
         val value = lowercase()
         val hasMonthly = listOf("monthly", "bulanan", "bulan").any { token -> value.contains(token) }
-        val hasExpense = listOf("expense", "expenses", "belanja", "duit", "spending").any { token ->
-            value.contains(token)
-        }
+        val hasExpense = listOf(
+            "expense",
+            "expenses",
+            "belanja",
+            "perbelanjaan",
+            "pengeluaran",
+            "duit",
+            "spending",
+        ).any { token -> value.contains(token) }
         return hasMonthly && hasExpense
     }
 
@@ -363,10 +369,11 @@ class AiPromptActionRecovery(
     }
 
     private fun String.extractSalaryAmount(): String? {
-        return Regex("(?i)\\b(?:gaji|salary|income)\\s*(?:rm\\s*)?(\\d+(?:[.,]\\d+)?)\\b")
+        return Regex("(?i)\\b(?:gaji|salary|income)\\s*(?:rm\\s*)?([0-9][0-9\\s.,_]*[0-9]|\\d)\\b")
             .find(this)
             ?.groupValues
             ?.getOrNull(1)
+            ?.replace(Regex("[\\s_]"), "")
             ?.replace(',', '.')
             ?.takeIf { value -> value.isNotBlank() }
     }
