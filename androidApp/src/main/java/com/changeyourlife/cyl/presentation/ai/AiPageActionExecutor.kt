@@ -4,6 +4,7 @@ import com.changeyourlife.cyl.domain.model.Page
 import com.changeyourlife.cyl.domain.model.PageBlock
 import com.changeyourlife.cyl.domain.model.PageBlockDocument
 import com.changeyourlife.cyl.domain.model.PageBlockType
+import com.changeyourlife.cyl.domain.model.PageMediaAttachment
 import com.changeyourlife.cyl.domain.model.PagePropertyType
 import com.changeyourlife.cyl.domain.model.PageTable
 import com.changeyourlife.cyl.domain.model.PageTableColumn
@@ -27,6 +28,7 @@ import com.changeyourlife.cyl.presentation.page.PageModuleType
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import java.util.UUID
 import javax.inject.Inject
 
 class AiPageActionExecutor @Inject constructor(
@@ -1018,16 +1020,55 @@ private fun PageBlockDocument.validateActionTarget(
     }
 
     fun formulaConfigIssue(table: PageBlock): AiPageActionValidationIssue? {
-        val missingReference = FormulaColumnReferenceRegex.findAll(action.formula)
+        val formula = action.effectiveFormula()
+        if (formula.isBlank()) {
+            return if (action.type.normalizedActionType() == "UPDATE_FORMULA_COLUMN") {
+                AiPageActionValidationIssue(
+                    actionIndex = actionIndex,
+                    field = "formula",
+                    code = "required",
+                    message = "Formula column needs a formula before it can be updated.",
+                )
+            } else {
+                null
+            }
+        }
+        val targetColumn = table.table.findColumn(
+            columnId = action.columnId,
+            columnName = action.columnName.ifBlank { action.propertyName }.ifBlank { action.title },
+        )
+        val hasSelfReference = targetColumn != null &&
+            FormulaColumnReferenceRegex.findAll(formula)
+                .map { match -> match.groupValues.getOrNull(1).orEmpty().trim().normalizedAiKey() }
+                .any { reference -> reference == targetColumn.name.normalizedAiKey() }
+        if (hasSelfReference) {
+            return AiPageActionValidationIssue(
+                actionIndex = actionIndex,
+                field = "formula",
+                code = "invalid_formula",
+                message = "Formula cannot reference its own column: ${targetColumn.name}.",
+            )
+        }
+        val missingReference = FormulaColumnReferenceRegex.findAll(formula)
             .map { match -> match.groupValues.getOrNull(1).orEmpty().trim() }
             .filter { columnName -> columnName.isNotBlank() }
             .firstOrNull { columnName -> table.table.findColumn(columnName = columnName) == null }
-            ?: return null
-        return targetNotFound(
-            field = "formula",
-            targetKind = "formula column",
-            targetLabel = missingReference,
-        )
+        if (missingReference != null) {
+            return targetNotFound(
+                field = "formula",
+                targetKind = "formula column",
+                targetLabel = missingReference,
+            )
+        }
+        if (!formula.isValidAiFormula(table.table)) {
+            return AiPageActionValidationIssue(
+                actionIndex = actionIndex,
+                field = "formula",
+                code = "invalid_formula",
+                message = "Formula must use numbers, column references like {Amount}, operators + - * /, and parentheses.",
+            )
+        }
+        return null
     }
 
     fun rollupConfigIssue(table: PageBlock): AiPageActionValidationIssue? {
@@ -1105,6 +1146,17 @@ private fun PageBlockDocument.validateActionTarget(
         )
     }
 
+    fun missingMediaPayloadIssue(): AiPageActionValidationIssue? {
+        if (action.blockType.toPageBlockTypeOrNull() != PageBlockType.MediaFile) return null
+        if (action.mediaUri.isNotBlank()) return null
+        return AiPageActionValidationIssue(
+            actionIndex = actionIndex,
+            field = "mediaUri",
+            code = "required",
+            message = "Media/file block needs mediaUri before it can be created.",
+        )
+    }
+
     fun taskDateIssue(): AiPageActionValidationIssue? {
         val dateValue = action.explicitTaskDateCellValue()
         return invalidDateIssue("cellValues.date", dateValue)
@@ -1160,6 +1212,8 @@ private fun PageBlockDocument.validateActionTarget(
     }
 
     return when (action.type.normalizedActionType()) {
+        "APPEND_BLOCK", "APPEND_PAGE_BLOCK", "ADD_BLOCK" -> missingMediaPayloadIssue()
+
         "DELETE_BLOCK", "UPDATE_BLOCK", "EDIT_BLOCK", "UPDATE_TODO", "CHECK_BLOCK", "UNCHECK_BLOCK" -> {
             if (blocks.anyMatchingBlock(action)) {
                 null
@@ -1245,6 +1299,105 @@ private fun ChatAction.explicitTaskDateCellValue(): String {
     }?.value.orEmpty()
 }
 
+private fun ChatAction.effectiveFormula(): String =
+    formula.ifBlank { value }.ifBlank { content }.trim()
+
+private fun String.isValidAiFormula(table: PageTable): Boolean {
+    if (isBlank()) return false
+    var expression = this
+    table.columns
+        .sortedByDescending { column -> column.name.length }
+        .forEach { column ->
+            expression = expression.replace("{${column.name}}", "1", ignoreCase = true)
+        }
+    if (FormulaColumnReferenceRegex.containsMatchIn(expression)) return false
+    return expression.evaluateAiFormulaArithmeticExpression() != null
+}
+
+private fun String.evaluateAiFormulaArithmeticExpression(): Double? {
+    class Parser(private val input: String) {
+        private var index = 0
+
+        fun parse(): Double? {
+            val value = parseExpression() ?: return null
+            skipSpaces()
+            return if (index == input.length) value else null
+        }
+
+        private fun parseExpression(): Double? {
+            var value = parseTerm() ?: return null
+            while (true) {
+                skipSpaces()
+                value = when (peek()) {
+                    '+' -> {
+                        index++
+                        value + (parseTerm() ?: return null)
+                    }
+                    '-' -> {
+                        index++
+                        value - (parseTerm() ?: return null)
+                    }
+                    else -> return value
+                }
+            }
+        }
+
+        private fun parseTerm(): Double? {
+            var value = parseFactor() ?: return null
+            while (true) {
+                skipSpaces()
+                value = when (peek()) {
+                    '*' -> {
+                        index++
+                        value * (parseFactor() ?: return null)
+                    }
+                    '/' -> {
+                        index++
+                        val divisor = parseFactor() ?: return null
+                        if (divisor == 0.0) return null
+                        value / divisor
+                    }
+                    else -> return value
+                }
+            }
+        }
+
+        private fun parseFactor(): Double? {
+            skipSpaces()
+            if (peek() == '-') {
+                index++
+                return -(parseFactor() ?: return null)
+            }
+            if (peek() == '(') {
+                index++
+                val value = parseExpression() ?: return null
+                skipSpaces()
+                if (peek() != ')') return null
+                index++
+                return value
+            }
+            val start = index
+            var dotCount = 0
+            while (peek()?.let { char -> char.isDigit() || char == '.' } == true) {
+                if (peek() == '.') dotCount++
+                if (dotCount > 1) return null
+                index++
+            }
+            return input.substring(start, index).toDoubleOrNull()
+        }
+
+        private fun skipSpaces() {
+            while (peek()?.isWhitespace() == true) {
+                index++
+            }
+        }
+
+        private fun peek(): Char? = input.getOrNull(index)
+    }
+
+    return Parser(this).parse()
+}
+
 private fun String.isValidAiDateCellValue(): Boolean {
     val trimmed = trim()
     if (trimmed.isBlank()) return true
@@ -1289,11 +1442,33 @@ private data class BlockMutationResult(
 private fun ChatAction.toPageBlock(): PageBlock {
     val blockType = blockType.toPageBlockType()
     val block = PageBlockCodec.newBlock(blockType)
-    return if (blockType == PageBlockType.DatabaseTable) {
-        block.copy(table = block.table.copy(title = content.ifBlank { title }.ifBlank { "AI table" }))
-    } else {
-        block.copy(text = content.ifBlank { title })
+    return when (blockType) {
+        PageBlockType.DatabaseTable -> {
+            block.copy(table = block.table.copy(title = content.ifBlank { title }.ifBlank { "AI table" }))
+        }
+        PageBlockType.MediaFile -> {
+            block.copy(
+                text = content.ifBlank { title },
+                mediaAttachments = listOfNotNull(toMediaAttachmentOrNull()),
+            )
+        }
+        else -> block.copy(text = content.ifBlank { title })
     }
+}
+
+private fun ChatAction.toMediaAttachmentOrNull(): PageMediaAttachment? {
+    val uri = mediaUri.trim()
+    if (uri.isBlank()) return null
+    val fallbackName = title
+        .ifBlank { content }
+        .ifBlank { uri.substringBefore('?').substringAfterLast('/').ifBlank { "AI attachment" } }
+    return PageMediaAttachment(
+        id = "media-${UUID.randomUUID()}",
+        uri = uri,
+        name = mediaName.ifBlank { fallbackName },
+        mimeType = mediaMimeType,
+        sizeBytes = mediaSizeBytes.coerceAtLeast(0),
+    )
 }
 
 private fun ChatAction.toDatabaseBlock(): PageBlock {
@@ -1919,7 +2094,7 @@ private fun PageTableColumn.withActionConfig(
     resolvedRollupTargetColumnId: String = "",
 ): PageTableColumn {
     return copy(
-        formula = action.formula.ifBlank { formula },
+        formula = action.effectiveFormula().ifBlank { formula },
         relationTargetTableId = action.relationTargetTableId.ifBlank { relationTargetTableId },
         rollupRelationColumnId = relationColumn?.id ?: action.rollupRelationColumnId.ifBlank { rollupRelationColumnId },
         rollupTargetColumnId = resolvedRollupTargetColumnId

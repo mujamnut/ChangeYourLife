@@ -1976,7 +1976,13 @@ class PageEditorViewModel @Inject constructor(
         val page = pageRepository.getPage(pageId) ?: return PageAiExecutionResult(
             messages = listOf("Failed: current page was not found."),
         )
-        return executePageAiActions(actions, page, uiState.value)
+        return runCatching {
+            executePageAiActions(actions, page, uiState.value)
+        }.getOrElse { error ->
+            PageAiExecutionResult(
+                messages = listOf(error.toPageAiExecutionErrorMessage()),
+            )
+        }
     }
 
     private suspend fun executePageAiActions(
@@ -3733,7 +3739,7 @@ class PageEditorViewModel @Inject constructor(
         resolvedRollupTargetColumnId: String = "",
     ): PageTableColumn {
         return copy(
-            formula = action.formula.ifBlank { formula },
+            formula = action.formula.ifBlank { action.value }.ifBlank { action.content }.ifBlank { formula },
             relationTargetTableId = action.relationTargetTableId.ifBlank { relationTargetTableId },
             rollupRelationColumnId = relationColumn?.id
                 ?: action.rollupRelationColumnId.ifBlank { rollupRelationColumnId },
@@ -4569,4 +4575,10 @@ private fun Page.toChatPageLink(): AiChatPageLink {
         pageId = id,
         title = title.ifBlank { "Untitled page" },
     )
+}
+
+private fun Throwable.toPageAiExecutionErrorMessage(): String {
+    val detail = localizedMessage?.takeIf { message -> message.isNotBlank() }
+        ?: "AI edit failed before it could update the page."
+    return "Failed: $detail"
 }

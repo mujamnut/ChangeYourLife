@@ -135,6 +135,201 @@ class AiPageActionExecutorTest {
     }
 
     @Test
+    fun addsMalayExpenseRowToExistingTable() = runBlocking {
+        val nameColumn = PageTableColumn(id = "column-name", name = "Name")
+        val amountColumn = PageTableColumn(
+            id = "column-amount",
+            name = "Amount",
+            type = PageTableColumnType.Number,
+        )
+        val dateColumn = PageTableColumn(
+            id = "column-date",
+            name = "Date",
+            type = PageTableColumnType.Date,
+        )
+        val notesColumn = PageTableColumn(id = "column-notes", name = "Notes")
+        val document = PageBlockDocument(
+            blocks = listOf(
+                PageBlock(
+                    id = "block-table",
+                    type = PageBlockType.DatabaseTable,
+                    table = PageTable(
+                        title = "Budget",
+                        columns = listOf(nameColumn, amountColumn, dateColumn, notesColumn),
+                    ),
+                ),
+            ),
+        )
+        val page = Page(
+            id = "page-1",
+            workspaceId = "workspace-1",
+            parentPageId = null,
+            title = "Budget Tracker",
+            content = PageBlockCodec.encodeDocument(document),
+            sortOrder = 0,
+            createdAt = 1000,
+            updatedAt = 1000,
+            deletedAt = null,
+        )
+        val pageRepository = FakePageRepository(page, document)
+        val executor = AiPageActionExecutor(
+            pageRepository = pageRepository,
+            taskRepository = FakeTaskRepository(),
+            reminderRepository = FakeReminderRepository(),
+        )
+
+        val result = executor.executeOnPage(
+            page = page,
+            title = page.title,
+            document = document,
+            actions = listOf(
+                ChatAction(
+                    type = "ADD_TABLE_ROW",
+                    title = "makeup",
+                    tableTitle = "Budget",
+                    rowTitle = "makeup",
+                    cellValues = mapOf(
+                        "Name" to "makeup",
+                        "Amount" to "29",
+                        "Date" to "2026-06-30",
+                        "Notes" to "29 ringgit harini makeup",
+                    ),
+                ),
+            ),
+        )
+
+        assertEquals(0, result.validationIssues.size)
+        val row = requireNotNull(result.updatedDocument).table.rows.single()
+        assertEquals("makeup", row.cells[nameColumn.id])
+        assertEquals("29", row.cells[amountColumn.id])
+        assertEquals("2026-06-30", row.cells[dateColumn.id])
+        assertEquals("29 ringgit harini makeup", row.cells[notesColumn.id])
+    }
+
+    @Test
+    fun addsMediaBlockWithAttachmentPayload() = runBlocking {
+        val document = PageBlockDocument()
+        val page = Page(
+            id = "page-1",
+            workspaceId = "workspace-1",
+            parentPageId = null,
+            title = "Receipts",
+            content = PageBlockCodec.encodeDocument(document),
+            sortOrder = 0,
+            createdAt = 1000,
+            updatedAt = 1000,
+            deletedAt = null,
+        )
+        val pageRepository = FakePageRepository(page, document)
+        val executor = AiPageActionExecutor(
+            pageRepository = pageRepository,
+            taskRepository = FakeTaskRepository(),
+            reminderRepository = FakeReminderRepository(),
+        )
+
+        val result = executor.executeOnPage(
+            page = page,
+            title = page.title,
+            document = document,
+            actions = listOf(
+                ChatAction(
+                    type = "ADD_BLOCK",
+                    title = "Receipt",
+                    blockType = "MediaFile",
+                    mediaUri = "content://receipts/receipt.png",
+                    mediaName = "receipt.png",
+                    mediaMimeType = "image/png",
+                    mediaSizeBytes = 1234,
+                ),
+            ),
+        )
+
+        assertEquals(emptyList<AiPageActionValidationIssue>(), result.validationIssues)
+        assertEquals(1, pageRepository.addBlockCalls.size)
+        assertNull(result.updatedDocument)
+
+        val refreshedDocument = PageBlockCodec.decodeDocument(requireNotNull(pageRepository.getPage("page-1")).content)
+        val block = refreshedDocument.blocks.single()
+        val attachment = block.mediaAttachments.single()
+        assertEquals(PageBlockType.MediaFile, block.type)
+        assertEquals("Receipt", block.text)
+        assertEquals("content://receipts/receipt.png", attachment.uri)
+        assertEquals("receipt.png", attachment.name)
+        assertEquals("image/png", attachment.mimeType)
+        assertEquals(1234L, attachment.sizeBytes)
+    }
+
+    @Test
+    fun updatesFormulaColumnFromValuePayload() = runBlocking {
+        val amountColumn = PageTableColumn(
+            id = "column-amount",
+            name = "Amount",
+            type = PageTableColumnType.Number,
+        )
+        val totalColumn = PageTableColumn(
+            id = "column-total",
+            name = "Total",
+            type = PageTableColumnType.Formula,
+        )
+        val document = PageBlockDocument(
+            blocks = listOf(
+                PageBlock(
+                    id = "block-table",
+                    type = PageBlockType.DatabaseTable,
+                    table = PageTable(
+                        title = "Budget",
+                        columns = listOf(amountColumn, totalColumn),
+                        rows = listOf(
+                            PageTableRow(
+                                id = "row-food",
+                                cells = mapOf(amountColumn.id to "4"),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val page = Page(
+            id = "page-1",
+            workspaceId = "workspace-1",
+            parentPageId = null,
+            title = "Budget Tracker",
+            content = PageBlockCodec.encodeDocument(document),
+            sortOrder = 0,
+            createdAt = 1000,
+            updatedAt = 1000,
+            deletedAt = null,
+        )
+        val executor = AiPageActionExecutor(
+            pageRepository = FakePageRepository(page, document),
+            taskRepository = FakeTaskRepository(),
+            reminderRepository = FakeReminderRepository(),
+        )
+
+        val result = executor.executeOnPage(
+            page = page,
+            title = page.title,
+            document = document,
+            actions = listOf(
+                ChatAction(
+                    type = "UPDATE_FORMULA_COLUMN",
+                    title = "Total",
+                    tableTitle = "Budget",
+                    columnName = "Total",
+                    value = "{Amount} * 2",
+                ),
+            ),
+        )
+
+        assertEquals(emptyList<AiPageActionValidationIssue>(), result.validationIssues)
+        val updatedTotalColumn = requireNotNull(result.updatedDocument)
+            .table
+            .columns
+            .single { column -> column.id == totalColumn.id }
+        assertEquals("{Amount} * 2", updatedTotalColumn.formula)
+    }
+
+    @Test
     fun rejectsMissingSemanticTargetsBeforeMutatingPage() = runBlocking {
         val nameColumn = PageTableColumn(id = "column-name", name = "Name")
         val dateColumn = PageTableColumn(
@@ -219,6 +414,20 @@ class AiPageActionExecutorTest {
                     formula = "{Amount} + 1",
                 ),
                 ChatAction(
+                    type = "UPDATE_FORMULA_COLUMN",
+                    title = "Name",
+                    tableTitle = "Budget",
+                    columnName = "Name",
+                    formula = "{Date} +",
+                ),
+                ChatAction(
+                    type = "UPDATE_FORMULA_COLUMN",
+                    title = "Name",
+                    tableTitle = "Budget",
+                    columnName = "Name",
+                    formula = "{Name} + 1",
+                ),
+                ChatAction(
                     type = "UPDATE_RELATION_COLUMN",
                     title = "Name",
                     tableTitle = "Budget",
@@ -254,6 +463,11 @@ class AiPageActionExecutorTest {
                     title = "Call Ali",
                 ),
                 ChatAction(
+                    type = "ADD_BLOCK",
+                    title = "Receipt",
+                    blockType = "MediaFile",
+                ),
+                ChatAction(
                     type = "DELETE_ROW_PAGE_BLOCK",
                     title = "Missing row note",
                     tableTitle = "Budget",
@@ -263,17 +477,20 @@ class AiPageActionExecutorTest {
             ),
         )
 
-        assertEquals(10, result.validationIssues.size)
+        assertEquals(13, result.validationIssues.size)
         assertEquals("columnName", result.validationIssues[0].field)
         assertEquals("blockText", result.validationIssues[1].field)
         assertEquals("dashboardMetricColumnName", result.validationIssues[2].field)
         assertEquals("formula", result.validationIssues[3].field)
-        assertEquals("relationTargetTableTitle", result.validationIssues[4].field)
-        assertEquals("relationTargetTableTitle", result.validationIssues[5].field)
-        assertEquals("value", result.validationIssues[6].field)
-        assertEquals("cellValues.Date", result.validationIssues[7].field)
-        assertEquals("cellValues.date", result.validationIssues[8].field)
-        assertEquals("rowBlockId", result.validationIssues[9].field)
+        assertEquals("formula", result.validationIssues[4].field)
+        assertEquals("formula", result.validationIssues[5].field)
+        assertEquals("relationTargetTableTitle", result.validationIssues[6].field)
+        assertEquals("relationTargetTableTitle", result.validationIssues[7].field)
+        assertEquals("value", result.validationIssues[8].field)
+        assertEquals("cellValues.Date", result.validationIssues[9].field)
+        assertEquals("cellValues.date", result.validationIssues[10].field)
+        assertEquals("mediaUri", result.validationIssues[11].field)
+        assertEquals("rowBlockId", result.validationIssues[12].field)
         assertEquals(0, pageRepository.moveTableColumnCalls.size)
         assertEquals(0, pageRepository.upsertPageCalls)
         assertNull(result.updatedDocument)

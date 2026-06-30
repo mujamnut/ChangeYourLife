@@ -55,6 +55,122 @@ class AiActionRecoveryTest {
     }
 
     @Test
+    fun rejectsModelMediaBlockActionWithoutUri() {
+        val result = service.recoverActionFromModelReply(
+            reply = """
+                {
+                  "reply": "Done",
+                  "actions": [
+                    {
+                      "type": "ADD_BLOCK",
+                      "targetTitle": "Receipts",
+                      "title": "Receipt",
+                      "blockType": "MediaFile"
+                    }
+                  ]
+                }
+            """.trimIndent(),
+            prompt = "add receipt file to @Receipts",
+            pages = listOf(AiPageContext(id = "page-1", title = "Receipts")),
+        )
+
+        val issue = assertNotNull(result).validationIssues.single()
+        assertEquals(emptyList(), result.actions)
+        assertEquals("mediaUri", issue.field)
+        assertEquals("missing_required_field", issue.code)
+    }
+
+    @Test
+    fun recoversMalayExpenseRowWithTodayDate() {
+        val result = service.recoverActionFromPrompt(
+            prompt = "saya guna 29 ringgit harini beli makeup",
+            pages = listOf(
+                AiPageContext(
+                    id = "page-budget",
+                    title = "Budget Tracker",
+                    blocks = listOf(
+                        AiBlockContext(
+                            id = "table-budget",
+                            type = "DatabaseTable",
+                            text = "title=Budget; columns=Name Text, Amount Number, Date Date; rows=",
+                            tableTitle = "Budget",
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        val action = assertNotNull(result).actions.single()
+        assertEquals("ADD_TABLE_ROW", action.type)
+        assertEquals("Budget Tracker", action.targetTitle)
+        assertEquals("Budget", action.tableTitle)
+        assertEquals("makeup", action.rowTitle)
+        assertEquals("makeup", action.cellValues["Name"])
+        assertEquals("29", action.cellValues["Amount"])
+        assertEquals(LocalDate.now().toString(), action.cellValues["Date"])
+    }
+
+    @Test
+    fun preservesModelMediaBlockPayload() {
+        val result = service.recoverActionFromModelReply(
+            reply = """
+                {
+                  "reply": "Done",
+                  "actions": [
+                    {
+                      "type": "ADD_BLOCK",
+                      "targetTitle": "Receipts",
+                      "title": "Receipt",
+                      "blockType": "MediaFile",
+                      "mediaUri": "content://receipts/receipt.png",
+                      "mediaName": "receipt.png",
+                      "mediaMimeType": "image/png",
+                      "mediaSizeBytes": 1234
+                    }
+                  ]
+                }
+            """.trimIndent(),
+            prompt = "add receipt file to @Receipts",
+            pages = listOf(AiPageContext(id = "page-1", title = "Receipts")),
+        )
+
+        val action = assertNotNull(result).actions.single()
+        assertEquals(emptyList(), result.validationIssues)
+        assertEquals("ADD_BLOCK", action.type)
+        assertEquals("Receipts", action.targetTitle)
+        assertEquals("content://receipts/receipt.png", action.mediaUri)
+        assertEquals("receipt.png", action.mediaName)
+        assertEquals("image/png", action.mediaMimeType)
+        assertEquals(1234L, action.mediaSizeBytes)
+    }
+
+    @Test
+    fun rejectsModelFormulaColumnActionWithoutFormula() {
+        val result = service.recoverActionFromModelReply(
+            reply = """
+                {
+                  "reply": "Done",
+                  "actions": [
+                    {
+                      "type": "UPDATE_FORMULA_COLUMN",
+                      "targetTitle": "Budget",
+                      "tableTitle": "Budget",
+                      "columnName": "Total"
+                    }
+                  ]
+                }
+            """.trimIndent(),
+            prompt = "update Total formula in @Budget",
+            pages = listOf(AiPageContext(id = "page-1", title = "Budget")),
+        )
+
+        val issue = assertNotNull(result).validationIssues.single()
+        assertEquals(emptyList(), result.actions)
+        assertEquals("formula", issue.field)
+        assertEquals("missing_required_field", issue.code)
+    }
+
+    @Test
     fun recoversMentionContextPageIdForTableCreation() {
         val result = service.recoverActionFromPrompt(
             prompt = """
@@ -135,7 +251,7 @@ class AiActionRecoveryTest {
         assertEquals("ADD_TABLE_ROW", action.type)
         assertEquals("Belanja Harian", action.targetTitle)
         assertEquals("Expenses", action.tableTitle)
-        assertEquals("beli makan", action.rowTitle)
+        assertEquals("makan", action.rowTitle)
         assertEquals("4", action.cellValues["Amount"])
         assertEquals("4", action.cellValues["Jumlah"])
         assertNull(action.cellValues["Task"])
@@ -289,7 +405,7 @@ class AiActionRecoveryTest {
         val rowAction = actions[1]
         assertEquals("ADD_TABLE_ROW", rowAction.type)
         assertEquals("belanja bulanan", rowAction.tableTitle)
-        assertEquals("beli makan", rowAction.rowTitle)
+        assertEquals("makan", rowAction.rowTitle)
         assertEquals("4", rowAction.cellValues["Amount"])
         assertEquals(LocalDate.now().toString(), rowAction.cellValues["Date"])
         assertNull(rowAction.cellValues["Task"])
@@ -345,7 +461,7 @@ class AiActionRecoveryTest {
         val rowAction = actions[1]
         assertEquals("ADD_TABLE_ROW", rowAction.type)
         assertEquals("Belanja", rowAction.tableTitle)
-        assertEquals("beli makan", rowAction.rowTitle)
+        assertEquals("makan", rowAction.rowTitle)
         assertEquals("4", rowAction.cellValues["Amount"])
         assertEquals(LocalDate.now().toString(), rowAction.cellValues["Date"])
         assertNull(rowAction.cellValues["Task"])

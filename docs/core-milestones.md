@@ -96,18 +96,23 @@ Goal: AI faham arahan Malay/English dan execute action secara konsisten.
 - Android AI executor sekarang validate formula reference `{Column}` supaya formula tidak rujuk column yang tidak wujud.
 - Android AI executor sekarang validate Date cell untuk `UPDATE_TABLE_CELL` dan `ADD_TABLE_ROW`, serta reject `CREATE_REMINDER` tanpa tarikh/masa.
 - Android AI executor regression test sekarang cover row page nested block missing target supaya delete/update dalam row tidak mutate bila block tidak wujud.
+- AI action schema dan Android executor sekarang support media attachment payload (`mediaUri`, `mediaName`, `mediaMimeType`, `mediaSizeBytes`) untuk `MediaFile` block.
+- Android AI executor regression test cover create media block dengan attachment payload dan reject `MediaFile` block tanpa `mediaUri`.
+- Backend schema validation sekarang reject `UPDATE_FORMULA_COLUMN` tanpa `formula`, `value`, atau `content`.
+- Android AI executor sekarang validate formula syntax asas: column reference `{Name}`, nombor, operator `+ - * /`, kurungan, dan reject self-reference.
+- Formula update sekarang boleh guna payload `formula`, `value`, atau `content`, jadi action model yang letak formula dalam `value` masih berfungsi.
 
 ### Belum Kukuh
 
 - Action schema sudah ada type/required-field validation dan semantic target validation asas, tapi semantic validation masih belum lengkap untuk semua edge case.
 - AI kadang balas JSON/text tapi action tidak execute.
 - Recovery logic masih banyak dan ad hoc.
-- Belum semua action diuji: formula evaluator penuh dan media attachment payload.
+- Belum semua action diuji untuk kombinasi multi-step yang sangat panjang dan ambiguous.
 
 ### Next Work
 
-- Luaskan semantic validation untuk config kompleks: media attachment payload dan formula evaluator penuh.
-- Tambah regression test untuk lebih banyak action: media attachment payload dan formula edge cases.
+- Tambah regression test untuk multi-step prompt yang panjang: create table + set formula + add rows + sort/filter dalam satu arahan.
+- Kurangkan recovery logic ad hoc dengan satu normalizer/action planner yang lebih explicit.
 
 ## Milestone 3: Editor/Page Core
 

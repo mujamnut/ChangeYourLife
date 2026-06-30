@@ -154,6 +154,10 @@ class AiService(
         val blockType: String = "",
         val blockId: String = "",
         val blockText: String = "",
+        val mediaUri: String = "",
+        val mediaName: String = "",
+        val mediaMimeType: String = "",
+        val mediaSizeBytes: Long = 0,
         val isChecked: Boolean? = null,
         val propertyName: String = "",
         val propertyType: String = "Text",
@@ -345,8 +349,16 @@ class AiService(
 
         return when (type) {
             "APPEND_BLOCK", "APPEND_PAGE_BLOCK", "ADD_BLOCK" -> {
-                if (blockType.normalizedActionType() == "DIVIDER" || hasAny(content, title)) emptyList()
-                else listOf(issue("content", "Block content is required unless the block is a divider."))
+                val normalizedBlockType = blockType.normalizedActionType()
+                when {
+                    normalizedBlockType == "DIVIDER" -> emptyList()
+                    normalizedBlockType in setOf("MEDIAFILE", "MEDIA_FILE") && hasAny(mediaUri) -> emptyList()
+                    normalizedBlockType in setOf("MEDIAFILE", "MEDIA_FILE") -> {
+                        listOf(issue("mediaUri", "Media/file block needs mediaUri."))
+                    }
+                    hasAny(content, title) -> emptyList()
+                    else -> listOf(issue("content", "Block content is required unless the block is a divider."))
+                }
             }
             "DELETE_BLOCK" -> {
                 if (hasAny(blockId, blockText, content, title)) emptyList()
@@ -381,8 +393,14 @@ class AiService(
             "DELETE_TABLE_COLUMN", "UPDATE_TABLE_COLUMN_TYPE", "CHANGE_TABLE_COLUMN_TYPE", "SET_TABLE_COLUMN_TYPE",
             "UPDATE_TABLE_COLUMN_CONFIG", "SET_TABLE_COLUMN_CONFIG", "UPDATE_FORMULA_COLUMN", "UPDATE_RELATION_COLUMN",
             "UPDATE_ROLLUP_COLUMN" -> {
-                if (hasAny(columnId, columnName, propertyName, title)) emptyList()
-                else listOf(issue("columnName", "Column action needs columnId, columnName, propertyName, or title."))
+                buildList {
+                    if (!hasAny(columnId, columnName, propertyName, title)) {
+                        add(issue("columnName", "Column action needs columnId, columnName, propertyName, or title."))
+                    }
+                    if (type == "UPDATE_FORMULA_COLUMN" && !hasAny(formula, value, content)) {
+                        add(issue("formula", "Formula column action needs formula, value, or content."))
+                    }
+                }
             }
             "RENAME_TABLE_COLUMN", "UPDATE_TABLE_COLUMN" -> {
                 buildList {
@@ -838,7 +856,9 @@ class AiService(
             }?.let { return it }
         }
 
-        return singleOrNull()?.takeIf { prompt.looksLikePageMutationRequest() }
+        return singleOrNull()?.takeIf {
+            prompt.looksLikePageMutationRequest() || prompt.looksLikeTableRowRequest()
+        }
     }
 
     private fun String.extractMentionContextPageIds(): List<String> {
@@ -1285,7 +1305,7 @@ class AiService(
     private fun String.extractTableRowText(pageTitle: String): String =
         removeTargetMention(pageTitle)
             .replace(
-                Regex("(?i)\\b(tambah|add|masukkan|letak|insert|create|buat|catat|satu|1|row|baris|rekod|record|dalam|dekat|di|ke|to|into|table|database|jadual|page|ini|tersebut|yang|saya|guna|pakai|use|used|untuk|tu|dah|sekali)\\b"),
+                Regex("(?i)\\b(tambah|add|masukkan|letak|insert|create|buat|catat|satu|1|row|baris|rekod|record|dalam|dekat|di|ke|to|into|table|database|jadual|page|ini|tersebut|yang|saya|guna|pakai|beli|belikan|buy|purchase|purchased|spent|spend|use|used|untuk|tu|dah|sekali)\\b"),
                 " ",
             )
             .replace(Regex("\\s+"), " ")

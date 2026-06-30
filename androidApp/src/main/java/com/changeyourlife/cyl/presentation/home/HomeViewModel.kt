@@ -597,56 +597,64 @@ class HomeViewModel @Inject constructor(
         page: Page,
         actions: List<ChatAction>,
     ): HomeAiExecutionResult {
-        val supportedActions = actions
-            .map { action ->
-                action.copy(
-                    targetTitle = action.targetTitle.ifBlank { page.title },
+        return runCatching {
+            val supportedActions = actions
+                .map { action ->
+                    action.copy(
+                        targetTitle = action.targetTitle.ifBlank { page.title },
+                    )
+                }
+                .filter { action -> aiPageActionExecutor.supports(action) }
+            if (supportedActions.isEmpty()) {
+                HomeAiExecutionResult()
+            } else {
+                val execution = aiPageActionExecutor.executeOnPage(
+                    page = page,
+                    title = page.title,
+                    document = PageBlockCodec.decodeDocument(page.content),
+                    actions = supportedActions,
+                )
+                val didUpdatePage = execution.updatedTitle != null || execution.updatedDocument != null
+                val updatedPage = if (didUpdatePage) {
+                    page.copy(
+                        title = execution.updatedTitle ?: page.title,
+                        content = execution.updatedDocument?.let(PageBlockCodec::encodeDocument) ?: page.content,
+                        updatedAt = System.currentTimeMillis(),
+                    ).also { updatedPage -> pageRepository.upsertPage(updatedPage) }
+                } else {
+                    page
+                }
+
+                val pageLinks = buildList {
+                    if (didUpdatePage) add(updatedPage.toChatPageLink())
+                    addAll(execution.pageLinks)
+                    addAll(execution.createdPages.map { createdPage -> createdPage.toChatPageLink() })
+                }.distinctBy { link -> "${link.pageId}:${link.targetType}:${link.targetId}" }
+
+                HomeAiExecutionResult(
+                    messages = execution.messages.ifEmpty {
+                        if (didUpdatePage) {
+                            listOf("Done: Updated ${updatedPage.title.ifBlank { "Untitled page" }}")
+                        } else {
+                            emptyList()
+                        }
+                    },
+                    pageLinks = pageLinks,
+                    validationIssues = execution.validationIssues.map { issue ->
+                        ChatActionValidationMetadata(
+                            actionIndex = issue.actionIndex,
+                            field = issue.field,
+                            code = issue.code,
+                            message = issue.message,
+                        )
+                    },
                 )
             }
-            .filter { action -> aiPageActionExecutor.supports(action) }
-        if (supportedActions.isEmpty()) return HomeAiExecutionResult()
-
-        val execution = aiPageActionExecutor.executeOnPage(
-            page = page,
-            title = page.title,
-            document = PageBlockCodec.decodeDocument(page.content),
-            actions = supportedActions,
-        )
-        val didUpdatePage = execution.updatedTitle != null || execution.updatedDocument != null
-        val updatedPage = if (didUpdatePage) {
-            page.copy(
-                title = execution.updatedTitle ?: page.title,
-                content = execution.updatedDocument?.let(PageBlockCodec::encodeDocument) ?: page.content,
-                updatedAt = System.currentTimeMillis(),
-            ).also { updatedPage -> pageRepository.upsertPage(updatedPage) }
-        } else {
-            page
+        }.getOrElse { error ->
+            HomeAiExecutionResult(
+                messages = listOf(error.toAiExecutionErrorMessage().sanitizeAiUserVisibleText()),
+            )
         }
-
-        val pageLinks = buildList {
-            if (didUpdatePage) add(updatedPage.toChatPageLink())
-            addAll(execution.pageLinks)
-            addAll(execution.createdPages.map { createdPage -> createdPage.toChatPageLink() })
-        }.distinctBy { link -> "${link.pageId}:${link.targetType}:${link.targetId}" }
-
-        return HomeAiExecutionResult(
-            messages = execution.messages.ifEmpty {
-                if (didUpdatePage) {
-                    listOf("Done: Updated ${updatedPage.title.ifBlank { "Untitled page" }}")
-                } else {
-                    emptyList()
-                }
-            },
-            pageLinks = pageLinks,
-            validationIssues = execution.validationIssues.map { issue ->
-                ChatActionValidationMetadata(
-                    actionIndex = issue.actionIndex,
-                    field = issue.field,
-                    code = issue.code,
-                    message = issue.message,
-                )
-            },
-        )
     }
 
     private suspend fun completeTaskAndReminder(task: TaskItem) {
@@ -1103,7 +1111,7 @@ class HomeViewModel @Inject constructor(
             "nota",
             "note",
         ).any { token -> value.contains(token) }
-        return mutationWords || pageObjectWords || looksLikePageWriteRequest()
+        return mutationWords || pageObjectWords || looksLikePageWriteRequest() || looksLikeTableRowRequest()
     }
 
     private fun String.recoverPropertyAction(targetPage: Page): ChatAction? {
@@ -1614,7 +1622,7 @@ class HomeViewModel @Inject constructor(
     private fun String.extractTableRowText(pageTitle: String): String {
         return removeMentionedPage(pageTitle)
             .replace(
-                Regex("(?i)\\b(tambah|add|masukkan|letak|insert|create|buat|catat|satu|1|row|baris|rekod|record|dalam|dekat|di|ke|to|into|table|database|jadual|page|ini|tersebut|yang|saya|guna|pakai|use|used|untuk|tu|dah|sekali)\\b"),
+                Regex("(?i)\\b(tambah|add|masukkan|letak|insert|create|buat|catat|satu|1|row|baris|rekod|record|dalam|dekat|di|ke|to|into|table|database|jadual|page|ini|tersebut|yang|saya|guna|pakai|beli|belikan|buy|purchase|purchased|spent|spend|use|used|untuk|tu|dah|sekali)\\b"),
                 " ",
             )
             .replace(Regex("\\s+"), " ")
@@ -2918,6 +2926,12 @@ private fun Throwable.toAiChatErrorMessage(): String {
     } else {
         "I couldn't reach the CYL backend: ${toBackendConnectionMessage()}"
     }
+}
+
+private fun Throwable.toAiExecutionErrorMessage(): String {
+    val detail = localizedMessage?.takeIf { message -> message.isNotBlank() }
+        ?: "AI edit failed before it could update the page."
+    return "Failed: $detail"
 }
 
 data class HomeUiState(
