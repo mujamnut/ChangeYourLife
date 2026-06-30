@@ -94,18 +94,20 @@ Goal: AI faham arahan Malay/English dan execute action secara konsisten.
 - Android AI executor regression test cover missing block/column/view-config target supaya action tidak mutate page bila target tidak sah.
 - Android AI executor sekarang validate relation target table dan rollup target table/column sebelum simpan column config.
 - Android AI executor sekarang validate formula reference `{Column}` supaya formula tidak rujuk column yang tidak wujud.
+- Android AI executor sekarang validate Date cell untuk `UPDATE_TABLE_CELL` dan `ADD_TABLE_ROW`, serta reject `CREATE_REMINDER` tanpa tarikh/masa.
+- Android AI executor regression test sekarang cover row page nested block missing target supaya delete/update dalam row tidak mutate bila block tidak wujud.
 
 ### Belum Kukuh
 
 - Action schema sudah ada type/required-field validation dan semantic target validation asas, tapi semantic validation masih belum lengkap untuk semua edge case.
 - AI kadang balas JSON/text tapi action tidak execute.
 - Recovery logic masih banyak dan ad hoc.
-- Belum semua action diuji: date, formula evaluator penuh, media, reminder, dan row page nested block.
+- Belum semua action diuji: formula evaluator penuh dan media attachment payload.
 
 ### Next Work
 
-- Luaskan semantic validation untuk config kompleks: media, date/reminder, formula evaluator penuh, dan row page nested block.
-- Tambah regression test untuk lebih banyak action: date, row page block, media, dan formula edge cases.
+- Luaskan semantic validation untuk config kompleks: media attachment payload dan formula evaluator penuh.
+- Tambah regression test untuk lebih banyak action: media attachment payload dan formula edge cases.
 
 ## Milestone 3: Editor/Page Core
 

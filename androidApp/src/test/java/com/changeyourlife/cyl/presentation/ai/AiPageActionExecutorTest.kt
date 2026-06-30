@@ -137,16 +137,24 @@ class AiPageActionExecutorTest {
     @Test
     fun rejectsMissingSemanticTargetsBeforeMutatingPage() = runBlocking {
         val nameColumn = PageTableColumn(id = "column-name", name = "Name")
+        val dateColumn = PageTableColumn(
+            id = "column-date",
+            name = "Date",
+            type = PageTableColumnType.Date,
+        )
         val tableBlock = PageBlock(
             id = "block-table",
             type = PageBlockType.DatabaseTable,
             table = PageTable(
                 title = "Budget",
-                columns = listOf(nameColumn),
+                columns = listOf(nameColumn, dateColumn),
                 rows = listOf(
                     PageTableRow(
                         id = "row-food",
-                        cells = mapOf(nameColumn.id to "Food"),
+                        cells = mapOf(
+                            nameColumn.id to "Food",
+                            dateColumn.id to "2026-06-30",
+                        ),
                     ),
                 ),
             ),
@@ -224,16 +232,48 @@ class AiPageActionExecutorTest {
                     columnName = "Name",
                     rollupTargetColumnName = "Amount",
                 ),
+                ChatAction(
+                    type = "UPDATE_TABLE_CELL",
+                    title = "Date",
+                    tableTitle = "Budget",
+                    rowTitle = "Food",
+                    columnName = "Date",
+                    value = "tomorrow",
+                ),
+                ChatAction(
+                    type = "ADD_TABLE_ROW",
+                    title = "Fuel",
+                    tableTitle = "Budget",
+                    cellValues = mapOf(
+                        "Name" to "Fuel",
+                        "Date" to "soon",
+                    ),
+                ),
+                ChatAction(
+                    type = "CREATE_REMINDER",
+                    title = "Call Ali",
+                ),
+                ChatAction(
+                    type = "DELETE_ROW_PAGE_BLOCK",
+                    title = "Missing row note",
+                    tableTitle = "Budget",
+                    rowTitle = "Food",
+                    blockText = "Missing row note",
+                ),
             ),
         )
 
-        assertEquals(6, result.validationIssues.size)
+        assertEquals(10, result.validationIssues.size)
         assertEquals("columnName", result.validationIssues[0].field)
         assertEquals("blockText", result.validationIssues[1].field)
         assertEquals("dashboardMetricColumnName", result.validationIssues[2].field)
         assertEquals("formula", result.validationIssues[3].field)
         assertEquals("relationTargetTableTitle", result.validationIssues[4].field)
         assertEquals("relationTargetTableTitle", result.validationIssues[5].field)
+        assertEquals("value", result.validationIssues[6].field)
+        assertEquals("cellValues.Date", result.validationIssues[7].field)
+        assertEquals("cellValues.date", result.validationIssues[8].field)
+        assertEquals("rowBlockId", result.validationIssues[9].field)
         assertEquals(0, pageRepository.moveTableColumnCalls.size)
         assertEquals(0, pageRepository.upsertPageCalls)
         assertNull(result.updatedDocument)

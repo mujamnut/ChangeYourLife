@@ -24,6 +24,9 @@ import com.changeyourlife.cyl.domain.repository.TaskRepository
 import com.changeyourlife.cyl.presentation.page.PageBlockCodec
 import com.changeyourlife.cyl.presentation.page.PageModuleTemplates
 import com.changeyourlife.cyl.presentation.page.PageModuleType
+import java.time.LocalDate
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 import javax.inject.Inject
 
 class AiPageActionExecutor @Inject constructor(
@@ -873,6 +876,8 @@ data class AiPageActionValidationIssue(
 )
 
 private val FormulaColumnReferenceRegex = Regex("""\{([^}]+)}""")
+private val DateCellStartDateRegex = Regex(""""startDate"\s*:\s*"([^"]+)"""")
+private val TaskDateCellKeys = setOf("date", "due date", "deadline", "time", "reminder")
 
 private fun PageBlockDocument.validateActionTarget(
     action: ChatAction,
@@ -1078,6 +1083,53 @@ private fun PageBlockDocument.validateActionTarget(
         return formulaConfigIssue(table) ?: relationConfigIssue() ?: rollupConfigIssue(table)
     }
 
+    fun invalidDateIssue(field: String, value: String): AiPageActionValidationIssue? {
+        if (value.isBlank() || value.isValidAiDateCellValue()) return null
+        return AiPageActionValidationIssue(
+            actionIndex = actionIndex,
+            field = field,
+            code = "invalid_date",
+            message = "Could not parse date value: $value.",
+        )
+    }
+
+    fun missingReminderDateIssue(): AiPageActionValidationIssue? {
+        if (action.delayMinutes != null) return null
+        val dateValue = action.explicitTaskDateCellValue()
+        if (dateValue.isNotBlank()) return invalidDateIssue("cellValues.date", dateValue)
+        return AiPageActionValidationIssue(
+            actionIndex = actionIndex,
+            field = "cellValues.date",
+            code = "required",
+            message = "Reminder needs a date or time before it can be created.",
+        )
+    }
+
+    fun taskDateIssue(): AiPageActionValidationIssue? {
+        val dateValue = action.explicitTaskDateCellValue()
+        return invalidDateIssue("cellValues.date", dateValue)
+    }
+
+    fun tableDateCellIssue(table: PageBlock): AiPageActionValidationIssue? {
+        val columnName = action.columnName.ifBlank { action.propertyName }
+        val column = table.table.findColumn(action.columnId, columnName) ?: return null
+        if (column.type != PageTableColumnType.Date) return null
+        val value = action.value.ifBlank { action.content }
+        return invalidDateIssue("value", value)
+    }
+
+    fun addedRowDateCellIssue(table: PageBlock): AiPageActionValidationIssue? {
+        table.table.columns
+            .filter { column -> column.type == PageTableColumnType.Date }
+            .forEach { column ->
+                val value = action.cellValues.entries.firstOrNull { entry ->
+                    entry.key.normalizedAiKey() == column.name.normalizedAiKey()
+                }?.value.orEmpty()
+                invalidDateIssue("cellValues.${column.name}", value)?.let { issue -> return issue }
+            }
+        return null
+    }
+
     fun rowIssue(table: PageBlock): AiPageActionValidationIssue? {
         val rowTitle = action.rowTitle.ifBlank { action.targetTitle }.ifBlank { action.title }
         return if (table.table.findRow(action.rowId, rowTitle) == null) {
@@ -1134,9 +1186,14 @@ private fun PageBlockDocument.validateActionTarget(
         }
 
         "RENAME_TABLE", "RENAME_DATABASE", "UPDATE_TABLE_TITLE",
-        "ADD_TABLE_COLUMN", "ADD_TABLE_ROW",
+        "ADD_TABLE_COLUMN",
         "CHANGE_TABLE_VIEW", "SET_TABLE_VIEW",
         "CLEAR_TABLE_SORT", "CLEAR_TABLE_FILTER", "CLEAR_TABLE_GROUP" -> tableIssue()
+
+        "ADD_TABLE_ROW" -> {
+            val table = targetTable() ?: return tableIssue()
+            addedRowDateCellIssue(table)
+        }
 
         "SET_TABLE_VIEW_CONFIG", "CONFIGURE_TABLE_VIEW", "UPDATE_TABLE_VIEW_CONFIG" -> {
             val table = targetTable() ?: return tableIssue()
@@ -1171,10 +1228,45 @@ private fun PageBlockDocument.validateActionTarget(
 
         "UPDATE_TABLE_CELL" -> {
             val table = targetTable() ?: return tableIssue()
-            rowIssue(table) ?: columnIssue(table)
+            rowIssue(table) ?: columnIssue(table) ?: tableDateCellIssue(table)
         }
 
+        "CREATE_TASK" -> taskDateIssue()
+
+        "CREATE_REMINDER" -> missingReminderDateIssue()
+
         else -> null
+    }
+}
+
+private fun ChatAction.explicitTaskDateCellValue(): String {
+    return cellValues.entries.firstOrNull { entry ->
+        entry.key.normalizedAiKey() in TaskDateCellKeys
+    }?.value.orEmpty()
+}
+
+private fun String.isValidAiDateCellValue(): Boolean {
+    val trimmed = trim()
+    if (trimmed.isBlank()) return true
+    val dateText = if (trimmed.startsWith("{")) {
+        DateCellStartDateRegex.find(trimmed)?.groupValues?.getOrNull(1).orEmpty()
+    } else {
+        trimmed
+    }
+    return dateText.toAiLocalDateOrNull() != null
+}
+
+private fun String.toAiLocalDateOrNull(): LocalDate? {
+    val trimmed = trim()
+    if (trimmed.isBlank()) return null
+    val formatters = listOf(
+        DateTimeFormatter.ISO_LOCAL_DATE,
+        DateTimeFormatter.ofPattern("dd/MM/yyyy", Locale.US),
+        DateTimeFormatter.ofPattern("MM/dd/yyyy", Locale.US),
+        DateTimeFormatter.ofPattern("yyyy/MM/dd", Locale.US),
+    )
+    return formatters.firstNotNullOfOrNull { formatter ->
+        runCatching { LocalDate.parse(trimmed, formatter) }.getOrNull()
     }
 }
 
