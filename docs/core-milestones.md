@@ -129,6 +129,8 @@ Goal: AI faham arahan Malay/English dan execute action secara konsisten.
 - Android masih ada guard kecil untuk skip unsafe qualitative table rename, dan guard itu direkod sebagai validation issue dalam `Action details`.
 - Android AI action execution decision sudah diextract ke `AiActionExecutionPolicy`, jadi `HomeViewModel` tidak lagi pegang local fallback/recovery rule.
 - Android regression test cover policy: planning tidak execute, backend kosong tidak invent action, backend action execute, vague rename ditolak, concrete rename dibenarkan.
+- Backend prompt recovery sekarang support Home AI create page tanpa mention/current page untuk monthly expenses, termasuk salary row dan table columns.
+- Home AI sekarang boleh execute global `CREATE_PAGE` action terus dari home chat dan simpan page link dalam jawapan AI.
 - Android ada regression test untuk AI DTO JSON null coercion supaya field `title`, `targetTitle`, `cellValues`, dan `validationIssues` null tidak mematikan chat.
 
 ### Belum Kukuh

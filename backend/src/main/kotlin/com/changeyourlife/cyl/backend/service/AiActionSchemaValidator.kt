@@ -90,6 +90,10 @@ class AiActionSchemaValidator {
                 if (hasAny(tableTitle, title, content)) emptyList()
                 else listOf(issue("tableTitle", "Create table action needs tableTitle, title, or content."))
             }
+            "CREATE_PAGE", "CREATE_SUBPAGE" -> {
+                if (hasAny(title, content, tableTitle, moduleType)) emptyList()
+                else listOf(issue("title", "Create page action needs title, content, tableTitle, or moduleType."))
+            }
             "RENAME_TABLE", "RENAME_DATABASE", "UPDATE_TABLE_TITLE" -> {
                 if (hasAny(title, value, content, newColumnName)) emptyList()
                 else listOf(issue("title", "Rename table action needs a new title."))

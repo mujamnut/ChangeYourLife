@@ -57,4 +57,25 @@ class AiPromptActionRecoveryTest {
         assertEquals("29", action.cellValues["Amount"])
         assertEquals("makeup", action.cellValues["Name"])
     }
+
+    @Test
+    fun recoversHomePromptForNewMonthlyExpensePageWithSalary() {
+        val result = recovery.recoverActionFromPrompt(
+            prompt = "buatkan page baru untuk bulan 7 punya monthly expenses,dengan gaji 1488",
+            pages = emptyList(),
+        )
+
+        val action = assertNotNull(result).actions.single()
+        assertEquals("CREATE_PAGE", action.type)
+        assertEquals("July Monthly Expenses", action.title)
+        assertEquals("Monthly Expenses", action.tableTitle)
+        assertEquals(
+            listOf("Category", "Budget", "Actual", "Variance", "Notes"),
+            action.tableColumns.map { column -> column.name },
+        )
+        assertEquals("Salary", action.tableRows.single()["Category"])
+        assertEquals("1488", action.tableRows.single()["Budget"])
+        assertEquals("1488", action.tableRows.single()["Actual"])
+        assertEquals("0", action.tableRows.single()["Variance"])
+    }
 }

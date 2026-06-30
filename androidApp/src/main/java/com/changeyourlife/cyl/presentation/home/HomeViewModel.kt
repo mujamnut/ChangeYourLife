@@ -540,13 +540,11 @@ class HomeViewModel @Inject constructor(
                         backendActions = result.actions,
                     )
                     val actionsToExecute = actionDecision.executableActions
-                    val actionResults = if (actionsToExecute.isEmpty()) {
-                        HomeAiExecutionResult()
-                    } else if (scopedTargetPage != null) {
-                        executePageScopedActions(scopedTargetPage, actionsToExecute)
-                    } else {
-                        HomeAiExecutionResult()
-                    }
+                    val actionResults = executeAiActions(
+                        workspaceId = workspaceId,
+                        scopedTargetPage = scopedTargetPage,
+                        actions = actionsToExecute,
+                    )
                     val replyWithResults = listOf(
                         assistantReply,
                         actionResults.messages.joinToString("\n"),
@@ -587,6 +585,67 @@ class HomeViewModel @Inject constructor(
                         content = message,
                     )
                 }
+        }
+    }
+
+    private suspend fun executeAiActions(
+        workspaceId: String,
+        scopedTargetPage: Page?,
+        actions: List<ChatAction>,
+    ): HomeAiExecutionResult {
+        if (actions.isEmpty()) return HomeAiExecutionResult()
+        val globalActions = actions.filter { action -> action.isHomeScopedAction() }
+        val pageActions = actions.filterNot { action -> action.isHomeScopedAction() }
+        val globalResult = executeHomeScopedActions(workspaceId, globalActions)
+        val pageResult = when {
+            pageActions.isEmpty() -> HomeAiExecutionResult()
+            scopedTargetPage != null -> executePageScopedActions(scopedTargetPage, pageActions)
+            else -> HomeAiExecutionResult(
+                validationIssues = pageActions.mapIndexed { index, _ ->
+                    ChatActionValidationMetadata(
+                        actionIndex = index,
+                        field = "targetTitle",
+                        code = "target_page_required",
+                        message = "This action needs a page target. Mention a page with @ or open the page before asking AI to edit it.",
+                    )
+                },
+            )
+        }
+        return globalResult + pageResult
+    }
+
+    private suspend fun executeHomeScopedActions(
+        workspaceId: String,
+        actions: List<ChatAction>,
+    ): HomeAiExecutionResult {
+        if (actions.isEmpty()) return HomeAiExecutionResult()
+        return runCatching {
+            val messages = mutableListOf<String>()
+            val pageLinks = mutableListOf<AiChatPageLink>()
+            actions.forEach { action ->
+                when (action.type.normalizedActionType()) {
+                    "CREATE_PAGE" -> {
+                        val pageTitle = action.title
+                            .ifBlank { action.tableTitle }
+                            .ifBlank { "Untitled page" }
+                        val created = pageRepository.createPage(
+                            workspaceId = workspaceId,
+                            title = pageTitle,
+                            content = action.toCreatedPageContent(),
+                        )
+                        messages += "Done: Created page ${created.title.ifBlank { "Untitled page" }}"
+                        pageLinks += created.toChatPageLink()
+                    }
+                }
+            }
+            HomeAiExecutionResult(
+                messages = messages,
+                pageLinks = pageLinks,
+            )
+        }.getOrElse { error ->
+            HomeAiExecutionResult(
+                messages = listOf(error.toAiExecutionErrorMessage().sanitizeAiUserVisibleText()),
+            )
         }
     }
 
@@ -653,6 +712,30 @@ class HomeViewModel @Inject constructor(
             )
         }
     }
+
+    private fun ChatAction.isHomeScopedAction(): Boolean {
+        return type.normalizedActionType() == "CREATE_PAGE"
+    }
+
+    private fun ChatAction.toCreatedPageContent(): String {
+        val moduleType = requestedModuleType("CREATE_PAGE")
+        if (moduleType != null) return PageModuleTemplates.contentFor(moduleType)
+        val blocks = buildList {
+            if (tableTitle.isNotBlank() || tableColumns.isNotEmpty() || tableRows.isNotEmpty() || cellValues.isNotEmpty()) {
+                add(toDatabaseBlock())
+            }
+            if (content.isNotBlank()) {
+                add(PageBlockCodec.newBlock(PageBlockType.Text).copy(text = content.trim()))
+            }
+        }
+        return PageBlockCodec.encodeDocument(PageBlockDocument(blocks = blocks))
+    }
+
+    private fun String.normalizedActionType(): String =
+        trim()
+            .uppercase()
+            .replace(Regex("[^A-Z0-9]+"), "_")
+            .trim('_')
 
     private suspend fun completeTaskAndReminder(task: TaskItem) {
         taskRepository.upsertTask(
@@ -2108,6 +2191,16 @@ private data class HomeAiExecutionResult(
     val pageLinks: List<AiChatPageLink> = emptyList(),
     val validationIssues: List<ChatActionValidationMetadata> = emptyList(),
 )
+
+private operator fun HomeAiExecutionResult.plus(other: HomeAiExecutionResult): HomeAiExecutionResult {
+    return HomeAiExecutionResult(
+        messages = messages + other.messages,
+        pageLinks = (pageLinks + other.pageLinks).distinctBy { link ->
+            "${link.pageId}:${link.targetType}:${link.targetId}"
+        },
+        validationIssues = validationIssues + other.validationIssues,
+    )
+}
 
 private data class HomeTableUpdateResult(
     val page: Page,

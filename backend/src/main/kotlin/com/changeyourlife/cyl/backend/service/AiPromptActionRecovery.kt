@@ -31,6 +31,17 @@ class AiPromptActionRecovery(
     ): AiActionResult? {
         if (prompt.isBlank()) return null
         val visiblePrompt = prompt.withoutMentionContext()
+        visiblePrompt.recoverCreatePageAction()?.let { action ->
+            val validation = listOf(action).validatedForActionSchema()
+            return AiActionResult(
+                reply = visiblePrompt.recoveryReply(
+                    malay = validation.actions.ifEmpty { listOf(action) }.recoveredMalayReply(),
+                    english = validation.actions.ifEmpty { listOf(action) }.recoveredEnglishReply(),
+                ),
+                actions = validation.actions,
+                validationIssues = validation.issues,
+            )
+        }
         val targetPage = pages.findTargetPage(prompt)
             ?: pages.findTargetPage(visiblePrompt)
             ?: return null
@@ -121,6 +132,7 @@ class AiPromptActionRecovery(
             "UPDATE_BLOCK" -> "Siap - saya ubah block itu."
             "ADD_TABLE_ROW" -> "Siap - saya tambah row itu."
             "CREATE_DATABASE" -> "Siap - saya buat table itu."
+            "CREATE_PAGE" -> "Siap - saya buat page itu."
             "DELETE_PROPERTY" -> "Siap - saya padam property itu."
             "UPDATE_PROPERTY" -> "Siap - saya ubah property itu."
             "ADD_PROPERTY" -> "Siap - saya tambah property itu."
@@ -136,6 +148,7 @@ class AiPromptActionRecovery(
             "UPDATE_BLOCK" -> "Done - I updated that block."
             "ADD_TABLE_ROW" -> "Done - I added that row."
             "CREATE_DATABASE" -> "Done - I created that table."
+            "CREATE_PAGE" -> "Done - I created that page."
             "DELETE_PROPERTY" -> "Done - I deleted that property."
             "UPDATE_PROPERTY" -> "Done - I updated that property."
             "ADD_PROPERTY" -> "Done - I added that property."
@@ -260,6 +273,120 @@ class AiPromptActionRecovery(
             tableView = "Table",
             tableColumns = tableTitle.defaultRecoveredTableColumns(lowercase()),
         )
+    }
+
+    private fun String.recoverCreatePageAction(): AiActionItem? {
+        val value = lowercase()
+        val hasCreateIntent = listOf("buat", "buatkan", "create", "cipta", "add", "tambah").any { token ->
+            value.contains(token)
+        }
+        val hasPageIntent = listOf("page", "halaman").any { token -> value.contains(token) }
+        val hasNewIntent = listOf("baru", "new").any { token -> value.contains(token) }
+        if (!hasCreateIntent || !hasPageIntent || !hasNewIntent) return null
+        if (listOf("subpage", "sub page", "sub-page").any { token -> value.contains(token) }) return null
+
+        val isExpensePage = looksLikeMonthlyExpensePage()
+        val pageTitle = when {
+            isExpensePage -> listOfNotNull(extractRequestedMonthName(), "Monthly Expenses").joinToString(" ")
+            else -> extractCreatePageTitle().ifBlank { "Untitled page" }
+        }
+        val salaryAmount = extractSalaryAmount()
+        return AiActionItem(
+            type = "CREATE_PAGE",
+            title = pageTitle,
+            tableTitle = if (isExpensePage) "Monthly Expenses" else "",
+            tableView = "Table",
+            tableColumns = if (isExpensePage) monthlyExpenseTableColumns() else emptyList(),
+            tableRows = if (isExpensePage && salaryAmount != null) {
+                listOf(
+                    mapOf(
+                        "Category" to "Salary",
+                        "Budget" to salaryAmount,
+                        "Actual" to salaryAmount,
+                        "Variance" to "0",
+                    ),
+                )
+            } else {
+                emptyList()
+            },
+        )
+    }
+
+    private fun String.looksLikeMonthlyExpensePage(): Boolean {
+        val value = lowercase()
+        val hasMonthly = listOf("monthly", "bulanan", "bulan").any { token -> value.contains(token) }
+        val hasExpense = listOf("expense", "expenses", "belanja", "duit", "spending").any { token ->
+            value.contains(token)
+        }
+        return hasMonthly && hasExpense
+    }
+
+    private fun String.extractRequestedMonthName(): String? {
+        val monthNumber = Regex("(?i)\\b(?:bulan|month)\\s*(\\d{1,2})\\b")
+            .find(this)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.toIntOrNull()
+        if (monthNumber != null) return monthNumber.toMonthNameOrNull()
+        val value = lowercase()
+        return when {
+            "january" in value || "januari" in value -> "January"
+            "february" in value || "februari" in value -> "February"
+            "march" in value || "mac" in value -> "March"
+            "april" in value -> "April"
+            "may" in value || "mei" in value -> "May"
+            "june" in value || "jun" in value -> "June"
+            "july" in value || "julai" in value -> "July"
+            "august" in value || "ogos" in value -> "August"
+            "september" in value -> "September"
+            "october" in value || "oktober" in value -> "October"
+            "november" in value -> "November"
+            "december" in value || "disember" in value -> "December"
+            else -> null
+        }
+    }
+
+    private fun Int.toMonthNameOrNull(): String? = when (this) {
+        1 -> "January"
+        2 -> "February"
+        3 -> "March"
+        4 -> "April"
+        5 -> "May"
+        6 -> "June"
+        7 -> "July"
+        8 -> "August"
+        9 -> "September"
+        10 -> "October"
+        11 -> "November"
+        12 -> "December"
+        else -> null
+    }
+
+    private fun String.extractSalaryAmount(): String? {
+        return Regex("(?i)\\b(?:gaji|salary|income)\\s*(?:rm\\s*)?(\\d+(?:[.,]\\d+)?)\\b")
+            .find(this)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.replace(',', '.')
+            ?.takeIf { value -> value.isNotBlank() }
+    }
+
+    private fun monthlyExpenseTableColumns(): List<AiTableColumnItem> = listOf(
+        AiTableColumnItem(name = "Category", type = "Text"),
+        AiTableColumnItem(name = "Budget", type = "Number"),
+        AiTableColumnItem(name = "Actual", type = "Number"),
+        AiTableColumnItem(name = "Variance", type = "Number"),
+        AiTableColumnItem(name = "Notes", type = "Text"),
+    )
+
+    private fun String.extractCreatePageTitle(): String {
+        return removeTargetMention("")
+            .replace(
+                Regex("(?i)\\b(tolong|please|buatkan|buat|create|cipta|add|tambah|page|halaman|baru|new|untuk|for|punya|dengan|with)\\b"),
+                " ",
+            )
+            .replace(Regex("\\s+"), " ")
+            .trim(' ', '-', ':', ',', '.')
     }
 
     private fun String.recoverTableRenameAction(targetPage: AiPageContext): AiActionItem? {
