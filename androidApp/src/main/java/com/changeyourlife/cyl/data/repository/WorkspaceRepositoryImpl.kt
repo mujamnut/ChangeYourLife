@@ -7,7 +7,7 @@ import com.changeyourlife.cyl.data.local.entity.WorkspaceEntity
 import com.changeyourlife.cyl.data.local.mapper.toDomain
 import com.changeyourlife.cyl.data.local.mapper.toEntity
 import com.changeyourlife.cyl.data.local.session.WorkspaceSelectionStore
-import com.changeyourlife.cyl.data.sync.SessionSyncCoordinator
+import com.changeyourlife.cyl.data.sync.BackgroundSyncQueue
 import com.changeyourlife.cyl.domain.model.Workspace
 import com.changeyourlife.cyl.domain.repository.WorkspaceRepository
 import java.util.UUID
@@ -19,11 +19,16 @@ import kotlinx.coroutines.flow.onStart
 class WorkspaceRepositoryImpl @Inject constructor(
     private val workspaceDao: WorkspaceDao,
     private val selectionStore: WorkspaceSelectionStore,
-    private val sessionSyncCoordinator: SessionSyncCoordinator,
+    private val backgroundSyncQueue: BackgroundSyncQueue,
 ) : WorkspaceRepository {
     override fun observeWorkspaces(): Flow<List<Workspace>> {
         return workspaceDao.observeWorkspaces()
-            .onStart { sessionSyncCoordinator.refreshWorkspaces() }
+            .onStart {
+                backgroundSyncQueue.enqueue("refreshWorkspaces", persistForRetry = false) {
+                    refreshWorkspaces()
+                    pushPendingChanges()
+                }
+            }
             .map { workspaces -> workspaces.map { it.toDomain() } }
     }
 
@@ -43,7 +48,9 @@ class WorkspaceRepositoryImpl @Inject constructor(
                 syncStatus = SyncStatus.PendingPush,
             )
             workspaceDao.upsertWorkspace(entity)
-            sessionSyncCoordinator.pushWorkspace(entity)
+            backgroundSyncQueue.enqueue("pushWorkspace:${entity.id}") {
+                pushWorkspace(entity)
+            }
         }
 
         if (selectionStore.activeWorkspaceId.value.isNullOrBlank()) {
@@ -70,7 +77,9 @@ class WorkspaceRepositoryImpl @Inject constructor(
         )
         val entity = workspace.toEntity().copy(syncStatus = SyncStatus.PendingPush)
         workspaceDao.upsertWorkspace(entity)
-        sessionSyncCoordinator.pushWorkspace(entity)
+        backgroundSyncQueue.enqueue("createWorkspace:${entity.id}") {
+            pushWorkspace(entity)
+        }
         selectionStore.setActiveWorkspaceId(workspace.id)
         return workspace
     }
@@ -78,6 +87,8 @@ class WorkspaceRepositoryImpl @Inject constructor(
     override suspend fun upsertWorkspace(workspace: Workspace) {
         val entity = workspace.toEntity().copy(syncStatus = SyncStatus.PendingPush)
         workspaceDao.upsertWorkspace(entity)
-        sessionSyncCoordinator.pushWorkspace(entity)
+        backgroundSyncQueue.enqueue("upsertWorkspace:${entity.id}") {
+            pushWorkspace(entity)
+        }
     }
 }

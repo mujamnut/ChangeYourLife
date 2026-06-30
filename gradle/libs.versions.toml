@@ -11,6 +11,7 @@ navigationCompose = "2.9.6"
 hilt = "2.57.2"
 androidxHilt = "1.3.0"
 room = "2.8.0"
+work = "2.10.5"
 retrofit = "3.0.0"
 coroutines = "1.10.2"
 serializationJson = "1.11.0"
@@ -47,6 +48,7 @@ room-runtime = { module = "androidx.room:room-runtime", version.ref = "room" }
 room-ktx = { module = "androidx.room:room-ktx", version.ref = "room" }
 room-compiler = { module = "androidx.room:room-compiler", version.ref = "room" }
 room-testing = { module = "androidx.room:room-testing", version.ref = "room" }
+androidx-work-runtime-ktx = { module = "androidx.work:work-runtime-ktx", version.ref = "work" }
 
 retrofit = { module = "com.squareup.retrofit2:retrofit", version.ref = "retrofit" }
 retrofit-converter-kotlinx-serialization = { module = "com.squareup.retrofit2:converter-kotlinx-serialization", version.ref = "retrofit" }

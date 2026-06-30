@@ -27,6 +27,21 @@ interface WorkspaceDao {
     )
     suspend fun getWorkspacesNeedingSync(syncedStatus: String = SyncStatus.Synced): List<WorkspaceEntity>
 
+    @Query(
+        """
+        SELECT COUNT(*) FROM workspaces
+        WHERE (syncStatus != :syncedStatus OR lastSyncedAt = 0)
+        AND syncStatus != :conflictStatus
+        """,
+    )
+    fun observeWorkspacesNeedingSyncCount(
+        syncedStatus: String = SyncStatus.Synced,
+        conflictStatus: String = SyncStatus.Conflict,
+    ): Flow<Int>
+
+    @Query("SELECT COUNT(*) FROM workspaces WHERE syncStatus = :conflictStatus")
+    fun observeWorkspaceConflictCount(conflictStatus: String = SyncStatus.Conflict): Flow<Int>
+
     @Upsert
     suspend fun upsertWorkspace(workspace: WorkspaceEntity)
 }

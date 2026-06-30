@@ -2,12 +2,16 @@ package com.changeyourlife.cyl.data.repository
 
 import com.changeyourlife.cyl.data.local.dao.PageDao
 import com.changeyourlife.cyl.data.local.dao.PageContentDao
+import com.changeyourlife.cyl.data.local.dao.SyncTombstoneDao
 import com.changeyourlife.cyl.data.local.entity.PageEntity
 import com.changeyourlife.cyl.data.local.entity.SyncStatus
+import com.changeyourlife.cyl.data.local.entity.SyncTombstoneEntity
+import com.changeyourlife.cyl.data.local.entity.SyncTombstoneType
 import com.changeyourlife.cyl.data.local.mapper.toContentProjection
 import com.changeyourlife.cyl.data.local.mapper.toDomain
 import com.changeyourlife.cyl.data.local.mapper.toEntity
 import com.changeyourlife.cyl.data.local.mapper.toDocument
+import com.changeyourlife.cyl.data.sync.BackgroundSyncQueue
 import com.changeyourlife.cyl.data.sync.SessionSyncCoordinator
 import com.changeyourlife.cyl.domain.model.Page
 import com.changeyourlife.cyl.domain.model.PageBlock
@@ -40,11 +44,18 @@ private val pageRepositoryJson = Json {
 class PageRepositoryImpl @Inject constructor(
     private val pageDao: PageDao,
     private val pageContentDao: PageContentDao,
+    private val syncTombstoneDao: SyncTombstoneDao,
     private val sessionSyncCoordinator: SessionSyncCoordinator,
+    private val backgroundSyncQueue: BackgroundSyncQueue,
 ) : PageRepository {
     override fun observePages(workspaceId: String): Flow<List<Page>> {
         return pageDao.observePages(workspaceId)
-            .onStart { sessionSyncCoordinator.refreshPages(workspaceId, includeDeleted = false) }
+            .onStart {
+                backgroundSyncQueue.enqueue("refreshPages:$workspaceId", persistForRetry = false) {
+                    refreshPages(workspaceId, includeDeleted = false)
+                    pushPendingChanges()
+                }
+            }
             .map { pages -> pages.map { it.toDomain() } }
     }
 
@@ -60,19 +71,34 @@ class PageRepositoryImpl @Inject constructor(
 
     override fun observeRecentPages(workspaceId: String, limit: Int): Flow<List<Page>> {
         return pageDao.observeRecentPages(workspaceId, limit)
-            .onStart { sessionSyncCoordinator.refreshPages(workspaceId, includeDeleted = false) }
+            .onStart {
+                backgroundSyncQueue.enqueue("refreshRecentPages:$workspaceId", persistForRetry = false) {
+                    refreshPages(workspaceId, includeDeleted = false)
+                    pushPendingChanges()
+                }
+            }
             .map { pages -> pages.map { it.toDomain() } }
     }
 
     override fun observeDeletedPages(workspaceId: String): Flow<List<Page>> {
         return pageDao.observeDeletedPages(workspaceId)
-            .onStart { sessionSyncCoordinator.refreshPages(workspaceId, includeDeleted = true) }
+            .onStart {
+                backgroundSyncQueue.enqueue("refreshDeletedPages:$workspaceId", persistForRetry = false) {
+                    refreshPages(workspaceId, includeDeleted = true)
+                    pushPendingChanges()
+                }
+            }
             .map { pages -> pages.map { it.toDomain() } }
     }
 
     override fun observePage(pageId: String): Flow<Page?> {
         return pageDao.observePage(pageId)
-            .onStart { sessionSyncCoordinator.refreshPage(pageId, includeDeleted = false) }
+            .onStart {
+                backgroundSyncQueue.enqueue("refreshPage:$pageId", persistForRetry = false) {
+                    refreshPage(pageId, includeDeleted = false)
+                    pushPendingChanges()
+                }
+            }
             .map { page -> page?.toDomain() }
     }
 
@@ -102,7 +128,7 @@ class PageRepositoryImpl @Inject constructor(
     override suspend fun upsertPage(page: Page) {
         val entity = page.toEntity().copy(syncStatus = SyncStatus.PendingPush)
         persistPage(entity)
-        sessionSyncCoordinator.pushPage(entity)
+        backgroundSyncQueue.enqueue("pushPage:${entity.id}") { pushPage(entity) }
     }
 
     override suspend fun updateBlockText(
@@ -623,7 +649,7 @@ class PageRepositoryImpl @Inject constructor(
         )
         val entity = page.toEntity().copy(syncStatus = SyncStatus.PendingPush)
         persistPage(entity)
-        sessionSyncCoordinator.pushPage(entity)
+        backgroundSyncQueue.enqueue("createPage:${entity.id}") { pushPage(entity) }
         return page
     }
 
@@ -632,7 +658,7 @@ class PageRepositoryImpl @Inject constructor(
             pageId = pageId,
             deletedAt = System.currentTimeMillis(),
         )
-        sessionSyncCoordinator.deletePage(pageId)
+        backgroundSyncQueue.enqueue("deletePage:$pageId") { this.deletePage(pageId) }
     }
 
     override suspend fun restorePage(pageId: String) {
@@ -640,12 +666,23 @@ class PageRepositoryImpl @Inject constructor(
             pageId = pageId,
             restoredAt = System.currentTimeMillis(),
         )
-        sessionSyncCoordinator.restorePage(pageId)
+        backgroundSyncQueue.enqueue("restorePage:$pageId") { this.restorePage(pageId) }
     }
 
     override suspend fun deletePagePermanently(pageId: String) {
+        val now = System.currentTimeMillis()
+        syncTombstoneDao.upsertTombstone(
+            SyncTombstoneEntity(
+                id = "${SyncTombstoneType.PagePermanentDelete}:$pageId",
+                entityType = SyncTombstoneType.PagePermanentDelete,
+                entityId = pageId,
+                createdAt = now,
+            ),
+        )
         pageDao.deletePageTreePermanently(pageId)
-        sessionSyncCoordinator.deletePagePermanently(pageId)
+        backgroundSyncQueue.enqueue("deletePagePermanently:$pageId") {
+            this.deletePagePermanently(pageId)
+        }
     }
 
     override suspend fun keepLocalPageConflict(pageId: String) {
@@ -697,7 +734,9 @@ class PageRepositoryImpl @Inject constructor(
             syncStatus = SyncStatus.PendingPush,
         )
         persistPage(updatedPage)
-        remoteSync(updatedPage)
+        backgroundSyncQueue.enqueue("mutateProjectedPage:$pageId") {
+            remoteSync(updatedPage)
+        }
         return true
     }
 
@@ -716,7 +755,9 @@ class PageRepositoryImpl @Inject constructor(
             syncStatus = SyncStatus.PendingPush,
         )
         persistPage(updatedPage)
-        remoteSync(updatedPage)
+        backgroundSyncQueue.enqueue("mutateDocumentPage:$pageId") {
+            remoteSync(updatedPage)
+        }
         return true
     }
 

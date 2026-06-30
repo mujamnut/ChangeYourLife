@@ -2,9 +2,11 @@ package com.changeyourlife.cyl.data.sync
 
 import com.changeyourlife.cyl.data.local.dao.PageDao
 import com.changeyourlife.cyl.data.local.dao.PageContentDao
+import com.changeyourlife.cyl.data.local.dao.SyncTombstoneDao
 import com.changeyourlife.cyl.data.local.dao.WorkspaceDao
 import com.changeyourlife.cyl.data.local.entity.PageEntity
 import com.changeyourlife.cyl.data.local.entity.SyncStatus
+import com.changeyourlife.cyl.data.local.entity.SyncTombstoneType
 import com.changeyourlife.cyl.data.local.entity.WorkspaceEntity
 import com.changeyourlife.cyl.data.local.mapper.toContentProjection
 import com.changeyourlife.cyl.data.local.mapper.toDomain
@@ -42,6 +44,7 @@ class SessionSyncCoordinator @Inject constructor(
     private val workspaceDao: WorkspaceDao,
     private val pageDao: PageDao,
     private val pageContentDao: PageContentDao,
+    private val syncTombstoneDao: SyncTombstoneDao,
     private val syncApi: SyncApi,
     private val tokenStore: AuthTokenStore,
     private val selectionStore: WorkspaceSelectionStore,
@@ -70,8 +73,20 @@ class SessionSyncCoordinator @Inject constructor(
             refreshPages(workspaceId = workspaceId, includeDeleted = true)
         }
 
+        pushPendingChanges()
+    }
+
+    suspend fun pushPendingChanges() {
+        pushPendingTombstones()
         pushPendingWorkspaces()
         pushPendingPages()
+    }
+
+    suspend fun pushPendingChangesForWorker(): Boolean {
+        if (authHeader() == null) return true
+        pushPendingChanges()
+        if (authHeader() == null) return true
+        return !hasRetryablePendingChanges()
     }
 
     suspend fun refreshWorkspaces() {
@@ -650,7 +665,21 @@ class SessionSyncCoordinator @Inject constructor(
         val header = authHeader() ?: return
         runCatching {
             syncApi.deletePagePermanently(header, pageId)
-        }.onFailure(::handleSyncFailure)
+        }.onSuccess {
+            syncTombstoneDao.deleteTombstone(
+                entityType = SyncTombstoneType.PagePermanentDelete,
+                entityId = pageId,
+            )
+        }.onFailure { error ->
+            if (error is HttpException && error.code() == 404) {
+                syncTombstoneDao.deleteTombstone(
+                    entityType = SyncTombstoneType.PagePermanentDelete,
+                    entityId = pageId,
+                )
+            } else {
+                handleSyncFailure(error)
+            }
+        }
     }
 
     suspend fun keepLocalPageConflict(pageId: String) {
@@ -682,6 +711,18 @@ class SessionSyncCoordinator @Inject constructor(
         workspaceDao.getWorkspacesNeedingSync()
             .filterNot { workspace -> workspace.syncStatus == SyncStatus.Conflict }
             .forEach { workspace -> pushWorkspace(workspace.copy(syncStatus = SyncStatus.PendingPush)) }
+    }
+
+    private suspend fun hasRetryablePendingChanges(): Boolean {
+        return syncTombstoneDao.getPendingTombstones().isNotEmpty() ||
+            workspaceDao.getWorkspacesNeedingSync().any { workspace -> workspace.syncStatus != SyncStatus.Conflict } ||
+            pageDao.getPagesNeedingSync().any { page -> page.syncStatus != SyncStatus.Conflict }
+    }
+
+    private suspend fun pushPendingTombstones() {
+        syncTombstoneDao.getPendingTombstones()
+            .filter { tombstone -> tombstone.entityType == SyncTombstoneType.PagePermanentDelete }
+            .forEach { tombstone -> deletePagePermanently(tombstone.entityId) }
     }
 
     private suspend fun pushPendingPages() {

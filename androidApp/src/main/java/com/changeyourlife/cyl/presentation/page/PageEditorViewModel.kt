@@ -4578,7 +4578,8 @@ private fun Page.toChatPageLink(): AiChatPageLink {
 }
 
 private fun Throwable.toPageAiExecutionErrorMessage(): String {
-    val detail = localizedMessage?.takeIf { message -> message.isNotBlank() }
-        ?: "AI edit failed before it could update the page."
+    val root = generateSequence(this) { error -> error.cause }.last()
+    val detail = root.localizedMessage?.takeIf { message -> message.isNotBlank() }
+        ?: "AI edit failed before it could update the page. (${root.javaClass.simpleName})"
     return "Failed: $detail"
 }

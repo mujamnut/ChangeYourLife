@@ -448,12 +448,14 @@ class AiPageActionExecutor @Inject constructor(
                             val updatedDirectly = !documentChanged &&
                                 targetTable != null &&
                                 row != null &&
-                                pageRepository.addTableRow(
-                                    pageId = page.id,
-                                    tableBlockId = targetTable.id,
-                                    row = row,
-                                    targetIndex = action.targetIndex?.toAiZeroBasedIndex(),
-                                )
+                                runCatching {
+                                    pageRepository.addTableRow(
+                                        pageId = page.id,
+                                        tableBlockId = targetTable.id,
+                                        row = row,
+                                        targetIndex = action.targetIndex?.toAiZeroBasedIndex(),
+                                    )
+                                }.getOrDefault(false)
                             if (updatedDirectly) {
                                 refreshPageDocument(page.id)?.let { refreshedDocument ->
                                     workingDocument = refreshedDocument
@@ -877,8 +879,8 @@ data class AiPageActionValidationIssue(
     val message: String = "",
 )
 
-private val FormulaColumnReferenceRegex = Regex("""\{([^}]+)}""")
-private val DateCellStartDateRegex = Regex(""""startDate"\s*:\s*"([^"]+)"""")
+private val FormulaColumnReferenceRegex by lazy { Regex("""\{([^}]+)\}""") }
+private val DateCellStartDateRegex by lazy { Regex(""""startDate"\s*:\s*"([^"]+)"""") }
 private val TaskDateCellKeys = setOf("date", "due date", "deadline", "time", "reminder")
 
 private fun PageBlockDocument.validateActionTarget(

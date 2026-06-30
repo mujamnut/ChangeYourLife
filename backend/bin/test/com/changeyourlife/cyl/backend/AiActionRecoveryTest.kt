@@ -580,4 +580,118 @@ class AiActionRecoveryTest {
 
         assertNull(result)
     }
+
+    @Test
+    fun recoversLegacyModelJsonRowWithoutLeakingNullOrIdFields() {
+        val result = service.recoverActionFromModelReply(
+            reply = """
+                {"page":"@Budget Tracker","action":"update","data":[{"id":"id1","category":"fuel","amount":"5","note":null}]}
+            """.trimIndent(),
+            prompt = "tambah fuel 5 ringgit dekat @Budget Tracker",
+            pages = listOf(
+                AiPageContext(
+                    id = "page-budget",
+                    title = "Budget Tracker",
+                    blocks = listOf(
+                        AiBlockContext(
+                            id = "table-1",
+                            type = "DatabaseTable",
+                            text = "title=Budget; columns=Name Text, Amount Number, Notes Text; rows=",
+                            tableTitle = "Budget",
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        val action = assertNotNull(result).actions.single()
+        assertEquals("ADD_TABLE_ROW", action.type)
+        assertEquals("Budget Tracker", action.targetTitle)
+        assertEquals("Budget", action.tableTitle)
+        assertEquals("fuel", action.rowTitle)
+        assertEquals("5", action.cellValues["Amount"])
+        assertNull(action.cellValues["Id"])
+        assertNull(action.cellValues["Note"])
+    }
+
+    @Test
+    fun selectorPrefersPromptRowPlanWhenModelOnlyCreatesTable() {
+        val modelResult = AiService.AiActionResult(
+            reply = "Siap - saya buat table itu.",
+            actions = listOf(
+                AiService.AiActionItem(
+                    type = "CREATE_DATABASE",
+                    targetTitle = "Budget Tracker",
+                    tableTitle = "saya guna 29 ringgit harini beli makeup",
+                ),
+            ),
+        )
+        val promptResult = AiService.AiActionResult(
+            reply = "Siap - saya tambah row itu.",
+            actions = listOf(
+                AiService.AiActionItem(
+                    type = "ADD_TABLE_ROW",
+                    targetTitle = "Budget Tracker",
+                    tableTitle = "Budget",
+                    rowTitle = "makeup",
+                    cellValues = mapOf(
+                        "Name" to "makeup",
+                        "Amount" to "29",
+                        "Date" to LocalDate.now().toString(),
+                    ),
+                ),
+            ),
+        )
+
+        val selected = service.selectActionResultForPrompt(
+            prompt = "saya guna 29 ringgit harini beli makeup",
+            modelResult = modelResult,
+            promptResult = promptResult,
+        )
+
+        val action = assertNotNull(selected).actions.single()
+        assertEquals("ADD_TABLE_ROW", action.type)
+        assertEquals("makeup", action.rowTitle)
+        assertEquals("29", action.cellValues["Amount"])
+    }
+
+    @Test
+    fun selectorPrefersPromptMultiStepWhenModelMissesASegment() {
+        val modelResult = AiService.AiActionResult(
+            reply = "Siap - saya tambah row itu.",
+            actions = listOf(
+                AiService.AiActionItem(
+                    type = "ADD_TABLE_ROW",
+                    targetTitle = "Belanja",
+                    tableTitle = "Expenses",
+                    rowTitle = "makan",
+                ),
+            ),
+        )
+        val promptResult = AiService.AiActionResult(
+            reply = "Siap - saya buat perubahan itu.",
+            actions = listOf(
+                AiService.AiActionItem(
+                    type = "DELETE_ALL_BLOCKS",
+                    targetTitle = "Belanja",
+                ),
+                AiService.AiActionItem(
+                    type = "ADD_TABLE_ROW",
+                    targetTitle = "Belanja",
+                    tableTitle = "Expenses",
+                    rowTitle = "makan",
+                    cellValues = mapOf("Date" to LocalDate.now().toString()),
+                ),
+            ),
+        )
+
+        val selected = service.selectActionResultForPrompt(
+            prompt = "padam semua block, dan catat makan harini",
+            modelResult = modelResult,
+            promptResult = promptResult,
+        )
+
+        val actions = assertNotNull(selected).actions
+        assertEquals(listOf("DELETE_ALL_BLOCKS", "ADD_TABLE_ROW"), actions.map { it.type })
+    }
 }

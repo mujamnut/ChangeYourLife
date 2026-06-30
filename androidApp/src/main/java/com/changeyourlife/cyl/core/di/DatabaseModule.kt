@@ -9,6 +9,7 @@ import com.changeyourlife.cyl.data.local.dao.ChatMessageDao
 import com.changeyourlife.cyl.data.local.dao.PageDao
 import com.changeyourlife.cyl.data.local.dao.PageContentDao
 import com.changeyourlife.cyl.data.local.dao.ReminderDao
+import com.changeyourlife.cyl.data.local.dao.SyncTombstoneDao
 import com.changeyourlife.cyl.data.local.dao.TaskDao
 import com.changeyourlife.cyl.data.local.dao.WorkspaceDao
 import dagger.Module
@@ -35,6 +36,7 @@ object DatabaseModule {
             .addMigrations(MIGRATION_4_5)
             .addMigrations(MIGRATION_5_6)
             .addMigrations(MIGRATION_6_7)
+            .addMigrations(MIGRATION_7_8)
             .build()
     }
 
@@ -66,6 +68,11 @@ object DatabaseModule {
     @Provides
     fun provideChatMessageDao(database: CylDatabase): ChatMessageDao {
         return database.chatMessageDao()
+    }
+
+    @Provides
+    fun provideSyncTombstoneDao(database: CylDatabase): SyncTombstoneDao {
+        return database.syncTombstoneDao()
     }
 
     val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -331,6 +338,34 @@ object DatabaseModule {
     val MIGRATION_6_7 = object : Migration(6, 7) {
         override fun migrate(db: SupportSQLiteDatabase) {
             db.execSQL("ALTER TABLE `chat_messages` ADD COLUMN `actionMetadataJson` TEXT NOT NULL DEFAULT ''")
+        }
+    }
+
+    val MIGRATION_7_8 = object : Migration(7, 8) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `sync_tombstones` (
+                    `id` TEXT NOT NULL,
+                    `entityType` TEXT NOT NULL,
+                    `entityId` TEXT NOT NULL,
+                    `createdAt` INTEGER NOT NULL,
+                    PRIMARY KEY(`id`)
+                )
+                """.trimIndent(),
+            )
+            db.execSQL(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS `index_sync_tombstones_entityType_entityId`
+                ON `sync_tombstones` (`entityType`, `entityId`)
+                """.trimIndent(),
+            )
+            db.execSQL(
+                """
+                CREATE INDEX IF NOT EXISTS `index_sync_tombstones_createdAt`
+                ON `sync_tombstones` (`createdAt`)
+                """.trimIndent(),
+            )
         }
     }
 }

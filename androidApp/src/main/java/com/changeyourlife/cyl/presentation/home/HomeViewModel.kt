@@ -16,6 +16,7 @@ import com.changeyourlife.cyl.domain.model.PageTableRollupAggregation
 import com.changeyourlife.cyl.domain.model.PageTableRow
 import com.changeyourlife.cyl.domain.model.PageTableView
 import com.changeyourlife.cyl.domain.model.Reminder
+import com.changeyourlife.cyl.domain.model.SyncOverview
 import com.changeyourlife.cyl.domain.model.TaskItem
 import com.changeyourlife.cyl.domain.model.Workspace
 import com.changeyourlife.cyl.domain.repository.AuthRepository
@@ -29,13 +30,14 @@ import com.changeyourlife.cyl.domain.model.ChatSession
 import com.changeyourlife.cyl.domain.repository.ChatHistoryRepository
 import com.changeyourlife.cyl.domain.repository.PageRepository
 import com.changeyourlife.cyl.domain.repository.ReminderRepository
+import com.changeyourlife.cyl.domain.repository.SyncStatusRepository
 import com.changeyourlife.cyl.domain.repository.TaskRepository
 import com.changeyourlife.cyl.domain.repository.WorkspaceRepository
 import com.changeyourlife.cyl.domain.repository.AiPageContext
 import com.changeyourlife.cyl.domain.repository.AiRepository
 import com.changeyourlife.cyl.domain.repository.AiStatus
 import com.changeyourlife.cyl.domain.repository.ChatAction
-import com.changeyourlife.cyl.domain.repository.ChatTableColumn
+import com.changeyourlife.cyl.presentation.ai.AiActionExecutionPolicy
 import com.changeyourlife.cyl.presentation.ai.AiChatActionMetadata
 import com.changeyourlife.cyl.presentation.ai.AiChatActionMetadataItem
 import com.changeyourlife.cyl.presentation.ai.AiChatActionValidationIssue
@@ -49,7 +51,6 @@ import com.changeyourlife.cyl.presentation.page.PageBlockCodec
 import com.changeyourlife.cyl.presentation.page.PageModuleTemplates
 import com.changeyourlife.cyl.presentation.page.PageModuleType
 import dagger.hilt.android.lifecycle.HiltViewModel
-import java.time.LocalDate
 import javax.inject.Inject
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -76,6 +77,7 @@ class HomeViewModel @Inject constructor(
     private val aiRepository: AiRepository,
     private val aiPageActionExecutor: AiPageActionExecutor,
     private val chatHistoryRepository: ChatHistoryRepository,
+    private val syncStatusRepository: SyncStatusRepository,
 ) : ViewModel() {
     private val workspaceFormState = MutableStateFlow(WorkspaceFormState())
     private val activeChatSessionId = MutableStateFlow<String?>(null)
@@ -221,13 +223,13 @@ class HomeViewModel @Inject constructor(
         dashboardState,
         workspaceFormState,
         chatState,
-        chatHistorySearchQuery,
-        chatHistorySearchResults,
-    ) { dashboard, form, chat, chatSearchQuery, chatSearchResults ->
+        syncStatusRepository.observeOverview(),
+    ) { dashboard, form, chat, syncOverview ->
         dashboard.copy(
             isCreateWorkspaceDialogVisible = form.isCreateWorkspaceDialogVisible,
             newWorkspaceName = form.newWorkspaceName,
             canCreateWorkspace = form.newWorkspaceName.isNotBlank(),
+            syncOverview = syncOverview,
             chatMessages = chat.messages,
             chatSessions = chat.sessions,
             chatSessionPreviews = chat.previews,
@@ -235,9 +237,14 @@ class HomeViewModel @Inject constructor(
             isAiGeneratingChat = chat.isGenerating,
             aiChatError = chat.error,
             aiChatMode = chat.mode,
-            chatHistorySearchQuery = chatSearchQuery,
-            chatHistorySearchResults = chatSearchResults,
         )
+    }.let { baseState ->
+        combine(baseState, chatHistorySearchQuery, chatHistorySearchResults) { state, chatSearchQuery, chatSearchResults ->
+            state.copy(
+                chatHistorySearchQuery = chatSearchQuery,
+                chatHistorySearchResults = chatSearchResults,
+            )
+        }
     }.let { baseState ->
         combine(baseState, searchQuery, aiModelLabel) { state, query, modelLabel ->
             state.copy(
@@ -373,6 +380,10 @@ class HomeViewModel @Inject constructor(
 
     fun clearSearchQuery() {
         searchQuery.value = ""
+    }
+
+    fun retrySyncNow() {
+        syncStatusRepository.retryNow()
     }
 
     fun updateChatHistorySearchQuery(query: String) {
@@ -524,25 +535,11 @@ class HomeViewModel @Inject constructor(
                     val assistantReply = result.reply.ifBlank {
                         "I received your message, but the AI returned an empty reply."
                     }.sanitizeAiUserVisibleText()
-                    val localActions = if (mode == AiChatMode.Planning) {
-                        emptyList()
-                    } else {
-                        recoverPageWriteActions(
-                            prompt = prompt,
-                            pages = pages,
-                            assistantReply = assistantReply,
-                            mentionedPageIds = normalizedMentionedPageIds,
-                        )
-                    }
-                    val actionsToExecute = when (mode) {
-                        AiChatMode.Planning -> emptyList()
-                        AiChatMode.Edit -> localActions.ifEmpty {
-                            result.actions.filterNot { action -> action.isUnsafeQualitativeRename() }
-                        }
-                        AiChatMode.Auto -> result.actions
-                            .filterNot { action -> action.isUnsafeQualitativeRename() }
-                            .repairedWithLocalPlan(prompt, localActions)
-                    }
+                    val actionDecision = AiActionExecutionPolicy.decide(
+                        mode = mode,
+                        backendActions = result.actions,
+                    )
+                    val actionsToExecute = actionDecision.executableActions
                     val actionResults = if (actionsToExecute.isEmpty()) {
                         HomeAiExecutionResult()
                     } else if (scopedTargetPage != null) {
@@ -570,7 +567,7 @@ class HomeViewModel @Inject constructor(
                                 code = issue.code,
                                 message = issue.message,
                             )
-                        } + actionResults.validationIssues,
+                        } + actionDecision.validationIssues + actionResults.validationIssues,
                     )
                     chatHistoryRepository.appendMessage(
                         sessionId = session.id,
@@ -865,100 +862,6 @@ class HomeViewModel @Inject constructor(
             .replace(Regex("[^a-z0-9]"), "")
     }
 
-    private fun recoverPageWriteActions(
-        prompt: String,
-        pages: List<Page>,
-        assistantReply: String,
-        mentionedPageIds: List<String> = emptyList(),
-    ): List<ChatAction> {
-        val hasSelectedMention = mentionedPageIds.isNotEmpty()
-        if (!prompt.looksLikePageMutationRequest() && !(hasSelectedMention && prompt.looksLikePageActionIntent())) {
-            return emptyList()
-        }
-        val targetPage = pages.findPagesByIds(mentionedPageIds).firstOrNull()
-            ?: pages.findMentionedPage(prompt)
-            ?: pages.singleOrNull()
-            ?: return emptyList()
-
-        val recoveredActions = prompt.recoverStructuredActions(targetPage)
-        if (recoveredActions.isNotEmpty()) return recoveredActions
-
-        if (!prompt.looksLikePageWriteRequest()) return emptyList()
-        val content = assistantReply.asWritablePageContent()
-            .ifBlank { prompt.extractWriteFallbackContent(targetPage.title) }
-        if (content.isBlank()) return emptyList()
-
-        return listOf(
-            ChatAction(
-                type = "APPEND_BLOCK",
-                title = "",
-                targetTitle = targetPage.title,
-                blockType = prompt.inferWriteBlockType(),
-                content = content,
-            ),
-        )
-    }
-
-    private fun recoverPageStructuredActions(
-        prompt: String,
-        pages: List<Page>,
-        mentionedPageIds: List<String> = emptyList(),
-    ): List<ChatAction> {
-        val hasSelectedMention = mentionedPageIds.isNotEmpty()
-        if (!prompt.looksLikePageMutationRequest() && !(hasSelectedMention && prompt.looksLikePageActionIntent())) {
-            return emptyList()
-        }
-        val targetPage = pages.findPagesByIds(mentionedPageIds).firstOrNull()
-            ?: pages.findMentionedPage(prompt)
-            ?: pages.singleOrNull()
-            ?: return emptyList()
-        return prompt.recoverStructuredActions(targetPage)
-    }
-
-    private fun List<ChatAction>.repairedWithLocalPlan(
-        prompt: String,
-        localActions: List<ChatAction>,
-    ): List<ChatAction> {
-        if (isEmpty()) return localActions
-        if (localActions.isEmpty()) return this
-
-        val hasConflictingAction = any { action -> action.conflictsWithPrompt(prompt) }
-        val localCoversMoreSegments = prompt.actionSegments().size > size && localActions.size > size
-        return if (hasConflictingAction || localCoversMoreSegments) {
-            localActions
-        } else {
-            this
-        }
-    }
-
-    private fun ChatAction.isUnsafeQualitativeRename(): Boolean {
-        val normalizedType = type.trim().uppercase()
-        if (normalizedType !in setOf("RENAME_TABLE", "RENAME_DATABASE", "UPDATE_TABLE_TITLE")) return false
-        val requestedTitle = title
-            .ifBlank { value }
-            .ifBlank { content }
-            .ifBlank { newColumnName }
-        return requestedTitle.isQualitativeTableTitleRequest()
-    }
-
-    private fun ChatAction.conflictsWithPrompt(prompt: String): Boolean {
-        val normalizedType = type.trim().uppercase()
-        val visiblePrompt = prompt.substringBefore("CYL_MENTION_CONTEXT:").trim()
-        return when {
-            normalizedType in setOf("CREATE_DATABASE", "CREATE_TABLE") &&
-                visiblePrompt.looksLikeTableRowRequest() -> true
-
-            normalizedType == "ADD_TABLE_ROW" &&
-                visiblePrompt.looksLikeTableRowRequest() &&
-                !visiblePrompt.looksLikeTaskRowRequest() &&
-                cellValues.keys.any { key -> key.equals("Task", ignoreCase = true) } -> true
-
-            normalizedType == "DELETE_BLOCK" && visiblePrompt.requestsAllBlocksDeletion() -> true
-
-            else -> false
-        }
-    }
-
     private fun List<Page>.findPagesByIds(pageIds: List<String>): List<Page> {
         if (pageIds.isEmpty()) return emptyList()
         return pageIds.mapNotNull { pageId ->
@@ -976,7 +879,7 @@ class HomeViewModel @Inject constructor(
     private fun String.withMentionContext(pages: List<Page>): String {
         if (pages.isEmpty()) return this
         val context = pages.joinToString(separator = "\n") { page ->
-            "- @${page.title.ifBlank { "Untitled page" }}"
+            "- @${page.title.ifBlank { "Untitled page" }} id=${page.id}"
         }
         return """
             $this
@@ -1014,773 +917,6 @@ class HomeViewModel @Inject constructor(
                 mention.startsWith(title) ||
                 title.contains(mention)
         }.take(1)
-    }
-
-    private fun String.looksLikePageWriteRequest(): Boolean {
-        val value = lowercase()
-        val hasWriteIntent = listOf(
-            "write",
-            "tulis",
-            "catat",
-            "masukkan",
-            "insert",
-            "append",
-            "add note",
-            "tambah nota",
-            "nota",
-            "note",
-            "isi",
-            "content",
-            "memo",
-            "buat isi",
-            "draft",
-            "karangan",
-        ).any { token -> value.contains(token) }
-        if (!hasWriteIntent) return false
-
-        val destructiveOrTableIntent = listOf(
-            "delete",
-            "hapus",
-            "buang",
-            "rename",
-            "table",
-            "database",
-            "row",
-            "column",
-            "property",
-        ).any { token -> value.contains(token) }
-        return !destructiveOrTableIntent
-    }
-
-    private fun String.looksLikePageMutationRequest(): Boolean {
-        val value = lowercase()
-        return looksLikePageWriteRequest() ||
-            listOf("property", "properties", "prop").any { token -> value.contains(token) } ||
-            listOf("block", "heading", "todo", "quote", "divider", "media", "file").any { token -> value.contains(token) } &&
-            listOf(
-                "ubah",
-                "tukar",
-                "edit",
-                "update",
-                "ganti",
-                "padam",
-                "buang",
-                "hapus",
-                "delete",
-                "remove",
-            ).any { token -> value.contains(token) }
-    }
-
-    private fun String.looksLikePageActionIntent(): Boolean {
-        val value = lowercase()
-        val mutationWords = listOf(
-            "buat",
-            "create",
-            "cipta",
-            "tambah",
-            "add",
-            "masukkan",
-            "letak",
-            "write",
-            "tulis",
-            "catat",
-            "ubah",
-            "tukar",
-            "edit",
-            "update",
-            "ganti",
-            "padam",
-            "buang",
-            "hapus",
-            "delete",
-            "remove",
-        ).any { token -> value.contains(token) }
-        val pageObjectWords = listOf(
-            "property",
-            "properties",
-            "prop",
-            "block",
-            "blok",
-            "table",
-            "database",
-            "row",
-            "column",
-            "task",
-            "todo",
-            "reminder",
-            "nota",
-            "note",
-        ).any { token -> value.contains(token) }
-        return mutationWords || pageObjectWords || looksLikePageWriteRequest() || looksLikeTableRowRequest()
-    }
-
-    private fun String.recoverPropertyAction(targetPage: Page): ChatAction? {
-        val value = lowercase()
-        val mentionsProperty = listOf("property", "properties", "prop").any { token -> value.contains(token) }
-        if (!mentionsProperty) return null
-
-        val actionType = when {
-            listOf("padam", "buang", "hapus", "delete", "remove").any { token -> value.contains(token) } -> "DELETE_PROPERTY"
-            listOf("ubah", "tukar", "edit", "update", "set", "jadikan").any { token -> value.contains(token) } -> "UPDATE_PROPERTY"
-            listOf("tambah", "add", "create", "buat", "masukkan", "letak").any { token -> value.contains(token) } -> "ADD_PROPERTY"
-            else -> return null
-        }
-        val propertyName = extractPropertyName(targetPage.title)
-        if (propertyName.isBlank()) return null
-
-        return ChatAction(
-            type = actionType,
-            title = "",
-            targetTitle = targetPage.title,
-            propertyName = propertyName,
-            propertyType = inferPropertyType(),
-            value = extractPropertyValue(targetPage.title),
-        )
-    }
-
-    private fun String.recoverBlockMutationAction(targetPage: Page): ChatAction? {
-        val value = lowercase()
-        val hasBlockIntent = listOf("block", "heading", "tajuk", "todo", "quote", "petikan", "divider", "media", "file")
-            .any { token -> value.contains(token) }
-        if (!hasBlockIntent) return null
-
-        val isDelete = listOf("padam", "buang", "hapus", "delete", "remove").any { token -> value.contains(token) }
-        if (isDelete) {
-            if (requestsAllBlocksDeletion()) {
-                return ChatAction(
-                    type = "DELETE_ALL_BLOCKS",
-                    title = "",
-                    targetTitle = targetPage.title,
-                )
-            }
-            val blockText = extractBlockReference(targetPage.title)
-            return ChatAction(
-                type = "DELETE_BLOCK",
-                title = "",
-                targetTitle = targetPage.title,
-                blockType = inferWriteBlockType(),
-                blockText = blockText,
-                content = blockText,
-            )
-        }
-
-        val isUpdate = listOf("ubah", "tukar", "edit", "update", "ganti", "jadikan").any { token -> value.contains(token) }
-        if (!isUpdate) return null
-        val replacement = splitBlockReplacement(targetPage.title) ?: return null
-        return ChatAction(
-            type = "UPDATE_BLOCK",
-            title = "",
-            targetTitle = targetPage.title,
-            blockType = inferWriteBlockType(),
-            blockText = replacement.first,
-            content = replacement.second,
-        )
-    }
-
-    private fun String.recoverDatabaseAction(targetPage: Page): ChatAction? {
-        val value = lowercase()
-        if (looksLikeTableRowRequest()) return null
-        val isTableContext = looksLikeTableContextOnlyRequest()
-        val hasDatabaseIntent = listOf("table", "database", "jadual").any { token -> value.contains(token) }
-        if (!hasDatabaseIntent && !isTableContext) return null
-        if (isTableContext && !hasDatabaseIntent && targetPage.hasAnyTable()) return null
-        val isCreate = listOf("buat", "create", "cipta", "tambah", "add", "masukkan").any { token ->
-            value.contains(token)
-        } || isTableContext
-        if (!isCreate) return null
-        val tableTitle = extractTableTitle(targetPage.title)
-            .ifBlank { "Table" }
-        return ChatAction(
-            type = "CREATE_DATABASE",
-            title = "",
-            targetTitle = targetPage.title,
-            tableTitle = tableTitle,
-            tableView = "Table",
-            tableColumns = tableTitle.defaultRecoveredTableColumns(value),
-        )
-    }
-
-    private fun String.recoverImplicitDatabaseAction(targetPage: Page): ChatAction {
-        val tableTitle = when {
-            looksLikeExpenseText() -> targetPage.title.ifBlank { "Belanja" }
-            else -> targetPage.title.ifBlank { "Table" }
-        }
-        return ChatAction(
-            type = "CREATE_DATABASE",
-            title = "",
-            targetTitle = targetPage.title,
-            tableTitle = tableTitle,
-            tableView = "Table",
-            tableColumns = tableTitle.defaultRecoveredTableColumns(lowercase()),
-        )
-    }
-
-    private fun String.recoverWriteAction(targetPage: Page): ChatAction? {
-        if (!looksLikePageWriteRequest()) return null
-        val content = extractWriteFallbackContent(targetPage.title).ifBlank { return null }
-        return ChatAction(
-            type = "APPEND_BLOCK",
-            title = "",
-            targetTitle = targetPage.title,
-            blockType = inferWriteBlockType(),
-            content = content,
-        )
-    }
-
-    private fun String.recoverStructuredActions(targetPage: Page): List<ChatAction> {
-        val actions = mutableListOf<ChatAction>()
-        var createdTableTitle: String? = null
-        actionSegments().forEach { segment ->
-            val rowAction = segment.recoverTableRowAction(targetPage, fallbackTableTitle = createdTableTitle)
-            if (rowAction == null &&
-                segment.looksLikeTableRowRequest() &&
-                createdTableTitle.isNullOrBlank() &&
-                !targetPage.hasAnyTable()
-            ) {
-                val tableAction = segment.recoverImplicitDatabaseAction(targetPage)
-                createdTableTitle = tableAction.tableTitle
-                actions += tableAction
-                segment.recoverTableRowAction(targetPage, fallbackTableTitle = createdTableTitle)
-                    ?.let { action -> actions += action }
-                return@forEach
-            }
-
-            val action = segment.recoverBlockMutationAction(targetPage)
-                ?: rowAction
-                ?: segment.recoverPropertyAction(targetPage)
-                ?: segment.recoverTableRenameAction(targetPage)
-                ?: segment.recoverDatabaseAction(targetPage)
-                ?: segment.takeUnless { it.looksLikeTableContextOnlyRequest() }?.recoverWriteAction(targetPage)
-            if (action != null) {
-                actions += action
-                if (action.type.equals("CREATE_DATABASE", ignoreCase = true)) {
-                    createdTableTitle = action.tableTitle.takeIf { title -> title.isNotBlank() }
-                }
-            }
-        }
-        return if (actions.isNotEmpty()) {
-            actions
-        } else {
-            listOfNotNull(
-                recoverBlockMutationAction(targetPage)
-                    ?: recoverTableRowAction(targetPage)
-                    ?: recoverPropertyAction(targetPage)
-                    ?: recoverTableRenameAction(targetPage)
-                    ?: recoverDatabaseAction(targetPage)
-                    ?: takeUnless { it.looksLikeTableContextOnlyRequest() }?.recoverWriteAction(targetPage),
-            )
-        }
-    }
-
-    private fun String.recoverTableRenameAction(targetPage: Page): ChatAction? {
-        val value = lowercase()
-        val hasTableIntent = listOf("table", "database", "jadual").any { token -> value.contains(token) }
-        if (!hasTableIntent || !targetPage.hasAnyTable()) return null
-        val hasRenameIntent = listOf("rename", "ubah nama", "tukar nama", "ganti nama", "change name", "jadikan nama")
-            .any { token -> value.contains(token) } ||
-            (
-                listOf("ubah", "tukar", "ganti", "jadikan", "change", "set").any { token -> value.contains(token) } &&
-                    listOf("nama", "name", "title").any { token -> value.contains(token) }
-                )
-        if (!hasRenameIntent) return null
-        val newTitle = extractNewTableTitle(targetPage.title).ifBlank { return null }
-        return ChatAction(
-            type = "RENAME_TABLE",
-            title = newTitle,
-            targetTitle = targetPage.title,
-        )
-    }
-
-    private fun String.recoverTableRowAction(
-        targetPage: Page,
-        fallbackTableTitle: String? = null,
-    ): ChatAction? {
-        if (!looksLikeTableRowRequest()) return null
-        val document = PageBlockCodec.decodeDocument(targetPage.content)
-        val tableTitle = document.blocks
-            .firstOrNull { block -> block.type == PageBlockType.DatabaseTable }
-            ?.table
-            ?.title
-            ?.takeIf { title -> title.isNotBlank() }
-            ?: fallbackTableTitle.orEmpty()
-        if (tableTitle.isBlank() && document.blocks.none { block -> block.type == PageBlockType.DatabaseTable }) {
-            return null
-        }
-
-        val rowPrompt = bestTableRowSegment()
-        val rowText = rowPrompt.extractTableRowText(targetPage.title)
-        if (rowText.isBlank()) return null
-        val amount = rowText.extractMoneyAmount()
-        val rowTitle = rowText.removeMoneyAmount().removeDateRequestWords().ifBlank { rowText }
-        val dateValue = rowPrompt.inferredDateValue()
-        val cellValues = buildMap {
-            put("Name", rowTitle)
-            put("Item", rowTitle)
-            amount?.let { value ->
-                put("Amount", value)
-                put("Jumlah", value)
-                put("Harga", value)
-                put("Price", value)
-                put("Cost", value)
-                put("Total", value)
-            }
-            dateValue?.let { value ->
-                put("Date", value)
-                put("Tarikh", value)
-            }
-            if (amount != null && !rowText.equals(rowTitle, ignoreCase = true)) {
-                put("Notes", rowText)
-            }
-        }
-        return ChatAction(
-            type = "ADD_TABLE_ROW",
-            title = "",
-            targetTitle = targetPage.title,
-            tableTitle = tableTitle,
-            rowTitle = rowTitle,
-            cellValues = cellValues,
-        )
-    }
-
-    private fun String.asWritablePageContent(): String {
-        val value = trim()
-        if (value.isBlank()) return ""
-        val lower = value.lowercase()
-        val isGenericFailure = listOf(
-            "i can't",
-            "i cannot",
-            "cannot",
-            "can't",
-            "tidak dapat",
-            "tak dapat",
-            "maaf",
-            "sorry",
-            "please try again",
-            "couldn't convert",
-            "belum dapat tukar",
-            "tukar arahan",
-        ).any { token -> lower.contains(token) }
-        if (isGenericFailure) return ""
-        return value
-    }
-
-    private fun String.isBackendActionFallback(): Boolean {
-        val value = lowercase()
-        return listOf(
-            "belum dapat tukar arahan",
-            "tukar arahan itu kepada tindakan",
-            "couldn't convert that into a cyl action",
-            "could not convert that into a cyl action",
-            "try again with the page",
-            "mention page with @",
-        ).any { token -> value.contains(token) }
-    }
-
-    private fun String.recoveredActionReply(): String {
-        val value = lowercase()
-        val usesMalay = listOf(
-            "saya",
-            "awak",
-            "tolong",
-            "boleh",
-            "nak",
-            "buat",
-            "tulis",
-            "catat",
-            "tambah",
-            "masukkan",
-            "ubah",
-            "tukar",
-            "padam",
-            "buang",
-            "hapus",
-            "dekat",
-            "dalam",
-            "sini",
-        ).any { token -> value.contains(token) }
-        return if (usesMalay) {
-            "Siap - saya buat perubahan itu."
-        } else {
-            "Done - I made that change."
-        }
-    }
-
-    private fun String.extractWriteFallbackContent(pageTitle: String): String {
-        return removeMentionedPage(pageTitle)
-            .replace(Regex("(?i)\\b(tolong|please|buat|create|write|tulis|catat|masukkan|insert|append|draft|nota|note|memo|isi|content|buat isi|tambah nota|add note)\\b"), "")
-            .replace(Regex("\\s+"), " ")
-            .trim(' ', '-', ':')
-    }
-
-    private fun String.extractTableTitle(pageTitle: String): String {
-        return removeMentionedPage(pageTitle)
-            .replace(
-                Regex("(?i)\\b(buat|create|cipta|tambah|add|masukkan|letak|untuk|catat|rekod|record|table|database|jadual|dalam|dekat|di|page|ini|sini)\\b"),
-                " ",
-            )
-            .replace(Regex("\\s+"), " ")
-            .trim(' ', '-', ':')
-    }
-
-    private fun String.extractNewTableTitle(pageTitle: String): String {
-        val cleaned = removeMentionedPage(pageTitle)
-            .replace(Regex("(?i)\\b(ubah|tukar|ganti|jadikan|change|set|rename|nama|name|title|table|database|jadual)\\b"), " ")
-            .replace(Regex("\\s+"), " ")
-            .trim(' ', '-', ':')
-        val afterMarker = listOf(
-            "dengan nama ",
-            "kepada ",
-            "menjadi ",
-            "jadikan ",
-            "dengan ",
-            "jadi ",
-            "to ",
-            "into ",
-            "as ",
-            " dengan nama ",
-            " kepada ",
-            " menjadi ",
-            " jadikan ",
-            " dengan ",
-            " jadi ",
-            " to ",
-            " into ",
-            " as ",
-        ).firstNotNullOfOrNull { marker ->
-            cleaned.substringAfter(marker, missingDelimiterValue = "")
-                .takeIf { value -> value.isNotBlank() }
-        } ?: cleaned
-
-        val title = afterMarker
-            .replace(Regex("(?i)\\b(yang|baru|new)\\b"), " ")
-            .replace(Regex("(?i)\\b(dan|and)\\s+(pendek|short|ringkas|simple)\\b"), " ")
-            .replace(Regex("(?i)\\b(pendek|short|ringkas|simple)\\b"), " ")
-            .replace(Regex("(?i)\\b(dan|and)\\b\\s*$"), " ")
-            .replace(Regex("\\s+"), " ")
-            .trim(' ', '-', ':', '"', '\'')
-        return title.takeUnless { candidate -> candidate.isQualitativeTableTitleRequest() }.orEmpty()
-    }
-
-    private fun String.isQualitativeTableTitleRequest(): Boolean {
-        val normalized = lowercase()
-            .replace(Regex("[^a-z0-9]+"), " ")
-            .trim()
-        if (normalized.isBlank()) return true
-        val descriptorWords = setOf(
-            "sesuai",
-            "sensuai",
-            "sesual",
-            "sensual",
-            "appropriate",
-            "suitable",
-            "better",
-            "nice",
-            "good",
-            "bagus",
-            "kemas",
-            "cantik",
-            "proper",
-            "short",
-            "simple",
-            "ringkas",
-            "pendek",
-        )
-        return normalized.split(Regex("\\s+")).all { word -> word in descriptorWords }
-    }
-
-    private fun Page.hasAnyTable(): Boolean {
-        return PageBlockCodec.decodeDocument(content)
-            .blocks
-            .any { block -> block.type == PageBlockType.DatabaseTable }
-    }
-
-    private fun String.defaultRecoveredTableColumns(promptValue: String): List<ChatTableColumn> {
-        return if (looksLikeExpenseText() || promptValue.looksLikeExpenseText()) {
-            listOf(
-                ChatTableColumn(name = "Name", type = "Text"),
-                ChatTableColumn(name = "Amount", type = "Number"),
-                ChatTableColumn(name = "Date", type = "Date"),
-                ChatTableColumn(name = "Notes", type = "Text"),
-            )
-        } else {
-            listOf(
-                ChatTableColumn(name = "Name", type = "Text"),
-                ChatTableColumn(name = "Status", type = "Status"),
-                ChatTableColumn(name = "Notes", type = "Text"),
-            )
-        }
-    }
-
-    private fun String.looksLikeExpenseText(): Boolean {
-        val value = lowercase()
-        return extractMoneyAmount() != null ||
-            listOf("duit", "belanja", "expense", "expenses", "spend", "makan", "ringgit", "rm", "harga", "jumlah")
-                .any { token -> value.contains(token) }
-    }
-
-    private fun ChatAction.normalizedForPrompt(prompt: String, mentionedPage: Page?): ChatAction {
-        val normalizedType = type.trim().uppercase()
-        return when {
-            normalizedType == "DELETE_BLOCK" && prompt.requestsAllBlocksDeletion() -> {
-                copy(
-                    type = "DELETE_ALL_BLOCKS",
-                    blockId = "",
-                    blockText = "",
-                    content = "",
-                    blockType = "",
-                )
-            }
-            normalizedType in setOf("CREATE_DATABASE", "CREATE_TABLE") && prompt.looksLikeTableRowRequest() && mentionedPage != null -> {
-                prompt.recoverTableRowAction(mentionedPage) ?: copy(type = "ADD_TABLE_ROW")
-            }
-            normalizedType == "ADD_TABLE_ROW" &&
-                prompt.looksLikeTableRowRequest() &&
-                !prompt.looksLikeTaskRowRequest() &&
-                mentionedPage != null -> {
-                prompt.recoverTableRowAction(mentionedPage) ?: this
-            }
-            else -> this
-        }
-    }
-
-    private fun String.requestsAllBlocksDeletion(): Boolean {
-        val value = lowercase()
-        val hasDeleteIntent = listOf("padam", "buang", "hapus", "delete", "remove", "clear", "kosongkan")
-            .any { token -> value.contains(token) }
-        val hasAllIntent = listOf("semua", "all", "every", "keseluruhan", "seluruh")
-            .any { token -> value.contains(token) }
-        val hasBlockIntent = listOf("block", "blok", "blocks")
-            .any { token -> value.contains(token) }
-        return hasDeleteIntent && hasAllIntent && hasBlockIntent
-    }
-
-    private fun String.looksLikeTableRowRequest(): Boolean {
-        val value = lowercase()
-        val hasRowIntent = listOf("row", "baris", "rekod", "record")
-            .any { token -> value.contains(token) }
-        val hasAddIntent = listOf("tambah", "add", "masukkan", "letak", "insert", "create", "catat")
-            .any { token -> value.contains(token) }
-        val hasCreateTableIntent = listOf("table", "database", "jadual")
-            .any { token -> value.contains(token) } &&
-            listOf("buat", "create", "cipta")
-                .any { token -> value.contains(token) }
-        val isExplicitNoteWrite = listOf("nota", "note", "memo", "isi", "content").any { token ->
-            value.contains(token)
-        } && looksLikePageWriteRequest()
-        val hasExpenseDataHint = extractMoneyAmount() != null ||
-            listOf("makan", "ringgit", "rm", "harga", "jumlah", "tarikh", "hari ini", "harini", "today")
-            .any { token -> value.contains(token) }
-        if (isExplicitNoteWrite) return false
-        if (hasCreateTableIntent && !hasRowIntent) return false
-        return (hasRowIntent && hasAddIntent) || (hasExpenseDataHint && !hasCreateTableIntent)
-    }
-
-    private fun String.looksLikeTaskRowRequest(): Boolean {
-        val value = lowercase()
-        return listOf("task", "todo", "reminder", "ingatkan", "deadline", "due", "appointment", "jadualkan")
-            .any { token -> value.contains(token) }
-    }
-
-    private fun String.looksLikeTableContextOnlyRequest(): Boolean {
-        val value = lowercase()
-        val hasContextIntent = listOf("catat", "rekod", "record", "track", "tracking").any { token ->
-            value.contains(token)
-        } &&
-            listOf("duit", "belanja", "expense", "expenses", "spending").any { token ->
-                value.contains(token)
-            } &&
-            listOf("bulanan", "monthly", "bulan", "harian", "daily").any { token ->
-                value.contains(token)
-            }
-        return hasContextIntent && !looksLikeTableRowRequest()
-    }
-
-    private fun String.actionSegments(): List<String> {
-        val splitText = replace(Regex("(?i)\\b(lepas tu|selepas tu|pastu|astu|then|next)\\b"), "\n")
-            .replace(
-                Regex("(?i)\\s*,\\s*(?=(dan\\s+)?(tu\\s+dah\\s+)?(untuk\\s+)?(tambah|add|masukkan|letak|buat|create|padam|buang|delete|hapus|catat|row|baris|rekod|makan|duit|belanja|harga|jumlah|ringgit|rm|tarikh|hari))"),
-                "\n",
-            )
-            .replace(
-                Regex("(?i)\\b(dan|and)\\s+(?=(tu\\s+dah\\s+)?(untuk\\s+)?(tambah|add|masukkan|letak|buat|create|padam|buang|delete|hapus|catat|row|baris|rekod|makan|duit|belanja|harga|jumlah|ringgit|rm|tarikh|hari))"),
-                "\n",
-            )
-        return splitText
-            .lineSequence()
-            .map { segment -> segment.trim(' ', ',', '.', ';', ':', '-') }
-            .filter { segment -> segment.isNotBlank() }
-            .toList()
-            .ifEmpty { listOf(trim()) }
-    }
-
-    private fun String.bestTableRowSegment(): String {
-        return actionSegments()
-            .lastOrNull { segment -> segment.looksLikeTableRowRequest() }
-            ?: this
-    }
-
-    private fun String.extractTableRowText(pageTitle: String): String {
-        return removeMentionedPage(pageTitle)
-            .replace(
-                Regex("(?i)\\b(tambah|add|masukkan|letak|insert|create|buat|catat|satu|1|row|baris|rekod|record|dalam|dekat|di|ke|to|into|table|database|jadual|page|ini|tersebut|yang|saya|guna|pakai|beli|belikan|buy|purchase|purchased|spent|spend|use|used|untuk|tu|dah|sekali)\\b"),
-                " ",
-            )
-            .replace(Regex("\\s+"), " ")
-            .trim(' ', '-', ':')
-    }
-
-    private fun String.extractMoneyAmount(): String? {
-        val match = Regex("(?i)(?:rm\\s*)?(\\d+(?:[.,]\\d+)?)\\s*(?:ringgit|rm)?")
-            .find(this)
-            ?: return null
-        return match.groupValues.getOrNull(1)
-            ?.replace(',', '.')
-            ?.takeIf { value -> value.isNotBlank() }
-    }
-
-    private fun String.removeMoneyAmount(): String {
-        return replace(Regex("(?i)\\b(?:rm\\s*)?\\d+(?:[.,]\\d+)?\\s*(?:ringgit|rm)?\\b"), " ")
-            .replace(Regex("\\s+"), " ")
-            .trim(' ', '-', ':', ',')
-    }
-
-    private fun String.removeDateRequestWords(): String {
-        return replace(Regex("(?i)\\b(hari\\s*ini|harini|today|tarikh|date|sekali)\\b"), " ")
-            .replace(Regex("\\s+"), " ")
-            .trim(' ', '-', ':', ',')
-    }
-
-    private fun String.inferredDateValue(): String? {
-        val value = lowercase()
-        val wantsToday = listOf("hari ini", "harini", "today").any { token -> value.contains(token) }
-        val wantsDate = wantsToday || listOf("tarikh", "date").any { token -> value.contains(token) }
-        return if (wantsDate) LocalDate.now().toString() else null
-    }
-
-    private fun String.inferWriteBlockType(): String {
-        val value = lowercase()
-        return when {
-            value.contains("heading") || value.contains("tajuk") -> "Heading"
-            value.contains("bullet") || value.contains("list") || value.contains("senarai") -> "Bullet"
-            value.contains("quote") || value.contains("petikan") -> "Quote"
-            value.contains("todo") || value.contains("checklist") -> "Todo"
-            value.contains("divider") || value.contains("garisan") || value.contains("line") -> "Divider"
-            value.contains("media") || value.contains("file") || value.contains("gambar") -> "MediaFile"
-            else -> "Text"
-        }
-    }
-
-    private fun String.extractPropertyName(pageTitle: String): String {
-        val typeWords = setOf(
-            "text",
-            "number",
-            "nombor",
-            "select",
-            "multiselect",
-            "status",
-            "date",
-            "tarikh",
-            "person",
-            "files",
-            "media",
-            "checkbox",
-            "url",
-            "email",
-            "phone",
-            "telefon",
-            "formula",
-            "relation",
-            "rollup",
-            "button",
-            "place",
-            "tempat",
-            "id",
-        )
-        val cleaned = removeMentionedPage(pageTitle)
-            .replace(
-                Regex(
-                    "(?i)\\b(tambah|add|create|buat|masukkan|letak|ubah|tukar|edit|update|set|jadikan|padam|buang|hapus|delete|remove|property|properties|prop|dalam|dekat|di|page|ini|sini)\\b",
-                ),
-                " ",
-            )
-            .replace(Regex("(?i)\\b(type|jenis|as|sebagai|kepada|ke|value|nilai|with|dengan)\\b.*$"), " ")
-            .replace(Regex("\\s+"), " ")
-            .trim(' ', '-', ':')
-
-        return cleaned
-            .split(" ")
-            .filter { token -> token.isNotBlank() && token.lowercase() !in typeWords }
-            .joinToString(" ")
-            .trim()
-    }
-
-    private fun String.extractPropertyValue(pageTitle: String): String {
-        val withoutMention = removeMentionedPage(pageTitle)
-        val match = Regex("(?i)\\b(value|nilai|kepada|ke|as|sebagai|dengan)\\b\\s+(.+)$")
-            .find(withoutMention)
-            ?: return ""
-        return match.groupValues.getOrNull(2)
-            .orEmpty()
-            .replace(Regex("\\s+"), " ")
-            .trim(' ', '-', ':')
-    }
-
-    private fun String.inferPropertyType(): String {
-        val value = lowercase()
-        return when {
-            value.contains("number") || value.contains("nombor") || value.contains("jumlah") || value.contains("harga") -> "Number"
-            value.contains("multi-select") || value.contains("multiselect") || value.contains("multi select") -> "MultiSelect"
-            value.contains("select") -> "Select"
-            value.contains("status") -> "Status"
-            value.contains("date") || value.contains("tarikh") || value.contains("deadline") || value.contains("due") -> "Date"
-            value.contains("person") || value.contains("orang") -> "Person"
-            value.contains("file") || value.contains("media") || value.contains("gambar") -> "FilesMedia"
-            value.contains("checkbox") || value.contains("check") || value.contains("tick") || value.contains("siap") -> "Checkbox"
-            value.contains("url") || value.contains("link") -> "Url"
-            value.contains("email") -> "Email"
-            value.contains("phone") || value.contains("telefon") -> "Phone"
-            value.contains("formula") || value.contains("kira") -> "Formula"
-            value.contains("relation") || value.contains("hubungan") -> "Relation"
-            value.contains("rollup") -> "Rollup"
-            value.contains("button") -> "Button"
-            value.contains("place") || value.contains("tempat") || value.contains("lokasi") -> "Place"
-            value.contains("id") -> "Id"
-            else -> "Text"
-        }
-    }
-
-    private fun String.extractBlockReference(pageTitle: String): String {
-        return removeMentionedPage(pageTitle)
-            .replace(
-                Regex(
-                    "(?i)\\b(padam|buang|hapus|delete|remove|block|heading|tajuk|todo|quote|petikan|divider|media|file|dalam|dekat|di|page|ini|sini)\\b",
-                ),
-                " ",
-            )
-            .replace(Regex("\\s+"), " ")
-            .trim(' ', '-', ':')
-    }
-
-    private fun String.splitBlockReplacement(pageTitle: String): Pair<String, String>? {
-        val cleaned = removeMentionedPage(pageTitle)
-            .replace(
-                Regex("(?i)\\b(ubah|tukar|edit|update|ganti|jadikan|block|heading|tajuk|todo|quote|petikan|divider|media|file|dalam|dekat|di|page|ini|sini)\\b"),
-                " ",
-            )
-            .replace(Regex("\\s+"), " ")
-            .trim(' ', '-', ':')
-        val parts = Regex("(?i)\\s+\\b(kepada|ke|jadi|menjadi|dengan|to|into|with)\\b\\s+")
-            .split(cleaned, limit = 2)
-        if (parts.size != 2) return null
-        val from = parts[0].trim(' ', '-', ':')
-        val to = parts[1].trim(' ', '-', ':')
-        if (from.isBlank() || to.isBlank()) return null
-        return from to to
-    }
-
-    private fun String.removeMentionedPage(pageTitle: String): String {
-        return replace("@$pageTitle", "", ignoreCase = true)
-            .replace(Regex("@[^\\s]+"), " ")
     }
 
     private suspend fun findMentionedPage(
@@ -2929,8 +2065,9 @@ private fun Throwable.toAiChatErrorMessage(): String {
 }
 
 private fun Throwable.toAiExecutionErrorMessage(): String {
-    val detail = localizedMessage?.takeIf { message -> message.isNotBlank() }
-        ?: "AI edit failed before it could update the page."
+    val root = generateSequence(this) { error -> error.cause }.last()
+    val detail = root.localizedMessage?.takeIf { message -> message.isNotBlank() }
+        ?: "AI edit failed before it could update the page. (${root.javaClass.simpleName})"
     return "Failed: $detail"
 }
 
@@ -2963,6 +2100,7 @@ data class HomeUiState(
     val aiChatError: String? = null,
     val aiChatMode: AiChatMode = AiChatMode.Planning,
     val aiModelLabel: String = "AI model",
+    val syncOverview: SyncOverview = SyncOverview(),
 )
 
 private data class HomeAiExecutionResult(

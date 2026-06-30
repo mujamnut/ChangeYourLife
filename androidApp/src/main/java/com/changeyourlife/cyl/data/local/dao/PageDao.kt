@@ -89,6 +89,21 @@ interface PageDao {
     @Query("SELECT COUNT(*) FROM pages WHERE workspaceId = :workspaceId AND deletedAt IS NULL")
     fun observePageCount(workspaceId: String): Flow<Int>
 
+    @Query(
+        """
+        SELECT COUNT(*) FROM pages
+        WHERE (syncStatus != :syncedStatus OR lastSyncedAt = 0)
+        AND syncStatus != :conflictStatus
+        """,
+    )
+    fun observePagesNeedingSyncCount(
+        syncedStatus: String = SyncStatus.Synced,
+        conflictStatus: String = SyncStatus.Conflict,
+    ): Flow<Int>
+
+    @Query("SELECT COUNT(*) FROM pages WHERE syncStatus = :conflictStatus")
+    fun observePageConflictCount(conflictStatus: String = SyncStatus.Conflict): Flow<Int>
+
     @Upsert
     suspend fun upsertPage(page: PageEntity)
 

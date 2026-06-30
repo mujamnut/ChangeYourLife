@@ -6,6 +6,7 @@ import com.changeyourlife.cyl.data.local.dao.ChatMessageDao
 import com.changeyourlife.cyl.data.local.dao.PageDao
 import com.changeyourlife.cyl.data.local.dao.PageContentDao
 import com.changeyourlife.cyl.data.local.dao.ReminderDao
+import com.changeyourlife.cyl.data.local.dao.SyncTombstoneDao
 import com.changeyourlife.cyl.data.local.dao.TaskDao
 import com.changeyourlife.cyl.data.local.dao.WorkspaceDao
 import com.changeyourlife.cyl.data.local.entity.ChatMessageEntity
@@ -13,6 +14,7 @@ import com.changeyourlife.cyl.data.local.entity.ChatSessionEntity
 import com.changeyourlife.cyl.data.local.entity.PageBlockEntity
 import com.changeyourlife.cyl.data.local.entity.PageEntity
 import com.changeyourlife.cyl.data.local.entity.ReminderEntity
+import com.changeyourlife.cyl.data.local.entity.SyncTombstoneEntity
 import com.changeyourlife.cyl.data.local.entity.PagePropertyEntity
 import com.changeyourlife.cyl.data.local.entity.PageTableCellEntity
 import com.changeyourlife.cyl.data.local.entity.PageTableColumnEntity
@@ -35,8 +37,9 @@ import com.changeyourlife.cyl.data.local.entity.WorkspaceEntity
         ReminderEntity::class,
         ChatMessageEntity::class,
         ChatSessionEntity::class,
+        SyncTombstoneEntity::class,
     ],
-    version = 7,
+    version = 8,
     exportSchema = true,
 )
 abstract class CylDatabase : RoomDatabase() {
@@ -46,4 +49,5 @@ abstract class CylDatabase : RoomDatabase() {
     abstract fun taskDao(): TaskDao
     abstract fun reminderDao(): ReminderDao
     abstract fun chatMessageDao(): ChatMessageDao
+    abstract fun syncTombstoneDao(): SyncTombstoneDao
 }

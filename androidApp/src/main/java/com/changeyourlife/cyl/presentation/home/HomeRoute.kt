@@ -87,6 +87,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.changeyourlife.cyl.domain.model.ChatSession
 import com.changeyourlife.cyl.domain.model.Page
 import com.changeyourlife.cyl.domain.model.PageBlockType
+import com.changeyourlife.cyl.domain.model.SyncOverview
 import com.changeyourlife.cyl.presentation.ai.AiChatMode
 import com.changeyourlife.cyl.presentation.ai.AiChatSheet
 import com.changeyourlife.cyl.presentation.ai.AiChatMessage
@@ -147,6 +148,7 @@ fun HomeRoute(
         onDeleteChatSession = viewModel::deleteChatSession,
         onChatHistorySearchQueryChange = viewModel::updateChatHistorySearchQuery,
         onClearChatHistorySearchQuery = viewModel::clearChatHistorySearchQuery,
+        onRetrySync = viewModel::retrySyncNow,
         onDismissChatError = viewModel::clearAiChatError,
         onLogout = {
             viewModel.logout(onLoggedOut)
@@ -198,6 +200,7 @@ private fun HomeScreen(
     onDeleteChatSession: (String) -> Unit,
     onChatHistorySearchQueryChange: (String) -> Unit,
     onClearChatHistorySearchQuery: () -> Unit,
+    onRetrySync: () -> Unit,
     onDismissChatError: () -> Unit,
     onLogout: () -> Unit,
     modifier: Modifier = Modifier,
@@ -344,8 +347,10 @@ private fun HomeScreen(
         topBar = {
             HomeHeader(
                 workspaceName = uiState.workspaceName,
+                syncOverview = uiState.syncOverview,
                 selectedTab = selectedHomeTab,
                 onSelectTab = { tab -> selectedHomeTab = tab },
+                onRetrySync = onRetrySync,
                 onOpenTrash = { selectedHomeTab = HomeTab.Trash },
                 onLogout = onLogout,
             )
@@ -608,8 +613,10 @@ private fun HomeSearchScreen(
 @Composable
 private fun HomeHeader(
     workspaceName: String,
+    syncOverview: SyncOverview,
     selectedTab: HomeTab,
     onSelectTab: (HomeTab) -> Unit,
+    onRetrySync: () -> Unit,
     onOpenTrash: () -> Unit,
     onLogout: () -> Unit,
     modifier: Modifier = Modifier,
@@ -702,6 +709,120 @@ private fun HomeHeader(
                 modifier = Modifier.weight(1f),
             )
         }
+        SyncStatusButton(
+            syncOverview = syncOverview,
+            onRetrySync = onRetrySync,
+        )
+    }
+}
+
+@Composable
+private fun SyncStatusButton(
+    syncOverview: SyncOverview,
+    onRetrySync: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var isMenuOpen by rememberSaveable { mutableStateOf(false) }
+    val statusColor = when {
+        syncOverview.hasConflict || syncOverview.hasError -> MaterialTheme.colorScheme.error
+        syncOverview.hasPending || syncOverview.isSyncing -> MaterialTheme.colorScheme.primary
+        else -> MaterialTheme.colorScheme.primary
+    }
+
+    Box(modifier = modifier) {
+        Box(
+            modifier = Modifier
+                .size(44.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .clickable { isMenuOpen = true }
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (syncOverview.isSyncing) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(18.dp),
+                    strokeWidth = 2.dp,
+                    color = statusColor,
+                )
+            } else {
+                Icon(
+                    imageVector = if (syncOverview.isClean) Icons.Rounded.CheckCircle else Icons.Rounded.Notifications,
+                    contentDescription = "Sync status",
+                    tint = statusColor,
+                    modifier = Modifier.size(22.dp),
+                )
+            }
+        }
+        DropdownMenu(
+            expanded = isMenuOpen,
+            onDismissRequest = { isMenuOpen = false },
+        ) {
+            DropdownMenuItem(
+                text = {
+                    Column {
+                        Text(
+                            text = syncOverview.statusTitle(),
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            text = syncOverview.statusDetail(),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                },
+                leadingIcon = {
+                    if (syncOverview.isSyncing) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp,
+                        )
+                    } else {
+                        Icon(
+                            imageVector = if (syncOverview.isClean) Icons.Rounded.CheckCircle else Icons.Rounded.Notifications,
+                            contentDescription = null,
+                            tint = statusColor,
+                        )
+                    }
+                },
+                onClick = {},
+            )
+            DropdownMenuItem(
+                text = { Text(text = "Retry sync") },
+                leadingIcon = {
+                    Icon(
+                        imageVector = Icons.Rounded.CheckCircle,
+                        contentDescription = null,
+                    )
+                },
+                onClick = {
+                    isMenuOpen = false
+                    onRetrySync()
+                },
+            )
+        }
+    }
+}
+
+private fun SyncOverview.statusTitle(): String {
+    return when {
+        hasConflict -> "$conflictCount sync conflict"
+        isSyncing -> "Syncing"
+        hasPending -> "$pendingCount waiting to sync"
+        hasError -> "Sync needs attention"
+        else -> "Synced"
+    }
+}
+
+private fun SyncOverview.statusDetail(): String {
+    return when {
+        hasConflict -> "Open the affected page to resolve conflict."
+        hasError -> lastErrorMessage.orEmpty()
+        hasPending -> "Changes will upload when connection is available."
+        isSyncing -> "Updating your workspace."
+        lastCompletedAt > 0L -> "All local changes are uploaded."
+        else -> "Ready."
     }
 }
 
@@ -1504,6 +1625,7 @@ private fun HomeRoutePreview() {
             onDeleteChatSession = {},
             onChatHistorySearchQueryChange = {},
             onClearChatHistorySearchQuery = {},
+            onRetrySync = {},
             onDismissChatError = {},
             onLogout = {},
         )

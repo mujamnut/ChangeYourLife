@@ -57,6 +57,16 @@ Status: in progress. Backend API asas dan Android local-first sync sudah dibuat.
 - Android ada AI executor regression test untuk pastikan add block, delete block, move table column, dan move table row guna repository granular, bukan full page save.
 - Android migration test sekarang cover upgrade penuh Room `1 -> 7` supaya legacy workspace survive dan semua current tables wujud.
 - GitHub Actions CI sudah run backend tests dengan PostgreSQL service dan Android unit/androidTest compile checks.
+- Android repository sekarang local-first untuk refresh juga: screen baca Room dahulu, kemudian refresh/push pending berjalan melalui `BackgroundSyncQueue`.
+- Login/register tidak lagi block pada full sync; token disimpan dahulu dan session sync berjalan di background.
+- App startup sekarang trigger background session sync bila token masih ada, jadi pending local changes dari run sebelum ini akan cuba dihantar selepas restart.
+- Permanent page delete sekarang ada `sync_tombstones` Room table supaya operasi delete yang gagal boleh retry selepas app restart.
+- Permanent page delete sekarang idempotent di Android: remote `404` dianggap selesai dan tombstone dibersihkan.
+- Android Room sudah naik ke version 8 untuk tombstone table dan schema export `8.json` sudah dijana.
+- Android sekarang guna WorkManager (`CylSyncWorker`) sebagai persistent retry backup untuk pending sync bila app process dibunuh atau network cuma tersedia kemudian.
+- `BackgroundSyncQueue` expose run state (`isSyncing`, last error, last completed) dan schedule WorkManager retry untuk local mutations.
+- Home top bar ada sync status icon kecil dengan pending/conflict/error summary dan `Retry sync`.
+- Sync status repository sudah gabungkan pending workspace/page/tombstone count, conflict count, dan queue run state sebagai `SyncOverview`.
 
 ### Belum Kukuh
 
@@ -65,10 +75,12 @@ Status: in progress. Backend API asas dan Android local-first sync sudah dibuat.
 - Page content JSON masih canonical; normalized projection sudah ada dan repository boleh mutate beberapa field direct, tapi editor/API belum fully pindah ke projection flow.
 - Conflict resolver sudah ada untuk whole page, belum granular per block/table row.
 - Default workspace id masih legacy local id di Android, tapi backend sekarang map sebagai client id per user.
+- WorkManager sekarang retry pending push/delete, tapi belum ada periodic pull/background refresh untuk remote changes yang dibuat dari device lain.
+- Sync error state bergantung pada queue/worker; beberapa coordinator path masih swallow network failure dan hanya kelihatan sebagai pending count.
 
 ### Next Work
 
-- Seterusnya masuk Milestone 2: AI Action Core.
+- Seterusnya masuk Milestone 2: AI Action Core. Untuk sync nanti, tambah periodic remote pull dan granular conflict resolver.
 
 ## Milestone 2: AI Action Core
 
@@ -101,18 +113,35 @@ Goal: AI faham arahan Malay/English dan execute action secara konsisten.
 - Backend schema validation sekarang reject `UPDATE_FORMULA_COLUMN` tanpa `formula`, `value`, atau `content`.
 - Android AI executor sekarang validate formula syntax asas: column reference `{Name}`, nombor, operator `+ - * /`, kurungan, dan reject self-reference.
 - Formula update sekarang boleh guna payload `formula`, `value`, atau `content`, jadi action model yang letak formula dalam `value` masih berfungsi.
+- Hidden mention context dari Android sekarang hantar page id bersama title, tetapi sanitizer tetap buang id teknikal jika model echo balik.
+- Backend chat action planner sekarang boleh pilih deterministic prompt recovery berbanding model action bila prompt jelas bercanggah, contoh row request yang model jadikan create table sahaja.
+- Backend legacy JSON recovery sekarang abaikan `null` dan internal row id supaya model reply seperti `{"page":"@Budget Tracker","action":"update","data":[...]}` jadi row action bersih.
+- Android network JSON parser sekarang coerce `null` kepada default DTO value supaya AI/backend response yang longgar tidak terus crash client parse.
+- Backend action result selector sekarang explicit dan unit-tested: prompt recovery boleh menang apabila model action cuma create table, salah isi `Task`, atau miss arahan multi-step.
+- Backend action selection sudah dipisahkan ke `AiActionPlanner`, jadi keputusan pilih model result vs deterministic prompt recovery tidak lagi bercampur dalam `AiService`.
+- Backend ada regression test khusus untuk `AiActionPlanner` supaya bug row request yang model jadikan create table atau letak arahan penuh dalam cell `Task` tidak berulang.
+- Backend schema validation sudah dipisahkan ke `AiActionSchemaValidator`, jadi supported action/required-field rule boleh diuji tanpa instantiate AI provider service.
+- Backend model reply/legacy JSON recovery sudah dipisahkan ke `AiModelActionNormalizer`, jadi `AiService` tidak lagi memegang parsing JSON model, legacy `{page, action, data}` recovery, dan sanitizer `null`/internal id.
+- Backend ada regression test khusus untuk `AiActionSchemaValidator` bagi action type normalization, unsupported action, media block tanpa URI, dan formula column tanpa formula.
+- Backend deterministic prompt recovery Malay/English sudah dipisahkan ke `AiPromptActionRecovery`, jadi `AiService` tidak lagi memegang parser arahan page/block/property/table row secara langsung.
+- Backend ada regression test khusus untuk `AiPromptActionRecovery` bagi delete semua block dan expense row Malay supaya parser boleh direfactor tanpa kehilangan behavior.
+- Android Home AI sekarang tidak lagi execute deterministic local action bila backend result kosong; `Edit` dan `Auto` hanya execute `actions` yang datang dari backend.
+- Android masih ada guard kecil untuk skip unsafe qualitative table rename, dan guard itu direkod sebagai validation issue dalam `Action details`.
+- Android AI action execution decision sudah diextract ke `AiActionExecutionPolicy`, jadi `HomeViewModel` tidak lagi pegang local fallback/recovery rule.
+- Android regression test cover policy: planning tidak execute, backend kosong tidak invent action, backend action execute, vague rename ditolak, concrete rename dibenarkan.
+- Android ada regression test untuk AI DTO JSON null coercion supaya field `title`, `targetTitle`, `cellValues`, dan `validationIssues` null tidak mematikan chat.
 
 ### Belum Kukuh
 
 - Action schema sudah ada type/required-field validation dan semantic target validation asas, tapi semantic validation masih belum lengkap untuk semua edge case.
-- AI kadang balas JSON/text tapi action tidak execute.
-- Recovery logic masih banyak dan ad hoc.
+- AI text/JSON fallback, model JSON normalizer, schema validator, planner selector, dan prompt recovery sudah dipisahkan dari `AiService`.
+- Android execution path sudah backend-only dan parser fallback lama sudah dibuang dari `HomeViewModel`, tapi `HomeViewModel` masih besar dan page AI flow belum diextract sebagai use-case penuh.
 - Belum semua action diuji untuk kombinasi multi-step yang sangat panjang dan ambiguous.
 
 ### Next Work
 
 - Tambah regression test untuk multi-step prompt yang panjang: create table + set formula + add rows + sort/filter dalam satu arahan.
-- Kurangkan recovery logic ad hoc dengan satu normalizer/action planner yang lebih explicit.
+- Extract page AI execution orchestration dari `HomeViewModel` ke use-case supaya chat/session, execution, dan metadata lebih mudah diuji end-to-end.
 
 ## Milestone 3: Editor/Page Core
 
