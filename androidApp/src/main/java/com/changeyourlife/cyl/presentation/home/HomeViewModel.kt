@@ -44,6 +44,7 @@ import com.changeyourlife.cyl.presentation.ai.AiChatActionValidationIssue
 import com.changeyourlife.cyl.presentation.ai.AiChatMode
 import com.changeyourlife.cyl.presentation.ai.AiChatMessage
 import com.changeyourlife.cyl.presentation.ai.AiChatPageLink
+import com.changeyourlife.cyl.presentation.ai.AiMarkdownTableActionRecovery
 import com.changeyourlife.cyl.presentation.ai.AiPageActionExecutor
 import com.changeyourlife.cyl.presentation.ai.toPageTableColumnFromAi
 import com.changeyourlife.cyl.presentation.ai.toRoleContentPairs
@@ -535,9 +536,19 @@ class HomeViewModel @Inject constructor(
                     val backendReply = result.reply.ifBlank {
                         "I received your message, but the AI returned an empty reply."
                     }.sanitizeAiUserVisibleText()
+                    val recoveredMarkdownActions = if (result.actions.isEmpty()) {
+                        AiMarkdownTableActionRecovery.recover(
+                            prompt = prompt,
+                            reply = result.reply,
+                            targetPageTitle = scopedTargetPage?.title,
+                        )
+                    } else {
+                        emptyList()
+                    }
+                    val proposedActions = result.actions.ifEmpty { recoveredMarkdownActions }
                     val actionDecision = AiActionExecutionPolicy.decide(
                         mode = mode,
-                        backendActions = result.actions,
+                        backendActions = proposedActions,
                     )
                     val actionsToExecute = actionDecision.executableActions
                     val actionResults = executeAiActions(
@@ -545,8 +556,10 @@ class HomeViewModel @Inject constructor(
                         scopedTargetPage = scopedTargetPage,
                         actions = actionsToExecute,
                     )
-                    val assistantReply = if (mode == AiChatMode.Planning && result.actions.isNotEmpty()) {
+                    val assistantReply = if (mode == AiChatMode.Planning && proposedActions.isNotEmpty()) {
                         "Saya nampak arahan untuk ubah app, tapi mode sekarang Planning. Tukar ke Edit atau Auto untuk apply perubahan ini."
+                    } else if (recoveredMarkdownActions.isNotEmpty()) {
+                        "Siap - saya tukar jadual itu kepada data CYL."
                     } else {
                         backendReply
                     }
@@ -560,7 +573,7 @@ class HomeViewModel @Inject constructor(
                         mode = mode.name,
                         schemaName = result.schemaName,
                         schemaVersion = result.schemaVersion,
-                        proposedActions = result.actions.map { action -> action.toMetadataItem() },
+                        proposedActions = proposedActions.map { action -> action.toMetadataItem() },
                         executedActions = actionsToExecute.map { action -> action.toMetadataItem() },
                         executionMessages = actionResults.messages,
                         validationIssues = result.validationIssues.map { issue ->

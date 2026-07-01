@@ -134,6 +134,7 @@ Goal: AI faham arahan Malay/English dan execute action secara konsisten.
 - Backend prompt recovery sekarang support Home AI `buat jadual/table/tracker ...` tanpa mention sebagai `CREATE_PAGE` dengan database table, jadi model tidak perlu jawab markdown untuk table baru.
 - Mention/context page tetap menang untuk request table; prompt seperti `buat jadual ... dalam @Page` masih jadi page-scoped `CREATE_DATABASE`, bukan page baru.
 - Android Home AI sekarang boleh treat global `CREATE_DATABASE`/`CREATE_TABLE` tanpa target sebagai create page berisi table, supaya response model lama tidak terus gagal di Home.
+- Android Home AI ada safety net untuk convert markdown table daripada model kepada CYL action bila backend pulangkan `actions` kosong untuk prompt create table yang jelas.
 - Android ada regression test untuk AI DTO JSON null coercion supaya field `title`, `targetTitle`, `cellValues`, dan `validationIssues` null tidak mematikan chat.
 
 ### Belum Kukuh
