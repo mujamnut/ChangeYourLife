@@ -93,4 +93,46 @@ class AiPromptActionRecoveryTest {
         assertEquals("Salary", action.tableRows.single()["Category"])
         assertEquals("1488", action.tableRows.single()["Budget"])
     }
+
+    @Test
+    fun recoversHomeTableRequestAsPageWithTable() {
+        val result = recovery.recoverActionFromPrompt(
+            prompt = "buat jadual penjagaan ayam",
+            pages = listOf(AiPageContext(id = "page-existing", title = "Existing")),
+        )
+
+        val action = assertNotNull(result).actions.single()
+        assertEquals("CREATE_PAGE", action.type)
+        assertEquals("Penjagaan Ayam", action.title)
+        assertEquals("Penjagaan Ayam", action.tableTitle)
+        assertEquals(listOf("Name", "Status", "Notes"), action.tableColumns.map { column -> column.name })
+    }
+
+    @Test
+    fun keepsMentionedTableRequestScopedToExistingPage() {
+        val result = recovery.recoverActionFromPrompt(
+            prompt = "buat jadual penjagaan ayam dalam @Reban Ayam",
+            pages = listOf(AiPageContext(id = "page-reban", title = "Reban Ayam")),
+        )
+
+        val action = assertNotNull(result).actions.single()
+        assertEquals("CREATE_DATABASE", action.type)
+        assertEquals("Reban Ayam", action.targetTitle)
+        assertEquals("penjagaan ayam", action.tableTitle)
+    }
+
+    @Test
+    fun recoversBudgetTrackerWithoutPageKeywordAsMonthlyExpensePage() {
+        val result = recovery.recoverActionFromPrompt(
+            prompt = "buat budget tracker bulan 7 dengan gaji 1488",
+            pages = emptyList(),
+        )
+
+        val action = assertNotNull(result).actions.single()
+        assertEquals("CREATE_PAGE", action.type)
+        assertEquals("July Monthly Expenses", action.title)
+        assertEquals("Monthly Expenses", action.tableTitle)
+        assertEquals("Salary", action.tableRows.single()["Category"])
+        assertEquals("1488", action.tableRows.single()["Budget"])
+    }
 }

@@ -365,6 +365,26 @@ class AiActionRecoveryTest {
     }
 
     @Test
+    fun chatWithActionsRecoversHomeTableRequestBeforeMarkdownAnswer() {
+        val sandboxService = AiService()
+        val result = sandboxService.chatWithActions(
+            messages = listOf(
+                ChatMessage(
+                    role = "user",
+                    content = "buat jadual penjagaan ayam",
+                ),
+            ),
+            pages = emptyList(),
+        )
+
+        val action = result.actions.single()
+        assertEquals("CREATE_PAGE", action.type)
+        assertEquals("Penjagaan Ayam", action.title)
+        assertEquals("Penjagaan Ayam", action.tableTitle)
+        assertEquals(listOf("Name", "Status", "Notes"), action.tableColumns.map { it.name })
+    }
+
+    @Test
     fun recoversMultipleMalayCommandsWithoutPuttingPromptIntoRow() {
         val result = service.recoverActionFromPrompt(
             prompt = """

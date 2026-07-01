@@ -31,7 +31,9 @@ class AiPromptActionRecovery(
     ): AiActionResult? {
         if (prompt.isBlank()) return null
         val visiblePrompt = prompt.withoutMentionContext()
-        visiblePrompt.recoverCreatePageAction()?.let { action ->
+        visiblePrompt.recoverCreatePageAction(
+            allowHomeTablePage = !prompt.hasMentionContext(),
+        )?.let { action ->
             val validation = listOf(action).validatedForActionSchema()
             return AiActionResult(
                 reply = visiblePrompt.recoveryReply(
@@ -205,6 +207,9 @@ class AiPromptActionRecovery(
     private fun String.withoutMentionContext(): String =
         substringBefore("CYL_MENTION_CONTEXT:").trim()
 
+    private fun String.hasMentionContext(): Boolean =
+        contains("CYL_MENTION_CONTEXT:", ignoreCase = true)
+
     private fun String.recoverWriteAction(targetPage: AiPageContext): AiActionItem? {
         if (!looksLikePageWriteRequest()) return null
         val content = extractWriteContent(targetPage.title).ifBlank { return null }
@@ -275,7 +280,9 @@ class AiPromptActionRecovery(
         )
     }
 
-    private fun String.recoverCreatePageAction(): AiActionItem? {
+    private fun String.recoverCreatePageAction(
+        allowHomeTablePage: Boolean,
+    ): AiActionItem? {
         val value = lowercase()
         val hasCreateIntent = listOf("buat", "buatkan", "create", "cipta", "add", "tambah").any { token ->
             value.contains(token)
@@ -283,20 +290,31 @@ class AiPromptActionRecovery(
         val hasPageIntent = listOf("page", "halaman").any { token -> value.contains(token) }
         val hasNewIntent = listOf("baru", "new").any { token -> value.contains(token) }
         val isExpensePage = looksLikeMonthlyExpensePage()
-        if (!hasCreateIntent || !hasPageIntent || (!hasNewIntent && !isExpensePage)) return null
+        val isHomeTablePage = allowHomeTablePage && looksLikeHomeTablePageRequest()
+        val isExplicitPageCreate = hasCreateIntent && hasPageIntent && (hasNewIntent || isExpensePage)
+        if (!isExplicitPageCreate && !isHomeTablePage) return null
         if (listOf("subpage", "sub page", "sub-page").any { token -> value.contains(token) }) return null
 
         val pageTitle = when {
             isExpensePage -> listOfNotNull(extractRequestedMonthName(), "Monthly Expenses").joinToString(" ")
+            isHomeTablePage -> extractHomeTablePageTitle().ifBlank { "Untitled page" }
             else -> extractCreatePageTitle().ifBlank { "Untitled page" }
         }
         val salaryAmount = extractSalaryAmount()
         return AiActionItem(
             type = "CREATE_PAGE",
             title = pageTitle,
-            tableTitle = if (isExpensePage) "Monthly Expenses" else "",
+            tableTitle = when {
+                isExpensePage -> "Monthly Expenses"
+                isHomeTablePage -> pageTitle
+                else -> ""
+            },
             tableView = "Table",
-            tableColumns = if (isExpensePage) monthlyExpenseTableColumns() else emptyList(),
+            tableColumns = when {
+                isExpensePage -> monthlyExpenseTableColumns()
+                isHomeTablePage -> pageTitle.defaultRecoveredTableColumns(value)
+                else -> emptyList()
+            },
             tableRows = if (isExpensePage && salaryAmount != null) {
                 listOf(
                     mapOf(
@@ -312,16 +330,66 @@ class AiPromptActionRecovery(
         )
     }
 
+    private fun String.looksLikeHomeTablePageRequest(): Boolean {
+        val value = lowercase()
+        val hasCreateIntent = listOf("buat", "buatkan", "create", "cipta", "add", "tambah").any { token ->
+            value.contains(token)
+        }
+        val hasTableIntent = listOf(
+            "table",
+            "database",
+            "jadual",
+            "tracker",
+            "tracking",
+            "rekod",
+            "record",
+        ).any { token -> value.contains(token) }
+        return hasCreateIntent && hasTableIntent && !referencesExistingPageTarget()
+    }
+
+    private fun String.referencesExistingPageTarget(): Boolean {
+        val value = lowercase()
+        return contains("@") ||
+            listOf(
+                "dalam page",
+                "dekat page",
+                "di page",
+                "ke page",
+                "page ini",
+                "current page",
+                "this page",
+                "sini",
+                "tersebut",
+            ).any { token -> value.contains(token) }
+    }
+
+    private fun String.extractHomeTablePageTitle(): String {
+        return removeTargetMention("")
+            .replace(
+                Regex(
+                    "(?i)\\b(tolong|please|buatkan|buat|create|cipta|add|tambah|table|database|jadual|baru|new|untuk|for|punya|dengan|with)\\b",
+                ),
+                " ",
+            )
+            .replace(Regex("\\s+"), " ")
+            .trim(' ', '-', ':', ',', '.')
+            .toReadableTitle()
+    }
+
     private fun String.looksLikeMonthlyExpensePage(): Boolean {
         val value = lowercase()
         val hasMonthly = listOf("monthly", "bulanan", "bulan").any { token -> value.contains(token) }
         val hasExpense = listOf(
             "expense",
             "expenses",
+            "budget",
+            "bajet",
             "belanja",
             "perbelanjaan",
             "pengeluaran",
             "duit",
+            "kewangan",
+            "finance",
             "spending",
         ).any { token -> value.contains(token) }
         return hasMonthly && hasExpense
@@ -394,6 +462,7 @@ class AiPromptActionRecovery(
             )
             .replace(Regex("\\s+"), " ")
             .trim(' ', '-', ':', ',', '.')
+            .toReadableTitle()
     }
 
     private fun String.recoverTableRenameAction(targetPage: AiPageContext): AiActionItem? {
@@ -685,7 +754,24 @@ class AiPromptActionRecovery(
     private fun String.looksLikeExpenseText(): Boolean {
         val value = lowercase()
         return extractMoneyAmount() != null ||
-            listOf("duit", "belanja", "expense", "expenses", "spend", "makan", "ringgit", "rm", "harga", "jumlah")
+            listOf(
+                "duit",
+                "belanja",
+                "perbelanjaan",
+                "pengeluaran",
+                "expense",
+                "expenses",
+                "budget",
+                "bajet",
+                "kewangan",
+                "finance",
+                "spend",
+                "makan",
+                "ringgit",
+                "rm",
+                "harga",
+                "jumlah",
+            )
                 .any { token -> value.contains(token) }
     }
 
@@ -1003,6 +1089,13 @@ class AiPromptActionRecovery(
             .replace(Regex("[^a-z0-9\\s]"), " ")
             .replace(Regex("\\s+"), " ")
             .trim()
+
+    private fun String.toReadableTitle(): String =
+        split(Regex("\\s+"))
+            .filter { word -> word.isNotBlank() }
+            .joinToString(" ") { word ->
+                word.lowercase().replaceFirstChar { char -> char.titlecase() }
+            }
 
     private fun String.normalizedActionType(): String =
         trim()

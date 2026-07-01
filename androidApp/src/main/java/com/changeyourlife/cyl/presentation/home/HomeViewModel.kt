@@ -629,10 +629,11 @@ class HomeViewModel @Inject constructor(
             val pageLinks = mutableListOf<AiChatPageLink>()
             actions.forEach { action ->
                 when (action.type.normalizedActionType()) {
-                    "CREATE_PAGE" -> {
-                        val pageTitle = action.title
-                            .ifBlank { action.tableTitle }
-                            .ifBlank { "Untitled page" }
+                    "CREATE_PAGE",
+                    "CREATE_DATABASE",
+                    "CREATE_TABLE",
+                    -> {
+                        val pageTitle = action.homePageTitle()
                         val created = pageRepository.createPage(
                             workspaceId = workspaceId,
                             title = pageTitle,
@@ -719,11 +720,14 @@ class HomeViewModel @Inject constructor(
     }
 
     private fun ChatAction.isHomeScopedAction(): Boolean {
-        return type.normalizedActionType() == "CREATE_PAGE"
+        val actionType = type.normalizedActionType()
+        return actionType == "CREATE_PAGE" ||
+            (actionType in setOf("CREATE_DATABASE", "CREATE_TABLE") && targetTitle.isBlank())
     }
 
     private fun ChatAction.toCreatedPageContent(): String {
-        val moduleType = requestedModuleType("CREATE_PAGE")
+        val actionType = type.normalizedActionType()
+        val moduleType = requestedModuleType(actionType)
         if (moduleType != null) return PageModuleTemplates.contentFor(moduleType)
         val blocks = buildList {
             if (tableTitle.isNotBlank() || tableColumns.isNotEmpty() || tableRows.isNotEmpty() || cellValues.isNotEmpty()) {
@@ -734,6 +738,13 @@ class HomeViewModel @Inject constructor(
             }
         }
         return PageBlockCodec.encodeDocument(PageBlockDocument(blocks = blocks))
+    }
+
+    private fun ChatAction.homePageTitle(): String {
+        return title
+            .ifBlank { tableTitle }
+            .ifBlank { content }
+            .ifBlank { "Untitled page" }
     }
 
     private fun String.normalizedActionType(): String =
