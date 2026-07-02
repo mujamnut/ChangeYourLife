@@ -92,6 +92,7 @@ enum class PageBlockType {
     Heading,
     Todo,
     Bullet,
+    Numbered,
     Quote,
     Divider,
     MediaFile,

@@ -144,6 +144,7 @@ import java.util.Locale
 import java.util.UUID
 import com.changeyourlife.cyl.domain.model.Page
 import com.changeyourlife.cyl.domain.model.PageBlock
+import com.changeyourlife.cyl.domain.model.PageBlockInsertPosition
 import com.changeyourlife.cyl.domain.model.PageBlockType
 import com.changeyourlife.cyl.domain.model.PageMediaAttachment
 import com.changeyourlife.cyl.domain.model.PageProperty
@@ -209,6 +210,8 @@ fun PageEditorRoute(
         onToggleTodo = viewModel::toggleTodoBlock,
         onAddBlock = viewModel::addBlock,
         onAddChildBlock = viewModel::addChildBlock,
+        onInsertBlockNear = viewModel::insertBlockNear,
+        onCreateLinkedChildPageFromBlock = viewModel::createLinkedChildPageFromBlock,
         onDeleteBlock = viewModel::deleteBlock,
         onMoveBlockUp = viewModel::moveBlockUp,
         onMoveBlockDown = viewModel::moveBlockDown,
@@ -239,6 +242,8 @@ fun PageEditorRoute(
         onTableRowBlockMediaRemove = viewModel::removeTableRowBlockMediaAttachment,
         onToggleTableRowTodoBlock = viewModel::toggleTableRowTodoBlock,
         onAddTableRowPageBlock = viewModel::addTableRowPageBlock,
+        onInsertTableRowPageBlockNear = viewModel::insertTableRowPageBlockNear,
+        onCreateLinkedChildPageFromTableRowBlock = viewModel::createLinkedChildPageFromTableRowBlock,
         onDeleteTableRowPageBlock = viewModel::deleteTableRowPageBlock,
         onAddProperty = viewModel::addProperty,
         onPropertyNameChange = viewModel::updatePropertyName,
@@ -281,6 +286,8 @@ private fun PageEditorScreen(
     onToggleTodo: (String) -> Unit,
     onAddBlock: (PageBlockType) -> Unit,
     onAddChildBlock: (String, PageBlockType) -> Unit,
+    onInsertBlockNear: (String, PageBlockType, PageBlockInsertPosition) -> Unit,
+    onCreateLinkedChildPageFromBlock: (String) -> Unit,
     onDeleteBlock: (String) -> Unit,
     onMoveBlockUp: (String) -> Unit,
     onMoveBlockDown: (String) -> Unit,
@@ -318,6 +325,8 @@ private fun PageEditorScreen(
     onTableRowBlockMediaRemove: (String, String, String, String) -> Unit,
     onToggleTableRowTodoBlock: (String, String, String) -> Unit,
     onAddTableRowPageBlock: (String, String, PageBlockType) -> Unit,
+    onInsertTableRowPageBlockNear: (String, String, String, PageBlockType, PageBlockInsertPosition) -> Unit,
+    onCreateLinkedChildPageFromTableRowBlock: (String, String, String) -> Unit,
     onDeleteTableRowPageBlock: (String, String, String) -> Unit,
     onAddProperty: (PagePropertyType, String) -> Unit,
     onPropertyNameChange: (String, String) -> Unit,
@@ -542,6 +551,8 @@ private fun PageEditorScreen(
                             onMoveDown = onMoveBlockDown,
                             onBlockFocused = { blockId -> activeBlockId = blockId },
                             onAddChildBlock = onAddChildBlock,
+                            onInsertBlockNear = onInsertBlockNear,
+                            onCreateLinkedChildPageFromBlock = onCreateLinkedChildPageFromBlock,
                             mentionPages = homeAiState.allPages,
                             onTableTitleChange = onTableTitleChange,
                             onTableViewChange = onTableViewChange,
@@ -570,6 +581,8 @@ private fun PageEditorScreen(
                             onTableRowBlockMediaRemove = onTableRowBlockMediaRemove,
                             onToggleTableRowTodoBlock = onToggleTableRowTodoBlock,
                             onAddTableRowPageBlock = onAddTableRowPageBlock,
+                            onInsertTableRowPageBlockNear = onInsertTableRowPageBlockNear,
+                            onCreateLinkedChildPageFromTableRowBlock = onCreateLinkedChildPageFromTableRowBlock,
                             onDeleteTableRowPageBlock = onDeleteTableRowPageBlock,
                             tableReferences = tableReferences,
                             searchTargetType = initialSearchTargetType,
@@ -1412,6 +1425,8 @@ private fun BlockEditorCard(
     onMoveDown: (String) -> Unit,
     onBlockFocused: (String) -> Unit,
     onAddChildBlock: (String, PageBlockType) -> Unit,
+    onInsertBlockNear: (String, PageBlockType, PageBlockInsertPosition) -> Unit,
+    onCreateLinkedChildPageFromBlock: (String) -> Unit,
     mentionPages: List<Page> = emptyList(),
     onTableTitleChange: (String, String) -> Unit,
     onTableViewChange: (String, PageTableView) -> Unit,
@@ -1447,6 +1462,8 @@ private fun BlockEditorCard(
     onTableRowBlockMediaRemove: (String, String, String, String) -> Unit,
     onToggleTableRowTodoBlock: (String, String, String) -> Unit,
     onAddTableRowPageBlock: (String, String, PageBlockType) -> Unit,
+    onInsertTableRowPageBlockNear: (String, String, String, PageBlockType, PageBlockInsertPosition) -> Unit,
+    onCreateLinkedChildPageFromTableRowBlock: (String, String, String) -> Unit,
     onDeleteTableRowPageBlock: (String, String, String) -> Unit,
     tableReferences: List<PageTableReference>,
     searchTargetType: String = "",
@@ -1543,6 +1560,9 @@ private fun BlockEditorCard(
                     onTextChange = { text -> onTextChange(block.id, text) },
                     onRichTextChange = { text, spans -> onRichTextChange(block.id, text, spans) },
                     onBlockTypeCommand = { type -> onBlockTypeChange(block.id, type) },
+                    onInsertBlockCommand = { type, position -> onInsertBlockNear(block.id, type, position) },
+                    onDeleteEmptyBlockCommand = { onDelete(block.id) },
+                    onCreateLinkedPageCommand = { onCreateLinkedChildPageFromBlock(block.id) },
                     onRichTextToolbarChange = onRichTextToolbarChange,
                     showInlineRichTextToolbar = false,
                     mentionPages = mentionPages,
@@ -1609,6 +1629,12 @@ private fun BlockEditorCard(
                     onAddRowPageBlock = { rowId, type ->
                         onAddTableRowPageBlock(block.id, rowId, type)
                     },
+                    onInsertRowPageBlockNear = { rowId, rowBlockId, type, position ->
+                        onInsertTableRowPageBlockNear(block.id, rowId, rowBlockId, type, position)
+                    },
+                    onCreateRowLinkedPage = { rowId, rowBlockId ->
+                        onCreateLinkedChildPageFromTableRowBlock(block.id, rowId, rowBlockId)
+                    },
                     onDeleteRowPageBlock = { rowId, rowBlockId ->
                         onDeleteTableRowPageBlock(block.id, rowId, rowBlockId)
                     },
@@ -1625,6 +1651,9 @@ private fun BlockEditorCard(
                     onRichTextToolbarChange = onRichTextToolbarChange,
                     showInlineRichTextToolbar = false,
                     onBlockTypeCommand = onBlockTypeChange,
+                    onInsertBlockCommand = onInsertBlockNear,
+                    onDeleteEmptyBlockCommand = onDelete,
+                    onCreateLinkedPageCommand = onCreateLinkedChildPageFromBlock,
                     onToggleTodo = onToggleTodo,
                     onFocusBlock = { onBlockFocused(block.id) },
                     mentionPages = mentionPages,
@@ -1639,6 +1668,25 @@ private fun BlockEditorCard(
                     onRichTextToolbarChange = onRichTextToolbarChange,
                     showInlineRichTextToolbar = false,
                     onBlockTypeCommand = onBlockTypeChange,
+                    onInsertBlockCommand = onInsertBlockNear,
+                    onDeleteEmptyBlockCommand = onDelete,
+                    onCreateLinkedPageCommand = onCreateLinkedChildPageFromBlock,
+                    onFocusBlock = { onBlockFocused(block.id) },
+                    mentionPages = mentionPages,
+                )
+                PageBlockType.Numbered -> LeadingTextBlockEditor(
+                    blockId = block.id,
+                    leadingText = "1.",
+                    block = block,
+                    onTextChange = onTextChange,
+                    onRichTextChange = onRichTextChange,
+                    onPasteBlocks = onPasteBlocks,
+                    onRichTextToolbarChange = onRichTextToolbarChange,
+                    showInlineRichTextToolbar = false,
+                    onBlockTypeCommand = onBlockTypeChange,
+                    onInsertBlockCommand = onInsertBlockNear,
+                    onDeleteEmptyBlockCommand = onDelete,
+                    onCreateLinkedPageCommand = onCreateLinkedChildPageFromBlock,
                     onFocusBlock = { onBlockFocused(block.id) },
                     mentionPages = mentionPages,
                 )
@@ -1652,6 +1700,9 @@ private fun BlockEditorCard(
                     onRichTextToolbarChange = onRichTextToolbarChange,
                     showInlineRichTextToolbar = false,
                     onBlockTypeCommand = onBlockTypeChange,
+                    onInsertBlockCommand = onInsertBlockNear,
+                    onDeleteEmptyBlockCommand = onDelete,
+                    onCreateLinkedPageCommand = onCreateLinkedChildPageFromBlock,
                     fontStyle = FontStyle.Italic,
                     onFocusBlock = { onBlockFocused(block.id) },
                     mentionPages = mentionPages,
@@ -1667,6 +1718,9 @@ private fun BlockEditorCard(
                     onRichTextToolbarChange = onRichTextToolbarChange,
                     showInlineRichTextToolbar = false,
                     onBlockTypeCommand = onBlockTypeChange,
+                    onInsertBlockCommand = onInsertBlockNear,
+                    onDeleteEmptyBlockCommand = onDelete,
+                    onCreateLinkedPageCommand = onCreateLinkedChildPageFromBlock,
                     onFocusBlock = { onBlockFocused(block.id) },
                     mentionPages = mentionPages,
                 )
@@ -1692,6 +1746,8 @@ private fun BlockEditorCard(
                                 onMoveDown = onMoveDown,
                                 onBlockFocused = onBlockFocused,
                                 onAddChildBlock = onAddChildBlock,
+                                onInsertBlockNear = onInsertBlockNear,
+                                onCreateLinkedChildPageFromBlock = onCreateLinkedChildPageFromBlock,
                                 mentionPages = mentionPages,
                                 onTableTitleChange = onTableTitleChange,
                                 onTableViewChange = onTableViewChange,
@@ -1720,6 +1776,8 @@ private fun BlockEditorCard(
                                 onTableRowBlockMediaRemove = onTableRowBlockMediaRemove,
                                 onToggleTableRowTodoBlock = onToggleTableRowTodoBlock,
                                 onAddTableRowPageBlock = onAddTableRowPageBlock,
+                                onInsertTableRowPageBlockNear = onInsertTableRowPageBlockNear,
+                                onCreateLinkedChildPageFromTableRowBlock = onCreateLinkedChildPageFromTableRowBlock,
                                 onDeleteTableRowPageBlock = onDeleteTableRowPageBlock,
                                 tableReferences = tableReferences,
                                 searchTargetType = searchTargetType,
@@ -1743,6 +1801,10 @@ private fun TextBlockEditor(
     onRichTextToolbarChange: (RichTextToolbarUiState?) -> Unit = {},
     showInlineRichTextToolbar: Boolean = true,
     onBlockTypeCommand: (String, PageBlockType) -> Unit,
+    onInsertBlockCommand: (String, PageBlockType, PageBlockInsertPosition) -> Unit,
+    onDeleteEmptyBlockCommand: (String) -> Unit,
+    onCreateLinkedPageCommand: (String) -> Unit,
+    onOpenPropertySheetCommand: (String) -> Unit = {},
     onFocusBlock: () -> Unit = {},
     mentionPages: List<Page> = emptyList(),
 ) {
@@ -1757,6 +1819,10 @@ private fun TextBlockEditor(
         modifier = Modifier.fillMaxWidth(),
         onFocusBlock = onFocusBlock,
         onBlockTypeCommand = onBlockTypeCommand,
+        onInsertBlockCommand = onInsertBlockCommand,
+        onDeleteEmptyBlockCommand = onDeleteEmptyBlockCommand,
+        onCreateLinkedPageCommand = onCreateLinkedPageCommand,
+        onOpenPropertySheetCommand = onOpenPropertySheetCommand,
         mentionPages = mentionPages,
         minLines = if (block.type == PageBlockType.Heading) 1 else 2,
         textStyle = when (block.type) {
@@ -1777,6 +1843,10 @@ private fun TodoBlockEditor(
     onRichTextToolbarChange: (RichTextToolbarUiState?) -> Unit = {},
     showInlineRichTextToolbar: Boolean = true,
     onBlockTypeCommand: (String, PageBlockType) -> Unit,
+    onInsertBlockCommand: (String, PageBlockType, PageBlockInsertPosition) -> Unit,
+    onDeleteEmptyBlockCommand: (String) -> Unit,
+    onCreateLinkedPageCommand: (String) -> Unit,
+    onOpenPropertySheetCommand: (String) -> Unit = {},
     onToggleTodo: (String) -> Unit,
     onFocusBlock: () -> Unit = {},
     mentionPages: List<Page> = emptyList(),
@@ -1800,6 +1870,10 @@ private fun TodoBlockEditor(
             modifier = Modifier.weight(1f),
             onFocusBlock = onFocusBlock,
             onBlockTypeCommand = onBlockTypeCommand,
+            onInsertBlockCommand = onInsertBlockCommand,
+            onDeleteEmptyBlockCommand = onDeleteEmptyBlockCommand,
+            onCreateLinkedPageCommand = onCreateLinkedPageCommand,
+            onOpenPropertySheetCommand = onOpenPropertySheetCommand,
             mentionPages = mentionPages,
             singleLine = true,
             placeholder = "Todo item",
@@ -1818,6 +1892,10 @@ private fun LeadingTextBlockEditor(
     onRichTextToolbarChange: (RichTextToolbarUiState?) -> Unit = {},
     showInlineRichTextToolbar: Boolean = true,
     onBlockTypeCommand: (String, PageBlockType) -> Unit,
+    onInsertBlockCommand: (String, PageBlockType, PageBlockInsertPosition) -> Unit,
+    onDeleteEmptyBlockCommand: (String) -> Unit,
+    onCreateLinkedPageCommand: (String) -> Unit,
+    onOpenPropertySheetCommand: (String) -> Unit = {},
     fontStyle: FontStyle? = null,
     onFocusBlock: () -> Unit = {},
     mentionPages: List<Page> = emptyList(),
@@ -1845,6 +1923,10 @@ private fun LeadingTextBlockEditor(
             modifier = Modifier.weight(1f),
             onFocusBlock = onFocusBlock,
             onBlockTypeCommand = onBlockTypeCommand,
+            onInsertBlockCommand = onInsertBlockCommand,
+            onDeleteEmptyBlockCommand = onDeleteEmptyBlockCommand,
+            onCreateLinkedPageCommand = onCreateLinkedPageCommand,
+            onOpenPropertySheetCommand = onOpenPropertySheetCommand,
             mentionPages = mentionPages,
             minLines = 2,
             textStyle = MaterialTheme.typography.bodyLarge.copy(
@@ -1863,6 +1945,10 @@ private fun MediaFileBlockEditor(
     onTextChange: (String) -> Unit,
     onRichTextChange: (String, List<PageTextSpan>) -> Unit,
     onBlockTypeCommand: (PageBlockType) -> Unit,
+    onInsertBlockCommand: (PageBlockType, PageBlockInsertPosition) -> Unit,
+    onDeleteEmptyBlockCommand: () -> Unit,
+    onCreateLinkedPageCommand: () -> Unit,
+    onOpenPropertySheetCommand: () -> Unit = {},
     onRichTextToolbarChange: (RichTextToolbarUiState?) -> Unit = {},
     showInlineRichTextToolbar: Boolean = true,
     mentionPages: List<Page> = emptyList(),
@@ -1936,6 +2022,10 @@ private fun MediaFileBlockEditor(
             onRichTextChange = { _, text, spans -> onRichTextChange(text, spans) },
             modifier = Modifier.fillMaxWidth(),
             onBlockTypeCommand = { _, type -> onBlockTypeCommand(type) },
+            onInsertBlockCommand = { _, type, position -> onInsertBlockCommand(type, position) },
+            onDeleteEmptyBlockCommand = { onDeleteEmptyBlockCommand() },
+            onCreateLinkedPageCommand = { onCreateLinkedPageCommand() },
+            onOpenPropertySheetCommand = { onOpenPropertySheetCommand() },
             onToolbarStateChange = onRichTextToolbarChange,
             showInlineToolbar = showInlineRichTextToolbar,
             enableMultiBlockPaste = false,
@@ -2061,6 +2151,8 @@ private fun DatabaseTableBlockEditor(
     onRowBlockMediaRemove: (String, String, String) -> Unit,
     onToggleRowTodoBlock: (String, String) -> Unit,
     onAddRowPageBlock: (String, PageBlockType) -> Unit,
+    onInsertRowPageBlockNear: (String, String, PageBlockType, PageBlockInsertPosition) -> Unit,
+    onCreateRowLinkedPage: (String, String) -> Unit,
     onDeleteRowPageBlock: (String, String) -> Unit,
     mentionPages: List<Page> = emptyList(),
     searchTargetType: String = "",
@@ -2115,6 +2207,10 @@ private fun DatabaseTableBlockEditor(
             },
             onToggleTodo = { rowBlockId -> onToggleRowTodoBlock(openRow.id, rowBlockId) },
             onAddBlock = { type -> onAddRowPageBlock(openRow.id, type) },
+            onInsertBlockNear = { rowBlockId, type, position ->
+                onInsertRowPageBlockNear(openRow.id, rowBlockId, type, position)
+            },
+            onCreateLinkedPage = { rowBlockId -> onCreateRowLinkedPage(openRow.id, rowBlockId) },
             onDeleteBlock = { rowBlockId -> onDeleteRowPageBlock(openRow.id, rowBlockId) },
             mentionPages = mentionPages,
             onDismiss = { openRowId = null },
@@ -4981,6 +5077,8 @@ private fun TableRowPageSheet(
     onBlockMediaRemove: (String, String) -> Unit,
     onToggleTodo: (String) -> Unit,
     onAddBlock: (PageBlockType) -> Unit,
+    onInsertBlockNear: (String, PageBlockType, PageBlockInsertPosition) -> Unit,
+    onCreateLinkedPage: (String) -> Unit,
     onDeleteBlock: (String) -> Unit,
     mentionPages: List<Page> = emptyList(),
     onDismiss: () -> Unit,
@@ -5112,6 +5210,12 @@ private fun TableRowPageSheet(
                                     onTextChange = { text -> onBlockTextChange(block.id, text) },
                                     onRichTextChange = { text, spans -> onBlockRichTextChange(block.id, text, spans) },
                                     onBlockTypeCommand = { type -> onBlockTypeChange(block.id, type) },
+                                    onInsertBlockCommand = { type, position ->
+                                        onInsertBlockNear(block.id, type, position)
+                                    },
+                                    onDeleteEmptyBlockCommand = { onDeleteBlock(block.id) },
+                                    onCreateLinkedPageCommand = { onCreateLinkedPage(block.id) },
+                                    onOpenPropertySheetCommand = { isNewColumnSheetOpen = true },
                                     onRichTextToolbarChange = { toolbarState ->
                                         rowRichTextToolbarState = toolbarState
                                     },
@@ -5129,6 +5233,12 @@ private fun TableRowPageSheet(
                                     },
                                     showInlineRichTextToolbar = false,
                                     onBlockTypeCommand = { _, type -> onBlockTypeChange(block.id, type) },
+                                    onInsertBlockCommand = { _, type, position ->
+                                        onInsertBlockNear(block.id, type, position)
+                                    },
+                                    onDeleteEmptyBlockCommand = { onDeleteBlock(block.id) },
+                                    onCreateLinkedPageCommand = { onCreateLinkedPage(block.id) },
+                                    onOpenPropertySheetCommand = { isNewColumnSheetOpen = true },
                                     onToggleTodo = { onToggleTodo(block.id) },
                                     mentionPages = mentionPages,
                                 )
@@ -5144,6 +5254,32 @@ private fun TableRowPageSheet(
                                     },
                                     showInlineRichTextToolbar = false,
                                     onBlockTypeCommand = { _, type -> onBlockTypeChange(block.id, type) },
+                                    onInsertBlockCommand = { _, type, position ->
+                                        onInsertBlockNear(block.id, type, position)
+                                    },
+                                    onDeleteEmptyBlockCommand = { onDeleteBlock(block.id) },
+                                    onCreateLinkedPageCommand = { onCreateLinkedPage(block.id) },
+                                    onOpenPropertySheetCommand = { isNewColumnSheetOpen = true },
+                                    mentionPages = mentionPages,
+                                )
+                                PageBlockType.Numbered -> LeadingTextBlockEditor(
+                                    blockId = block.id,
+                                    leadingText = "1.",
+                                    block = block,
+                                    onTextChange = { _, text -> onBlockTextChange(block.id, text) },
+                                    onRichTextChange = { _, text, spans -> onBlockRichTextChange(block.id, text, spans) },
+                                    onPasteBlocks = onBlockPasteBlocks,
+                                    onRichTextToolbarChange = { toolbarState ->
+                                        rowRichTextToolbarState = toolbarState
+                                    },
+                                    showInlineRichTextToolbar = false,
+                                    onBlockTypeCommand = { _, type -> onBlockTypeChange(block.id, type) },
+                                    onInsertBlockCommand = { _, type, position ->
+                                        onInsertBlockNear(block.id, type, position)
+                                    },
+                                    onDeleteEmptyBlockCommand = { onDeleteBlock(block.id) },
+                                    onCreateLinkedPageCommand = { onCreateLinkedPage(block.id) },
+                                    onOpenPropertySheetCommand = { isNewColumnSheetOpen = true },
                                     mentionPages = mentionPages,
                                 )
                                 PageBlockType.Quote -> LeadingTextBlockEditor(
@@ -5158,6 +5294,12 @@ private fun TableRowPageSheet(
                                     },
                                     showInlineRichTextToolbar = false,
                                     onBlockTypeCommand = { _, type -> onBlockTypeChange(block.id, type) },
+                                    onInsertBlockCommand = { _, type, position ->
+                                        onInsertBlockNear(block.id, type, position)
+                                    },
+                                    onDeleteEmptyBlockCommand = { onDeleteBlock(block.id) },
+                                    onCreateLinkedPageCommand = { onCreateLinkedPage(block.id) },
+                                    onOpenPropertySheetCommand = { isNewColumnSheetOpen = true },
                                     fontStyle = FontStyle.Italic,
                                     mentionPages = mentionPages,
                                 )
@@ -5175,6 +5317,12 @@ private fun TableRowPageSheet(
                                     },
                                     showInlineRichTextToolbar = false,
                                     onBlockTypeCommand = { _, type -> onBlockTypeChange(block.id, type) },
+                                    onInsertBlockCommand = { _, type, position ->
+                                        onInsertBlockNear(block.id, type, position)
+                                    },
+                                    onDeleteEmptyBlockCommand = { onDeleteBlock(block.id) },
+                                    onCreateLinkedPageCommand = { onCreateLinkedPage(block.id) },
+                                    onOpenPropertySheetCommand = { isNewColumnSheetOpen = true },
                                     mentionPages = mentionPages,
                                 )
                             }
@@ -5673,30 +5821,6 @@ private fun CenterMessage(
     }
 }
 
-private val PageBlockType.label: String
-    get() = when (this) {
-        PageBlockType.Text -> "Text"
-        PageBlockType.Heading -> "Heading"
-        PageBlockType.Todo -> "Todo"
-        PageBlockType.Bullet -> "Bullet"
-        PageBlockType.Quote -> "Quote"
-        PageBlockType.Divider -> "Divider"
-        PageBlockType.MediaFile -> "Media/file"
-        PageBlockType.DatabaseTable -> "Table"
-    }
-
-private val PageBlockType.placeholder: String
-    get() = when (this) {
-        PageBlockType.Text -> "Write something"
-        PageBlockType.Heading -> "Heading"
-        PageBlockType.Todo -> "Todo item"
-        PageBlockType.Bullet -> "Bullet item"
-        PageBlockType.Quote -> "Quote"
-        PageBlockType.Divider -> ""
-        PageBlockType.MediaFile -> "Caption"
-        PageBlockType.DatabaseTable -> ""
-    }
-
 private fun List<PageBlock>.containsBlockId(blockId: String): Boolean {
     return any { block ->
         block.id == blockId || block.children.containsBlockId(blockId)
@@ -5743,37 +5867,6 @@ private const val SearchTargetPageTitle = "title"
 private const val SearchTargetBlock = "block"
 private const val SearchTargetRow = "row"
 private const val SearchTargetRowBlock = "row_block"
-
-private val PageBlockType.isPlainEditorBlock: Boolean
-    get() = when (this) {
-        PageBlockType.Text,
-        PageBlockType.Heading,
-        PageBlockType.Todo,
-        PageBlockType.Bullet,
-        PageBlockType.Quote,
-        PageBlockType.Divider,
-        PageBlockType.MediaFile,
-        -> true
-        PageBlockType.DatabaseTable -> false
-    }
-
-private data class BlockTypeOption(
-    val type: PageBlockType,
-    val label: String,
-) {
-    companion object {
-        val entries = listOf(
-            BlockTypeOption(PageBlockType.Text, "Text"),
-            BlockTypeOption(PageBlockType.Heading, "Heading"),
-            BlockTypeOption(PageBlockType.Todo, "Todo"),
-            BlockTypeOption(PageBlockType.Bullet, "Bullet"),
-            BlockTypeOption(PageBlockType.Quote, "Quote"),
-            BlockTypeOption(PageBlockType.Divider, "Divider"),
-            BlockTypeOption(PageBlockType.MediaFile, "Media/file"),
-            BlockTypeOption(PageBlockType.DatabaseTable, "Table"),
-        )
-    }
-}
 
 private fun Uri.toPageMediaAttachment(context: Context): PageMediaAttachment? {
     val resolver = context.contentResolver
@@ -6768,6 +6861,7 @@ private fun PageEditorScreenPreview() {
             onBlockMediaRemove = { _, _ -> },
             onToggleTodo = {},
             onAddBlock = {},
+            onInsertBlockNear = { _, _, _ -> },
             onDeleteBlock = {},
             onMoveBlockUp = {},
             onMoveBlockDown = {},
@@ -6798,6 +6892,7 @@ private fun PageEditorScreenPreview() {
             onTableRowBlockMediaRemove = { _, _, _, _ -> },
             onToggleTableRowTodoBlock = { _, _, _ -> },
             onAddTableRowPageBlock = { _, _, _ -> },
+            onInsertTableRowPageBlockNear = { _, _, _, _, _ -> },
             onDeleteTableRowPageBlock = { _, _, _ -> },
             onAddProperty = { _, _ -> },
             onPropertyNameChange = { _, _ -> },
@@ -6805,6 +6900,8 @@ private fun PageEditorScreenPreview() {
             onDeleteProperty = {},
             onAddChildBlock = { _, _ -> },
             onCreateChildPage = {},
+            onCreateLinkedChildPageFromBlock = {},
+            onCreateLinkedChildPageFromTableRowBlock = { _, _, _ -> },
             onUndoEditorChange = {},
             onKeepLocalConflict = {},
             onUseRemoteConflict = {},

@@ -663,6 +663,7 @@ class HomeViewModel @Inject constructor(
             "heading" -> PageBlockType.Heading
             "todo" -> PageBlockType.Todo
             "bullet" -> PageBlockType.Bullet
+            "numbered", "number", "ordered", "numberedlist", "orderedlist" -> PageBlockType.Numbered
             "quote" -> PageBlockType.Quote
             "divider" -> PageBlockType.Divider
             "media", "file", "image", "video", "attachment" -> PageBlockType.MediaFile

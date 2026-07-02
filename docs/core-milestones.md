@@ -198,6 +198,7 @@ Goal: page editor stabil, senang maintain, dan tidak semua logic duduk dalam UI.
 - Table view: table/list/board/calendar/gallery/timeline/dashboard.
 - Rich text span engine sudah dipisahkan ke domain layer (`RichTextSpanEngine`) dengan unit test untuk normalize, toggle style, dan text-change adjustment.
 - Rich text Compose editor/toolbar sudah dipisahkan dari `PageEditorRoute` ke `CylRichTextBlockEditor`, jadi route tidak lagi simpan implementation rich text editor.
+- Block type UI metadata (`label`, `placeholder`, plain-editor flag, dan option list) sudah dipindahkan keluar dari `PageEditorRoute` ke `PageBlockTypeUi`.
 - `EditorCommand` + `EditorCommandExecutor` sudah ditambah di domain layer untuk update text, tukar block type, toggle todo, insert block, dan delete block.
 - `EditorCommand` sekarang support move block dengan unit test untuk undo, nested sibling, dan boundary no-op.
 - `EditorCommand` sekarang support replace media attachments dan replace table dengan undo.
@@ -216,21 +217,30 @@ Goal: page editor stabil, senang maintain, dan tidak semua logic duduk dalam UI.
 - Helper AI lama dalam `PageEditorViewModel` sudah dibuang; page AI sekarang ikut shared chat/action flow yang sama dengan Home.
 - `EditorCommandHistory` sudah ditambah untuk command-based undo/redo stack; `PageEditorViewModel` sekarang guna command undo untuk block-level, table metadata/column/row/cell, page property, dan row-page block command mutation, dengan snapshot fallback untuk path lama.
 - `EditorCommand` sekarang support page property insert/replace/delete dengan undo yang restore posisi asal.
-- Slash command parser sudah ada dengan unit test; rich text editor sekarang boleh guna `/text`, `/heading`, `/todo`, `/bullet`, `/quote`, `/divider`, `/media`, dan `/table` untuk tukar block type.
+- Slash command parser sudah ada dengan unit test; rich text editor sekarang boleh guna `/text`, `/heading`, `/todo`, `/bullet`, `/numbered`, `/quote`, `/divider`, `/media`, dan `/table` untuk tukar block type.
 - Table row page blocks juga sudah ada type-change path supaya slash command di dalam row page boleh mengubah row block, bukan hanya block biasa.
+- Slash command sekarang support `/above` dan `/below` untuk insert text block sebagai sibling atas/bawah block semasa, termasuk dalam row-page table content, melalui `PageMutationUseCase.insertBlockNear` dan `PageBlockInsertPosition`.
+- Slash command sekarang support `/page` untuk create linked child page dan inject mention span ke block semasa, termasuk row-page block dalam table.
+- Slash command sekarang support `/property` secara context-aware dalam row-page table content untuk buka sheet tambah property/table column.
+- Slash command UI sudah diextract ke `RichTextSlashCommandBar`, jadi editor core tidak lagi simpan command palette rendering inline.
 - `PageTextSpan` sekarang support metadata rich text lebih luas: `code`, `linkUrl`, `color`, `highlight`, `mentionPageId`, dan `mentionLabel` dengan default backward-compatible.
 - `RichTextSpanEngine` sekarang boleh normalize/merge metadata span, apply link/color/highlight/mention, dan toggle `Code`; ada regression test untuk metadata span, mention span, dan code format.
-- `RichTextController` sudah ditambah untuk urus `TextFieldValue`, selection, active format, format toggle, link apply, mention replacement, dan text-change span adjustment di luar `PageEditorRoute`.
-- `RichTextMentionParser` dan `RichTextPasteParser` sudah ada; paste parser boleh pecah markdown ringan kepada block text/heading/bullet/todo/quote serta inline `**bold**` dan `[link](url)`.
+- `RichTextController` sudah ditambah untuk urus `TextFieldValue`, selection, active format, pending typing-style, format toggle, link apply, mention replacement, dan text-change span adjustment di luar `PageEditorRoute`.
+- `RichTextMentionParser` dan `RichTextPasteParser` sudah ada; paste parser boleh pecah markdown ringan kepada block text/heading/bullet/numbered/todo/quote serta inline `**bold**` dan `[link](url)`.
+- `RichTextPasteParser` sekarang ada light HTML import untuk heading, paragraph, line break, list item, bold tag, dan basic entity decode sebelum masuk canonical CYL block/span format.
+- `RichTextBlockInteractionParser` sudah ada untuk split Enter dalam block kepada sibling block dengan span selepas cursor dipindahkan ke block baru.
 - Blank text block sekarang boleh menerima multi-line paste dan auto-create beberapa page block melalui editor mutation path, bukan simpan semua sebagai satu text block.
 - Row-page blank text block dalam table sekarang juga boleh menerima multi-line paste dan auto-create beberapa row-content block, dengan table undo path yang restore state asal.
 - Multi-line paste dalam non-empty selection sekarang preserve text/spans sebelum dan selepas selection, kemudian sisip block tambahan dari markdown ringan.
 - Table cell text/number sengaja flatten multi-line paste kepada satu line supaya grid tidak pecah; media caption sengaja tidak auto-create block baru.
 - Block editor sekarang ada mention picker `@Page` yang guna senarai page sebenar dan simpan mention sebagai span metadata, bukan teks kosong sahaja.
 - Rich text toolbar sekarang support `B/I/U/S`, `Code`, link, text color swatch, dan highlight swatch dengan canonical spans yang tidak hilang bila user sambung menaip.
+- Rich text toolbar sekarang simpan pending typing-style untuk collapsed selection, termasuk format, link, color, dan highlight; teks baru yang ditaip selepas toggle akan dapat style tersebut.
 - Page editor utama sekarang render rich text toolbar di bottom keyboard area melalui shared toolbar state, bukan toolbar duplicate dalam setiap block page utama.
 - Row-page dan media caption sekarang guna toolbar host yang sama, manakala table cell kekal guna typed cell editor tanpa rich toolbar.
-- Prefix Notion-like asas sudah ada: `- ` jadi bullet, `[] ` / `[ ] ` jadi todo, `# ` jadi heading, dan `> ` jadi quote.
+- Prefix Notion-like asas sudah ada: `- ` jadi bullet, `1. ` jadi numbered, `[] ` / `[ ] ` jadi todo, `# ` jadi heading, dan `> ` jadi quote.
+- Empty block delete path sudah disambung melalui Backspace key event ke command delete block; ini cover hardware/back key event path dalam Compose.
+- `PageBlockType.Numbered` sudah jadi block type sebenar dengan render/editor path page block, row-page block, slash command, AI alias, markdown paste, dan auto-prefix.
 - AI action schema/backend prompt/Android executor sekarang support `FORMAT_BLOCK_TEXT` untuk format block text kepada bold/italic/underline/strikethrough/code/link/color/highlight, dengan undo command dan regression test.
 
 ### Belum Kukuh
@@ -240,17 +250,19 @@ Goal: page editor stabil, senang maintain, dan tidak semua logic duduk dalam UI.
 - Mutation logic bercampur dengan UI state.
 - Undo command sudah cover editor mutation utama dan basic AI action undo sudah tersambung dari chat action details dengan reactive `undoState`.
 - Mention trigger dalam block editor dan row-page block sudah ada, tapi belum jadi command palette/editor-level penuh untuk semua context seperti table cell dan reusable picker global.
-- Slash command masih basic; belum ada command untuk create linked page, insert block below/above, atau command yang bergantung kepada context table/property.
-- Paste policy utama sudah settle untuk page block, row-page block, table cell, dan media caption; import HTML/clipboard rich content sebenar belum dibuat.
+- Slash command sudah cover type-change, insert sibling, linked page, dan context row-page property; belum ada full reusable command palette untuk semua editor surface.
+- Paste policy utama sudah settle untuk page block, row-page block, table cell, media caption, markdown ringan, dan light HTML; rich clipboard fidelity sebenar seperti styled spans dari Android clipboard/HTML penuh belum dibuat.
+- Backspace empty block sudah ada melalui key event, tetapi focus previous selepas delete masih perlu dibuat lebih reliable untuk soft keyboard path.
 
 ### Next Work
 
 - Terus kecilkan baki table/helper manual dalam `PageEditorViewModel` dengan memindahkan lookup, queue save, dan granular save orchestration ke use-case kecil.
 - Jadikan UI hanya render state dan dispatch event.
 - Tambah unit test untuk mutation tanpa Compose UI.
-- Extract slash command UI kepada editor command palette yang boleh juga dipakai untuk mention picker.
+- Extract slash command UI kepada editor command palette reusable yang boleh juga dipakai untuk mention picker dan semua context command.
 - Sambungkan slash command dan mention picker kepada editor event, bukan ad hoc UI state.
 - Tambah import/export rich clipboard sebenar kemudian jika perlu, tanpa ubah canonical CYL block/span format.
+- Tambah focus controller supaya Enter/Backspace boleh pindah focus ke block sibling dengan konsisten selepas split/delete.
 
 ## Milestone 4: Typed Table Core
 

@@ -7,6 +7,7 @@ import com.changeyourlife.cyl.domain.model.EditorCommand
 import com.changeyourlife.cyl.domain.model.Page
 import com.changeyourlife.cyl.domain.model.PageBlock
 import com.changeyourlife.cyl.domain.model.PageBlockDocument
+import com.changeyourlife.cyl.domain.model.PageBlockInsertPosition
 import com.changeyourlife.cyl.domain.model.PageBlockType
 import com.changeyourlife.cyl.domain.model.PageContentCodec
 import com.changeyourlife.cyl.domain.model.PageMediaAttachment
@@ -796,6 +797,63 @@ class PageEditorViewModel @Inject constructor(
         }
     }
 
+    fun insertBlockNear(
+        blockId: String,
+        type: PageBlockType,
+        position: PageBlockInsertPosition,
+    ) {
+        val currentUiState = uiState.value
+        if (currentUiState.page != null) {
+            val document = currentDocument(currentUiState) ?: return
+            val result = pageMutationUseCase.insertBlockNear(
+                document = document,
+                blockId = blockId,
+                type = type,
+                position = position,
+            )
+            if (!result.changed) return
+            recordEditorUndo(result.applied)
+            val insertCommand = result.insertCommand
+            queueGranularDocumentUpdate(
+                previous = document,
+                fallback = result.document,
+                recordUndo = false,
+            ) {
+                pageRepository.addBlock(
+                    pageId = pageId,
+                    block = result.block,
+                    parentBlockId = insertCommand?.parentBlockId.orEmpty(),
+                    targetIndex = insertCommand?.index,
+                )
+            }
+        }
+    }
+
+    fun createLinkedChildPageFromBlock(blockId: String) {
+        viewModelScope.launch {
+            val parent = pageRepository.getPage(pageId) ?: return@launch
+            val childPage = pageRepository.createPage(
+                workspaceId = parent.workspaceId,
+                title = "Untitled page",
+                content = PageBlockCodec.encode(listOf(PageBlockCodec.newBlock(PageBlockType.Text))),
+                parentPageId = parent.id,
+            )
+            val currentUiState = uiState.value
+            val document = currentDocument(currentUiState) ?: return@launch
+            val block = document.findBlock(blockId) ?: return@launch
+            val linked = block.withAppendedPageMention(childPage)
+            val result = pageMutationUseCase.updateBlockRichText(
+                document = document,
+                blockId = blockId,
+                text = linked.text,
+                spans = linked.richTextSpans,
+            )
+            if (!result.changed) return@launch
+            recordEditorUndo(result.applied)
+            queueBlockPatchPendingDocument(blockId, result.document)
+        }
+    }
+
     fun deleteBlock(blockId: String) {
         val currentUiState = uiState.value
         if (currentUiState.page != null) {
@@ -1496,6 +1554,67 @@ class PageEditorViewModel @Inject constructor(
         }
     }
 
+    fun insertTableRowPageBlockNear(
+        tableBlockId: String,
+        rowId: String,
+        rowBlockId: String,
+        type: PageBlockType,
+        position: PageBlockInsertPosition,
+    ) {
+        val currentUiState = uiState.value
+        if (currentUiState.page != null) {
+            val document = currentDocument(currentUiState) ?: return
+            val newBlock = PageBlockCodec.newBlock(type)
+            val result = document.replaceTableRowBlocksWithCommand(tableBlockId, rowId) { rowDocument ->
+                pageMutationUseCase.insertBlockNearCommand(
+                    document = rowDocument,
+                    blockId = rowBlockId,
+                    block = newBlock,
+                    position = position,
+                ) ?: EditorCommand.InsertBlock(block = newBlock)
+            }
+            if (!result.changed) return
+            queueTableRowPatchPendingDocument(
+                tableBlockId = tableBlockId,
+                rowId = rowId,
+                updated = result.document,
+            )
+        }
+    }
+
+    fun createLinkedChildPageFromTableRowBlock(
+        tableBlockId: String,
+        rowId: String,
+        rowBlockId: String,
+    ) {
+        viewModelScope.launch {
+            val parent = pageRepository.getPage(pageId) ?: return@launch
+            val childPage = pageRepository.createPage(
+                workspaceId = parent.workspaceId,
+                title = "Untitled page",
+                content = PageBlockCodec.encode(listOf(PageBlockCodec.newBlock(PageBlockType.Text))),
+                parentPageId = parent.id,
+            )
+            val currentUiState = uiState.value
+            val document = currentDocument(currentUiState) ?: return@launch
+            val result = document.replaceTableRowBlocksWithCommand(tableBlockId, rowId) { rowDocument ->
+                val block = rowDocument.findBlock(rowBlockId)
+                val linked = block?.withAppendedPageMention(childPage)
+                EditorCommand.UpdateBlockText(
+                    blockId = rowBlockId,
+                    text = linked?.text.orEmpty(),
+                    richTextSpans = linked?.richTextSpans.orEmpty(),
+                )
+            }
+            if (!result.changed) return@launch
+            queueTableRowPatchPendingDocument(
+                tableBlockId = tableBlockId,
+                rowId = rowId,
+                updated = result.document,
+            )
+        }
+    }
+
     fun deleteTableRowPageBlock(
         tableBlockId: String,
         rowId: String,
@@ -1740,6 +1859,22 @@ private sealed interface PendingGranularDocumentSave {
         val tableBlockId: String,
         val row: PageTableRow,
     ) : PendingGranularDocumentSave
+}
+
+private fun PageBlock.withAppendedPageMention(page: Page): PageBlock {
+    val label = "@${page.title.ifBlank { "Untitled page" }}"
+    val prefix = if (text.isBlank() || text.endsWith(" ")) "" else " "
+    val start = text.length + prefix.length
+    val nextText = "$text$prefix$label "
+    return copy(
+        text = nextText,
+        richTextSpans = richTextSpans + PageTextSpan(
+            start = start,
+            end = start + label.length,
+            mentionPageId = page.id,
+            mentionLabel = label,
+        ),
+    )
 }
 
 data class PageEditorUiState(

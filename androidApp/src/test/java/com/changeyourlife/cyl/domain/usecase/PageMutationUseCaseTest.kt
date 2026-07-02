@@ -3,6 +3,7 @@ package com.changeyourlife.cyl.domain.usecase
 import com.changeyourlife.cyl.domain.model.EditorCommand
 import com.changeyourlife.cyl.domain.model.PageBlock
 import com.changeyourlife.cyl.domain.model.PageBlockDocument
+import com.changeyourlife.cyl.domain.model.PageBlockInsertPosition
 import com.changeyourlife.cyl.domain.model.PageBlockType
 import com.changeyourlife.cyl.domain.model.PageProperty
 import com.changeyourlife.cyl.domain.model.PagePropertyType
@@ -85,6 +86,41 @@ class PageMutationUseCaseTest {
         assertEquals(PageBlockType.Heading, result.document.blocks[1].type)
         assertEquals("Title", result.document.blocks[1].text)
         assertEquals(PageBlockType.Bullet, result.document.blocks[2].type)
+    }
+
+    @Test
+    fun insertBlockNearKeepsSiblingLevelAndUndoCommand() {
+        val document = PageBlockDocument(
+            blocks = listOf(
+                PageBlock(
+                    id = "parent",
+                    type = PageBlockType.Text,
+                    children = listOf(
+                        PageBlock(id = "first-child", type = PageBlockType.Text),
+                        PageBlock(id = "target-child", type = PageBlockType.Text),
+                    ),
+                ),
+                PageBlock(id = "after-parent", type = PageBlockType.Text),
+            ),
+        )
+
+        val result = useCase.insertBlockNear(
+            document = document,
+            blockId = "target-child",
+            type = PageBlockType.Todo,
+            position = PageBlockInsertPosition.Below,
+        )
+        val undo = applyUseCase(result.document, requireNotNull(result.applied.result.undoCommand))
+
+        assertTrue(result.changed)
+        assertEquals(PageBlockType.Todo, result.block.type)
+        assertEquals("parent", result.insertCommand?.parentBlockId)
+        assertEquals(2, result.insertCommand?.index)
+        assertEquals(
+            listOf("first-child", "target-child", result.block.id),
+            result.document.blocks.first().children.map { block -> block.id },
+        )
+        assertEquals(document, undo.document)
     }
 
     @Test

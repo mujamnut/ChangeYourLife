@@ -44,6 +44,65 @@ class RichTextControllerTest {
     }
 
     @Test
+    fun controllerKeepsPendingTypingFormatForInsertedText() {
+        val controller = RichTextController(
+            RichTextEditorState(
+                blockId = "block-1",
+                value = TextFieldValue("Hello ", selection = TextRange(6)),
+            ),
+        )
+
+        controller.toggleBold()
+        val state = controller.updateText(TextFieldValue("Hello world", selection = TextRange(11)))
+
+        assertTrue(RichTextFormat.Bold in state.activeFormats)
+        assertEquals(listOf(PageTextSpan(start = 6, end = 11, bold = true)), state.spans)
+    }
+
+    @Test
+    fun controllerKeepsPendingTypingStyleForInsertedText() {
+        val controller = RichTextController(
+            RichTextEditorState(
+                blockId = "block-1",
+                value = TextFieldValue("Hello ", selection = TextRange(6)),
+            ),
+        )
+
+        controller.applyColor("#1565C0")
+        controller.applyHighlight("#FFF59D")
+        controller.applyLink("https://example.test")
+        val state = controller.updateText(TextFieldValue("Hello world", selection = TextRange(11)))
+
+        assertEquals(
+            listOf(
+                PageTextSpan(
+                    start = 6,
+                    end = 11,
+                    linkUrl = "https://example.test",
+                    color = "#1565C0",
+                    highlight = "#FFF59D",
+                ),
+            ),
+            state.spans,
+        )
+    }
+
+    @Test
+    fun controllerPreservesSpansWhenOnlySelectionChanges() {
+        val controller = RichTextController(
+            RichTextEditorState(
+                blockId = "block-1",
+                value = TextFieldValue("Hello", selection = TextRange(0, 5)),
+                spans = listOf(PageTextSpan(start = 0, end = 5, bold = true)),
+            ),
+        )
+
+        val state = controller.updateText(TextFieldValue("Hello", selection = TextRange(5)))
+
+        assertEquals(listOf(PageTextSpan(start = 0, end = 5, bold = true)), state.spans)
+    }
+
+    @Test
     fun mentionParserDetectsMentionAfterWhitespaceOnly() {
         assertEquals(
             RichTextMentionQuery(start = 5, end = 12, query = "Budget"),
@@ -87,6 +146,7 @@ class RichTextControllerTest {
             """
             # Plan
             - **Food**
+            1. Rent
             [ ] Pay bill
             See [Budget](https://budget.test)
             """.trimIndent(),
@@ -97,11 +157,40 @@ class RichTextControllerTest {
         assertEquals(PageBlockType.Bullet, blocks[1].type)
         assertEquals("Food", blocks[1].text)
         assertEquals(listOf(PageTextSpan(start = 0, end = 4, bold = true)), blocks[1].spans)
-        assertEquals(PageBlockType.Todo, blocks[2].type)
-        assertEquals("Pay bill", blocks[2].text)
-        assertEquals(PageBlockType.Text, blocks[3].type)
-        assertEquals("See Budget", blocks[3].text)
-        assertEquals(listOf(PageTextSpan(start = 4, end = 10, linkUrl = "https://budget.test")), blocks[3].spans)
+        assertEquals(PageBlockType.Numbered, blocks[2].type)
+        assertEquals("Rent", blocks[2].text)
+        assertEquals(PageBlockType.Todo, blocks[3].type)
+        assertEquals("Pay bill", blocks[3].text)
+        assertEquals(PageBlockType.Text, blocks[4].type)
+        assertEquals("See Budget", blocks[4].text)
+        assertEquals(listOf(PageTextSpan(start = 4, end = 10, linkUrl = "https://budget.test")), blocks[4].spans)
+    }
+
+    @Test
+    fun pasteParserConvertsLightHtmlToBlocks() {
+        val blocks = RichTextPasteParser.parse("<h1>Plan</h1><ul><li><strong>Food</strong></li></ul>")
+
+        assertEquals(PageBlockType.Heading, blocks[0].type)
+        assertEquals("Plan", blocks[0].text)
+        assertEquals(PageBlockType.Bullet, blocks[1].type)
+        assertEquals("Food", blocks[1].text)
+        assertEquals(listOf(PageTextSpan(start = 0, end = 4, bold = true)), blocks[1].spans)
+    }
+
+    @Test
+    fun enterSplitCreatesSiblingBlocksAndKeepsAfterTextSpans() {
+        val blocks = RichTextBlockInteractionParser.splitEnterChange(
+            currentType = PageBlockType.Text,
+            currentIsChecked = false,
+            oldValue = TextFieldValue("Hello world", selection = TextRange(5)),
+            newValue = TextFieldValue("Hello\n world", selection = TextRange(6)),
+            oldSpans = listOf(PageTextSpan(start = 6, end = 11, italic = true)),
+        )
+
+        assertEquals(2, blocks.size)
+        assertEquals("Hello", blocks[0].text)
+        assertEquals(" world", blocks[1].text)
+        assertEquals(listOf(PageTextSpan(start = 1, end = 6, italic = true)), blocks[1].spans)
     }
 
     @Test

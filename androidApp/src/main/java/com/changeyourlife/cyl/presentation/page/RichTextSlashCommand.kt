@@ -1,6 +1,7 @@
 package com.changeyourlife.cyl.presentation.page
 
 import com.changeyourlife.cyl.domain.model.PageBlockType
+import com.changeyourlife.cyl.domain.model.PageBlockInsertPosition
 
 data class RichTextSlashQuery(
     val start: Int,
@@ -11,59 +12,106 @@ data class RichTextSlashQuery(
 data class RichTextSlashCommand(
     val label: String,
     val hint: String,
-    val type: PageBlockType,
+    val action: RichTextSlashAction,
     val aliases: List<String>,
 )
+
+sealed interface RichTextSlashAction {
+    data class ChangeType(val type: PageBlockType) : RichTextSlashAction
+    data class InsertBlock(
+        val type: PageBlockType,
+        val position: PageBlockInsertPosition,
+    ) : RichTextSlashAction
+
+    data object CreateLinkedPage : RichTextSlashAction
+    data object OpenPropertySheet : RichTextSlashAction
+}
 
 object RichTextSlashCommandParser {
     val commands: List<RichTextSlashCommand> = listOf(
         RichTextSlashCommand(
             label = "Text",
             hint = "Plain block",
-            type = PageBlockType.Text,
+            action = RichTextSlashAction.ChangeType(PageBlockType.Text),
             aliases = listOf("text", "plain", "paragraph", "p"),
         ),
         RichTextSlashCommand(
             label = "Heading",
             hint = "Large title",
-            type = PageBlockType.Heading,
+            action = RichTextSlashAction.ChangeType(PageBlockType.Heading),
             aliases = listOf("heading", "head", "title", "h1"),
         ),
         RichTextSlashCommand(
             label = "Todo",
             hint = "Checkbox",
-            type = PageBlockType.Todo,
+            action = RichTextSlashAction.ChangeType(PageBlockType.Todo),
             aliases = listOf("todo", "task", "checkbox", "check"),
         ),
         RichTextSlashCommand(
             label = "Bullet",
             hint = "List item",
-            type = PageBlockType.Bullet,
+            action = RichTextSlashAction.ChangeType(PageBlockType.Bullet),
             aliases = listOf("bullet", "list", "ul"),
+        ),
+        RichTextSlashCommand(
+            label = "Numbered",
+            hint = "Ordered list",
+            action = RichTextSlashAction.ChangeType(PageBlockType.Numbered),
+            aliases = listOf("numbered", "number", "ordered", "ol", "numberedlist"),
         ),
         RichTextSlashCommand(
             label = "Quote",
             hint = "Callout text",
-            type = PageBlockType.Quote,
+            action = RichTextSlashAction.ChangeType(PageBlockType.Quote),
             aliases = listOf("quote", "blockquote"),
         ),
         RichTextSlashCommand(
             label = "Divider",
             hint = "Separator",
-            type = PageBlockType.Divider,
+            action = RichTextSlashAction.ChangeType(PageBlockType.Divider),
             aliases = listOf("divider", "line", "hr"),
         ),
         RichTextSlashCommand(
             label = "Media",
             hint = "File or image",
-            type = PageBlockType.MediaFile,
+            action = RichTextSlashAction.ChangeType(PageBlockType.MediaFile),
             aliases = listOf("media", "file", "image", "photo"),
         ),
         RichTextSlashCommand(
             label = "Table",
             hint = "Database table",
-            type = PageBlockType.DatabaseTable,
+            action = RichTextSlashAction.ChangeType(PageBlockType.DatabaseTable),
             aliases = listOf("table", "database", "db"),
+        ),
+        RichTextSlashCommand(
+            label = "Page",
+            hint = "Linked page",
+            action = RichTextSlashAction.CreateLinkedPage,
+            aliases = listOf("page", "subpage", "linkedpage"),
+        ),
+        RichTextSlashCommand(
+            label = "Property",
+            hint = "Add table property",
+            action = RichTextSlashAction.OpenPropertySheet,
+            aliases = listOf("property", "prop", "column", "field"),
+        ),
+        RichTextSlashCommand(
+            label = "Text above",
+            hint = "Insert before",
+            action = RichTextSlashAction.InsertBlock(
+                type = PageBlockType.Text,
+                position = PageBlockInsertPosition.Above,
+            ),
+            aliases = listOf("above", "insertabove", "textabove", "before"),
+        ),
+        RichTextSlashCommand(
+            label = "Text below",
+            hint = "Insert after",
+            action = RichTextSlashAction.InsertBlock(
+                type = PageBlockType.Text,
+                position = PageBlockInsertPosition.Below,
+            ),
+            aliases = listOf("below", "insertbelow", "textbelow", "after", "insert"),
         ),
     )
 

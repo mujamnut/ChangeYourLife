@@ -3,6 +3,7 @@ package com.changeyourlife.cyl.domain.usecase
 import com.changeyourlife.cyl.domain.model.EditorCommand
 import com.changeyourlife.cyl.domain.model.PageBlock
 import com.changeyourlife.cyl.domain.model.PageBlockDocument
+import com.changeyourlife.cyl.domain.model.PageBlockInsertPosition
 import com.changeyourlife.cyl.domain.model.PageBlockType
 import com.changeyourlife.cyl.domain.model.PageContentCodec
 import com.changeyourlife.cyl.domain.model.PageMediaAttachment
@@ -99,16 +100,60 @@ class PageMutationUseCase(
         parentBlockId: String? = null,
     ): BlockMutationResult {
         val block = PageContentCodec.newBlock(type)
+        val command = EditorCommand.InsertBlock(
+            block = block,
+            parentBlockId = parentBlockId,
+        )
         val applied = applyEditorCommandUseCase(
             document = document,
-            command = EditorCommand.InsertBlock(
-                block = block,
-                parentBlockId = parentBlockId,
-            ),
+            command = command,
         )
         return BlockMutationResult(
             applied = applied,
             block = block,
+            insertCommand = command,
+        )
+    }
+
+    fun insertBlockNear(
+        document: PageBlockDocument,
+        blockId: String,
+        type: PageBlockType,
+        position: PageBlockInsertPosition,
+    ): BlockMutationResult {
+        val block = PageContentCodec.newBlock(type)
+        val command = insertBlockNearCommand(
+            document = document,
+            blockId = blockId,
+            block = block,
+            position = position,
+        ) ?: EditorCommand.InsertBlock(block = block)
+        val applied = applyEditorCommandUseCase(
+            document = document,
+            command = command,
+        )
+        return BlockMutationResult(
+            applied = applied,
+            block = block,
+            insertCommand = command,
+        )
+    }
+
+    fun insertBlockNearCommand(
+        document: PageBlockDocument,
+        blockId: String,
+        block: PageBlock,
+        position: PageBlockInsertPosition,
+    ): EditorCommand.InsertBlock? {
+        val location = document.blocks.findBlockLocation(blockId) ?: return null
+        val targetIndex = when (position) {
+            PageBlockInsertPosition.Above -> location.index
+            PageBlockInsertPosition.Below -> location.index + 1
+        }
+        return EditorCommand.InsertBlock(
+            block = block,
+            parentBlockId = location.parentBlockId,
+            index = targetIndex,
         )
     }
 
@@ -268,6 +313,7 @@ data class PageMutationResult(
 data class BlockMutationResult(
     val applied: AppliedEditorCommand,
     val block: PageBlock,
+    val insertCommand: EditorCommand.InsertBlock? = null,
 ) {
     val document: PageBlockDocument
         get() = applied.document
@@ -318,6 +364,24 @@ private data class ReplaceBlocksResult(
     val blocks: List<PageBlock>,
     val changed: Boolean,
 )
+
+private data class BlockLocation(
+    val parentBlockId: String?,
+    val index: Int,
+)
+
+private fun List<PageBlock>.findBlockLocation(
+    blockId: String,
+    parentBlockId: String? = null,
+): BlockLocation? {
+    forEachIndexed { index, block ->
+        if (block.id == blockId) {
+            return BlockLocation(parentBlockId = parentBlockId, index = index)
+        }
+        block.children.findBlockLocation(blockId, parentBlockId = block.id)?.let { return it }
+    }
+    return null
+}
 
 private fun List<PageBlock>.replaceBlockWithBlocks(
     blockId: String,

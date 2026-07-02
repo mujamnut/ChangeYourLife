@@ -2406,6 +2406,7 @@ private fun String.toPageBlockType(): PageBlockType {
         "heading", "title", "h1" -> PageBlockType.Heading
         "todo", "task", "checkbox", "checklist" -> PageBlockType.Todo
         "bullet", "list", "bulletedlist" -> PageBlockType.Bullet
+        "numbered", "number", "ordered", "orderedlist", "numberedlist", "ol" -> PageBlockType.Numbered
         "quote" -> PageBlockType.Quote
         "divider", "line" -> PageBlockType.Divider
         "media", "file", "files", "image", "photo", "video", "attachment", "attachments", "mediafile" -> PageBlockType.MediaFile
@@ -2421,6 +2422,7 @@ private fun String.toPageBlockTypeOrNull(): PageBlockType? {
         "heading", "title", "h1" -> PageBlockType.Heading
         "todo", "task", "checkbox", "checklist" -> PageBlockType.Todo
         "bullet", "list", "bulletedlist" -> PageBlockType.Bullet
+        "numbered", "number", "ordered", "orderedlist", "numberedlist", "ol" -> PageBlockType.Numbered
         "quote" -> PageBlockType.Quote
         "divider", "line" -> PageBlockType.Divider
         "media", "file", "files", "image", "photo", "video", "attachment", "attachments", "mediafile" -> PageBlockType.MediaFile

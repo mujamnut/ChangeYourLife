@@ -30,6 +30,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextRange
@@ -43,6 +48,7 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import com.changeyourlife.cyl.domain.model.Page
 import com.changeyourlife.cyl.domain.model.PageBlock
+import com.changeyourlife.cyl.domain.model.PageBlockInsertPosition
 import com.changeyourlife.cyl.domain.model.PageBlockType
 import com.changeyourlife.cyl.domain.model.PageTextSpan
 import com.changeyourlife.cyl.domain.model.RichTextFormat
@@ -52,6 +58,10 @@ import com.changeyourlife.cyl.domain.model.hasAnyStyle
 data class RichTextToolbarUiState(
     val value: TextFieldValue,
     val spans: List<PageTextSpan>,
+    val activeFormats: RichTextFormatSet,
+    val typingLinkUrl: String = "",
+    val typingColor: String = "",
+    val typingHighlight: String = "",
     val onToggle: (RichTextFormat) -> Unit,
     val onApplyLink: () -> Unit,
     val onApplyColor: (String) -> Unit,
@@ -66,6 +76,10 @@ fun RichTextToolbarHost(
     RichTextToolbar(
         value = state.value,
         spans = state.spans,
+        activeFormats = state.activeFormats,
+        typingLinkUrl = state.typingLinkUrl,
+        typingColor = state.typingColor,
+        typingHighlight = state.typingHighlight,
         onToggle = state.onToggle,
         onApplyLink = state.onApplyLink,
         onApplyColor = state.onApplyColor,
@@ -84,6 +98,10 @@ fun CylRichTextBlockEditor(
     modifier: Modifier = Modifier,
     onFocusBlock: () -> Unit = {},
     onBlockTypeCommand: (String, PageBlockType) -> Unit = { _, _ -> },
+    onInsertBlockCommand: (String, PageBlockType, PageBlockInsertPosition) -> Unit = { _, _, _ -> },
+    onDeleteEmptyBlockCommand: (String) -> Unit = {},
+    onCreateLinkedPageCommand: (String) -> Unit = {},
+    onOpenPropertySheetCommand: (String) -> Unit = {},
     onToolbarStateChange: (RichTextToolbarUiState?) -> Unit = {},
     showInlineToolbar: Boolean = true,
     enableMultiBlockPaste: Boolean = true,
@@ -101,6 +119,18 @@ fun CylRichTextBlockEditor(
     }
     var currentSpans by remember(block.id) {
         mutableStateOf(RichTextSpanEngine.normalize(block.richTextSpans, block.text))
+    }
+    var typingFormats by remember(block.id) {
+        mutableStateOf(RichTextFormatSet())
+    }
+    var typingLinkUrl by remember(block.id) {
+        mutableStateOf("")
+    }
+    var typingColor by remember(block.id) {
+        mutableStateOf("")
+    }
+    var typingHighlight by remember(block.id) {
+        mutableStateOf("")
     }
     var isLinkEditorVisible by remember(block.id) {
         mutableStateOf(false)
@@ -147,9 +177,30 @@ fun CylRichTextBlockEditor(
         }
     }
 
+    fun commitState(nextState: RichTextEditorState, notifyChange: Boolean = true) {
+        val normalized = RichTextSpanEngine.normalize(nextState.spans, nextState.value.text)
+        currentSpans = normalized
+        typingFormats = nextState.typingFormats
+        typingLinkUrl = nextState.typingLinkUrl
+        typingColor = nextState.typingColor
+        typingHighlight = nextState.typingHighlight
+        fieldValue = TextFieldValue(
+            annotatedString = buildRichTextAnnotatedString(nextState.value.text, normalized),
+            selection = nextState.value.selection.coerceInText(nextState.value.text),
+            composition = nextState.value.composition,
+        )
+        if (notifyChange) {
+            onRichTextChange(blockId, nextState.value.text, normalized)
+        }
+    }
+
     fun commitSpans(nextText: String, nextSpans: List<PageTextSpan>, selection: TextRange = fieldValue.selection) {
         val normalized = RichTextSpanEngine.normalize(nextSpans, nextText)
         currentSpans = normalized
+        typingFormats = RichTextFormatSet()
+        typingLinkUrl = ""
+        typingColor = ""
+        typingHighlight = ""
         fieldValue = TextFieldValue(
             annotatedString = buildRichTextAnnotatedString(nextText, normalized),
             selection = selection.coerceInText(nextText),
@@ -158,16 +209,23 @@ fun CylRichTextBlockEditor(
     }
 
     fun toggleFormat(format: RichTextFormat) {
-        val range = fieldValue.effectiveFormatRange()
-        if (range.min == range.max) return
-        val nextSpans = RichTextSpanEngine.toggleFormat(
-            spans = currentSpans,
-            format = format,
-            start = range.min,
-            end = range.max,
-            textLength = fieldValue.text.length,
+        val nextState = RichTextController(
+            RichTextEditorState(
+                blockId = blockId,
+                value = fieldValue,
+                spans = currentSpans,
+                typingFormats = typingFormats,
+                typingLinkUrl = typingLinkUrl,
+                typingColor = typingColor,
+                typingHighlight = typingHighlight,
+                isFocused = true,
+            ),
+        ).toggleFormat(format)
+        val changedSpans = nextState.spans != currentSpans || nextState.value.text != fieldValue.text
+        commitState(
+            nextState = nextState,
+            notifyChange = changedSpans,
         )
-        commitSpans(fieldValue.text, nextSpans)
     }
 
     fun showLinkEditor() {
@@ -182,33 +240,37 @@ fun CylRichTextBlockEditor(
     }
 
     fun applyColor(color: String) {
-        val range = fieldValue.effectiveFormatRange()
-        if (range.min == range.max) return
-        commitSpans(
-            fieldValue.text,
-            RichTextSpanEngine.applyColor(
+        val nextState = RichTextController(
+            RichTextEditorState(
+                blockId = blockId,
+                value = fieldValue,
                 spans = currentSpans,
-                start = range.min,
-                end = range.max,
-                textLength = fieldValue.text.length,
-                color = color,
+                typingFormats = typingFormats,
+                typingLinkUrl = typingLinkUrl,
+                typingColor = typingColor,
+                typingHighlight = typingHighlight,
+                isFocused = true,
             ),
-        )
+        ).applyColor(color)
+        val changedSpans = nextState.spans != currentSpans || nextState.value.text != fieldValue.text
+        commitState(nextState, notifyChange = changedSpans)
     }
 
     fun applyHighlight(highlight: String) {
-        val range = fieldValue.effectiveFormatRange()
-        if (range.min == range.max) return
-        commitSpans(
-            fieldValue.text,
-            RichTextSpanEngine.applyHighlight(
+        val nextState = RichTextController(
+            RichTextEditorState(
+                blockId = blockId,
+                value = fieldValue,
                 spans = currentSpans,
-                start = range.min,
-                end = range.max,
-                textLength = fieldValue.text.length,
-                highlight = highlight,
+                typingFormats = typingFormats,
+                typingLinkUrl = typingLinkUrl,
+                typingColor = typingColor,
+                typingHighlight = typingHighlight,
+                isFocused = true,
             ),
-        )
+        ).applyHighlight(highlight)
+        val changedSpans = nextState.spans != currentSpans || nextState.value.text != fieldValue.text
+        commitState(nextState, notifyChange = changedSpans)
     }
 
     LaunchedEffect(block.text, block.richTextSpans) {
@@ -225,13 +287,28 @@ fun CylRichTextBlockEditor(
     val toolbarState = RichTextToolbarUiState(
         value = fieldValue,
         spans = currentSpans,
+        activeFormats = RichTextController(
+            RichTextEditorState(
+                blockId = blockId,
+                value = fieldValue,
+                spans = currentSpans,
+                typingFormats = typingFormats,
+                typingLinkUrl = typingLinkUrl,
+                typingColor = typingColor,
+                typingHighlight = typingHighlight,
+                isFocused = isFocused,
+            ),
+        ).state.activeFormats,
+        typingLinkUrl = typingLinkUrl,
+        typingColor = typingColor,
+        typingHighlight = typingHighlight,
         onToggle = ::toggleFormat,
         onApplyLink = ::showLinkEditor,
         onApplyColor = ::applyColor,
         onApplyHighlight = ::applyHighlight,
     )
 
-    LaunchedEffect(isFocused, fieldValue, currentSpans) {
+    LaunchedEffect(isFocused, fieldValue, currentSpans, typingFormats, typingLinkUrl, typingColor, typingHighlight) {
         onToolbarStateChange(if (isFocused) toolbarState else null)
     }
 
@@ -246,6 +323,21 @@ fun CylRichTextBlockEditor(
         OutlinedTextField(
             value = fieldValue,
             onValueChange = { incoming ->
+                val enterBlocks = if (enableMultiBlockPaste) {
+                    RichTextBlockInteractionParser.splitEnterChange(
+                        currentType = block.type,
+                        currentIsChecked = block.isChecked,
+                        oldValue = fieldValue,
+                        newValue = incoming,
+                        oldSpans = currentSpans,
+                    )
+                } else {
+                    emptyList()
+                }
+                if (enterBlocks.size > 1) {
+                    onPasteBlocks(blockId, enterBlocks)
+                    return@OutlinedTextField
+                }
                 val pasteBlocks = if (enableMultiBlockPaste) {
                     RichTextPasteParser.mergeTextChangeIntoBlocks(
                         currentType = block.type,
@@ -267,26 +359,39 @@ fun CylRichTextBlockEditor(
                     onBlockTypeCommand(blockId, autoType)
                     return@OutlinedTextField
                 }
-                val nextSpans = if (incoming.text == fieldValue.text) {
-                    currentSpans
-                } else {
-                    RichTextSpanEngine.adjustForTextChange(
-                        spans = currentSpans,
-                        oldText = fieldValue.text,
-                        newText = incoming.text,
-                    )
-                }.let { spans -> RichTextSpanEngine.normalize(spans, incoming.text) }
                 val nextValue = TextFieldValue(
-                    annotatedString = buildRichTextAnnotatedString(incoming.text, nextSpans),
+                    text = incoming.text,
                     selection = incoming.selection.coerceInText(incoming.text),
                     composition = incoming.composition,
                 )
-                fieldValue = nextValue
-                currentSpans = nextSpans
-                onRichTextChange(blockId, nextValue.text, nextSpans)
+                val nextState = RichTextController(
+                    RichTextEditorState(
+                        blockId = blockId,
+                        value = fieldValue,
+                        spans = currentSpans,
+                        typingFormats = typingFormats,
+                        typingLinkUrl = typingLinkUrl,
+                        typingColor = typingColor,
+                        typingHighlight = typingHighlight,
+                        isFocused = isFocused,
+                    ),
+                ).updateText(nextValue)
+                commitState(nextState)
             },
             modifier = Modifier
                 .fillMaxWidth()
+                .onPreviewKeyEvent { event ->
+                    if (
+                        event.type == KeyEventType.KeyDown &&
+                        event.key == Key.Backspace &&
+                        fieldValue.text.isEmpty()
+                    ) {
+                        onDeleteEmptyBlockCommand(blockId)
+                        true
+                    } else {
+                        false
+                    }
+                }
                 .onFocusChanged { focusState ->
                     isFocused = focusState.hasFocus
                     if (focusState.hasFocus) onFocusBlock()
@@ -326,7 +431,7 @@ fun CylRichTextBlockEditor(
                     },
                 )
             } else if (slashQuery != null && slashCommands.isNotEmpty()) {
-                SlashCommandBar(
+                RichTextSlashCommandBar(
                     commands = slashCommands,
                     onSelect = { command ->
                         val oldText = fieldValue.text
@@ -339,7 +444,20 @@ fun CylRichTextBlockEditor(
                             newText = nextText,
                         )
                         commitSpans(nextText, nextSpans, TextRange(nextText.length))
-                        onBlockTypeCommand(blockId, command.type)
+                        when (val action = command.action) {
+                            is RichTextSlashAction.ChangeType -> {
+                                onBlockTypeCommand(blockId, action.type)
+                            }
+                            is RichTextSlashAction.InsertBlock -> {
+                                onInsertBlockCommand(blockId, action.type, action.position)
+                            }
+                            RichTextSlashAction.CreateLinkedPage -> {
+                                onCreateLinkedPageCommand(blockId)
+                            }
+                            RichTextSlashAction.OpenPropertySheet -> {
+                                onOpenPropertySheetCommand(blockId)
+                            }
+                        }
                     },
                 )
             }
@@ -348,17 +466,21 @@ fun CylRichTextBlockEditor(
                     url = linkUrl,
                     onUrlChange = { linkUrl = it },
                     onApply = {
-                        val range = fieldValue.effectiveFormatRange()
-                        if (range.min != range.max) {
-                            val nextSpans = RichTextSpanEngine.applyLink(
+                        val nextState = RichTextController(
+                            RichTextEditorState(
+                                blockId = blockId,
+                                value = fieldValue,
                                 spans = currentSpans,
-                                start = range.min,
-                                end = range.max,
-                                textLength = fieldValue.text.length,
-                                url = linkUrl,
-                            )
-                            commitSpans(fieldValue.text, nextSpans)
-                        }
+                                typingFormats = typingFormats,
+                                typingLinkUrl = typingLinkUrl,
+                                typingColor = typingColor,
+                                typingHighlight = typingHighlight,
+                                isFocused = true,
+                            ),
+                        ).applyLink(linkUrl)
+                        val changedSpans = nextState.spans != currentSpans ||
+                            nextState.value.text != fieldValue.text
+                        commitState(nextState, notifyChange = changedSpans)
                         isLinkEditorVisible = false
                     },
                     onDismiss = { isLinkEditorVisible = false },
@@ -367,34 +489,6 @@ fun CylRichTextBlockEditor(
             if (showInlineToolbar) {
                 RichTextToolbarHost(state = toolbarState)
             }
-        }
-    }
-}
-
-@Composable
-private fun SlashCommandBar(
-    commands: List<RichTextSlashCommand>,
-    onSelect: (RichTextSlashCommand) -> Unit,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        commands.forEach { command ->
-            FilterChip(
-                selected = false,
-                onClick = { onSelect(command) },
-                label = {
-                    Text(
-                        text = "${command.label} · ${command.hint}",
-                        style = MaterialTheme.typography.labelMedium,
-                    )
-                },
-                modifier = Modifier.padding(vertical = 2.dp),
-            )
         }
     }
 }
@@ -474,6 +568,10 @@ private fun RichTextLinkEditor(
 private fun RichTextToolbar(
     value: TextFieldValue,
     spans: List<PageTextSpan>,
+    activeFormats: RichTextFormatSet,
+    typingLinkUrl: String,
+    typingColor: String,
+    typingHighlight: String,
     onToggle: (RichTextFormat) -> Unit,
     onApplyLink: () -> Unit,
     onApplyColor: (String) -> Unit,
@@ -492,31 +590,38 @@ private fun RichTextToolbar(
         RichTextFormat.entries.forEach { format ->
             RichTextFormatButton(
                 label = format.label,
-                selected = hasRange &&
-                    RichTextSpanEngine.hasFormat(spans, format, range.min, range.max),
-                enabled = hasRange,
+                selected = format in activeFormats,
+                enabled = true,
                 onClick = { onToggle(format) },
             )
         }
         RichTextActionButton(
             label = "Link",
-            enabled = hasRange,
+            enabled = true,
             onClick = onApplyLink,
         )
         RichTextSwatchButton(
             color = Color(0xFF1565C0),
-            selected = hasRange && spans.any { span ->
-                span.start <= range.min && span.end >= range.max && span.color == "#1565C0"
+            selected = if (hasRange) {
+                spans.any { span ->
+                    span.start <= range.min && span.end >= range.max && span.color == "#1565C0"
+                }
+            } else {
+                typingColor == "#1565C0"
             },
-            enabled = hasRange,
+            enabled = true,
             onClick = { onApplyColor("#1565C0") },
         )
         RichTextSwatchButton(
             color = Color(0xFFFFF59D),
-            selected = hasRange && spans.any { span ->
-                span.start <= range.min && span.end >= range.max && span.highlight == "#FFF59D"
+            selected = if (hasRange) {
+                spans.any { span ->
+                    span.start <= range.min && span.end >= range.max && span.highlight == "#FFF59D"
+                }
+            } else {
+                typingHighlight == "#FFF59D"
             },
-            enabled = hasRange,
+            enabled = true,
             onClick = { onApplyHighlight("#FFF59D") },
         )
     }
@@ -669,6 +774,7 @@ private fun PageTextSpan.toSpanStyle(): SpanStyle {
 private fun String.toAutoBlockTypeOrNull(): PageBlockType? {
     return when (this) {
         "- " -> PageBlockType.Bullet
+        "1. " -> PageBlockType.Numbered
         "[] ", "[ ] " -> PageBlockType.Todo
         "# " -> PageBlockType.Heading
         "> " -> PageBlockType.Quote

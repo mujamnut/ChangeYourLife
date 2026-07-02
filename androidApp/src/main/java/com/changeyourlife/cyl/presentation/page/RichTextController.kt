@@ -18,6 +18,10 @@ data class RichTextEditorState(
     val value: TextFieldValue,
     val spans: List<PageTextSpan> = emptyList(),
     val activeFormats: RichTextFormatSet = RichTextFormatSet(),
+    val typingFormats: RichTextFormatSet = RichTextFormatSet(),
+    val typingLinkUrl: String = "",
+    val typingColor: String = "",
+    val typingHighlight: String = "",
     val isFocused: Boolean = false,
 )
 
@@ -36,19 +40,24 @@ class RichTextController(
         newValue: TextFieldValue,
         incomingSpans: List<PageTextSpan> = emptyList(),
     ): RichTextEditorState {
-        val nextSpans = if (
-            newValue.text == state.value.text ||
-            incomingSpans.isNotEmpty() ||
-            state.spans.isEmpty()
-        ) {
-            incomingSpans
-        } else {
-            RichTextSpanEngine.adjustForTextChange(
+        val adjustedSpans = when {
+            newValue.text == state.value.text -> state.spans
+            incomingSpans.isNotEmpty() -> incomingSpans
+            state.spans.isEmpty() -> emptyList()
+            else -> RichTextSpanEngine.adjustForTextChange(
                 spans = state.spans,
                 oldText = state.value.text,
                 newText = newValue.text,
             )
         }
+        val nextSpans = adjustedSpans.withTypingFormats(
+            oldText = state.value.text,
+            newText = newValue.text,
+            formats = state.typingFormats.formats,
+            linkUrl = state.typingLinkUrl,
+            color = state.typingColor,
+            highlight = state.typingHighlight,
+        )
         state = state.copy(
             value = newValue.copy(selection = newValue.selection.coerceInText(newValue.text)),
             spans = RichTextSpanEngine.normalize(nextSpans, newValue.text),
@@ -67,6 +76,13 @@ class RichTextController(
     fun toggleCode(): RichTextEditorState = toggleFormat(RichTextFormat.Code)
 
     fun toggleFormat(format: RichTextFormat): RichTextEditorState {
+        if (state.value.selection.start == state.value.selection.end) {
+            val nextTypingFormats = state.typingFormats.formats.toMutableSet().apply {
+                if (format in this) remove(format) else add(format)
+            }
+            state = state.copy(typingFormats = RichTextFormatSet(nextTypingFormats)).withActiveFormats()
+            return state
+        }
         val range = state.value.effectiveFormatRange()
         if (range.min == range.max) return state
         state = state.copy(
@@ -83,7 +99,10 @@ class RichTextController(
 
     fun applyLink(url: String): RichTextEditorState {
         val range = state.value.effectiveFormatRange()
-        if (range.min == range.max) return state
+        if (range.min == range.max) {
+            state = state.copy(typingLinkUrl = url.trim()).withActiveFormats()
+            return state
+        }
         state = state.copy(
             spans = RichTextSpanEngine.applyLink(
                 spans = state.spans,
@@ -98,7 +117,10 @@ class RichTextController(
 
     fun applyColor(color: String): RichTextEditorState {
         val range = state.value.effectiveFormatRange()
-        if (range.min == range.max) return state
+        if (range.min == range.max) {
+            state = state.copy(typingColor = color).withActiveFormats()
+            return state
+        }
         state = state.copy(
             spans = RichTextSpanEngine.applyColor(
                 spans = state.spans,
@@ -113,7 +135,10 @@ class RichTextController(
 
     fun applyHighlight(highlight: String): RichTextEditorState {
         val range = state.value.effectiveFormatRange()
-        if (range.min == range.max) return state
+        if (range.min == range.max) {
+            state = state.copy(typingHighlight = highlight).withActiveFormats()
+            return state
+        }
         state = state.copy(
             spans = RichTextSpanEngine.applyHighlight(
                 spans = state.spans,
@@ -165,12 +190,49 @@ class RichTextController(
     }
 
     private fun RichTextEditorState.withActiveFormats(): RichTextEditorState {
+        if (value.selection.start == value.selection.end && typingFormats.formats.isNotEmpty()) {
+            return copy(activeFormats = typingFormats)
+        }
         val range = value.effectiveFormatRange()
         val active = RichTextFormat.entries.filterTo(mutableSetOf()) { format ->
             range.min != range.max &&
                 RichTextSpanEngine.hasFormat(spans, format, range.min, range.max)
         }
         return copy(activeFormats = RichTextFormatSet(active))
+    }
+
+    private fun List<PageTextSpan>.withTypingFormats(
+        oldText: String,
+        newText: String,
+        formats: Set<RichTextFormat>,
+        linkUrl: String,
+        color: String,
+        highlight: String,
+    ): List<PageTextSpan> {
+        if (
+            formats.isEmpty() &&
+            linkUrl.isBlank() &&
+            color.isBlank() &&
+            highlight.isBlank()
+        ) {
+            return this
+        }
+        if (oldText == newText) return this
+        val insertedRange = insertedRangeOrNull(oldText, newText) ?: return this
+        if (insertedRange.min == insertedRange.max) return this
+        val typingSpan = PageTextSpan(
+            start = insertedRange.min,
+            end = insertedRange.max,
+            bold = RichTextFormat.Bold in formats,
+            italic = RichTextFormat.Italic in formats,
+            underline = RichTextFormat.Underline in formats,
+            strikethrough = RichTextFormat.Strikethrough in formats,
+            code = RichTextFormat.Code in formats,
+            linkUrl = linkUrl,
+            color = color,
+            highlight = highlight,
+        )
+        return RichTextSpanEngine.normalize(this + typingSpan, newText)
     }
 }
 
@@ -265,6 +327,7 @@ object RichTextPasteParser {
 
     fun parse(rawText: String): List<RichTextPasteBlock> {
         return rawText
+            .toLightMarkdownFromHtml()
             .replace("\r\n", "\n")
             .split('\n')
             .mapNotNull { line -> line.toPasteBlockOrNull() }
@@ -286,6 +349,7 @@ object RichTextPasteParser {
             trimmed.startsWith("[x] ", ignoreCase = true) -> Triple(PageBlockType.Todo, trimmed.substring(4), true)
             trimmed.startsWith("[ ] ") -> Triple(PageBlockType.Todo, trimmed.substring(4), false)
             trimmed.startsWith("[] ") -> Triple(PageBlockType.Todo, trimmed.substring(3), false)
+            trimmed.isNumberedListLine() -> Triple(PageBlockType.Numbered, trimmed.substringAfterNumberedMarker(), false)
             trimmed.startsWith("- ") -> Triple(PageBlockType.Bullet, trimmed.removePrefix("- "), false)
             trimmed.startsWith("> ") -> Triple(PageBlockType.Quote, trimmed.removePrefix("> "), false)
             else -> Triple(PageBlockType.Text, this, false)
@@ -434,6 +498,37 @@ object RichTextPasteParser {
     }
 }
 
+object RichTextBlockInteractionParser {
+    fun splitEnterChange(
+        currentType: PageBlockType,
+        currentIsChecked: Boolean,
+        oldValue: TextFieldValue,
+        newValue: TextFieldValue,
+        oldSpans: List<PageTextSpan>,
+    ): List<RichTextPasteBlock> {
+        val inserted = insertedTextOrNull(oldValue.text, newValue.text) ?: return emptyList()
+        if (inserted != "\n") return emptyList()
+        val range = changedRange(oldValue.text, newValue.text).coerceInText(oldValue.text)
+        val beforeText = oldValue.text.substring(0, range.min)
+        val afterText = oldValue.text.substring(range.max)
+        val nextType = currentType.continuedBlockTypeAfterEnter()
+        return listOf(
+            RichTextPasteBlock(
+                type = currentType,
+                text = beforeText,
+                spans = oldSpans.clipBefore(range.min),
+                isChecked = currentIsChecked,
+            ),
+            RichTextPasteBlock(
+                type = nextType,
+                text = afterText,
+                spans = oldSpans.clipAfter(rangeEnd = range.max, newOffset = 0),
+                isChecked = false,
+            ),
+        )
+    }
+}
+
 internal fun TextFieldValue.effectiveFormatRange(): TextRange {
     val start = selection.min.coerceIn(0, text.length)
     val end = selection.max.coerceIn(0, text.length)
@@ -453,3 +548,121 @@ internal fun TextFieldValue.effectiveFormatRange(): TextRange {
 
 internal fun TextRange.coerceInText(text: String): TextRange =
     TextRange(start.coerceIn(0, text.length), end.coerceIn(0, text.length))
+
+private fun PageBlockType.continuedBlockTypeAfterEnter(): PageBlockType {
+    return when (this) {
+        PageBlockType.Bullet,
+        PageBlockType.Numbered,
+        PageBlockType.Todo,
+        PageBlockType.Quote,
+        -> this
+        PageBlockType.Text,
+        PageBlockType.Heading,
+        PageBlockType.Divider,
+        PageBlockType.MediaFile,
+        PageBlockType.DatabaseTable,
+        -> PageBlockType.Text
+    }
+}
+
+private fun String.isNumberedListLine(): Boolean {
+    val dotIndex = indexOf(". ")
+    if (dotIndex <= 0) return false
+    return substring(0, dotIndex).all { char -> char.isDigit() }
+}
+
+private fun String.substringAfterNumberedMarker(): String {
+    return substringAfter(". ").trimStart()
+}
+
+private fun String.toLightMarkdownFromHtml(): String {
+    if (!contains('<') || !contains('>')) return this
+    return replace(Regex("(?is)<h[1-6][^>]*>"), "# ")
+        .replace(Regex("(?is)</h[1-6]>"), "\n")
+        .replace(Regex("(?is)<li[^>]*>"), "- ")
+        .replace(Regex("(?is)</li>"), "\n")
+        .replace(Regex("(?is)<br\\s*/?>"), "\n")
+        .replace(Regex("(?is)</p>"), "\n")
+        .replace(Regex("(?is)<p[^>]*>"), "")
+        .replace(Regex("(?is)<strong[^>]*>|<b[^>]*>"), "**")
+        .replace(Regex("(?is)</strong>|</b>"), "**")
+        .replace(Regex("(?is)<[^>]+>"), "")
+        .replace("&nbsp;", " ")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .trim()
+}
+
+private fun insertedRangeOrNull(
+    oldText: String,
+    newText: String,
+): TextRange? {
+    val inserted = insertedTextOrNull(oldText, newText) ?: return null
+    val range = changedRange(oldText, newText)
+    return TextRange(range.min, range.min + inserted.length)
+}
+
+private fun insertedTextOrNull(
+    oldText: String,
+    newText: String,
+): String? {
+    if (oldText == newText) return null
+    val range = changedRange(oldText, newText)
+    val insertedEnd = newText.length - (oldText.length - range.max)
+    if (insertedEnd < range.min) return null
+    return newText.substring(range.min, insertedEnd)
+}
+
+private fun changedRange(
+    oldText: String,
+    newText: String,
+): TextRange {
+    var prefixLength = 0
+    val shortestLength = minOf(oldText.length, newText.length)
+    while (
+        prefixLength < shortestLength &&
+        oldText[prefixLength] == newText[prefixLength]
+    ) {
+        prefixLength++
+    }
+
+    var suffixLength = 0
+    while (
+        suffixLength < oldText.length - prefixLength &&
+        suffixLength < newText.length - prefixLength &&
+        oldText[oldText.lastIndex - suffixLength] == newText[newText.lastIndex - suffixLength]
+    ) {
+        suffixLength++
+    }
+    return TextRange(prefixLength, oldText.length - suffixLength)
+}
+
+private fun List<PageTextSpan>.clipBefore(end: Int): List<PageTextSpan> {
+    return mapNotNull { span ->
+        val clippedEnd = minOf(span.end, end)
+        if (span.start >= clippedEnd) {
+            null
+        } else {
+            span.copy(end = clippedEnd)
+        }
+    }
+}
+
+private fun List<PageTextSpan>.clipAfter(
+    rangeEnd: Int,
+    newOffset: Int,
+): List<PageTextSpan> {
+    return mapNotNull { span ->
+        val clippedStart = maxOf(span.start, rangeEnd)
+        if (clippedStart >= span.end) {
+            null
+        } else {
+            span.copy(
+                start = newOffset + (clippedStart - rangeEnd),
+                end = newOffset + (span.end - rangeEnd),
+            )
+        }
+    }
+}
