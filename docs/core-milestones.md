@@ -208,6 +208,7 @@ Goal: page editor stabil, senang maintain, dan tidak semua logic duduk dalam UI.
 - `TableMutationUseCase` sudah ditambah untuk table title/view/sort/filter/group, column metadata/type/date/formula/relation/rollup, cell coercion, add/duplicate/delete column, add/delete row, dan row-page block mutation.
 - `PageEditorViewModel` table editor sekarang mula delegate mutation utama kepada `TableMutationUseCase`, sementara ViewModel kekal urus queue save/granular repository.
 - `PageMutationUseCase` sudah ditambah untuk block text/rich text, block type, todo, media attachment, add/delete/move block, dan page property mutation.
+- `PageMutationUseCase` sekarang support replace satu block dengan beberapa block hasil paste, dengan block pertama kekal guna id asal supaya focus/save path tidak pecah.
 - `PageEditorViewModel` block/property editor sekarang delegate command construction kepada `PageMutationUseCase`, sementara ViewModel kekal urus pending state, undo history, dan repository save.
 - `AiActionExecutionUseCase` sudah ditambah untuk Home AI action execution: split home-scoped action vs page-scoped action, create page/table, call `AiPageActionExecutor`, persist updated page, collect page links, dan return validation issues.
 - `HomeViewModel` tidak lagi inject/call `AiPageActionExecutor` terus untuk chat action execution; ia panggil `AiActionExecutionUseCase`.
@@ -217,6 +218,16 @@ Goal: page editor stabil, senang maintain, dan tidak semua logic duduk dalam UI.
 - `EditorCommand` sekarang support page property insert/replace/delete dengan undo yang restore posisi asal.
 - Slash command parser sudah ada dengan unit test; rich text editor sekarang boleh guna `/text`, `/heading`, `/todo`, `/bullet`, `/quote`, `/divider`, `/media`, dan `/table` untuk tukar block type.
 - Table row page blocks juga sudah ada type-change path supaya slash command di dalam row page boleh mengubah row block, bukan hanya block biasa.
+- `PageTextSpan` sekarang support metadata rich text lebih luas: `code`, `linkUrl`, `color`, `highlight`, `mentionPageId`, dan `mentionLabel` dengan default backward-compatible.
+- `RichTextSpanEngine` sekarang boleh normalize/merge metadata span, apply link/color/highlight/mention, dan toggle `Code`; ada regression test untuk metadata span, mention span, dan code format.
+- `RichTextController` sudah ditambah untuk urus `TextFieldValue`, selection, active format, format toggle, link apply, mention replacement, dan text-change span adjustment di luar `PageEditorRoute`.
+- `RichTextMentionParser` dan `RichTextPasteParser` sudah ada; paste parser boleh pecah markdown ringan kepada block text/heading/bullet/todo/quote serta inline `**bold**` dan `[link](url)`.
+- Blank text block sekarang boleh menerima multi-line paste dan auto-create beberapa page block melalui editor mutation path, bukan simpan semua sebagai satu text block.
+- Block editor sekarang ada mention picker `@Page` yang guna senarai page sebenar dan simpan mention sebagai span metadata, bukan teks kosong sahaja.
+- Rich text toolbar sekarang support `B/I/U/S`, `Code`, link, text color swatch, dan highlight swatch dengan canonical spans yang tidak hilang bila user sambung menaip.
+- Page editor utama sekarang render rich text toolbar di bottom keyboard area melalui shared toolbar state, bukan toolbar duplicate dalam setiap block page utama.
+- Prefix Notion-like asas sudah ada: `- ` jadi bullet, `[] ` / `[ ] ` jadi todo, `# ` jadi heading, dan `> ` jadi quote.
+- AI action schema/backend prompt/Android executor sekarang support `FORMAT_BLOCK_TEXT` untuk format block text kepada bold/italic/underline/strikethrough/code/link/color/highlight, dengan undo command dan regression test.
 
 ### Belum Kukuh
 
@@ -224,8 +235,10 @@ Goal: page editor stabil, senang maintain, dan tidak semua logic duduk dalam UI.
 - `PageEditorViewModel.kt` masih besar, tapi legacy AI fallback sudah dibuang dan tinggal fokus editor/manual mutation.
 - Mutation logic bercampur dengan UI state.
 - Undo command sudah cover editor mutation utama dan basic AI action undo sudah tersambung dari chat action details dengan reactive `undoState`.
-- Mention trigger dalam block editor dan toolbar atas keyboard masih belum jadi sistem editor-level penuh.
-- Slash command masih basic; belum ada command untuk create linked page, insert block below, atau command yang bergantung kepada context table/property.
+- Mention trigger dalam block editor dan row-page block sudah ada, tapi belum jadi command palette/editor-level penuh untuk semua context seperti table cell dan reusable picker global.
+- Toolbar rich text sudah naik ke bottom keyboard area untuk page utama, tapi belum diseragamkan penuh untuk row-page sheet, table cell, dan semua editor context.
+- Slash command masih basic; belum ada command untuk create linked page, insert block below/above, atau command yang bergantung kepada context table/property.
+- Paste advanced belum kukuh untuk non-empty selection, row page block, table cell, dan media caption; basic blank-block multi-line paste sudah wired.
 
 ### Next Work
 
@@ -234,6 +247,8 @@ Goal: page editor stabil, senang maintain, dan tidak semua logic duduk dalam UI.
 - Tambah unit test untuk mutation tanpa Compose UI.
 - Extract slash command UI kepada editor command palette yang boleh juga dipakai untuk mention picker.
 - Sambungkan slash command dan mention picker kepada editor event, bukan ad hoc UI state.
+- Matangkan paste advanced: non-empty selection, row page block, table cell, dan media caption rules yang selamat.
+- Seragamkan rich toolbar untuk row-page sheet, table cell, dan semua editor context supaya behavior formatting tidak bercabang.
 
 ## Milestone 4: Typed Table Core
 

@@ -69,6 +69,12 @@ data class PageTextSpan(
     val italic: Boolean = false,
     val underline: Boolean = false,
     val strikethrough: Boolean = false,
+    val code: Boolean = false,
+    val linkUrl: String = "",
+    val color: String = "",
+    val highlight: String = "",
+    val mentionPageId: String = "",
+    val mentionLabel: String = "",
 )
 
 @Serializable

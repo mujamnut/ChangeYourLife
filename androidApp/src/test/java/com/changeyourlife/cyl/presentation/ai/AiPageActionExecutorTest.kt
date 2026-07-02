@@ -10,6 +10,7 @@ import com.changeyourlife.cyl.domain.model.PageTable
 import com.changeyourlife.cyl.domain.model.PageTableColumn
 import com.changeyourlife.cyl.domain.model.PageTableColumnType
 import com.changeyourlife.cyl.domain.model.PageTableRow
+import com.changeyourlife.cyl.domain.model.PageTextSpan
 import com.changeyourlife.cyl.domain.model.Reminder
 import com.changeyourlife.cyl.domain.model.TaskItem
 import com.changeyourlife.cyl.domain.repository.ChatAction
@@ -23,9 +24,61 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AiPageActionExecutorTest {
+    @Test
+    fun executesFormatBlockTextAsRichTextSpanWithUndoCommand() = runBlocking {
+        val document = PageBlockDocument(
+            blocks = listOf(
+                PageBlock(
+                    id = "block-note",
+                    type = PageBlockType.Text,
+                    text = "Jaga ayam setiap pagi",
+                ),
+            ),
+        )
+        val page = Page(
+            id = "page-1",
+            workspaceId = "workspace-1",
+            parentPageId = null,
+            title = "Penjagaan Ayam",
+            content = PageBlockCodec.encodeDocument(document),
+            sortOrder = 0,
+            createdAt = 1000,
+            updatedAt = 1000,
+            deletedAt = null,
+        )
+        val executor = AiPageActionExecutor(
+            pageRepository = FakePageRepository(page, document),
+            taskRepository = FakeTaskRepository(),
+            reminderRepository = FakeReminderRepository(),
+            applyEditorCommandUseCase = ApplyEditorCommandUseCase(),
+        )
+
+        val result = executor.executeOnPage(
+            page = page,
+            title = page.title,
+            document = document,
+            actions = listOf(
+                ChatAction(
+                    type = "FORMAT_BLOCK_TEXT",
+                    title = "",
+                    blockId = "block-note",
+                    textToFormat = "ayam",
+                    format = "Bold",
+                ),
+            ),
+        )
+
+        assertEquals(
+            listOf(PageTextSpan(start = 5, end = 9, bold = true)),
+            requireNotNull(result.updatedDocument).blocks.single().richTextSpans,
+        )
+        assertTrue(result.undoCommands.isNotEmpty())
+    }
+
     @Test
     fun executesAddDeleteAndReorderWithGranularPageRepositoryCalls() = runBlocking {
         val nameColumn = PageTableColumn(id = "column-name", name = "Name")

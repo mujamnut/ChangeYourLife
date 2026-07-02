@@ -5,6 +5,7 @@ enum class RichTextFormat {
     Italic,
     Underline,
     Strikethrough,
+    Code,
 }
 
 object RichTextSpanEngine {
@@ -69,6 +70,56 @@ object RichTextSpanEngine {
         return flags.toTextSpans()
     }
 
+    fun applyLink(
+        spans: List<PageTextSpan>,
+        start: Int,
+        end: Int,
+        textLength: Int,
+        url: String,
+    ): List<PageTextSpan> {
+        return applyMetadata(spans, start, end, textLength) {
+            linkUrl = url.trim()
+        }
+    }
+
+    fun applyColor(
+        spans: List<PageTextSpan>,
+        start: Int,
+        end: Int,
+        textLength: Int,
+        color: String,
+    ): List<PageTextSpan> {
+        return applyMetadata(spans, start, end, textLength) {
+            this.color = color.trim()
+        }
+    }
+
+    fun applyHighlight(
+        spans: List<PageTextSpan>,
+        start: Int,
+        end: Int,
+        textLength: Int,
+        highlight: String,
+    ): List<PageTextSpan> {
+        return applyMetadata(spans, start, end, textLength) {
+            this.highlight = highlight.trim()
+        }
+    }
+
+    fun applyMention(
+        spans: List<PageTextSpan>,
+        start: Int,
+        end: Int,
+        textLength: Int,
+        pageId: String,
+        label: String,
+    ): List<PageTextSpan> {
+        return applyMetadata(spans, start, end, textLength) {
+            mentionPageId = pageId
+            mentionLabel = label
+        }
+    }
+
     fun hasFormat(
         spans: List<PageTextSpan>,
         format: RichTextFormat,
@@ -79,18 +130,60 @@ object RichTextSpanEngine {
         val flags = spans.toRichTextFlags(end)
         return (start until end).all { index -> flags[index].has(format) }
     }
+
+    private fun applyMetadata(
+        spans: List<PageTextSpan>,
+        start: Int,
+        end: Int,
+        textLength: Int,
+        update: RichTextFlags.() -> Unit,
+    ): List<PageTextSpan> {
+        val safeStart = start.coerceIn(0, textLength)
+        val safeEnd = end.coerceIn(0, textLength)
+        if (safeStart >= safeEnd) return normalize(spans, " ".repeat(textLength))
+        val flags = spans.toRichTextFlags(textLength)
+        for (index in safeStart until safeEnd) {
+            flags[index].update()
+        }
+        return flags.toTextSpans()
+    }
 }
 
 fun PageTextSpan.hasAnyStyle(): Boolean =
-    bold || italic || underline || strikethrough
+    bold ||
+        italic ||
+        underline ||
+        strikethrough ||
+        code ||
+        linkUrl.isNotBlank() ||
+        color.isNotBlank() ||
+        highlight.isNotBlank() ||
+        mentionPageId.isNotBlank() ||
+        mentionLabel.isNotBlank()
 
 private data class RichTextFlags(
     var bold: Boolean = false,
     var italic: Boolean = false,
     var underline: Boolean = false,
     var strikethrough: Boolean = false,
+    var code: Boolean = false,
+    var linkUrl: String = "",
+    var color: String = "",
+    var highlight: String = "",
+    var mentionPageId: String = "",
+    var mentionLabel: String = "",
 ) {
-    fun isEmpty(): Boolean = !bold && !italic && !underline && !strikethrough
+    fun isEmpty(): Boolean =
+        !bold &&
+            !italic &&
+            !underline &&
+            !strikethrough &&
+            !code &&
+            linkUrl.isBlank() &&
+            color.isBlank() &&
+            highlight.isBlank() &&
+            mentionPageId.isBlank() &&
+            mentionLabel.isBlank()
 
     fun has(format: RichTextFormat): Boolean {
         return when (format) {
@@ -98,6 +191,7 @@ private data class RichTextFlags(
             RichTextFormat.Italic -> italic
             RichTextFormat.Underline -> underline
             RichTextFormat.Strikethrough -> strikethrough
+            RichTextFormat.Code -> code
         }
     }
 
@@ -107,6 +201,7 @@ private data class RichTextFlags(
             RichTextFormat.Italic -> italic = value
             RichTextFormat.Underline -> underline = value
             RichTextFormat.Strikethrough -> strikethrough = value
+            RichTextFormat.Code -> code = value
         }
     }
 
@@ -114,7 +209,13 @@ private data class RichTextFlags(
         return bold == other.bold &&
             italic == other.italic &&
             underline == other.underline &&
-            strikethrough == other.strikethrough
+            strikethrough == other.strikethrough &&
+            code == other.code &&
+            linkUrl == other.linkUrl &&
+            color == other.color &&
+            highlight == other.highlight &&
+            mentionPageId == other.mentionPageId &&
+            mentionLabel == other.mentionLabel
     }
 
     fun toSpan(start: Int, end: Int): PageTextSpan {
@@ -125,6 +226,12 @@ private data class RichTextFlags(
             italic = italic,
             underline = underline,
             strikethrough = strikethrough,
+            code = code,
+            linkUrl = linkUrl,
+            color = color,
+            highlight = highlight,
+            mentionPageId = mentionPageId,
+            mentionLabel = mentionLabel,
         )
     }
 }
@@ -147,7 +254,13 @@ private fun PageTextSpan.sameStyleAs(other: PageTextSpan): Boolean {
     return bold == other.bold &&
         italic == other.italic &&
         underline == other.underline &&
-        strikethrough == other.strikethrough
+        strikethrough == other.strikethrough &&
+        code == other.code &&
+        linkUrl == other.linkUrl &&
+        color == other.color &&
+        highlight == other.highlight &&
+        mentionPageId == other.mentionPageId &&
+        mentionLabel == other.mentionLabel
 }
 
 private fun List<PageTextSpan>.toRichTextFlags(textLength: Int): MutableList<RichTextFlags> {
@@ -158,6 +271,12 @@ private fun List<PageTextSpan>.toRichTextFlags(textLength: Int): MutableList<Ric
             flags[index].italic = flags[index].italic || span.italic
             flags[index].underline = flags[index].underline || span.underline
             flags[index].strikethrough = flags[index].strikethrough || span.strikethrough
+            flags[index].code = flags[index].code || span.code
+            if (flags[index].linkUrl.isBlank()) flags[index].linkUrl = span.linkUrl
+            if (flags[index].color.isBlank()) flags[index].color = span.color
+            if (flags[index].highlight.isBlank()) flags[index].highlight = span.highlight
+            if (flags[index].mentionPageId.isBlank()) flags[index].mentionPageId = span.mentionPageId
+            if (flags[index].mentionLabel.isBlank()) flags[index].mentionLabel = span.mentionLabel
         }
     }
     return flags

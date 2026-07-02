@@ -8,6 +8,7 @@ import com.changeyourlife.cyl.domain.model.Page
 import com.changeyourlife.cyl.domain.model.PageBlock
 import com.changeyourlife.cyl.domain.model.PageBlockDocument
 import com.changeyourlife.cyl.domain.model.PageBlockType
+import com.changeyourlife.cyl.domain.model.PageContentCodec
 import com.changeyourlife.cyl.domain.model.PageMediaAttachment
 import com.changeyourlife.cyl.domain.model.PageProperty
 import com.changeyourlife.cyl.domain.model.PagePropertyType
@@ -643,6 +644,35 @@ class PageEditorViewModel @Inject constructor(
             )
             if (!result.changed) return
             queueBlockPatchPendingDocument(blockId, result.document)
+        }
+    }
+
+    fun pasteBlocks(
+        blockId: String,
+        pasteBlocks: List<RichTextPasteBlock>,
+    ) {
+        if (pasteBlocks.isEmpty()) return
+        val currentUiState = uiState.value
+        if (currentUiState.page != null) {
+            val document = currentDocument(currentUiState) ?: return
+            val replacementBlocks = pasteBlocks.map { pasteBlock ->
+                PageContentCodec.newBlock(pasteBlock.type).copy(
+                    text = pasteBlock.text,
+                    richTextSpans = pasteBlock.spans,
+                    isChecked = pasteBlock.isChecked,
+                )
+            }
+            val result = pageMutationUseCase.replaceBlockWithBlocks(
+                document = document,
+                blockId = blockId,
+                replacementBlocks = replacementBlocks,
+            )
+            if (!result.changed) return
+            queueDocumentUpdate(
+                updated = result.document,
+                previous = document,
+                recordUndo = true,
+            )
         }
     }
 

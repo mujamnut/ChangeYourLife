@@ -72,6 +72,19 @@ class AiActionSchemaValidator {
                 if (hasAny(blockId, blockText, content, title)) emptyList()
                 else listOf(issue("blockId", "Delete block action needs blockId, blockText, content, or title."))
             }
+            "FORMAT_BLOCK_TEXT" -> {
+                buildList {
+                    if (!hasAny(blockId, blockText, title, content)) {
+                        add(issue("blockId", "Format text action needs blockId, blockText, content, or title."))
+                    }
+                    if (!hasAny(textToFormat, value, content) && rangeStart == null && rangeEnd == null) {
+                        add(issue("textToFormat", "Format text action needs textToFormat/value/content or rangeStart/rangeEnd."))
+                    }
+                    if (!hasAny(format, linkUrl, color, highlight)) {
+                        add(issue("format", "Format text action needs format, linkUrl, color, or highlight."))
+                    }
+                }
+            }
             "UPDATE_BLOCK", "EDIT_BLOCK", "UPDATE_TODO", "CHECK_BLOCK", "UNCHECK_BLOCK" -> {
                 buildList {
                     if (!hasAny(blockId, blockText, title)) {
@@ -200,6 +213,7 @@ class AiActionSchemaValidator {
             "DELETE_PROPERTY",
             "DELETE_ALL_BLOCKS",
             "DELETE_BLOCK",
+            "FORMAT_BLOCK_TEXT",
             "UPDATE_BLOCK",
             "EDIT_BLOCK",
             "UPDATE_TODO",

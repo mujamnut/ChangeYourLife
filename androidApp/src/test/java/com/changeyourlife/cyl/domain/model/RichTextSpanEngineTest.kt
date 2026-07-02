@@ -82,4 +82,62 @@ class RichTextSpanEngineTest {
             adjusted,
         )
     }
+
+    @Test
+    fun metadataSpansSurviveNormalizeAndMergeOnlyWhenMetadataMatches() {
+        val normalized = RichTextSpanEngine.normalize(
+            spans = listOf(
+                PageTextSpan(start = 0, end = 3, linkUrl = "https://a.test"),
+                PageTextSpan(start = 3, end = 5, linkUrl = "https://a.test"),
+                PageTextSpan(start = 5, end = 7, linkUrl = "https://b.test"),
+            ),
+            text = "Example",
+        )
+
+        assertEquals(
+            listOf(
+                PageTextSpan(start = 0, end = 5, linkUrl = "https://a.test"),
+                PageTextSpan(start = 5, end = 7, linkUrl = "https://b.test"),
+            ),
+            normalized,
+        )
+    }
+
+    @Test
+    fun applyMentionStoresPageIdAndLabelAcrossSelection() {
+        val spans = RichTextSpanEngine.applyMention(
+            spans = emptyList(),
+            start = 0,
+            end = 7,
+            textLength = 12,
+            pageId = "page-1",
+            label = "@Budget",
+        )
+
+        assertEquals(
+            listOf(
+                PageTextSpan(
+                    start = 0,
+                    end = 7,
+                    mentionPageId = "page-1",
+                    mentionLabel = "@Budget",
+                ),
+            ),
+            spans,
+        )
+    }
+
+    @Test
+    fun codeFormatCanBeToggledLikeOtherInlineFormats() {
+        val spans = RichTextSpanEngine.toggleFormat(
+            spans = emptyList(),
+            format = RichTextFormat.Code,
+            start = 1,
+            end = 4,
+            textLength = 5,
+        )
+
+        assertEquals(listOf(PageTextSpan(start = 1, end = 4, code = true)), spans)
+        assertTrue(RichTextSpanEngine.hasFormat(spans, RichTextFormat.Code, 1, 4))
+    }
 }

@@ -202,6 +202,7 @@ fun PageEditorRoute(
         onTitleChange = viewModel::updateTitle,
         onBlockTextChange = viewModel::updateBlockText,
         onBlockRichTextChange = viewModel::updateBlockRichText,
+        onPasteBlocks = viewModel::pasteBlocks,
         onBlockTypeChange = viewModel::changeBlockType,
         onBlockMediaAdd = viewModel::addBlockMediaAttachments,
         onBlockMediaRemove = viewModel::removeBlockMediaAttachment,
@@ -272,6 +273,7 @@ private fun PageEditorScreen(
     onTitleChange: (String) -> Unit,
     onBlockTextChange: (String, String) -> Unit,
     onBlockRichTextChange: (String, String, List<PageTextSpan>) -> Unit,
+    onPasteBlocks: (String, List<RichTextPasteBlock>) -> Unit,
     onBlockTypeChange: (String, PageBlockType) -> Unit,
     onBlockMediaAdd: (String, List<PageMediaAttachment>) -> Unit,
     onBlockMediaRemove: (String, String) -> Unit,
@@ -335,6 +337,7 @@ private fun PageEditorScreen(
     var isPageSearchSheetOpen by rememberSaveable { mutableStateOf(false) }
     var isBlockPickerSheetOpen by rememberSaveable { mutableStateOf(false) }
     var activeBlockId by rememberSaveable { mutableStateOf<String?>(null) }
+    var richTextToolbarState by remember { mutableStateOf<RichTextToolbarUiState?>(null) }
 
     LaunchedEffect(uiState.blocks, activeBlockId) {
         val currentActiveBlockId = activeBlockId
@@ -359,6 +362,7 @@ private fun PageEditorScreen(
             PageEditorBottomBar(
                 activeBlockId = activeBlockId,
                 canUndoEditorChange = uiState.canUndoEditorChange,
+                richTextToolbarState = richTextToolbarState,
                 onAddBlock = onAddBlock,
                 onDeleteActiveBlock = {
                     activeBlockId?.let(onDeleteBlock)
@@ -523,6 +527,10 @@ private fun PageEditorScreen(
                             indentLevel = 0,
                             onTextChange = onBlockTextChange,
                             onRichTextChange = onBlockRichTextChange,
+                            onPasteBlocks = onPasteBlocks,
+                            onRichTextToolbarChange = { toolbarState ->
+                                richTextToolbarState = toolbarState
+                            },
                             onBlockTypeChange = onBlockTypeChange,
                             onMediaAdd = onBlockMediaAdd,
                             onMediaRemove = onBlockMediaRemove,
@@ -532,6 +540,7 @@ private fun PageEditorScreen(
                             onMoveDown = onMoveBlockDown,
                             onBlockFocused = { blockId -> activeBlockId = blockId },
                             onAddChildBlock = onAddChildBlock,
+                            mentionPages = homeAiState.allPages,
                             onTableTitleChange = onTableTitleChange,
                             onTableViewChange = onTableViewChange,
                             onTableViewConfigChange = onTableViewConfigChange,
@@ -703,6 +712,7 @@ private fun PageSyncConflictBanner(
 private fun PageEditorBottomBar(
     activeBlockId: String?,
     canUndoEditorChange: Boolean,
+    richTextToolbarState: RichTextToolbarUiState?,
     onAddBlock: (PageBlockType) -> Unit,
     onDeleteActiveBlock: () -> Unit,
     onUndoEditorChange: () -> Unit,
@@ -720,6 +730,9 @@ private fun PageEditorBottomBar(
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         if (isKeyboardVisible) {
+            richTextToolbarState?.let { toolbarState ->
+                PageKeyboardRichTextToolbar(toolbarState)
+            }
             PageKeyboardBlockToolbar(
                 activeBlockId = activeBlockId,
                 canUndoEditorChange = canUndoEditorChange,
@@ -756,6 +769,26 @@ private fun PageEditorBottomBar(
                 },
             )
         }
+    }
+}
+
+@Composable
+private fun PageKeyboardRichTextToolbar(
+    state: RichTextToolbarUiState,
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        ),
+    ) {
+        RichTextToolbarHost(
+            state = state,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+        )
     }
 }
 
@@ -1365,6 +1398,8 @@ private fun BlockEditorCard(
     indentLevel: Int = 0,
     onTextChange: (String, String) -> Unit,
     onRichTextChange: (String, String, List<PageTextSpan>) -> Unit,
+    onPasteBlocks: (String, List<RichTextPasteBlock>) -> Unit,
+    onRichTextToolbarChange: (RichTextToolbarUiState?) -> Unit,
     onBlockTypeChange: (String, PageBlockType) -> Unit,
     onMediaAdd: (String, List<PageMediaAttachment>) -> Unit,
     onMediaRemove: (String, String) -> Unit,
@@ -1374,6 +1409,7 @@ private fun BlockEditorCard(
     onMoveDown: (String) -> Unit,
     onBlockFocused: (String) -> Unit,
     onAddChildBlock: (String, PageBlockType) -> Unit,
+    mentionPages: List<Page> = emptyList(),
     onTableTitleChange: (String, String) -> Unit,
     onTableViewChange: (String, PageTableView) -> Unit,
     onTableViewConfigChange: (String, PageTableViewConfig) -> Unit,
@@ -1503,6 +1539,7 @@ private fun BlockEditorCard(
                     onTextChange = { text -> onTextChange(block.id, text) },
                     onRichTextChange = { text, spans -> onRichTextChange(block.id, text, spans) },
                     onBlockTypeCommand = { type -> onBlockTypeChange(block.id, type) },
+                    mentionPages = mentionPages,
                 )
                 PageBlockType.DatabaseTable -> DatabaseTableBlockEditor(
                     tableBlockId = block.id,
@@ -1566,6 +1603,7 @@ private fun BlockEditorCard(
                     onDeleteRowPageBlock = { rowId, rowBlockId ->
                         onDeleteTableRowPageBlock(block.id, rowId, rowBlockId)
                     },
+                    mentionPages = mentionPages,
                     searchTargetType = searchTargetType,
                     searchTargetId = searchTargetId,
                 )
@@ -1574,9 +1612,13 @@ private fun BlockEditorCard(
                     block = block,
                     onTextChange = onTextChange,
                     onRichTextChange = onRichTextChange,
+                    onPasteBlocks = onPasteBlocks,
+                    onRichTextToolbarChange = onRichTextToolbarChange,
+                    showInlineRichTextToolbar = false,
                     onBlockTypeCommand = onBlockTypeChange,
                     onToggleTodo = onToggleTodo,
                     onFocusBlock = { onBlockFocused(block.id) },
+                    mentionPages = mentionPages,
                 )
                 PageBlockType.Bullet -> LeadingTextBlockEditor(
                     blockId = block.id,
@@ -1584,8 +1626,12 @@ private fun BlockEditorCard(
                     block = block,
                     onTextChange = onTextChange,
                     onRichTextChange = onRichTextChange,
+                    onPasteBlocks = onPasteBlocks,
+                    onRichTextToolbarChange = onRichTextToolbarChange,
+                    showInlineRichTextToolbar = false,
                     onBlockTypeCommand = onBlockTypeChange,
                     onFocusBlock = { onBlockFocused(block.id) },
+                    mentionPages = mentionPages,
                 )
                 PageBlockType.Quote -> LeadingTextBlockEditor(
                     blockId = block.id,
@@ -1593,9 +1639,13 @@ private fun BlockEditorCard(
                     block = block,
                     onTextChange = onTextChange,
                     onRichTextChange = onRichTextChange,
+                    onPasteBlocks = onPasteBlocks,
+                    onRichTextToolbarChange = onRichTextToolbarChange,
+                    showInlineRichTextToolbar = false,
                     onBlockTypeCommand = onBlockTypeChange,
                     fontStyle = FontStyle.Italic,
                     onFocusBlock = { onBlockFocused(block.id) },
+                    mentionPages = mentionPages,
                 )
                 PageBlockType.Heading,
                 PageBlockType.Text,
@@ -1604,8 +1654,12 @@ private fun BlockEditorCard(
                     block = block,
                     onTextChange = onTextChange,
                     onRichTextChange = onRichTextChange,
+                    onPasteBlocks = onPasteBlocks,
+                    onRichTextToolbarChange = onRichTextToolbarChange,
+                    showInlineRichTextToolbar = false,
                     onBlockTypeCommand = onBlockTypeChange,
                     onFocusBlock = { onBlockFocused(block.id) },
+                    mentionPages = mentionPages,
                 )
             }
 
@@ -1618,6 +1672,8 @@ private fun BlockEditorCard(
                                 indentLevel = indentLevel + 1,
                                 onTextChange = onTextChange,
                                 onRichTextChange = onRichTextChange,
+                                onPasteBlocks = onPasteBlocks,
+                                onRichTextToolbarChange = onRichTextToolbarChange,
                                 onBlockTypeChange = onBlockTypeChange,
                                 onMediaAdd = onMediaAdd,
                                 onMediaRemove = onMediaRemove,
@@ -1627,6 +1683,7 @@ private fun BlockEditorCard(
                                 onMoveDown = onMoveDown,
                                 onBlockFocused = onBlockFocused,
                                 onAddChildBlock = onAddChildBlock,
+                                mentionPages = mentionPages,
                                 onTableTitleChange = onTableTitleChange,
                                 onTableViewChange = onTableViewChange,
                                 onTableViewConfigChange = onTableViewConfigChange,
@@ -1672,17 +1729,25 @@ private fun TextBlockEditor(
     block: PageBlock,
     onTextChange: (String, String) -> Unit,
     onRichTextChange: (String, String, List<PageTextSpan>) -> Unit,
+    onPasteBlocks: (String, List<RichTextPasteBlock>) -> Unit = { _, _ -> },
+    onRichTextToolbarChange: (RichTextToolbarUiState?) -> Unit = {},
+    showInlineRichTextToolbar: Boolean = true,
     onBlockTypeCommand: (String, PageBlockType) -> Unit,
     onFocusBlock: () -> Unit = {},
+    mentionPages: List<Page> = emptyList(),
 ) {
     CylRichTextBlockEditor(
         blockId = blockId,
         block = block,
         onTextChange = onTextChange,
         onRichTextChange = onRichTextChange,
+        onPasteBlocks = onPasteBlocks,
+        onToolbarStateChange = onRichTextToolbarChange,
+        showInlineToolbar = showInlineRichTextToolbar,
         modifier = Modifier.fillMaxWidth(),
         onFocusBlock = onFocusBlock,
         onBlockTypeCommand = onBlockTypeCommand,
+        mentionPages = mentionPages,
         minLines = if (block.type == PageBlockType.Heading) 1 else 2,
         textStyle = when (block.type) {
             PageBlockType.Heading -> MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.SemiBold)
@@ -1698,9 +1763,13 @@ private fun TodoBlockEditor(
     block: PageBlock,
     onTextChange: (String, String) -> Unit,
     onRichTextChange: (String, String, List<PageTextSpan>) -> Unit,
+    onPasteBlocks: (String, List<RichTextPasteBlock>) -> Unit = { _, _ -> },
+    onRichTextToolbarChange: (RichTextToolbarUiState?) -> Unit = {},
+    showInlineRichTextToolbar: Boolean = true,
     onBlockTypeCommand: (String, PageBlockType) -> Unit,
     onToggleTodo: (String) -> Unit,
     onFocusBlock: () -> Unit = {},
+    mentionPages: List<Page> = emptyList(),
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -1715,9 +1784,13 @@ private fun TodoBlockEditor(
             block = block,
             onTextChange = onTextChange,
             onRichTextChange = onRichTextChange,
+            onPasteBlocks = onPasteBlocks,
+            onToolbarStateChange = onRichTextToolbarChange,
+            showInlineToolbar = showInlineRichTextToolbar,
             modifier = Modifier.weight(1f),
             onFocusBlock = onFocusBlock,
             onBlockTypeCommand = onBlockTypeCommand,
+            mentionPages = mentionPages,
             singleLine = true,
             placeholder = "Todo item",
         )
@@ -1731,9 +1804,13 @@ private fun LeadingTextBlockEditor(
     block: PageBlock,
     onTextChange: (String, String) -> Unit,
     onRichTextChange: (String, String, List<PageTextSpan>) -> Unit,
+    onPasteBlocks: (String, List<RichTextPasteBlock>) -> Unit = { _, _ -> },
+    onRichTextToolbarChange: (RichTextToolbarUiState?) -> Unit = {},
+    showInlineRichTextToolbar: Boolean = true,
     onBlockTypeCommand: (String, PageBlockType) -> Unit,
     fontStyle: FontStyle? = null,
     onFocusBlock: () -> Unit = {},
+    mentionPages: List<Page> = emptyList(),
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -1752,9 +1829,13 @@ private fun LeadingTextBlockEditor(
             block = block,
             onTextChange = onTextChange,
             onRichTextChange = onRichTextChange,
+            onPasteBlocks = onPasteBlocks,
+            onToolbarStateChange = onRichTextToolbarChange,
+            showInlineToolbar = showInlineRichTextToolbar,
             modifier = Modifier.weight(1f),
             onFocusBlock = onFocusBlock,
             onBlockTypeCommand = onBlockTypeCommand,
+            mentionPages = mentionPages,
             minLines = 2,
             textStyle = MaterialTheme.typography.bodyLarge.copy(
                 fontStyle = fontStyle,
@@ -1772,6 +1853,7 @@ private fun MediaFileBlockEditor(
     onTextChange: (String) -> Unit,
     onRichTextChange: (String, List<PageTextSpan>) -> Unit,
     onBlockTypeCommand: (PageBlockType) -> Unit,
+    mentionPages: List<Page> = emptyList(),
 ) {
     val context = LocalContext.current
     val filePicker = rememberLauncherForActivityResult(
@@ -1842,6 +1924,7 @@ private fun MediaFileBlockEditor(
             onRichTextChange = { _, text, spans -> onRichTextChange(text, spans) },
             modifier = Modifier.fillMaxWidth(),
             onBlockTypeCommand = { _, type -> onBlockTypeCommand(type) },
+            mentionPages = mentionPages,
             minLines = 1,
             placeholder = "Caption",
         )
@@ -1963,6 +2046,7 @@ private fun DatabaseTableBlockEditor(
     onToggleRowTodoBlock: (String, String) -> Unit,
     onAddRowPageBlock: (String, PageBlockType) -> Unit,
     onDeleteRowPageBlock: (String, String) -> Unit,
+    mentionPages: List<Page> = emptyList(),
     searchTargetType: String = "",
     searchTargetId: String = "",
 ) {
@@ -2013,6 +2097,7 @@ private fun DatabaseTableBlockEditor(
             onToggleTodo = { rowBlockId -> onToggleRowTodoBlock(openRow.id, rowBlockId) },
             onAddBlock = { type -> onAddRowPageBlock(openRow.id, type) },
             onDeleteBlock = { rowBlockId -> onDeleteRowPageBlock(openRow.id, rowBlockId) },
+            mentionPages = mentionPages,
             onDismiss = { openRowId = null },
         )
     }
@@ -4869,6 +4954,7 @@ private fun TableRowPageSheet(
     onToggleTodo: (String) -> Unit,
     onAddBlock: (PageBlockType) -> Unit,
     onDeleteBlock: (String) -> Unit,
+    mentionPages: List<Page> = emptyList(),
     onDismiss: () -> Unit,
 ) {
     val title = row.cellText(table.titleColumn()).ifBlank { "Untitled row" }
@@ -4997,6 +5083,7 @@ private fun TableRowPageSheet(
                                     onTextChange = { text -> onBlockTextChange(block.id, text) },
                                     onRichTextChange = { text, spans -> onBlockRichTextChange(block.id, text, spans) },
                                     onBlockTypeCommand = { type -> onBlockTypeChange(block.id, type) },
+                                    mentionPages = mentionPages,
                                 )
                                 PageBlockType.Todo -> TodoBlockEditor(
                                     blockId = block.id,
@@ -5005,6 +5092,7 @@ private fun TableRowPageSheet(
                                     onRichTextChange = { _, text, spans -> onBlockRichTextChange(block.id, text, spans) },
                                     onBlockTypeCommand = { _, type -> onBlockTypeChange(block.id, type) },
                                     onToggleTodo = { onToggleTodo(block.id) },
+                                    mentionPages = mentionPages,
                                 )
                                 PageBlockType.Bullet -> LeadingTextBlockEditor(
                                     blockId = block.id,
@@ -5013,6 +5101,7 @@ private fun TableRowPageSheet(
                                     onTextChange = { _, text -> onBlockTextChange(block.id, text) },
                                     onRichTextChange = { _, text, spans -> onBlockRichTextChange(block.id, text, spans) },
                                     onBlockTypeCommand = { _, type -> onBlockTypeChange(block.id, type) },
+                                    mentionPages = mentionPages,
                                 )
                                 PageBlockType.Quote -> LeadingTextBlockEditor(
                                     blockId = block.id,
@@ -5022,6 +5111,7 @@ private fun TableRowPageSheet(
                                     onRichTextChange = { _, text, spans -> onBlockRichTextChange(block.id, text, spans) },
                                     onBlockTypeCommand = { _, type -> onBlockTypeChange(block.id, type) },
                                     fontStyle = FontStyle.Italic,
+                                    mentionPages = mentionPages,
                                 )
                                 PageBlockType.DatabaseTable,
                                 PageBlockType.Heading,
@@ -5032,6 +5122,7 @@ private fun TableRowPageSheet(
                                     onTextChange = { _, text -> onBlockTextChange(block.id, text) },
                                     onRichTextChange = { _, text, spans -> onBlockRichTextChange(block.id, text, spans) },
                                     onBlockTypeCommand = { _, type -> onBlockTypeChange(block.id, type) },
+                                    mentionPages = mentionPages,
                                 )
                             }
                         }
@@ -6614,6 +6705,7 @@ private fun PageEditorScreenPreview() {
             onTitleChange = {},
             onBlockTextChange = { _, _ -> },
             onBlockRichTextChange = { _, _, _ -> },
+            onPasteBlocks = { _, _ -> },
             onBlockTypeChange = { _, _ -> },
             onBlockMediaAdd = { _, _ -> },
             onBlockMediaRemove = { _, _ -> },

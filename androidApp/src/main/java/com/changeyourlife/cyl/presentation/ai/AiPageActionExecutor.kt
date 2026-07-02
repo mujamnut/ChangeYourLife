@@ -18,7 +18,10 @@ import com.changeyourlife.cyl.domain.model.PageTableSort
 import com.changeyourlife.cyl.domain.model.PageTableSortDirection
 import com.changeyourlife.cyl.domain.model.PageTableView
 import com.changeyourlife.cyl.domain.model.PageTableViewConfig
+import com.changeyourlife.cyl.domain.model.PageTextSpan
 import com.changeyourlife.cyl.domain.model.Reminder
+import com.changeyourlife.cyl.domain.model.RichTextFormat
+import com.changeyourlife.cyl.domain.model.RichTextSpanEngine
 import com.changeyourlife.cyl.domain.model.TaskItem
 import com.changeyourlife.cyl.domain.model.toAiUndoCommandSummary
 import com.changeyourlife.cyl.domain.repository.ChatAction
@@ -215,6 +218,17 @@ class AiPageActionExecutor @Inject constructor(
                             documentChanged = true
                             "Deleted block: ${deleteResult.label}"
                         }
+                    }
+
+                    "FORMAT_BLOCK_TEXT" -> {
+                        val formatResult = workingDocument.formatMatchingBlockText(
+                            action = action,
+                            actionIndex = actionIndex,
+                            undoCommands = undoCommands,
+                        )
+                        workingDocument = formatResult.document
+                        documentChanged = true
+                        "Formatted text: ${formatResult.label}"
                     }
 
                     "UPDATE_BLOCK", "EDIT_BLOCK", "UPDATE_TODO", "CHECK_BLOCK", "UNCHECK_BLOCK" -> {
@@ -896,6 +910,38 @@ class AiPageActionExecutor @Inject constructor(
         )
     }
 
+    private fun PageBlockDocument.formatMatchingBlockText(
+        action: ChatAction,
+        actionIndex: Int,
+        undoCommands: MutableList<AiUndoCommandSummary>,
+    ): DocumentBlockMutationResult {
+        val target = blocks.findMatchingBlock(action)
+            ?: error("Could not find block to format")
+        val (start, end) = action.findFormatRangeIn(target.text)
+            ?: error("Could not find text to format")
+        val nextSpans = action.applyTextFormat(
+            spans = target.richTextSpans,
+            start = start,
+            end = end,
+            textLength = target.text.length,
+        )
+        if (nextSpans == RichTextSpanEngine.normalize(target.richTextSpans, target.text)) {
+            error("No supported text format was provided")
+        }
+        return DocumentBlockMutationResult(
+            document = applyAiEditorCommand(
+                command = EditorCommand.UpdateBlockText(
+                    blockId = target.id,
+                    text = target.text,
+                    richTextSpans = nextSpans,
+                ),
+                actionIndex = actionIndex,
+                undoCommands = undoCommands,
+            ),
+            label = target.blockLabel(),
+        )
+    }
+
     private fun PageBlockDocument.updateMatchingTable(
         action: ChatAction,
         actionIndex: Int,
@@ -942,6 +988,7 @@ class AiPageActionExecutor @Inject constructor(
             "DELETE_PROPERTY",
             "DELETE_ALL_BLOCKS",
             "DELETE_BLOCK",
+            "FORMAT_BLOCK_TEXT",
             "UPDATE_BLOCK",
             "EDIT_BLOCK",
             "UPDATE_TODO",
@@ -1361,7 +1408,14 @@ private fun PageBlockDocument.validateActionTarget(
     return when (action.type.normalizedActionType()) {
         "APPEND_BLOCK", "APPEND_PAGE_BLOCK", "ADD_BLOCK" -> missingMediaPayloadIssue()
 
-        "DELETE_BLOCK", "UPDATE_BLOCK", "EDIT_BLOCK", "UPDATE_TODO", "CHECK_BLOCK", "UNCHECK_BLOCK" -> {
+        "DELETE_BLOCK",
+        "FORMAT_BLOCK_TEXT",
+        "UPDATE_BLOCK",
+        "EDIT_BLOCK",
+        "UPDATE_TODO",
+        "CHECK_BLOCK",
+        "UNCHECK_BLOCK",
+        -> {
             if (blocks.anyMatchingBlock(action)) {
                 null
             } else {
@@ -1616,6 +1670,58 @@ private fun ChatAction.toMediaAttachmentOrNull(): PageMediaAttachment? {
         mimeType = mediaMimeType,
         sizeBytes = mediaSizeBytes.coerceAtLeast(0),
     )
+}
+
+private fun ChatAction.findFormatRangeIn(text: String): Pair<Int, Int>? {
+    if (text.isBlank()) return null
+    val start = rangeStart
+    val end = rangeEnd
+    if (start != null && end != null && start >= 0 && end > start && end <= text.length) {
+        return start to end
+    }
+    val target = textToFormat
+        .ifBlank { value }
+        .ifBlank { content }
+        .trim()
+    if (target.isBlank()) return null
+    val index = text.indexOf(target, ignoreCase = true)
+    return if (index >= 0) index to (index + target.length) else null
+}
+
+private fun ChatAction.applyTextFormat(
+    spans: List<PageTextSpan>,
+    start: Int,
+    end: Int,
+    textLength: Int,
+): List<PageTextSpan> {
+    var nextSpans = RichTextSpanEngine.normalize(spans, " ".repeat(textLength))
+    when (format.normalizedActionType()) {
+        "BOLD", "STRONG" -> {
+            nextSpans = RichTextSpanEngine.toggleFormat(nextSpans, RichTextFormat.Bold, start, end, textLength)
+        }
+        "ITALIC", "EMPHASIS" -> {
+            nextSpans = RichTextSpanEngine.toggleFormat(nextSpans, RichTextFormat.Italic, start, end, textLength)
+        }
+        "UNDERLINE" -> {
+            nextSpans = RichTextSpanEngine.toggleFormat(nextSpans, RichTextFormat.Underline, start, end, textLength)
+        }
+        "STRIKETHROUGH", "STRIKE" -> {
+            nextSpans = RichTextSpanEngine.toggleFormat(nextSpans, RichTextFormat.Strikethrough, start, end, textLength)
+        }
+        "CODE", "MONOSPACE" -> {
+            nextSpans = RichTextSpanEngine.toggleFormat(nextSpans, RichTextFormat.Code, start, end, textLength)
+        }
+    }
+    if (linkUrl.isNotBlank()) {
+        nextSpans = RichTextSpanEngine.applyLink(nextSpans, start, end, textLength, linkUrl)
+    }
+    if (color.isNotBlank()) {
+        nextSpans = RichTextSpanEngine.applyColor(nextSpans, start, end, textLength, color)
+    }
+    if (highlight.isNotBlank()) {
+        nextSpans = RichTextSpanEngine.applyHighlight(nextSpans, start, end, textLength, highlight)
+    }
+    return nextSpans
 }
 
 private fun ChatAction.toDatabaseBlock(): PageBlock {

@@ -153,6 +153,13 @@ class AiService(
         val blockType: String = "",
         val blockId: String = "",
         val blockText: String = "",
+        val textToFormat: String = "",
+        val format: String = "",
+        val linkUrl: String = "",
+        val color: String = "",
+        val highlight: String = "",
+        val rangeStart: Int? = null,
+        val rangeEnd: Int? = null,
         val mediaUri: String = "",
         val mediaName: String = "",
         val mediaMimeType: String = "",
@@ -330,7 +337,7 @@ class AiService(
 
             Supported action types:
             CREATE_PAGE, RENAME_PAGE, UPDATE_PAGE,
-            APPEND_BLOCK, ADD_BLOCK, UPDATE_BLOCK, DELETE_BLOCK, DELETE_ALL_BLOCKS,
+            APPEND_BLOCK, ADD_BLOCK, UPDATE_BLOCK, FORMAT_BLOCK_TEXT, DELETE_BLOCK, DELETE_ALL_BLOCKS,
             ADD_PROPERTY, UPDATE_PROPERTY, DELETE_PROPERTY,
             CREATE_DATABASE, CREATE_TABLE, RENAME_TABLE, ADD_TABLE_COLUMN, DELETE_TABLE_COLUMN,
             RENAME_TABLE_COLUMN, UPDATE_TABLE_COLUMN_TYPE, UPDATE_TABLE_COLUMN_CONFIG,
@@ -341,7 +348,8 @@ class AiService(
             Main fields you may use:
             targetTitle, title, content, blockType, blockText, propertyName, propertyType, value,
             tableTitle, tableView, columnName, newColumnName, columnType, rowTitle, newRowTitle,
-            cellValues, tableColumns, tableRows, formula, sortDirection, filterQuery, groupByColumnName.
+            cellValues, tableColumns, tableRows, formula, sortDirection, filterQuery, groupByColumnName,
+            textToFormat, format, linkUrl, color, highlight, rangeStart, rangeEnd.
 
             Table column types:
             Text, Number, Select, MultiSelect, Status, Date, Person, Files, Checkbox, URL, Email, Phone,
@@ -367,6 +375,9 @@ class AiService(
 
             User: @Budget Tracker ubah nama table jadi Expenses
             JSON: {"reply":"Siap - saya rename table itu.","actions":[{"type":"RENAME_TABLE","targetTitle":"Budget Tracker","title":"Expenses"}]}
+
+            User: bold perkataan ayam dalam block jadual penjagaan
+            JSON: {"reply":"Siap - saya format teks itu.","actions":[{"type":"FORMAT_BLOCK_TEXT","blockText":"jadual penjagaan","textToFormat":"ayam","format":"Bold"}]}
 
             Context:
             $context

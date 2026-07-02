@@ -59,6 +59,35 @@ class PageMutationUseCaseTest {
     }
 
     @Test
+    fun replaceBlockWithBlocksKeepsFirstBlockIdAndInsertsRemainingBlocks() {
+        val document = PageBlockDocument(
+            blocks = listOf(
+                PageBlock(id = "before", type = PageBlockType.Text, text = "Before"),
+                PageBlock(id = "target", type = PageBlockType.Text, text = "Old"),
+                PageBlock(id = "after", type = PageBlockType.Text, text = "After"),
+            ),
+        )
+
+        val result = useCase.replaceBlockWithBlocks(
+            document = document,
+            blockId = "target",
+            replacementBlocks = listOf(
+                PageBlock(id = "new-1", type = PageBlockType.Heading, text = "Title"),
+                PageBlock(id = "new-2", type = PageBlockType.Bullet, text = "Item"),
+            ),
+        )
+
+        assertTrue(result.changed)
+        assertEquals(
+            listOf("before", "target", "new-2", "after"),
+            result.document.blocks.map { block -> block.id },
+        )
+        assertEquals(PageBlockType.Heading, result.document.blocks[1].type)
+        assertEquals("Title", result.document.blocks[1].text)
+        assertEquals(PageBlockType.Bullet, result.document.blocks[2].type)
+    }
+
+    @Test
     fun moveBlockReturnsRepositoryTargetIndex() {
         val document = PageBlockDocument(
             blocks = listOf(

@@ -112,6 +112,21 @@ class PageMutationUseCase(
         )
     }
 
+    fun replaceBlockWithBlocks(
+        document: PageBlockDocument,
+        blockId: String,
+        replacementBlocks: List<PageBlock>,
+    ): PasteBlocksMutationResult {
+        if (replacementBlocks.isEmpty()) {
+            return PasteBlocksMutationResult(document = document, changed = false)
+        }
+        val result = document.blocks.replaceBlockWithBlocks(blockId, replacementBlocks)
+        return PasteBlocksMutationResult(
+            document = if (result.changed) document.copy(blocks = result.blocks) else document,
+            changed = result.changed,
+        )
+    }
+
     fun deleteBlock(
         document: PageBlockDocument,
         blockId: String,
@@ -283,6 +298,11 @@ data class MoveBlockMutationResult(
         get() = applied.changed
 }
 
+data class PasteBlocksMutationResult(
+    val document: PageBlockDocument,
+    val changed: Boolean,
+)
+
 private fun PageBlockDocument.findBlock(blockId: String): PageBlock? {
     fun walk(blocks: List<PageBlock>): PageBlock? {
         blocks.forEach { block ->
@@ -292,6 +312,42 @@ private fun PageBlockDocument.findBlock(blockId: String): PageBlock? {
         return null
     }
     return walk(blocks)
+}
+
+private data class ReplaceBlocksResult(
+    val blocks: List<PageBlock>,
+    val changed: Boolean,
+)
+
+private fun List<PageBlock>.replaceBlockWithBlocks(
+    blockId: String,
+    replacementBlocks: List<PageBlock>,
+): ReplaceBlocksResult {
+    val directIndex = indexOfFirst { block -> block.id == blockId }
+    if (directIndex >= 0) {
+        val currentBlock = this[directIndex]
+        val replacements = replacementBlocks.mapIndexed { index, block ->
+            if (index == 0) block.copy(id = currentBlock.id) else block
+        }
+        return ReplaceBlocksResult(
+            blocks = take(directIndex) + replacements + drop(directIndex + 1),
+            changed = true,
+        )
+    }
+
+    forEachIndexed { index, block ->
+        val childResult = block.children.replaceBlockWithBlocks(blockId, replacementBlocks)
+        if (childResult.changed) {
+            return ReplaceBlocksResult(
+                blocks = toMutableList().apply {
+                    set(index, block.copy(children = childResult.blocks))
+                },
+                changed = true,
+            )
+        }
+    }
+
+    return ReplaceBlocksResult(blocks = this, changed = false)
 }
 
 private fun List<PageBlock>.findBlockMoveTargetIndex(
