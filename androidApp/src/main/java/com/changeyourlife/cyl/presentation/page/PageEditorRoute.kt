@@ -1543,6 +1543,8 @@ private fun BlockEditorCard(
                     onTextChange = { text -> onTextChange(block.id, text) },
                     onRichTextChange = { text, spans -> onRichTextChange(block.id, text, spans) },
                     onBlockTypeCommand = { type -> onBlockTypeChange(block.id, type) },
+                    onRichTextToolbarChange = onRichTextToolbarChange,
+                    showInlineRichTextToolbar = false,
                     mentionPages = mentionPages,
                 )
                 PageBlockType.DatabaseTable -> DatabaseTableBlockEditor(
@@ -1861,6 +1863,8 @@ private fun MediaFileBlockEditor(
     onTextChange: (String) -> Unit,
     onRichTextChange: (String, List<PageTextSpan>) -> Unit,
     onBlockTypeCommand: (PageBlockType) -> Unit,
+    onRichTextToolbarChange: (RichTextToolbarUiState?) -> Unit = {},
+    showInlineRichTextToolbar: Boolean = true,
     mentionPages: List<Page> = emptyList(),
 ) {
     val context = LocalContext.current
@@ -1932,6 +1936,9 @@ private fun MediaFileBlockEditor(
             onRichTextChange = { _, text, spans -> onRichTextChange(text, spans) },
             modifier = Modifier.fillMaxWidth(),
             onBlockTypeCommand = { _, type -> onBlockTypeCommand(type) },
+            onToolbarStateChange = onRichTextToolbarChange,
+            showInlineToolbar = showInlineRichTextToolbar,
+            enableMultiBlockPaste = false,
             mentionPages = mentionPages,
             minLines = 1,
             placeholder = "Caption",
@@ -4714,7 +4721,9 @@ private fun TableCellEditor(
         -> {
             OutlinedTextField(
                 value = value,
-                onValueChange = onValueChange,
+                onValueChange = { nextValue ->
+                    onValueChange(nextValue.toSingleLineTableCellValue())
+                },
                 modifier = modifier.height(TableRowHeight),
                 singleLine = true,
                 placeholder = {
@@ -4743,6 +4752,12 @@ private fun TableCellEditor(
             )
         }
     }
+}
+
+private fun String.toSingleLineTableCellValue(): String {
+    return replace("\r\n", " ")
+        .replace('\n', ' ')
+        .replace('\r', ' ')
 }
 
 @Composable
@@ -4972,6 +4987,7 @@ private fun TableRowPageSheet(
 ) {
     val title = row.cellText(table.titleColumn()).ifBlank { "Untitled row" }
     var isNewColumnSheetOpen by remember { mutableStateOf(false) }
+    var rowRichTextToolbarState by remember { mutableStateOf<RichTextToolbarUiState?>(null) }
 
     if (isNewColumnSheetOpen) {
         NewTableColumnSheet(
@@ -5096,6 +5112,10 @@ private fun TableRowPageSheet(
                                     onTextChange = { text -> onBlockTextChange(block.id, text) },
                                     onRichTextChange = { text, spans -> onBlockRichTextChange(block.id, text, spans) },
                                     onBlockTypeCommand = { type -> onBlockTypeChange(block.id, type) },
+                                    onRichTextToolbarChange = { toolbarState ->
+                                        rowRichTextToolbarState = toolbarState
+                                    },
+                                    showInlineRichTextToolbar = false,
                                     mentionPages = mentionPages,
                                 )
                                 PageBlockType.Todo -> TodoBlockEditor(
@@ -5104,6 +5124,10 @@ private fun TableRowPageSheet(
                                     onTextChange = { _, text -> onBlockTextChange(block.id, text) },
                                     onRichTextChange = { _, text, spans -> onBlockRichTextChange(block.id, text, spans) },
                                     onPasteBlocks = onBlockPasteBlocks,
+                                    onRichTextToolbarChange = { toolbarState ->
+                                        rowRichTextToolbarState = toolbarState
+                                    },
+                                    showInlineRichTextToolbar = false,
                                     onBlockTypeCommand = { _, type -> onBlockTypeChange(block.id, type) },
                                     onToggleTodo = { onToggleTodo(block.id) },
                                     mentionPages = mentionPages,
@@ -5115,6 +5139,10 @@ private fun TableRowPageSheet(
                                     onTextChange = { _, text -> onBlockTextChange(block.id, text) },
                                     onRichTextChange = { _, text, spans -> onBlockRichTextChange(block.id, text, spans) },
                                     onPasteBlocks = onBlockPasteBlocks,
+                                    onRichTextToolbarChange = { toolbarState ->
+                                        rowRichTextToolbarState = toolbarState
+                                    },
+                                    showInlineRichTextToolbar = false,
                                     onBlockTypeCommand = { _, type -> onBlockTypeChange(block.id, type) },
                                     mentionPages = mentionPages,
                                 )
@@ -5125,6 +5153,10 @@ private fun TableRowPageSheet(
                                     onTextChange = { _, text -> onBlockTextChange(block.id, text) },
                                     onRichTextChange = { _, text, spans -> onBlockRichTextChange(block.id, text, spans) },
                                     onPasteBlocks = onBlockPasteBlocks,
+                                    onRichTextToolbarChange = { toolbarState ->
+                                        rowRichTextToolbarState = toolbarState
+                                    },
+                                    showInlineRichTextToolbar = false,
                                     onBlockTypeCommand = { _, type -> onBlockTypeChange(block.id, type) },
                                     fontStyle = FontStyle.Italic,
                                     mentionPages = mentionPages,
@@ -5138,6 +5170,10 @@ private fun TableRowPageSheet(
                                     onTextChange = { _, text -> onBlockTextChange(block.id, text) },
                                     onRichTextChange = { _, text, spans -> onBlockRichTextChange(block.id, text, spans) },
                                     onPasteBlocks = onBlockPasteBlocks,
+                                    onRichTextToolbarChange = { toolbarState ->
+                                        rowRichTextToolbarState = toolbarState
+                                    },
+                                    showInlineRichTextToolbar = false,
                                     onBlockTypeCommand = { _, type -> onBlockTypeChange(block.id, type) },
                                     mentionPages = mentionPages,
                                 )
@@ -5151,6 +5187,10 @@ private fun TableRowPageSheet(
                         }
                     }
                 }
+            }
+
+            rowRichTextToolbarState?.let { toolbarState ->
+                PageKeyboardRichTextToolbar(toolbarState)
             }
 
             Spacer(modifier = Modifier.height(12.dp))

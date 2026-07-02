@@ -103,4 +103,49 @@ class RichTextControllerTest {
         assertEquals("See Budget", blocks[3].text)
         assertEquals(listOf(PageTextSpan(start = 4, end = 10, linkUrl = "https://budget.test")), blocks[3].spans)
     }
+
+    @Test
+    fun pasteParserMergesMultiLinePasteIntoNonEmptySelection() {
+        val blocks = RichTextPasteParser.mergeTextChangeIntoBlocks(
+            currentType = PageBlockType.Text,
+            currentIsChecked = false,
+            oldValue = TextFieldValue("Hello old world", selection = TextRange(6, 9)),
+            newValue = TextFieldValue("Hello # Plan\n- **Food** world", selection = TextRange(24)),
+            oldSpans = listOf(
+                PageTextSpan(start = 0, end = 5, bold = true),
+                PageTextSpan(start = 10, end = 15, italic = true),
+            ),
+        )
+
+        assertEquals(2, blocks.size)
+        assertEquals(PageBlockType.Text, blocks[0].type)
+        assertEquals("Hello Plan", blocks[0].text)
+        assertEquals(listOf(PageTextSpan(start = 0, end = 5, bold = true)), blocks[0].spans)
+        assertEquals(PageBlockType.Text, blocks[1].type)
+        assertEquals("Food world", blocks[1].text)
+        assertEquals(
+            listOf(
+                PageTextSpan(start = 0, end = 4, bold = true),
+                PageTextSpan(start = 5, end = 10, italic = true),
+            ),
+            blocks[1].spans,
+        )
+    }
+
+    @Test
+    fun pasteParserUsesPastedTypesWhenSelectionReplacesWholeBlock() {
+        val blocks = RichTextPasteParser.mergeTextChangeIntoBlocks(
+            currentType = PageBlockType.Text,
+            currentIsChecked = false,
+            oldValue = TextFieldValue("Old", selection = TextRange(0, 3)),
+            newValue = TextFieldValue("# Title\n- Item", selection = TextRange(14)),
+            oldSpans = emptyList(),
+        )
+
+        assertEquals(2, blocks.size)
+        assertEquals(PageBlockType.Heading, blocks[0].type)
+        assertEquals("Title", blocks[0].text)
+        assertEquals(PageBlockType.Bullet, blocks[1].type)
+        assertEquals("Item", blocks[1].text)
+    }
 }

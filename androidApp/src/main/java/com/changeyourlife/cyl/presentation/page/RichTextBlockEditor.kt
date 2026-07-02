@@ -86,6 +86,7 @@ fun CylRichTextBlockEditor(
     onBlockTypeCommand: (String, PageBlockType) -> Unit = { _, _ -> },
     onToolbarStateChange: (RichTextToolbarUiState?) -> Unit = {},
     showInlineToolbar: Boolean = true,
+    enableMultiBlockPaste: Boolean = true,
     mentionPages: List<Page> = emptyList(),
     minLines: Int = 1,
     singleLine: Boolean = false,
@@ -245,8 +246,14 @@ fun CylRichTextBlockEditor(
         OutlinedTextField(
             value = fieldValue,
             onValueChange = { incoming ->
-                val pasteBlocks = if (fieldValue.text.isBlank() && incoming.text.contains('\n')) {
-                    RichTextPasteParser.parse(incoming.text)
+                val pasteBlocks = if (enableMultiBlockPaste) {
+                    RichTextPasteParser.mergeTextChangeIntoBlocks(
+                        currentType = block.type,
+                        currentIsChecked = block.isChecked,
+                        oldValue = fieldValue,
+                        newValue = incoming,
+                        oldSpans = currentSpans,
+                    )
                 } else {
                     emptyList()
                 }

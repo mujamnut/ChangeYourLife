@@ -224,9 +224,12 @@ Goal: page editor stabil, senang maintain, dan tidak semua logic duduk dalam UI.
 - `RichTextMentionParser` dan `RichTextPasteParser` sudah ada; paste parser boleh pecah markdown ringan kepada block text/heading/bullet/todo/quote serta inline `**bold**` dan `[link](url)`.
 - Blank text block sekarang boleh menerima multi-line paste dan auto-create beberapa page block melalui editor mutation path, bukan simpan semua sebagai satu text block.
 - Row-page blank text block dalam table sekarang juga boleh menerima multi-line paste dan auto-create beberapa row-content block, dengan table undo path yang restore state asal.
+- Multi-line paste dalam non-empty selection sekarang preserve text/spans sebelum dan selepas selection, kemudian sisip block tambahan dari markdown ringan.
+- Table cell text/number sengaja flatten multi-line paste kepada satu line supaya grid tidak pecah; media caption sengaja tidak auto-create block baru.
 - Block editor sekarang ada mention picker `@Page` yang guna senarai page sebenar dan simpan mention sebagai span metadata, bukan teks kosong sahaja.
 - Rich text toolbar sekarang support `B/I/U/S`, `Code`, link, text color swatch, dan highlight swatch dengan canonical spans yang tidak hilang bila user sambung menaip.
 - Page editor utama sekarang render rich text toolbar di bottom keyboard area melalui shared toolbar state, bukan toolbar duplicate dalam setiap block page utama.
+- Row-page dan media caption sekarang guna toolbar host yang sama, manakala table cell kekal guna typed cell editor tanpa rich toolbar.
 - Prefix Notion-like asas sudah ada: `- ` jadi bullet, `[] ` / `[ ] ` jadi todo, `# ` jadi heading, dan `> ` jadi quote.
 - AI action schema/backend prompt/Android executor sekarang support `FORMAT_BLOCK_TEXT` untuk format block text kepada bold/italic/underline/strikethrough/code/link/color/highlight, dengan undo command dan regression test.
 
@@ -237,9 +240,8 @@ Goal: page editor stabil, senang maintain, dan tidak semua logic duduk dalam UI.
 - Mutation logic bercampur dengan UI state.
 - Undo command sudah cover editor mutation utama dan basic AI action undo sudah tersambung dari chat action details dengan reactive `undoState`.
 - Mention trigger dalam block editor dan row-page block sudah ada, tapi belum jadi command palette/editor-level penuh untuk semua context seperti table cell dan reusable picker global.
-- Toolbar rich text sudah naik ke bottom keyboard area untuk page utama, tapi belum diseragamkan penuh untuk row-page sheet, table cell, dan semua editor context.
 - Slash command masih basic; belum ada command untuk create linked page, insert block below/above, atau command yang bergantung kepada context table/property.
-- Paste advanced belum kukuh untuk non-empty selection, table cell, dan media caption; blank-block multi-line paste untuk page biasa dan row-page sudah wired.
+- Paste policy utama sudah settle untuk page block, row-page block, table cell, dan media caption; import HTML/clipboard rich content sebenar belum dibuat.
 
 ### Next Work
 
@@ -248,8 +250,7 @@ Goal: page editor stabil, senang maintain, dan tidak semua logic duduk dalam UI.
 - Tambah unit test untuk mutation tanpa Compose UI.
 - Extract slash command UI kepada editor command palette yang boleh juga dipakai untuk mention picker.
 - Sambungkan slash command dan mention picker kepada editor event, bukan ad hoc UI state.
-- Matangkan paste advanced: non-empty selection, table cell, dan media caption rules yang selamat.
-- Seragamkan rich toolbar untuk row-page sheet, table cell, dan semua editor context supaya behavior formatting tidak bercabang.
+- Tambah import/export rich clipboard sebenar kemudian jika perlu, tanpa ubah canonical CYL block/span format.
 
 ## Milestone 4: Typed Table Core
 

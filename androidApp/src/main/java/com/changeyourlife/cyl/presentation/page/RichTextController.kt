@@ -208,6 +208,61 @@ data class RichTextPasteBlock(
 )
 
 object RichTextPasteParser {
+    fun mergeTextChangeIntoBlocks(
+        currentType: PageBlockType,
+        currentIsChecked: Boolean,
+        oldValue: TextFieldValue,
+        newValue: TextFieldValue,
+        oldSpans: List<PageTextSpan>,
+    ): List<RichTextPasteBlock> {
+        val inserted = insertedTextOrNull(oldValue.text, newValue.text) ?: return emptyList()
+        if (!inserted.contains('\n')) return emptyList()
+        val parsed = parse(inserted)
+        if (parsed.size <= 1) return emptyList()
+
+        val range = changedRange(oldValue.text, newValue.text).coerceInText(oldValue.text)
+        val beforeText = oldValue.text.substring(0, range.min)
+        val afterText = oldValue.text.substring(range.max)
+        val beforeSpans = oldSpans.clipBefore(range.min)
+        val afterSpans = oldSpans.clipAfter(
+            rangeEnd = range.max,
+            newOffset = parsed.last().text.length,
+        )
+
+        val first = parsed.first()
+        val last = parsed.last()
+        val firstText = beforeText + first.text
+        val lastText = last.text + afterText
+        val firstType = if (beforeText.isBlank()) first.type else currentType
+        val lastType = if (afterText.isBlank()) last.type else currentType
+
+        return buildList {
+            add(
+                RichTextPasteBlock(
+                    type = firstType,
+                    text = firstText,
+                    spans = RichTextSpanEngine.normalize(
+                        beforeSpans + first.spans.shiftBy(beforeText.length),
+                        firstText,
+                    ),
+                    isChecked = if (firstType == currentType && beforeText.isNotBlank()) currentIsChecked else first.isChecked,
+                ),
+            )
+            addAll(parsed.drop(1).dropLast(1))
+            add(
+                RichTextPasteBlock(
+                    type = lastType,
+                    text = lastText,
+                    spans = RichTextSpanEngine.normalize(
+                        last.spans + afterSpans,
+                        lastText,
+                    ),
+                    isChecked = if (lastType == currentType && afterText.isNotBlank()) currentIsChecked else last.isChecked,
+                ),
+            )
+        }
+    }
+
     fun parse(rawText: String): List<RichTextPasteBlock> {
         return rawText
             .replace("\r\n", "\n")
@@ -288,7 +343,94 @@ object RichTextPasteParser {
         return InlineMarkdownResult(
             text = text,
             spans = RichTextSpanEngine.normalize(spans, text),
-        )
+            )
+    }
+
+    private fun insertedTextOrNull(
+        oldText: String,
+        newText: String,
+    ): String? {
+        if (oldText == newText) return null
+        var prefixLength = 0
+        val shortestLength = minOf(oldText.length, newText.length)
+        while (
+            prefixLength < shortestLength &&
+            oldText[prefixLength] == newText[prefixLength]
+        ) {
+            prefixLength++
+        }
+
+        var suffixLength = 0
+        while (
+            suffixLength < oldText.length - prefixLength &&
+            suffixLength < newText.length - prefixLength &&
+            oldText[oldText.lastIndex - suffixLength] == newText[newText.lastIndex - suffixLength]
+        ) {
+            suffixLength++
+        }
+        return newText.substring(prefixLength, newText.length - suffixLength)
+    }
+
+    private fun changedRange(
+        oldText: String,
+        newText: String,
+    ): TextRange {
+        var prefixLength = 0
+        val shortestLength = minOf(oldText.length, newText.length)
+        while (
+            prefixLength < shortestLength &&
+            oldText[prefixLength] == newText[prefixLength]
+        ) {
+            prefixLength++
+        }
+
+        var suffixLength = 0
+        while (
+            suffixLength < oldText.length - prefixLength &&
+            suffixLength < newText.length - prefixLength &&
+            oldText[oldText.lastIndex - suffixLength] == newText[newText.lastIndex - suffixLength]
+        ) {
+            suffixLength++
+        }
+        return TextRange(prefixLength, oldText.length - suffixLength)
+    }
+
+    private fun List<PageTextSpan>.clipBefore(end: Int): List<PageTextSpan> {
+        return mapNotNull { span ->
+            val clippedEnd = minOf(span.end, end)
+            if (span.start >= clippedEnd) {
+                null
+            } else {
+                span.copy(end = clippedEnd)
+            }
+        }
+    }
+
+    private fun List<PageTextSpan>.clipAfter(
+        rangeEnd: Int,
+        newOffset: Int,
+    ): List<PageTextSpan> {
+        return mapNotNull { span ->
+            val clippedStart = maxOf(span.start, rangeEnd)
+            if (clippedStart >= span.end) {
+                null
+            } else {
+                span.copy(
+                    start = newOffset + (clippedStart - rangeEnd),
+                    end = newOffset + (span.end - rangeEnd),
+                )
+            }
+        }
+    }
+
+    private fun List<PageTextSpan>.shiftBy(offset: Int): List<PageTextSpan> {
+        if (offset == 0) return this
+        return map { span ->
+            span.copy(
+                start = span.start + offset,
+                end = span.end + offset,
+            )
+        }
     }
 }
 
