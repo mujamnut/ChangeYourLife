@@ -270,6 +270,45 @@ data class RichTextPasteBlock(
 )
 
 object RichTextPasteParser {
+    fun insertedTextForChange(
+        oldText: String,
+        newText: String,
+    ): String? = insertedTextOrNull(oldText, newText)
+
+    fun parseClipboard(
+        rawText: String,
+        htmlText: String?,
+    ): List<RichTextPasteBlock> {
+        val htmlBlocks = htmlText
+            ?.takeIf { html -> html.isNotBlank() }
+            ?.let(RichTextHtmlPasteParser::parse)
+            .orEmpty()
+        return htmlBlocks.ifEmpty { parse(rawText) }
+    }
+
+    fun mergeRichClipboardTextChangeIntoBlocks(
+        currentType: PageBlockType,
+        currentIsChecked: Boolean,
+        oldValue: TextFieldValue,
+        newValue: TextFieldValue,
+        oldSpans: List<PageTextSpan>,
+        clipboardHtmlText: String?,
+    ): List<RichTextPasteBlock> {
+        if (clipboardHtmlText.isNullOrBlank()) return emptyList()
+        val inserted = insertedTextOrNull(oldValue.text, newValue.text) ?: return emptyList()
+        if (inserted.isBlank()) return emptyList()
+        val parsed = parseClipboard(inserted, clipboardHtmlText)
+        if (parsed.isEmpty()) return emptyList()
+        return mergeParsedPasteBlocks(
+            currentType = currentType,
+            currentIsChecked = currentIsChecked,
+            oldValue = oldValue,
+            newValue = newValue,
+            oldSpans = oldSpans,
+            parsed = parsed,
+        )
+    }
+
     fun mergeTextChangeIntoBlocks(
         currentType: PageBlockType,
         currentIsChecked: Boolean,
@@ -281,11 +320,60 @@ object RichTextPasteParser {
         if (!inserted.contains('\n')) return emptyList()
         val parsed = parse(inserted)
         if (parsed.size <= 1) return emptyList()
+        return mergeParsedPasteBlocks(
+            currentType = currentType,
+            currentIsChecked = currentIsChecked,
+            oldValue = oldValue,
+            newValue = newValue,
+            oldSpans = oldSpans,
+            parsed = parsed,
+        )
+    }
 
-        val range = changedRange(oldValue.text, newValue.text).coerceInText(oldValue.text)
+    private fun mergeParsedPasteBlocks(
+        currentType: PageBlockType,
+        currentIsChecked: Boolean,
+        oldValue: TextFieldValue,
+        newValue: TextFieldValue,
+        oldSpans: List<PageTextSpan>,
+        parsed: List<RichTextPasteBlock>,
+    ): List<RichTextPasteBlock> {
+        if (parsed.isEmpty()) return emptyList()
+        val range = if (oldValue.selection.min != oldValue.selection.max) {
+            oldValue.selection.coerceInText(oldValue.text)
+        } else {
+            changedRange(oldValue.text, newValue.text).coerceInText(oldValue.text)
+        }
         val beforeText = oldValue.text.substring(0, range.min)
         val afterText = oldValue.text.substring(range.max)
         val beforeSpans = oldSpans.clipBefore(range.min)
+        if (parsed.size == 1) {
+            val pasteBlock = parsed.single()
+            val mergedText = beforeText + pasteBlock.text + afterText
+            val mergedType = if (beforeText.isBlank() && afterText.isBlank()) pasteBlock.type else currentType
+            val mergedAfterSpans = oldSpans.clipAfter(
+                rangeEnd = range.max,
+                newOffset = beforeText.length + pasteBlock.text.length,
+            )
+            return listOf(
+                RichTextPasteBlock(
+                    type = mergedType,
+                    text = mergedText,
+                    spans = RichTextSpanEngine.normalize(
+                        beforeSpans + pasteBlock.spans.shiftBy(beforeText.length) + mergedAfterSpans,
+                        mergedText,
+                    ),
+                    isChecked = if (
+                        mergedType == currentType &&
+                        (beforeText.isNotBlank() || afterText.isNotBlank())
+                    ) {
+                        currentIsChecked
+                    } else {
+                        pasteBlock.isChecked
+                    },
+                ),
+            )
+        }
         val afterSpans = oldSpans.clipAfter(
             rangeEnd = range.max,
             newOffset = parsed.last().text.length,
@@ -326,6 +414,9 @@ object RichTextPasteParser {
     }
 
     fun parse(rawText: String): List<RichTextPasteBlock> {
+        RichTextHtmlPasteParser.parse(rawText).takeIf { blocks -> blocks.isNotEmpty() }?.let { blocks ->
+            return blocks
+        }
         return rawText
             .toLightMarkdownFromHtml()
             .replace("\r\n", "\n")

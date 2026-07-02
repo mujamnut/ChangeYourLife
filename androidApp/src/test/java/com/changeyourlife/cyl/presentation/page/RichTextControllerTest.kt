@@ -178,6 +178,79 @@ class RichTextControllerTest {
     }
 
     @Test
+    fun pasteParserPreservesRichHtmlBlocksAndInlineStyles() {
+        val blocks = RichTextPasteParser.parse(
+            """
+            <h2>Budget</h2>
+            <p><strong>Food</strong> and <em>Fuel</em>
+            <a href="https://budget.test"><span style="color: #1565c0; background-color: rgb(255,245,157); text-decoration: underline line-through;">Link</span></a></p>
+            <ol><li>Rent</li></ol>
+            <ul><li><input type="checkbox" checked> Pay bill</li></ul>
+            <blockquote>Note</blockquote>
+            <pre>code</pre>
+            """.trimIndent(),
+        )
+
+        assertEquals(PageBlockType.Heading, blocks[0].type)
+        assertEquals("Budget", blocks[0].text)
+        assertEquals(PageBlockType.Text, blocks[1].type)
+        assertEquals("Food and Fuel Link", blocks[1].text)
+        assertEquals(
+            listOf(
+                PageTextSpan(start = 0, end = 4, bold = true),
+                PageTextSpan(start = 9, end = 13, italic = true),
+                PageTextSpan(
+                    start = 14,
+                    end = 18,
+                    underline = true,
+                    strikethrough = true,
+                    linkUrl = "https://budget.test",
+                    color = "#1565C0",
+                    highlight = "#FFF59D",
+                ),
+            ),
+            blocks[1].spans,
+        )
+        assertEquals(PageBlockType.Numbered, blocks[2].type)
+        assertEquals("Rent", blocks[2].text)
+        assertEquals(PageBlockType.Todo, blocks[3].type)
+        assertTrue(blocks[3].isChecked)
+        assertEquals("Pay bill", blocks[3].text)
+        assertEquals(PageBlockType.Quote, blocks[4].type)
+        assertEquals("Note", blocks[4].text)
+        assertEquals(PageBlockType.Text, blocks[5].type)
+        assertEquals("code", blocks[5].text)
+        assertEquals(listOf(PageTextSpan(start = 0, end = 4, code = true)), blocks[5].spans)
+    }
+
+    @Test
+    fun pasteParserMergesSingleRichHtmlBlockIntoExistingText() {
+        val blocks = RichTextPasteParser.mergeRichClipboardTextChangeIntoBlocks(
+            currentType = PageBlockType.Text,
+            currentIsChecked = false,
+            oldValue = TextFieldValue("Hello old world", selection = TextRange(6, 9)),
+            newValue = TextFieldValue("Hello Food world", selection = TextRange(10)),
+            oldSpans = listOf(
+                PageTextSpan(start = 0, end = 5, bold = true),
+                PageTextSpan(start = 10, end = 15, italic = true),
+            ),
+            clipboardHtmlText = "<strong>Food</strong>",
+        )
+
+        assertEquals(1, blocks.size)
+        assertEquals(PageBlockType.Text, blocks[0].type)
+        assertEquals("Hello Food world", blocks[0].text)
+        assertEquals(
+            listOf(
+                PageTextSpan(start = 0, end = 5, bold = true),
+                PageTextSpan(start = 6, end = 10, bold = true),
+                PageTextSpan(start = 11, end = 16, italic = true),
+            ),
+            blocks[0].spans,
+        )
+    }
+
+    @Test
     fun enterSplitCreatesSiblingBlocksAndKeepsAfterTextSpans() {
         val blocks = RichTextBlockInteractionParser.splitEnterChange(
             currentType = PageBlockType.Text,

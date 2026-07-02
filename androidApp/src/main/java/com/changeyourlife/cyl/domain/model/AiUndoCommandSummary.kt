@@ -80,6 +80,16 @@ fun EditorCommand.toAiUndoCommandSummary(actionIndex: Int): AiUndoCommandSummary
             direction = direction,
         )
 
+        is EditorCommand.MoveBlockToParent -> AiUndoCommandSummary(
+            actionIndex = actionIndex,
+            commandType = "MoveBlockToParent",
+            targetType = parentBlockId?.let { "Block" } ?: "Document",
+            targetId = blockId,
+            blockId = blockId,
+            parentBlockId = parentBlockId,
+            index = index,
+        )
+
         is EditorCommand.ReplaceBlockMediaAttachments -> AiUndoCommandSummary(
             actionIndex = actionIndex,
             commandType = "ReplaceBlockMediaAttachments",
@@ -155,6 +165,14 @@ fun AiUndoCommandSummary.toEditorCommand(): EditorCommand? {
 
         "MoveBlock" -> blockId.takeIf(String::isNotBlank)?.let { id ->
             direction?.let { delta -> EditorCommand.MoveBlock(blockId = id, direction = delta) }
+        }
+
+        "MoveBlockToParent" -> blockId.takeIf(String::isNotBlank)?.let { id ->
+            EditorCommand.MoveBlockToParent(
+                blockId = id,
+                parentBlockId = parentBlockId,
+                index = index,
+            )
         }
 
         "ReplaceBlockMediaAttachments" -> blockId.takeIf(String::isNotBlank)?.let { id ->

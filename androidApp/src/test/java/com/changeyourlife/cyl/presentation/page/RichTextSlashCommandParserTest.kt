@@ -70,4 +70,13 @@ class RichTextSlashCommandParserTest {
 
         assertEquals(RichTextSlashAction.OpenPropertySheet, action)
     }
+
+    @Test
+    fun matchingCommandsSupportsIndentAndOutdent() {
+        val indentAction = RichTextSlashCommandParser.matchingCommands("indent").single().action
+        val outdentAction = RichTextSlashCommandParser.matchingCommands("outdent").single().action
+
+        assertEquals(RichTextSlashAction.IndentBlock, indentAction)
+        assertEquals(RichTextSlashAction.OutdentBlock, outdentAction)
+    }
 }

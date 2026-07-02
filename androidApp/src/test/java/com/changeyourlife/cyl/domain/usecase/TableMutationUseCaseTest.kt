@@ -185,6 +185,43 @@ class TableMutationUseCaseTest {
     }
 
     @Test
+    fun rowBlockNestingUsesEditorCommandPipelineAndSupportsUndo() {
+        val document = tableDocument(
+            columns = listOf(PageTableColumn(id = "name", name = "Name")),
+            rows = listOf(
+                PageTableRow(
+                    id = "row-1",
+                    cells = mapOf("name" to "Food"),
+                    blocks = listOf(
+                        PageBlock(id = "parent", type = PageBlockType.Bullet, text = "Parent"),
+                        PageBlock(id = "child", type = PageBlockType.Text, text = "Child"),
+                    ),
+                ),
+            ),
+        )
+
+        val result = useCase.updateRowBlocks(
+            document = document,
+            tableBlockId = "table-1",
+            rowId = "row-1",
+        ) {
+            EditorCommand.MoveBlockToParent(
+                blockId = "child",
+                parentBlockId = "parent",
+                index = 0,
+            )
+        }
+        val undoResult = ApplyEditorCommandUseCase()(result.document, requireNotNull(result.commandResult.undoCommand))
+
+        assertTrue(result.changed)
+        val rowBlocks = result.document.table.rows.single().blocks
+        assertEquals(listOf("parent"), rowBlocks.map { block -> block.id })
+        assertEquals(listOf("child"), rowBlocks.single().children.map { block -> block.id })
+        assertTrue(result.commandResult.undoCommand is EditorCommand.ReplaceTable)
+        assertEquals(document, undoResult.document)
+    }
+
+    @Test
     fun replaceRowBlockWithBlocksKeepsFirstIdAndReturnsTableUndo() {
         val document = tableDocument(
             columns = listOf(PageTableColumn(id = "name", name = "Name")),

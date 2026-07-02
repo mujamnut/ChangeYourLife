@@ -215,6 +215,8 @@ fun PageEditorRoute(
         onDeleteBlock = viewModel::deleteBlock,
         onMoveBlockUp = viewModel::moveBlockUp,
         onMoveBlockDown = viewModel::moveBlockDown,
+        onIndentBlock = viewModel::indentBlock,
+        onOutdentBlock = viewModel::outdentBlock,
         onTableTitleChange = viewModel::updateTableTitle,
         onTableViewChange = viewModel::updateTableView,
         onTableViewConfigChange = viewModel::updateTableViewConfig,
@@ -245,6 +247,8 @@ fun PageEditorRoute(
         onInsertTableRowPageBlockNear = viewModel::insertTableRowPageBlockNear,
         onCreateLinkedChildPageFromTableRowBlock = viewModel::createLinkedChildPageFromTableRowBlock,
         onDeleteTableRowPageBlock = viewModel::deleteTableRowPageBlock,
+        onIndentTableRowPageBlock = viewModel::indentTableRowPageBlock,
+        onOutdentTableRowPageBlock = viewModel::outdentTableRowPageBlock,
         onAddProperty = viewModel::addProperty,
         onPropertyNameChange = viewModel::updatePropertyName,
         onPropertyValueChange = viewModel::updatePropertyValue,
@@ -291,6 +295,8 @@ private fun PageEditorScreen(
     onDeleteBlock: (String) -> Unit,
     onMoveBlockUp: (String) -> Unit,
     onMoveBlockDown: (String) -> Unit,
+    onIndentBlock: (String) -> Unit,
+    onOutdentBlock: (String) -> Unit,
     onTableTitleChange: (String, String) -> Unit,
     onTableViewChange: (String, PageTableView) -> Unit,
     onTableViewConfigChange: (String, PageTableViewConfig) -> Unit,
@@ -328,6 +334,8 @@ private fun PageEditorScreen(
     onInsertTableRowPageBlockNear: (String, String, String, PageBlockType, PageBlockInsertPosition) -> Unit,
     onCreateLinkedChildPageFromTableRowBlock: (String, String, String) -> Unit,
     onDeleteTableRowPageBlock: (String, String, String) -> Unit,
+    onIndentTableRowPageBlock: (String, String, String) -> Unit,
+    onOutdentTableRowPageBlock: (String, String, String) -> Unit,
     onAddProperty: (PagePropertyType, String) -> Unit,
     onPropertyNameChange: (String, String) -> Unit,
     onPropertyValueChange: (String, String) -> Unit,
@@ -349,11 +357,40 @@ private fun PageEditorScreen(
     var isBlockPickerSheetOpen by rememberSaveable { mutableStateOf(false) }
     var activeBlockId by rememberSaveable { mutableStateOf<String?>(null) }
     var richTextToolbarState by remember { mutableStateOf<RichTextToolbarUiState?>(null) }
+    var focusRequestSequence by rememberSaveable { mutableStateOf(0L) }
+    var editorFocusRequest by remember { mutableStateOf<EditorBlockFocusRequest?>(null) }
+
+    fun requestEditorFocus(blockId: String?) {
+        if (blockId.isNullOrBlank()) return
+        focusRequestSequence += 1
+        editorFocusRequest = EditorBlockFocusRequest(
+            blockId = blockId,
+            token = focusRequestSequence,
+        )
+        activeBlockId = blockId
+    }
+
+    fun deleteBlockAndFocusSibling(blockId: String) {
+        val targetBlockId = uiState.blocks.editorFocusTargetAfterDeleting(blockId)
+        onDeleteBlock(blockId)
+        requestEditorFocus(targetBlockId)
+        if (targetBlockId == null) activeBlockId = null
+    }
 
     LaunchedEffect(uiState.blocks, activeBlockId) {
         val currentActiveBlockId = activeBlockId
         if (currentActiveBlockId != null && !uiState.blocks.containsBlockId(currentActiveBlockId)) {
             activeBlockId = null
+        }
+    }
+
+    LaunchedEffect(uiState.blocks, editorFocusRequest) {
+        val currentFocusRequest = editorFocusRequest
+        if (
+            currentFocusRequest != null &&
+            !uiState.blocks.containsFocusableEditorBlock(currentFocusRequest.blockId)
+        ) {
+            editorFocusRequest = null
         }
     }
 
@@ -376,8 +413,7 @@ private fun PageEditorScreen(
                 richTextToolbarState = richTextToolbarState,
                 onAddBlock = onAddBlock,
                 onDeleteActiveBlock = {
-                    activeBlockId?.let(onDeleteBlock)
-                    activeBlockId = null
+                    activeBlockId?.let(::deleteBlockAndFocusSibling)
                 },
                 onUndoEditorChange = onUndoEditorChange,
                 onSearch = { isPageSearchSheetOpen = true },
@@ -535,6 +571,7 @@ private fun PageEditorScreen(
                     ) { block ->
                         BlockEditorCard(
                             block = block,
+                            isFirstBlock = uiState.blocks.firstOrNull()?.id == block.id,
                             indentLevel = 0,
                             onTextChange = onBlockTextChange,
                             onRichTextChange = onBlockRichTextChange,
@@ -546,10 +583,14 @@ private fun PageEditorScreen(
                             onMediaAdd = onBlockMediaAdd,
                             onMediaRemove = onBlockMediaRemove,
                             onToggleTodo = onToggleTodo,
-                            onDelete = onDeleteBlock,
+                            onDelete = ::deleteBlockAndFocusSibling,
                             onMoveUp = onMoveBlockUp,
                             onMoveDown = onMoveBlockDown,
+                            onIndentBlock = onIndentBlock,
+                            onOutdentBlock = onOutdentBlock,
                             onBlockFocused = { blockId -> activeBlockId = blockId },
+                            focusRequest = editorFocusRequest,
+                            activeBlockId = activeBlockId,
                             onAddChildBlock = onAddChildBlock,
                             onInsertBlockNear = onInsertBlockNear,
                             onCreateLinkedChildPageFromBlock = onCreateLinkedChildPageFromBlock,
@@ -584,6 +625,8 @@ private fun PageEditorScreen(
                             onInsertTableRowPageBlockNear = onInsertTableRowPageBlockNear,
                             onCreateLinkedChildPageFromTableRowBlock = onCreateLinkedChildPageFromTableRowBlock,
                             onDeleteTableRowPageBlock = onDeleteTableRowPageBlock,
+                            onIndentTableRowPageBlock = onIndentTableRowPageBlock,
+                            onOutdentTableRowPageBlock = onOutdentTableRowPageBlock,
                             tableReferences = tableReferences,
                             searchTargetType = initialSearchTargetType,
                             searchTargetId = initialSearchTargetId,
@@ -816,6 +859,9 @@ private fun PageKeyboardBlockToolbar(
     onDeleteActiveBlock: () -> Unit,
     onUndoEditorChange: () -> Unit,
 ) {
+    val blockTypeEntries = remember {
+        EditorCommandRegistry.changeTypeEntries()
+    }
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -846,13 +892,14 @@ private fun PageKeyboardBlockToolbar(
                 }
             }
             items(
-                items = BlockTypeOption.entries,
-                key = { option -> option.type.name },
-            ) { option ->
+                items = blockTypeEntries,
+                key = { entry -> entry.command.paletteItemId() },
+            ) { entry ->
+                val type = entry.changeTypeOrNull() ?: return@items
                 FilterChip(
                     selected = false,
-                    onClick = { onAddBlock(option.type) },
-                    label = { Text(text = option.label) },
+                    onClick = { onAddBlock(type) },
+                    label = { Text(text = entry.command.label) },
                 )
             }
             if (activeBlockId != null) {
@@ -881,6 +928,9 @@ private fun PageBlockPickerSheet(
     onDismiss: () -> Unit,
     sheetState: androidx.compose.material3.SheetState,
 ) {
+    val blockTypeEntries = remember {
+        EditorCommandRegistry.changeTypeEntries()
+    }
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
@@ -894,9 +944,11 @@ private fun PageBlockPickerSheet(
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
             )
-            BlockTypeOption.entries.forEach { option ->
+            blockTypeEntries.forEach { entry ->
+                val type = entry.changeTypeOrNull() ?: return@forEach
                 ListItem(
-                    headlineContent = { Text(text = option.label) },
+                    headlineContent = { Text(text = entry.command.label) },
+                    supportingContent = { Text(text = entry.command.hint) },
                     leadingContent = {
                         Icon(
                             imageVector = Icons.Rounded.Add,
@@ -906,7 +958,7 @@ private fun PageBlockPickerSheet(
                     },
                     modifier = Modifier
                         .clip(RoundedCornerShape(16.dp))
-                        .clickable { onAddBlock(option.type) },
+                        .clickable { onAddBlock(type) },
                 )
             }
             Spacer(modifier = Modifier.height(12.dp))
@@ -1379,6 +1431,9 @@ private fun PropertyTypeRow(
 private fun AddBlockToolbar(
     onAddBlock: (PageBlockType) -> Unit,
 ) {
+    val blockTypeEntries = remember {
+        EditorCommandRegistry.changeTypeEntries()
+    }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(
             text = "Blocks",
@@ -1389,13 +1444,14 @@ private fun AddBlockToolbar(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             items(
-                items = BlockTypeOption.entries,
-                key = { option -> option.type.name },
-            ) { option ->
+                items = blockTypeEntries,
+                key = { entry -> entry.command.paletteItemId() },
+            ) { entry ->
+                val type = entry.changeTypeOrNull() ?: return@items
                 FilterChip(
                     selected = false,
-                    onClick = { onAddBlock(option.type) },
-                    label = { Text(text = option.label) },
+                    onClick = { onAddBlock(type) },
+                    label = { Text(text = entry.command.label) },
                     leadingIcon = {
                         Icon(
                             imageVector = Icons.Rounded.Add,
@@ -1411,6 +1467,7 @@ private fun AddBlockToolbar(
 @Composable
 private fun BlockEditorCard(
     block: PageBlock,
+    isFirstBlock: Boolean = false,
     indentLevel: Int = 0,
     onTextChange: (String, String) -> Unit,
     onRichTextChange: (String, String, List<PageTextSpan>) -> Unit,
@@ -1423,7 +1480,11 @@ private fun BlockEditorCard(
     onDelete: (String) -> Unit,
     onMoveUp: (String) -> Unit,
     onMoveDown: (String) -> Unit,
+    onIndentBlock: (String) -> Unit,
+    onOutdentBlock: (String) -> Unit,
     onBlockFocused: (String) -> Unit,
+    focusRequest: EditorBlockFocusRequest?,
+    activeBlockId: String? = null,
     onAddChildBlock: (String, PageBlockType) -> Unit,
     onInsertBlockNear: (String, PageBlockType, PageBlockInsertPosition) -> Unit,
     onCreateLinkedChildPageFromBlock: (String) -> Unit,
@@ -1465,6 +1526,8 @@ private fun BlockEditorCard(
     onInsertTableRowPageBlockNear: (String, String, String, PageBlockType, PageBlockInsertPosition) -> Unit,
     onCreateLinkedChildPageFromTableRowBlock: (String, String, String) -> Unit,
     onDeleteTableRowPageBlock: (String, String, String) -> Unit,
+    onIndentTableRowPageBlock: (String, String, String) -> Unit,
+    onOutdentTableRowPageBlock: (String, String, String) -> Unit,
     tableReferences: List<PageTableReference>,
     searchTargetType: String = "",
     searchTargetId: String = "",
@@ -1472,6 +1535,17 @@ private fun BlockEditorCard(
     var isBlockMenuExpanded by remember { mutableStateOf(false) }
     val isPlainTextBlock = block.type.isPlainEditorBlock
     val isSearchHighlighted = block.isDirectSearchTarget(searchTargetType, searchTargetId)
+    val isCurrentBlockActive = activeBlockId == block.id
+    val shouldShowBlockHandle = isBlockMenuExpanded ||
+        isCurrentBlockActive ||
+        block.type == PageBlockType.DatabaseTable ||
+        block.type == PageBlockType.Divider ||
+        block.type == PageBlockType.MediaFile
+    val focusRequestToken = if (focusRequest?.blockId == block.id) {
+        focusRequest.token
+    } else {
+        0L
+    }
 
     Card(
         modifier = Modifier
@@ -1488,69 +1562,64 @@ private fun BlockEditorCard(
             },
         ),
     ) {
-        Column(
-            modifier = Modifier.padding(
-                horizontal = if (isPlainTextBlock || block.type == PageBlockType.DatabaseTable) 0.dp else 6.dp,
-                vertical = if (isPlainTextBlock || block.type == PageBlockType.DatabaseTable) 0.dp else 8.dp,
-            ),
-            verticalArrangement = Arrangement.spacedBy(
-                if (isPlainTextBlock || block.type == PageBlockType.DatabaseTable) 0.dp else 6.dp,
-            ),
-        ) {
-            if (!isPlainTextBlock && block.type != PageBlockType.DatabaseTable) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = block.type.label,
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    IconButton(onClick = { isBlockMenuExpanded = true }) {
+        Row(modifier = Modifier.fillMaxWidth()) {
+            Box(
+                modifier = Modifier
+                    .width(30.dp)
+                    .padding(top = if (block.type == PageBlockType.DatabaseTable) 28.dp else 2.dp),
+                contentAlignment = Alignment.TopStart,
+            ) {
+                if (shouldShowBlockHandle) {
+                    IconButton(
+                        onClick = {
+                            onBlockFocused(block.id)
+                            isBlockMenuExpanded = true
+                        },
+                        modifier = Modifier.size(30.dp),
+                    ) {
                         Icon(
-                            imageVector = Icons.Rounded.MoreVert,
+                            imageVector = Icons.Rounded.DragIndicator,
                             contentDescription = "Block actions",
+                            modifier = Modifier.size(20.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                 }
 
-                DropdownMenu(
+                EditorBlockActionMenu(
                     expanded = isBlockMenuExpanded,
-                    onDismissRequest = { isBlockMenuExpanded = false },
-                ) {
-                    BlockTypeOption.entries.forEach { option ->
-                        DropdownMenuItem(
-                            text = { Text(text = "Add ${option.label.lowercase()} inside") },
-                            leadingIcon = {
-                                Icon(
-                                    imageVector = Icons.Rounded.Add,
-                                    contentDescription = null,
-                                )
-                            },
-                            onClick = {
-                                isBlockMenuExpanded = false
-                                onAddChildBlock(block.id, option.type)
-                            },
-                        )
-                    }
-                    DropdownMenuItem(
-                        text = { Text(text = "Delete") },
-                        leadingIcon = {
-                            Icon(
-                                imageVector = Icons.Rounded.Delete,
-                                contentDescription = null,
-                            )
-                        },
-                        onClick = {
-                            isBlockMenuExpanded = false
-                            onDelete(block.id)
-                        },
-                    )
-                }
+                    currentType = block.type,
+                    onDismiss = { isBlockMenuExpanded = false },
+                    onTurnInto = { type -> onBlockTypeChange(block.id, type) },
+                    onInsertNear = { type, position -> onInsertBlockNear(block.id, type, position) },
+                    onAddChild = { type -> onAddChildBlock(block.id, type) },
+                    onMoveUp = { onMoveUp(block.id) },
+                    onMoveDown = { onMoveDown(block.id) },
+                    onIndent = { onIndentBlock(block.id) },
+                    onOutdent = { onOutdentBlock(block.id) },
+                    onDelete = { onDelete(block.id) },
+                )
             }
 
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(
+                        horizontal = if (isPlainTextBlock || block.type == PageBlockType.DatabaseTable) {
+                            0.dp
+                        } else {
+                            6.dp
+                        },
+                        vertical = if (isPlainTextBlock || block.type == PageBlockType.DatabaseTable) {
+                            0.dp
+                        } else {
+                            8.dp
+                        },
+                    ),
+                verticalArrangement = Arrangement.spacedBy(
+                    if (isPlainTextBlock || block.type == PageBlockType.DatabaseTable) 0.dp else 6.dp,
+                ),
+            ) {
             when (block.type) {
                 PageBlockType.Divider -> HorizontalDivider()
                 PageBlockType.MediaFile -> MediaFileBlockEditor(
@@ -1562,10 +1631,14 @@ private fun BlockEditorCard(
                     onBlockTypeCommand = { type -> onBlockTypeChange(block.id, type) },
                     onInsertBlockCommand = { type, position -> onInsertBlockNear(block.id, type, position) },
                     onDeleteEmptyBlockCommand = { onDelete(block.id) },
+                    onIndentBlockCommand = { onIndentBlock(block.id) },
+                    onOutdentBlockCommand = { onOutdentBlock(block.id) },
                     onCreateLinkedPageCommand = { onCreateLinkedChildPageFromBlock(block.id) },
+                    focusRequestToken = focusRequestToken,
                     onRichTextToolbarChange = onRichTextToolbarChange,
                     showInlineRichTextToolbar = false,
                     mentionPages = mentionPages,
+                    isFirstBlock = isFirstBlock,
                 )
                 PageBlockType.DatabaseTable -> DatabaseTableBlockEditor(
                     tableBlockId = block.id,
@@ -1638,6 +1711,12 @@ private fun BlockEditorCard(
                     onDeleteRowPageBlock = { rowId, rowBlockId ->
                         onDeleteTableRowPageBlock(block.id, rowId, rowBlockId)
                     },
+                    onIndentRowPageBlock = { rowId, rowBlockId ->
+                        onIndentTableRowPageBlock(block.id, rowId, rowBlockId)
+                    },
+                    onOutdentRowPageBlock = { rowId, rowBlockId ->
+                        onOutdentTableRowPageBlock(block.id, rowId, rowBlockId)
+                    },
                     mentionPages = mentionPages,
                     searchTargetType = searchTargetType,
                     searchTargetId = searchTargetId,
@@ -1653,10 +1732,14 @@ private fun BlockEditorCard(
                     onBlockTypeCommand = onBlockTypeChange,
                     onInsertBlockCommand = onInsertBlockNear,
                     onDeleteEmptyBlockCommand = onDelete,
+                    onIndentBlockCommand = onIndentBlock,
+                    onOutdentBlockCommand = onOutdentBlock,
                     onCreateLinkedPageCommand = onCreateLinkedChildPageFromBlock,
+                    focusRequestToken = focusRequestToken,
                     onToggleTodo = onToggleTodo,
                     onFocusBlock = { onBlockFocused(block.id) },
                     mentionPages = mentionPages,
+                    isFirstBlock = isFirstBlock,
                 )
                 PageBlockType.Bullet -> LeadingTextBlockEditor(
                     blockId = block.id,
@@ -1670,9 +1753,13 @@ private fun BlockEditorCard(
                     onBlockTypeCommand = onBlockTypeChange,
                     onInsertBlockCommand = onInsertBlockNear,
                     onDeleteEmptyBlockCommand = onDelete,
+                    onIndentBlockCommand = onIndentBlock,
+                    onOutdentBlockCommand = onOutdentBlock,
                     onCreateLinkedPageCommand = onCreateLinkedChildPageFromBlock,
+                    focusRequestToken = focusRequestToken,
                     onFocusBlock = { onBlockFocused(block.id) },
                     mentionPages = mentionPages,
+                    isFirstBlock = isFirstBlock,
                 )
                 PageBlockType.Numbered -> LeadingTextBlockEditor(
                     blockId = block.id,
@@ -1686,9 +1773,13 @@ private fun BlockEditorCard(
                     onBlockTypeCommand = onBlockTypeChange,
                     onInsertBlockCommand = onInsertBlockNear,
                     onDeleteEmptyBlockCommand = onDelete,
+                    onIndentBlockCommand = onIndentBlock,
+                    onOutdentBlockCommand = onOutdentBlock,
                     onCreateLinkedPageCommand = onCreateLinkedChildPageFromBlock,
+                    focusRequestToken = focusRequestToken,
                     onFocusBlock = { onBlockFocused(block.id) },
                     mentionPages = mentionPages,
+                    isFirstBlock = isFirstBlock,
                 )
                 PageBlockType.Quote -> LeadingTextBlockEditor(
                     blockId = block.id,
@@ -1702,10 +1793,14 @@ private fun BlockEditorCard(
                     onBlockTypeCommand = onBlockTypeChange,
                     onInsertBlockCommand = onInsertBlockNear,
                     onDeleteEmptyBlockCommand = onDelete,
+                    onIndentBlockCommand = onIndentBlock,
+                    onOutdentBlockCommand = onOutdentBlock,
                     onCreateLinkedPageCommand = onCreateLinkedChildPageFromBlock,
+                    focusRequestToken = focusRequestToken,
                     fontStyle = FontStyle.Italic,
                     onFocusBlock = { onBlockFocused(block.id) },
                     mentionPages = mentionPages,
+                    isFirstBlock = isFirstBlock,
                 )
                 PageBlockType.Heading,
                 PageBlockType.Text,
@@ -1720,9 +1815,13 @@ private fun BlockEditorCard(
                     onBlockTypeCommand = onBlockTypeChange,
                     onInsertBlockCommand = onInsertBlockNear,
                     onDeleteEmptyBlockCommand = onDelete,
+                    onIndentBlockCommand = onIndentBlock,
+                    onOutdentBlockCommand = onOutdentBlock,
                     onCreateLinkedPageCommand = onCreateLinkedChildPageFromBlock,
+                    focusRequestToken = focusRequestToken,
                     onFocusBlock = { onBlockFocused(block.id) },
                     mentionPages = mentionPages,
+                    isFirstBlock = isFirstBlock,
                 )
             }
 
@@ -1744,7 +1843,12 @@ private fun BlockEditorCard(
                                 onDelete = onDelete,
                                 onMoveUp = onMoveUp,
                                 onMoveDown = onMoveDown,
+                                onIndentBlock = onIndentBlock,
+                                onOutdentBlock = onOutdentBlock,
                                 onBlockFocused = onBlockFocused,
+                                focusRequest = focusRequest,
+                                activeBlockId = activeBlockId,
+                                isFirstBlock = false,
                                 onAddChildBlock = onAddChildBlock,
                                 onInsertBlockNear = onInsertBlockNear,
                                 onCreateLinkedChildPageFromBlock = onCreateLinkedChildPageFromBlock,
@@ -1779,6 +1883,8 @@ private fun BlockEditorCard(
                                 onInsertTableRowPageBlockNear = onInsertTableRowPageBlockNear,
                                 onCreateLinkedChildPageFromTableRowBlock = onCreateLinkedChildPageFromTableRowBlock,
                                 onDeleteTableRowPageBlock = onDeleteTableRowPageBlock,
+                                onIndentTableRowPageBlock = onIndentTableRowPageBlock,
+                                onOutdentTableRowPageBlock = onOutdentTableRowPageBlock,
                                 tableReferences = tableReferences,
                                 searchTargetType = searchTargetType,
                                 searchTargetId = searchTargetId,
@@ -1789,6 +1895,7 @@ private fun BlockEditorCard(
             }
         }
     }
+}
 }
 
 @Composable
@@ -1803,10 +1910,15 @@ private fun TextBlockEditor(
     onBlockTypeCommand: (String, PageBlockType) -> Unit,
     onInsertBlockCommand: (String, PageBlockType, PageBlockInsertPosition) -> Unit,
     onDeleteEmptyBlockCommand: (String) -> Unit,
+    onIndentBlockCommand: (String) -> Unit = {},
+    onOutdentBlockCommand: (String) -> Unit = {},
     onCreateLinkedPageCommand: (String) -> Unit,
     onOpenPropertySheetCommand: (String) -> Unit = {},
+    focusRequestToken: Long = 0L,
     onFocusBlock: () -> Unit = {},
     mentionPages: List<Page> = emptyList(),
+    isFirstBlock: Boolean = false,
+    isTableRowPage: Boolean = false,
 ) {
     CylRichTextBlockEditor(
         blockId = blockId,
@@ -1821,8 +1933,11 @@ private fun TextBlockEditor(
         onBlockTypeCommand = onBlockTypeCommand,
         onInsertBlockCommand = onInsertBlockCommand,
         onDeleteEmptyBlockCommand = onDeleteEmptyBlockCommand,
+        onIndentBlockCommand = onIndentBlockCommand,
+        onOutdentBlockCommand = onOutdentBlockCommand,
         onCreateLinkedPageCommand = onCreateLinkedPageCommand,
         onOpenPropertySheetCommand = onOpenPropertySheetCommand,
+        focusRequestToken = focusRequestToken,
         mentionPages = mentionPages,
         minLines = if (block.type == PageBlockType.Heading) 1 else 2,
         textStyle = when (block.type) {
@@ -1830,6 +1945,11 @@ private fun TextBlockEditor(
             else -> MaterialTheme.typography.bodyLarge
         },
         placeholder = block.type.placeholder,
+        placeholderContext = EditorPlaceholderContext(
+            type = block.type,
+            isFirstBlock = isFirstBlock,
+            isTableRowPage = isTableRowPage,
+        ),
     )
 }
 
@@ -1845,11 +1965,16 @@ private fun TodoBlockEditor(
     onBlockTypeCommand: (String, PageBlockType) -> Unit,
     onInsertBlockCommand: (String, PageBlockType, PageBlockInsertPosition) -> Unit,
     onDeleteEmptyBlockCommand: (String) -> Unit,
+    onIndentBlockCommand: (String) -> Unit = {},
+    onOutdentBlockCommand: (String) -> Unit = {},
     onCreateLinkedPageCommand: (String) -> Unit,
     onOpenPropertySheetCommand: (String) -> Unit = {},
+    focusRequestToken: Long = 0L,
     onToggleTodo: (String) -> Unit,
     onFocusBlock: () -> Unit = {},
     mentionPages: List<Page> = emptyList(),
+    isFirstBlock: Boolean = false,
+    isTableRowPage: Boolean = false,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -1872,11 +1997,19 @@ private fun TodoBlockEditor(
             onBlockTypeCommand = onBlockTypeCommand,
             onInsertBlockCommand = onInsertBlockCommand,
             onDeleteEmptyBlockCommand = onDeleteEmptyBlockCommand,
+            onIndentBlockCommand = onIndentBlockCommand,
+            onOutdentBlockCommand = onOutdentBlockCommand,
             onCreateLinkedPageCommand = onCreateLinkedPageCommand,
             onOpenPropertySheetCommand = onOpenPropertySheetCommand,
+            focusRequestToken = focusRequestToken,
             mentionPages = mentionPages,
             singleLine = true,
             placeholder = "Todo item",
+            placeholderContext = EditorPlaceholderContext(
+                type = block.type,
+                isFirstBlock = isFirstBlock,
+                isTableRowPage = isTableRowPage,
+            ),
         )
     }
 }
@@ -1894,11 +2027,16 @@ private fun LeadingTextBlockEditor(
     onBlockTypeCommand: (String, PageBlockType) -> Unit,
     onInsertBlockCommand: (String, PageBlockType, PageBlockInsertPosition) -> Unit,
     onDeleteEmptyBlockCommand: (String) -> Unit,
+    onIndentBlockCommand: (String) -> Unit = {},
+    onOutdentBlockCommand: (String) -> Unit = {},
     onCreateLinkedPageCommand: (String) -> Unit,
     onOpenPropertySheetCommand: (String) -> Unit = {},
+    focusRequestToken: Long = 0L,
     fontStyle: FontStyle? = null,
     onFocusBlock: () -> Unit = {},
     mentionPages: List<Page> = emptyList(),
+    isFirstBlock: Boolean = false,
+    isTableRowPage: Boolean = false,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -1925,14 +2063,22 @@ private fun LeadingTextBlockEditor(
             onBlockTypeCommand = onBlockTypeCommand,
             onInsertBlockCommand = onInsertBlockCommand,
             onDeleteEmptyBlockCommand = onDeleteEmptyBlockCommand,
+            onIndentBlockCommand = onIndentBlockCommand,
+            onOutdentBlockCommand = onOutdentBlockCommand,
             onCreateLinkedPageCommand = onCreateLinkedPageCommand,
             onOpenPropertySheetCommand = onOpenPropertySheetCommand,
+            focusRequestToken = focusRequestToken,
             mentionPages = mentionPages,
             minLines = 2,
             textStyle = MaterialTheme.typography.bodyLarge.copy(
                 fontStyle = fontStyle,
             ),
             placeholder = block.type.placeholder,
+            placeholderContext = EditorPlaceholderContext(
+                type = block.type,
+                isFirstBlock = isFirstBlock,
+                isTableRowPage = isTableRowPage,
+            ),
         )
     }
 }
@@ -1947,11 +2093,16 @@ private fun MediaFileBlockEditor(
     onBlockTypeCommand: (PageBlockType) -> Unit,
     onInsertBlockCommand: (PageBlockType, PageBlockInsertPosition) -> Unit,
     onDeleteEmptyBlockCommand: () -> Unit,
+    onIndentBlockCommand: () -> Unit = {},
+    onOutdentBlockCommand: () -> Unit = {},
     onCreateLinkedPageCommand: () -> Unit,
     onOpenPropertySheetCommand: () -> Unit = {},
+    focusRequestToken: Long = 0L,
     onRichTextToolbarChange: (RichTextToolbarUiState?) -> Unit = {},
     showInlineRichTextToolbar: Boolean = true,
     mentionPages: List<Page> = emptyList(),
+    isFirstBlock: Boolean = false,
+    isTableRowPage: Boolean = false,
 ) {
     val context = LocalContext.current
     val filePicker = rememberLauncherForActivityResult(
@@ -2024,14 +2175,23 @@ private fun MediaFileBlockEditor(
             onBlockTypeCommand = { _, type -> onBlockTypeCommand(type) },
             onInsertBlockCommand = { _, type, position -> onInsertBlockCommand(type, position) },
             onDeleteEmptyBlockCommand = { onDeleteEmptyBlockCommand() },
+            onIndentBlockCommand = { onIndentBlockCommand() },
+            onOutdentBlockCommand = { onOutdentBlockCommand() },
             onCreateLinkedPageCommand = { onCreateLinkedPageCommand() },
             onOpenPropertySheetCommand = { onOpenPropertySheetCommand() },
+            focusRequestToken = focusRequestToken,
             onToolbarStateChange = onRichTextToolbarChange,
             showInlineToolbar = showInlineRichTextToolbar,
             enableMultiBlockPaste = false,
             mentionPages = mentionPages,
             minLines = 1,
             placeholder = "Caption",
+            placeholderContext = EditorPlaceholderContext(
+                type = PageBlockType.MediaFile,
+                isFirstBlock = isFirstBlock,
+                isTableRowPage = isTableRowPage,
+                isMediaCaption = true,
+            ),
         )
     }
 }
@@ -2154,6 +2314,8 @@ private fun DatabaseTableBlockEditor(
     onInsertRowPageBlockNear: (String, String, PageBlockType, PageBlockInsertPosition) -> Unit,
     onCreateRowLinkedPage: (String, String) -> Unit,
     onDeleteRowPageBlock: (String, String) -> Unit,
+    onIndentRowPageBlock: (String, String) -> Unit,
+    onOutdentRowPageBlock: (String, String) -> Unit,
     mentionPages: List<Page> = emptyList(),
     searchTargetType: String = "",
     searchTargetId: String = "",
@@ -2212,6 +2374,8 @@ private fun DatabaseTableBlockEditor(
             },
             onCreateLinkedPage = { rowBlockId -> onCreateRowLinkedPage(openRow.id, rowBlockId) },
             onDeleteBlock = { rowBlockId -> onDeleteRowPageBlock(openRow.id, rowBlockId) },
+            onIndentBlock = { rowBlockId -> onIndentRowPageBlock(openRow.id, rowBlockId) },
+            onOutdentBlock = { rowBlockId -> onOutdentRowPageBlock(openRow.id, rowBlockId) },
             mentionPages = mentionPages,
             onDismiss = { openRowId = null },
         )
@@ -5080,12 +5244,41 @@ private fun TableRowPageSheet(
     onInsertBlockNear: (String, PageBlockType, PageBlockInsertPosition) -> Unit,
     onCreateLinkedPage: (String) -> Unit,
     onDeleteBlock: (String) -> Unit,
+    onIndentBlock: (String) -> Unit,
+    onOutdentBlock: (String) -> Unit,
     mentionPages: List<Page> = emptyList(),
     onDismiss: () -> Unit,
 ) {
     val title = row.cellText(table.titleColumn()).ifBlank { "Untitled row" }
     var isNewColumnSheetOpen by remember { mutableStateOf(false) }
     var rowRichTextToolbarState by remember { mutableStateOf<RichTextToolbarUiState?>(null) }
+    var rowFocusRequestSequence by remember(row.id) { mutableStateOf(0L) }
+    var rowEditorFocusRequest by remember(row.id) { mutableStateOf<EditorBlockFocusRequest?>(null) }
+
+    fun requestRowEditorFocus(blockId: String?) {
+        if (blockId.isNullOrBlank()) return
+        rowFocusRequestSequence += 1
+        rowEditorFocusRequest = EditorBlockFocusRequest(
+            blockId = blockId,
+            token = rowFocusRequestSequence,
+        )
+    }
+
+    fun deleteRowBlockAndFocusSibling(blockId: String) {
+        val targetBlockId = row.blocks.editorFocusTargetAfterDeleting(blockId)
+        onDeleteBlock(blockId)
+        requestRowEditorFocus(targetBlockId)
+    }
+
+    LaunchedEffect(row.blocks, rowEditorFocusRequest) {
+        val currentFocusRequest = rowEditorFocusRequest
+        if (
+            currentFocusRequest != null &&
+            !row.blocks.containsFocusableEditorBlock(currentFocusRequest.blockId)
+        ) {
+            rowEditorFocusRequest = null
+        }
+    }
 
     if (isNewColumnSheetOpen) {
         NewTableColumnSheet(
@@ -5186,6 +5379,11 @@ private fun TableRowPageSheet(
                 row.blocks.forEach { block ->
                     val isSearchHighlighted = block.isDirectSearchTarget(searchTargetType, searchTargetId) ||
                         (searchTargetType == SearchTargetRowBlock && searchTargetId == block.id)
+                    val focusRequestToken = if (rowEditorFocusRequest?.blockId == block.id) {
+                        rowEditorFocusRequest?.token ?: 0L
+                    } else {
+                        0L
+                    }
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -5213,14 +5411,18 @@ private fun TableRowPageSheet(
                                     onInsertBlockCommand = { type, position ->
                                         onInsertBlockNear(block.id, type, position)
                                     },
-                                    onDeleteEmptyBlockCommand = { onDeleteBlock(block.id) },
+                                    onDeleteEmptyBlockCommand = { deleteRowBlockAndFocusSibling(block.id) },
+                                    onIndentBlockCommand = { onIndentBlock(block.id) },
+                                    onOutdentBlockCommand = { onOutdentBlock(block.id) },
                                     onCreateLinkedPageCommand = { onCreateLinkedPage(block.id) },
                                     onOpenPropertySheetCommand = { isNewColumnSheetOpen = true },
+                                    focusRequestToken = focusRequestToken,
                                     onRichTextToolbarChange = { toolbarState ->
                                         rowRichTextToolbarState = toolbarState
                                     },
                                     showInlineRichTextToolbar = false,
                                     mentionPages = mentionPages,
+                                    isTableRowPage = true,
                                 )
                                 PageBlockType.Todo -> TodoBlockEditor(
                                     blockId = block.id,
@@ -5236,11 +5438,15 @@ private fun TableRowPageSheet(
                                     onInsertBlockCommand = { _, type, position ->
                                         onInsertBlockNear(block.id, type, position)
                                     },
-                                    onDeleteEmptyBlockCommand = { onDeleteBlock(block.id) },
+                                    onDeleteEmptyBlockCommand = { deleteRowBlockAndFocusSibling(block.id) },
+                                    onIndentBlockCommand = { onIndentBlock(block.id) },
+                                    onOutdentBlockCommand = { onOutdentBlock(block.id) },
                                     onCreateLinkedPageCommand = { onCreateLinkedPage(block.id) },
                                     onOpenPropertySheetCommand = { isNewColumnSheetOpen = true },
+                                    focusRequestToken = focusRequestToken,
                                     onToggleTodo = { onToggleTodo(block.id) },
                                     mentionPages = mentionPages,
+                                    isTableRowPage = true,
                                 )
                                 PageBlockType.Bullet -> LeadingTextBlockEditor(
                                     blockId = block.id,
@@ -5257,10 +5463,14 @@ private fun TableRowPageSheet(
                                     onInsertBlockCommand = { _, type, position ->
                                         onInsertBlockNear(block.id, type, position)
                                     },
-                                    onDeleteEmptyBlockCommand = { onDeleteBlock(block.id) },
+                                    onDeleteEmptyBlockCommand = { deleteRowBlockAndFocusSibling(block.id) },
+                                    onIndentBlockCommand = { onIndentBlock(block.id) },
+                                    onOutdentBlockCommand = { onOutdentBlock(block.id) },
                                     onCreateLinkedPageCommand = { onCreateLinkedPage(block.id) },
                                     onOpenPropertySheetCommand = { isNewColumnSheetOpen = true },
+                                    focusRequestToken = focusRequestToken,
                                     mentionPages = mentionPages,
+                                    isTableRowPage = true,
                                 )
                                 PageBlockType.Numbered -> LeadingTextBlockEditor(
                                     blockId = block.id,
@@ -5277,10 +5487,14 @@ private fun TableRowPageSheet(
                                     onInsertBlockCommand = { _, type, position ->
                                         onInsertBlockNear(block.id, type, position)
                                     },
-                                    onDeleteEmptyBlockCommand = { onDeleteBlock(block.id) },
+                                    onDeleteEmptyBlockCommand = { deleteRowBlockAndFocusSibling(block.id) },
+                                    onIndentBlockCommand = { onIndentBlock(block.id) },
+                                    onOutdentBlockCommand = { onOutdentBlock(block.id) },
                                     onCreateLinkedPageCommand = { onCreateLinkedPage(block.id) },
                                     onOpenPropertySheetCommand = { isNewColumnSheetOpen = true },
+                                    focusRequestToken = focusRequestToken,
                                     mentionPages = mentionPages,
+                                    isTableRowPage = true,
                                 )
                                 PageBlockType.Quote -> LeadingTextBlockEditor(
                                     blockId = block.id,
@@ -5297,11 +5511,15 @@ private fun TableRowPageSheet(
                                     onInsertBlockCommand = { _, type, position ->
                                         onInsertBlockNear(block.id, type, position)
                                     },
-                                    onDeleteEmptyBlockCommand = { onDeleteBlock(block.id) },
+                                    onDeleteEmptyBlockCommand = { deleteRowBlockAndFocusSibling(block.id) },
+                                    onIndentBlockCommand = { onIndentBlock(block.id) },
+                                    onOutdentBlockCommand = { onOutdentBlock(block.id) },
                                     onCreateLinkedPageCommand = { onCreateLinkedPage(block.id) },
                                     onOpenPropertySheetCommand = { isNewColumnSheetOpen = true },
+                                    focusRequestToken = focusRequestToken,
                                     fontStyle = FontStyle.Italic,
                                     mentionPages = mentionPages,
+                                    isTableRowPage = true,
                                 )
                                 PageBlockType.DatabaseTable,
                                 PageBlockType.Heading,
@@ -5320,14 +5538,18 @@ private fun TableRowPageSheet(
                                     onInsertBlockCommand = { _, type, position ->
                                         onInsertBlockNear(block.id, type, position)
                                     },
-                                    onDeleteEmptyBlockCommand = { onDeleteBlock(block.id) },
+                                    onDeleteEmptyBlockCommand = { deleteRowBlockAndFocusSibling(block.id) },
+                                    onIndentBlockCommand = { onIndentBlock(block.id) },
+                                    onOutdentBlockCommand = { onOutdentBlock(block.id) },
                                     onCreateLinkedPageCommand = { onCreateLinkedPage(block.id) },
                                     onOpenPropertySheetCommand = { isNewColumnSheetOpen = true },
+                                    focusRequestToken = focusRequestToken,
                                     mentionPages = mentionPages,
+                                    isTableRowPage = true,
                                 )
                             }
                         }
-                        IconButton(onClick = { onDeleteBlock(block.id) }) {
+                        IconButton(onClick = { deleteRowBlockAndFocusSibling(block.id) }) {
                             Icon(
                                 imageVector = Icons.Rounded.Delete,
                                 contentDescription = "Delete row block",
@@ -6865,6 +7087,8 @@ private fun PageEditorScreenPreview() {
             onDeleteBlock = {},
             onMoveBlockUp = {},
             onMoveBlockDown = {},
+            onIndentBlock = {},
+            onOutdentBlock = {},
             onTableTitleChange = { _, _ -> },
             onTableViewChange = { _, _ -> },
             onTableViewConfigChange = { _, _ -> },
@@ -6894,6 +7118,8 @@ private fun PageEditorScreenPreview() {
             onAddTableRowPageBlock = { _, _, _ -> },
             onInsertTableRowPageBlockNear = { _, _, _, _, _ -> },
             onDeleteTableRowPageBlock = { _, _, _ -> },
+            onIndentTableRowPageBlock = { _, _, _ -> },
+            onOutdentTableRowPageBlock = { _, _, _ -> },
             onAddProperty = { _, _ -> },
             onPropertyNameChange = { _, _ -> },
             onPropertyValueChange = { _, _ -> },

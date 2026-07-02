@@ -929,6 +929,34 @@ class PageEditorViewModel @Inject constructor(
         }
     }
 
+    fun indentBlock(blockId: String) {
+        val currentUiState = uiState.value
+        if (currentUiState.page != null) {
+            val document = currentDocument(currentUiState) ?: return
+            val result = pageMutationUseCase.indentBlock(
+                document = document,
+                blockId = blockId,
+            )
+            if (!result.changed) return
+            recordEditorUndo(result.applied)
+            queueDocumentUpdate(result.document)
+        }
+    }
+
+    fun outdentBlock(blockId: String) {
+        val currentUiState = uiState.value
+        if (currentUiState.page != null) {
+            val document = currentDocument(currentUiState) ?: return
+            val result = pageMutationUseCase.outdentBlock(
+                document = document,
+                blockId = blockId,
+            )
+            if (!result.changed) return
+            recordEditorUndo(result.applied)
+            queueDocumentUpdate(result.document)
+        }
+    }
+
     fun updateTableTitle(blockId: String, title: String) {
         val currentUiState = uiState.value
         if (currentUiState.page != null) {
@@ -1635,6 +1663,48 @@ class PageEditorViewModel @Inject constructor(
         }
     }
 
+    fun indentTableRowPageBlock(
+        tableBlockId: String,
+        rowId: String,
+        rowBlockId: String,
+    ) {
+        val currentUiState = uiState.value
+        if (currentUiState.page != null) {
+            val document = currentDocument(currentUiState) ?: return
+            val result = document.replaceTableRowBlocksWithCommand(tableBlockId, rowId) { rowDocument ->
+                pageMutationUseCase.indentBlockCommand(rowDocument, rowBlockId)
+                    ?: rowDocument.noOpRowBlockCommand(rowBlockId)
+            }
+            if (!result.changed) return
+            queueTableRowPatchPendingDocument(
+                tableBlockId = tableBlockId,
+                rowId = rowId,
+                updated = result.document,
+            )
+        }
+    }
+
+    fun outdentTableRowPageBlock(
+        tableBlockId: String,
+        rowId: String,
+        rowBlockId: String,
+    ) {
+        val currentUiState = uiState.value
+        if (currentUiState.page != null) {
+            val document = currentDocument(currentUiState) ?: return
+            val result = document.replaceTableRowBlocksWithCommand(tableBlockId, rowId) { rowDocument ->
+                pageMutationUseCase.outdentBlockCommand(rowDocument, rowBlockId)
+                    ?: rowDocument.noOpRowBlockCommand(rowBlockId)
+            }
+            if (!result.changed) return
+            queueTableRowPatchPendingDocument(
+                tableBlockId = tableBlockId,
+                rowId = rowId,
+                updated = result.document,
+            )
+        }
+    }
+
     fun addProperty(
         type: PagePropertyType,
         name: String,
@@ -1805,6 +1875,15 @@ class PageEditorViewModel @Inject constructor(
 
     private fun PageBlockDocument.findTableBlock(blockId: String): PageBlock? {
         return findBlock(blockId)?.takeIf { block -> block.type == PageBlockType.DatabaseTable }
+    }
+
+    private fun PageBlockDocument.noOpRowBlockCommand(blockId: String): EditorCommand {
+        val block = findBlock(blockId)
+        return EditorCommand.UpdateBlockText(
+            blockId = blockId,
+            text = block?.text.orEmpty(),
+            richTextSpans = block?.richTextSpans.orEmpty(),
+        )
     }
 
     private fun PageBlockDocument.normalizedForEditor(): PageBlockDocument {

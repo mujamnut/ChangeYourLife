@@ -171,6 +171,85 @@ class EditorCommandExecutorTest {
     }
 
     @Test
+    fun moveBlockToParentCanIndentAndUndo() {
+        val document = PageBlockDocument(
+            blocks = listOf(
+                PageBlock(id = "parent", type = PageBlockType.Text),
+                PageBlock(id = "child", type = PageBlockType.Bullet, text = "Nested"),
+                PageBlock(id = "after", type = PageBlockType.Text),
+            ),
+        )
+
+        val result = EditorCommandExecutor.apply(
+            document = document,
+            command = EditorCommand.MoveBlockToParent(
+                blockId = "child",
+                parentBlockId = "parent",
+                index = 0,
+            ),
+        )
+        val undoResult = EditorCommandExecutor.apply(result.document, result.undoCommand!!)
+
+        assertTrue(result.changed)
+        assertEquals(listOf("parent", "after"), result.document.blocks.map { it.id })
+        assertEquals(listOf("child"), result.document.blocks.first().children.map { it.id })
+        assertEquals(document, undoResult.document)
+    }
+
+    @Test
+    fun moveBlockToParentCanOutdentAndUndo() {
+        val document = PageBlockDocument(
+            blocks = listOf(
+                PageBlock(
+                    id = "parent",
+                    type = PageBlockType.Text,
+                    children = listOf(PageBlock(id = "child", type = PageBlockType.Bullet)),
+                ),
+                PageBlock(id = "after", type = PageBlockType.Text),
+            ),
+        )
+
+        val result = EditorCommandExecutor.apply(
+            document = document,
+            command = EditorCommand.MoveBlockToParent(
+                blockId = "child",
+                parentBlockId = null,
+                index = 1,
+            ),
+        )
+        val undoResult = EditorCommandExecutor.apply(result.document, result.undoCommand!!)
+
+        assertTrue(result.changed)
+        assertEquals(listOf("parent", "child", "after"), result.document.blocks.map { it.id })
+        assertEquals(emptyList<PageBlock>(), result.document.blocks.first().children)
+        assertEquals(document, undoResult.document)
+    }
+
+    @Test
+    fun moveBlockToDescendantDoesNotChangeDocument() {
+        val document = PageBlockDocument(
+            blocks = listOf(
+                PageBlock(
+                    id = "parent",
+                    type = PageBlockType.Text,
+                    children = listOf(PageBlock(id = "child", type = PageBlockType.Text)),
+                ),
+            ),
+        )
+
+        val result = EditorCommandExecutor.apply(
+            document = document,
+            command = EditorCommand.MoveBlockToParent(
+                blockId = "parent",
+                parentBlockId = "child",
+            ),
+        )
+
+        assertFalse(result.changed)
+        assertEquals(document, result.document)
+    }
+
+    @Test
     fun replaceBlockMediaAttachmentsCanBeUndone() {
         val existingAttachment = PageMediaAttachment(
             id = "file-1",

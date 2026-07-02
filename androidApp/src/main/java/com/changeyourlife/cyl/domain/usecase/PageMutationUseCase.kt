@@ -202,6 +202,65 @@ class PageMutationUseCase(
         )
     }
 
+    fun indentBlock(
+        document: PageBlockDocument,
+        blockId: String,
+    ): PageMutationResult {
+        val command = indentBlockCommand(document, blockId)
+            ?: return document.unchangedResult()
+        return apply(
+            document = document,
+            command = command,
+        )
+    }
+
+    fun indentBlockCommand(
+        document: PageBlockDocument,
+        blockId: String,
+    ): EditorCommand.MoveBlockToParent? {
+        val location = document.blocks.findBlockLocation(blockId)
+            ?: return null
+        if (location.index <= 0) return null
+        val siblings = document.siblingBlocks(location.parentBlockId)
+            ?: return null
+        val targetParent = siblings.getOrNull(location.index - 1)
+            ?: return null
+        return EditorCommand.MoveBlockToParent(
+            blockId = blockId,
+            parentBlockId = targetParent.id,
+            index = targetParent.children.size,
+        )
+    }
+
+    fun outdentBlock(
+        document: PageBlockDocument,
+        blockId: String,
+    ): PageMutationResult {
+        val command = outdentBlockCommand(document, blockId)
+            ?: return document.unchangedResult()
+        return apply(
+            document = document,
+            command = command,
+        )
+    }
+
+    fun outdentBlockCommand(
+        document: PageBlockDocument,
+        blockId: String,
+    ): EditorCommand.MoveBlockToParent? {
+        val location = document.blocks.findBlockLocation(blockId)
+            ?: return null
+        val parentBlockId = location.parentBlockId
+            ?: return null
+        val parentLocation = document.blocks.findBlockLocation(parentBlockId)
+            ?: return null
+        return EditorCommand.MoveBlockToParent(
+            blockId = blockId,
+            parentBlockId = parentLocation.parentBlockId,
+            index = parentLocation.index + 1,
+        )
+    }
+
     fun addProperty(
         document: PageBlockDocument,
         type: PagePropertyType,
@@ -358,6 +417,12 @@ private fun PageBlockDocument.findBlock(blockId: String): PageBlock? {
         return null
     }
     return walk(blocks)
+}
+
+private fun PageBlockDocument.siblingBlocks(parentBlockId: String?): List<PageBlock>? {
+    return parentBlockId
+        ?.let { id -> findBlock(id)?.children }
+        ?: blocks
 }
 
 private data class ReplaceBlocksResult(

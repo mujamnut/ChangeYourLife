@@ -25,6 +25,8 @@ sealed interface RichTextSlashAction {
 
     data object CreateLinkedPage : RichTextSlashAction
     data object OpenPropertySheet : RichTextSlashAction
+    data object IndentBlock : RichTextSlashAction
+    data object OutdentBlock : RichTextSlashAction
 }
 
 object RichTextSlashCommandParser {
@@ -94,6 +96,18 @@ object RichTextSlashCommandParser {
             hint = "Add table property",
             action = RichTextSlashAction.OpenPropertySheet,
             aliases = listOf("property", "prop", "column", "field"),
+        ),
+        RichTextSlashCommand(
+            label = "Indent",
+            hint = "Nest under previous block",
+            action = RichTextSlashAction.IndentBlock,
+            aliases = listOf("indent", "nest", "tab"),
+        ),
+        RichTextSlashCommand(
+            label = "Outdent",
+            hint = "Move out one level",
+            action = RichTextSlashAction.OutdentBlock,
+            aliases = listOf("outdent", "unnest", "shift-tab"),
         ),
         RichTextSlashCommand(
             label = "Text above",

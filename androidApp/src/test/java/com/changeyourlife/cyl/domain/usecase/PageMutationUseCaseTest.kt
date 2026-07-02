@@ -157,6 +157,45 @@ class PageMutationUseCaseTest {
     }
 
     @Test
+    fun indentBlockMovesBlockInsidePreviousSibling() {
+        val document = PageBlockDocument(
+            blocks = listOf(
+                PageBlock(id = "parent", type = PageBlockType.Bullet),
+                PageBlock(id = "child", type = PageBlockType.Bullet),
+            ),
+        )
+
+        val result = useCase.indentBlock(document, blockId = "child")
+        val undo = applyUseCase(result.document, requireNotNull(result.applied.result.undoCommand))
+
+        assertTrue(result.changed)
+        assertEquals(listOf("parent"), result.document.blocks.map { it.id })
+        assertEquals(listOf("child"), result.document.blocks.single().children.map { it.id })
+        assertEquals(document, undo.document)
+    }
+
+    @Test
+    fun outdentBlockMovesChildAfterParent() {
+        val document = PageBlockDocument(
+            blocks = listOf(
+                PageBlock(
+                    id = "parent",
+                    type = PageBlockType.Bullet,
+                    children = listOf(PageBlock(id = "child", type = PageBlockType.Bullet)),
+                ),
+                PageBlock(id = "after", type = PageBlockType.Text),
+            ),
+        )
+
+        val result = useCase.outdentBlock(document, blockId = "child")
+        val undo = applyUseCase(result.document, requireNotNull(result.applied.result.undoCommand))
+
+        assertTrue(result.changed)
+        assertEquals(listOf("parent", "child", "after"), result.document.blocks.map { it.id })
+        assertEquals(document, undo.document)
+    }
+
+    @Test
     fun propertyMutationsReturnPropertyAndUndoCommand() {
         val document = PageBlockDocument(
             properties = listOf(PageProperty(id = "status", name = "Status", type = PagePropertyType.Status)),

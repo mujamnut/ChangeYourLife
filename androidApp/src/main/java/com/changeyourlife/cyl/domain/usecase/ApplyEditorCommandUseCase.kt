@@ -62,5 +62,6 @@ private fun EditorCommand.target(): EditorCommandTarget {
             ?: EditorCommandTarget.Document
         is EditorCommand.DeleteBlock -> EditorCommandTarget.Document
         is EditorCommand.MoveBlock -> EditorCommandTarget.Document
+        is EditorCommand.MoveBlockToParent -> EditorCommandTarget.Document
     }
 }

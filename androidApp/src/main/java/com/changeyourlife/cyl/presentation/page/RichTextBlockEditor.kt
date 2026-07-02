@@ -1,5 +1,11 @@
 package com.changeyourlife.cyl.presentation.page
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -12,11 +18,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -25,10 +31,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -46,6 +55,8 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalContext
 import com.changeyourlife.cyl.domain.model.Page
 import com.changeyourlife.cyl.domain.model.PageBlock
 import com.changeyourlife.cyl.domain.model.PageBlockInsertPosition
@@ -100,8 +111,12 @@ fun CylRichTextBlockEditor(
     onBlockTypeCommand: (String, PageBlockType) -> Unit = { _, _ -> },
     onInsertBlockCommand: (String, PageBlockType, PageBlockInsertPosition) -> Unit = { _, _, _ -> },
     onDeleteEmptyBlockCommand: (String) -> Unit = {},
+    onIndentBlockCommand: (String) -> Unit = {},
+    onOutdentBlockCommand: (String) -> Unit = {},
     onCreateLinkedPageCommand: (String) -> Unit = {},
     onOpenPropertySheetCommand: (String) -> Unit = {},
+    commandContext: EditorCommandContext = EditorCommandContext(),
+    focusRequestToken: Long = 0L,
     onToolbarStateChange: (RichTextToolbarUiState?) -> Unit = {},
     showInlineToolbar: Boolean = true,
     enableMultiBlockPaste: Boolean = true,
@@ -110,6 +125,7 @@ fun CylRichTextBlockEditor(
     singleLine: Boolean = false,
     textStyle: TextStyle = MaterialTheme.typography.bodyLarge,
     placeholder: String,
+    placeholderContext: EditorPlaceholderContext? = null,
 ) {
     var fieldValue by remember(block.id) {
         mutableStateOf(block.toTextFieldValue())
@@ -117,6 +133,10 @@ fun CylRichTextBlockEditor(
     var isFocused by remember(block.id) {
         mutableStateOf(false)
     }
+    val focusRequester = remember(block.id) {
+        FocusRequester()
+    }
+    val keyboardController = LocalSoftwareKeyboardController.current
     var currentSpans by remember(block.id) {
         mutableStateOf(RichTextSpanEngine.normalize(block.richTextSpans, block.text))
     }
@@ -135,45 +155,38 @@ fun CylRichTextBlockEditor(
     var isLinkEditorVisible by remember(block.id) {
         mutableStateOf(false)
     }
+    val context = LocalContext.current
     var linkUrl by remember(block.id) {
         mutableStateOf("")
     }
-    val slashQuery = remember(fieldValue.text, fieldValue.selection) {
+    val effectivePlaceholder = placeholderContext
+        ?.copy(isFocused = isFocused)
+        ?.let(EditorPlaceholderPolicy::placeholderFor)
+        ?: placeholder
+    var suggestionSelectionIndex by remember(block.id) {
+        mutableStateOf(0)
+    }
+    var dismissedSuggestionQuery by remember(block.id) {
+        mutableStateOf<EditorSuggestionQuery?>(null)
+    }
+    val suggestionState = remember(
+        fieldValue.text,
+        fieldValue.selection,
+        mentionPages,
+        commandContext,
+        suggestionSelectionIndex,
+        dismissedSuggestionQuery,
+    ) {
         if (fieldValue.selection.start == fieldValue.selection.end) {
-            RichTextSlashCommandParser.activeQuery(
+            EditorSuggestionController.resolve(
                 text = fieldValue.text,
                 cursor = fieldValue.selection.end,
-            )
+                mentionPages = mentionPages,
+                context = commandContext,
+                selectedIndex = suggestionSelectionIndex,
+            )?.takeUnless { state -> state.query == dismissedSuggestionQuery }
         } else {
             null
-        }
-    }
-    val mentionQuery = remember(fieldValue.text, fieldValue.selection) {
-        if (fieldValue.selection.start == fieldValue.selection.end) {
-            RichTextMentionParser.activeQuery(
-                text = fieldValue.text,
-                cursor = fieldValue.selection.end,
-            )
-        } else {
-            null
-        }
-    }
-    val slashCommands = remember(slashQuery) {
-        slashQuery?.let { query ->
-            RichTextSlashCommandParser.matchingCommands(query.query)
-        }.orEmpty()
-    }
-    val mentionSuggestions = remember(mentionPages, mentionQuery) {
-        val query = mentionQuery?.query.orEmpty().trim()
-        if (mentionQuery == null) {
-            emptyList()
-        } else {
-            mentionPages
-                .filter { page ->
-                    val title = page.title.ifBlank { "Untitled page" }
-                    query.isBlank() || title.contains(query, ignoreCase = true)
-                }
-                .take(8)
         }
     }
 
@@ -208,6 +221,75 @@ fun CylRichTextBlockEditor(
         onRichTextChange(blockId, nextText, normalized)
     }
 
+    fun selectSuggestion(
+        state: EditorSuggestionState,
+        item: RichTextCommandPaletteItem,
+    ) {
+        when (item.kind) {
+            RichTextCommandPaletteKind.Mention -> {
+                val page = mentionPages.firstOrNull { candidate ->
+                    candidate.paletteItemId() == item.id
+                } ?: return
+                val controller = RichTextController(
+                    RichTextEditorState(
+                        blockId = blockId,
+                        value = fieldValue,
+                        spans = currentSpans,
+                        isFocused = true,
+                    ),
+                )
+                val nextState = controller.replaceRangeWithMention(
+                    range = TextRange(state.query.start, state.query.end),
+                    pageId = page.id,
+                    title = page.title,
+                )
+                commitSpans(
+                    nextText = nextState.value.text,
+                    nextSpans = nextState.spans,
+                    selection = nextState.value.selection,
+                )
+            }
+            RichTextCommandPaletteKind.Slash -> {
+                val command = EditorCommandRegistry
+                    .entryForPaletteItemId(item.id)
+                    ?.command
+                    ?: return
+                val oldText = fieldValue.text
+                val nextText = oldText
+                    .removeRange(state.query.start, state.query.end)
+                    .trimStart()
+                val nextSpans = RichTextSpanEngine.adjustForTextChange(
+                    spans = currentSpans,
+                    oldText = oldText,
+                    newText = nextText,
+                )
+                commitSpans(nextText, nextSpans, TextRange(nextText.length))
+                when (val action = command.action) {
+                    is RichTextSlashAction.ChangeType -> {
+                        onBlockTypeCommand(blockId, action.type)
+                    }
+                    is RichTextSlashAction.InsertBlock -> {
+                        onInsertBlockCommand(blockId, action.type, action.position)
+                    }
+                    RichTextSlashAction.CreateLinkedPage -> {
+                        onCreateLinkedPageCommand(blockId)
+                    }
+                    RichTextSlashAction.OpenPropertySheet -> {
+                        onOpenPropertySheetCommand(blockId)
+                    }
+                    RichTextSlashAction.IndentBlock -> {
+                        onIndentBlockCommand(blockId)
+                    }
+                    RichTextSlashAction.OutdentBlock -> {
+                        onOutdentBlockCommand(blockId)
+                    }
+                }
+            }
+        }
+        suggestionSelectionIndex = 0
+        dismissedSuggestionQuery = null
+    }
+
     fun toggleFormat(format: RichTextFormat) {
         val nextState = RichTextController(
             RichTextEditorState(
@@ -229,14 +311,47 @@ fun CylRichTextBlockEditor(
     }
 
     fun showLinkEditor() {
-        linkUrl = currentSpans
-            .firstOrNull { span ->
-                val range = fieldValue.effectiveFormatRange()
-                span.start <= range.min && span.end >= range.max && span.linkUrl.isNotBlank()
-            }
-            ?.linkUrl
-            .orEmpty()
+        linkUrl = RichTextLinkPolicy.selectedLinkUrl(
+            spans = currentSpans,
+            range = fieldValue.effectiveFormatRange(),
+        )
         isLinkEditorVisible = true
+    }
+
+    fun applyLinkValue(url: String) {
+        val nextState = RichTextController(
+            RichTextEditorState(
+                blockId = blockId,
+                value = fieldValue,
+                spans = currentSpans,
+                typingFormats = typingFormats,
+                typingLinkUrl = typingLinkUrl,
+                typingColor = typingColor,
+                typingHighlight = typingHighlight,
+                isFocused = true,
+            ),
+        ).applyLink(url)
+        val changedSpans = nextState.spans != currentSpans ||
+            nextState.value.text != fieldValue.text
+        commitState(nextState, notifyChange = changedSpans)
+    }
+
+    fun copyCurrentLink() {
+        val trimmed = linkUrl.trim()
+        if (trimmed.isBlank()) return
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+        clipboard?.setPrimaryClip(ClipData.newPlainText("Link", trimmed))
+        Toast.makeText(context, "Link copied", Toast.LENGTH_SHORT).show()
+    }
+
+    fun openCurrentLink() {
+        val target = RichTextLinkPolicy.normalizedOpenUrl(linkUrl)
+        if (target.isBlank()) return
+        runCatching {
+            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(target)))
+        }.onFailure {
+            Toast.makeText(context, "Can't open link", Toast.LENGTH_SHORT).show()
+        }
     }
 
     fun applyColor(color: String) {
@@ -284,6 +399,17 @@ fun CylRichTextBlockEditor(
         }
     }
 
+    LaunchedEffect(focusRequestToken) {
+        if (focusRequestToken <= 0L) return@LaunchedEffect
+        fieldValue = fieldValue.copy(selection = TextRange(fieldValue.text.length))
+        focusRequester.requestFocus()
+        keyboardController?.show()
+        withFrameNanos { }
+        focusRequester.requestFocus()
+        keyboardController?.show()
+        onFocusBlock()
+    }
+
     val toolbarState = RichTextToolbarUiState(
         value = fieldValue,
         spans = currentSpans,
@@ -323,6 +449,32 @@ fun CylRichTextBlockEditor(
         OutlinedTextField(
             value = fieldValue,
             onValueChange = { incoming ->
+                if (incoming.text != fieldValue.text || incoming.selection != fieldValue.selection) {
+                    suggestionSelectionIndex = 0
+                    dismissedSuggestionQuery = null
+                }
+                val richClipboardHtml = if (enableMultiBlockPaste) {
+                    context.richClipboardHtmlForPaste(
+                        oldText = fieldValue.text,
+                        newText = incoming.text,
+                    )
+                } else {
+                    null
+                }
+                if (richClipboardHtml != null) {
+                    val clipboardBlocks = RichTextPasteParser.mergeRichClipboardTextChangeIntoBlocks(
+                        currentType = block.type,
+                        currentIsChecked = block.isChecked,
+                        oldValue = fieldValue,
+                        newValue = incoming,
+                        oldSpans = currentSpans,
+                        clipboardHtmlText = richClipboardHtml,
+                    )
+                    if (clipboardBlocks.isNotEmpty()) {
+                        onPasteBlocks(blockId, clipboardBlocks)
+                        return@OutlinedTextField
+                    }
+                }
                 val enterBlocks = if (enableMultiBlockPaste) {
                     RichTextBlockInteractionParser.splitEnterChange(
                         currentType = block.type,
@@ -380,8 +532,39 @@ fun CylRichTextBlockEditor(
             },
             modifier = Modifier
                 .fillMaxWidth()
+                .focusRequester(focusRequester)
                 .onPreviewKeyEvent { event ->
+                    val activeSuggestionState = suggestionState
                     if (
+                        event.type == KeyEventType.KeyDown &&
+                        activeSuggestionState != null
+                    ) {
+                        when (event.key) {
+                            Key.DirectionDown -> {
+                                suggestionSelectionIndex = EditorSuggestionController
+                                    .moveSelection(activeSuggestionState, delta = 1)
+                                    .selectedIndex
+                                true
+                            }
+                            Key.DirectionUp -> {
+                                suggestionSelectionIndex = EditorSuggestionController
+                                    .moveSelection(activeSuggestionState, delta = -1)
+                                    .selectedIndex
+                                true
+                            }
+                            Key.Enter -> {
+                                activeSuggestionState.selectedItem?.let { item ->
+                                    selectSuggestion(activeSuggestionState, item)
+                                }
+                                true
+                            }
+                            Key.Escape -> {
+                                dismissedSuggestionQuery = activeSuggestionState.query
+                                true
+                            }
+                            else -> false
+                        }
+                    } else if (
                         event.type == KeyEventType.KeyDown &&
                         event.key == Key.Backspace &&
                         fieldValue.text.isEmpty()
@@ -400,65 +583,17 @@ fun CylRichTextBlockEditor(
             singleLine = singleLine,
             textStyle = textStyle,
             placeholder = {
-                Text(text = placeholder)
+                Text(text = effectivePlaceholder)
             },
             colors = plainRichTextFieldColors(),
         )
 
         if (isFocused) {
-            if (mentionQuery != null && mentionSuggestions.isNotEmpty()) {
-                MentionSuggestionBar(
-                    pages = mentionSuggestions,
-                    onSelect = { page ->
-                        val controller = RichTextController(
-                            RichTextEditorState(
-                                blockId = blockId,
-                                value = fieldValue,
-                                spans = currentSpans,
-                                isFocused = true,
-                            ),
-                        )
-                        val nextState = controller.replaceRangeWithMention(
-                            range = TextRange(mentionQuery.start, mentionQuery.end),
-                            pageId = page.id,
-                            title = page.title,
-                        )
-                        commitSpans(
-                            nextText = nextState.value.text,
-                            nextSpans = nextState.spans,
-                            selection = nextState.value.selection,
-                        )
-                    },
-                )
-            } else if (slashQuery != null && slashCommands.isNotEmpty()) {
-                RichTextSlashCommandBar(
-                    commands = slashCommands,
-                    onSelect = { command ->
-                        val oldText = fieldValue.text
-                        val nextText = oldText
-                            .removeRange(slashQuery.start, slashQuery.end)
-                            .trimStart()
-                        val nextSpans = RichTextSpanEngine.adjustForTextChange(
-                            spans = currentSpans,
-                            oldText = oldText,
-                            newText = nextText,
-                        )
-                        commitSpans(nextText, nextSpans, TextRange(nextText.length))
-                        when (val action = command.action) {
-                            is RichTextSlashAction.ChangeType -> {
-                                onBlockTypeCommand(blockId, action.type)
-                            }
-                            is RichTextSlashAction.InsertBlock -> {
-                                onInsertBlockCommand(blockId, action.type, action.position)
-                            }
-                            RichTextSlashAction.CreateLinkedPage -> {
-                                onCreateLinkedPageCommand(blockId)
-                            }
-                            RichTextSlashAction.OpenPropertySheet -> {
-                                onOpenPropertySheetCommand(blockId)
-                            }
-                        }
-                    },
+            if (suggestionState != null) {
+                RichTextCommandPalette(
+                    items = suggestionState.items,
+                    onSelect = { item -> selectSuggestion(suggestionState, item) },
+                    selectedItemId = suggestionState.selectedItem?.id,
                 )
             }
             if (isLinkEditorVisible) {
@@ -466,23 +601,16 @@ fun CylRichTextBlockEditor(
                     url = linkUrl,
                     onUrlChange = { linkUrl = it },
                     onApply = {
-                        val nextState = RichTextController(
-                            RichTextEditorState(
-                                blockId = blockId,
-                                value = fieldValue,
-                                spans = currentSpans,
-                                typingFormats = typingFormats,
-                                typingLinkUrl = typingLinkUrl,
-                                typingColor = typingColor,
-                                typingHighlight = typingHighlight,
-                                isFocused = true,
-                            ),
-                        ).applyLink(linkUrl)
-                        val changedSpans = nextState.spans != currentSpans ||
-                            nextState.value.text != fieldValue.text
-                        commitState(nextState, notifyChange = changedSpans)
+                        applyLinkValue(linkUrl)
                         isLinkEditorVisible = false
                     },
+                    onRemove = {
+                        applyLinkValue("")
+                        linkUrl = ""
+                        isLinkEditorVisible = false
+                    },
+                    onCopy = ::copyCurrentLink,
+                    onOpen = ::openCurrentLink,
                     onDismiss = { isLinkEditorVisible = false },
                 )
             }
@@ -494,73 +622,53 @@ fun CylRichTextBlockEditor(
 }
 
 @Composable
-private fun MentionSuggestionBar(
-    pages: List<Page>,
-    onSelect: (Page) -> Unit,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        pages.forEach { page ->
-            FilterChip(
-                selected = false,
-                onClick = { onSelect(page) },
-                label = {
-                    Text(
-                        text = "@${page.title.ifBlank { "Untitled page" }}",
-                        style = MaterialTheme.typography.labelMedium,
-                    )
-                },
-                modifier = Modifier.padding(vertical = 2.dp),
-            )
-        }
-    }
-}
-
-@Composable
 private fun RichTextLinkEditor(
     url: String,
     onUrlChange: (String) -> Unit,
     onApply: () -> Unit,
+    onRemove: () -> Unit,
+    onCopy: () -> Unit,
+    onOpen: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    Row(
+    val hasLink = url.trim().isNotBlank()
+    Column(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalAlignment = Alignment.CenterVertically,
+        verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         OutlinedTextField(
             value = url,
             onValueChange = onUrlChange,
-            modifier = Modifier.weight(1f),
+            modifier = Modifier.fillMaxWidth(),
             singleLine = true,
             placeholder = {
                 Text("https://")
             },
             colors = plainRichTextFieldColors(),
         )
-        Text(
-            text = "Apply",
+        Row(
             modifier = Modifier
-                .clip(RoundedCornerShape(8.dp))
-                .clickable(onClick = onApply)
-                .padding(horizontal = 10.dp, vertical = 8.dp),
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.primary,
-        )
-        Text(
-            text = "Cancel",
-            modifier = Modifier
-                .clip(RoundedCornerShape(8.dp))
-                .clickable(onClick = onDismiss)
-                .padding(horizontal = 10.dp, vertical = 8.dp),
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            TextButton(onClick = onApply) {
+                Text("Apply")
+            }
+            TextButton(onClick = onOpen, enabled = hasLink) {
+                Text("Open")
+            }
+            TextButton(onClick = onCopy, enabled = hasLink) {
+                Text("Copy")
+            }
+            TextButton(onClick = onRemove, enabled = hasLink) {
+                Text("Remove")
+            }
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
     }
 }
 
@@ -587,43 +695,54 @@ private fun RichTextToolbar(
         horizontalArrangement = Arrangement.spacedBy(4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        RichTextFormat.entries.forEach { format ->
-            RichTextFormatButton(
-                label = format.label,
-                selected = format in activeFormats,
-                enabled = true,
-                onClick = { onToggle(format) },
-            )
+        EditorCommandRegistry.richTextToolbarEntries().forEach { entry ->
+            when (val action = entry.action) {
+                is RichTextToolbarRegistryAction.ToggleFormat -> {
+                    RichTextFormatButton(
+                        label = entry.label,
+                        selected = action.format in activeFormats,
+                        enabled = true,
+                        onClick = { onToggle(action.format) },
+                    )
+                }
+                RichTextToolbarRegistryAction.Link -> {
+                    RichTextActionButton(
+                        label = entry.label,
+                        enabled = true,
+                        onClick = onApplyLink,
+                    )
+                }
+                is RichTextToolbarRegistryAction.ApplyColor -> {
+                    RichTextSwatchButton(
+                        color = Color(action.colorHex.toColorLong()),
+                        selected = if (hasRange) {
+                            spans.any { span ->
+                                span.start <= range.min && span.end >= range.max && span.color == action.colorHex
+                            }
+                        } else {
+                            typingColor == action.colorHex
+                        },
+                        enabled = true,
+                        onClick = { onApplyColor(action.colorHex) },
+                    )
+                }
+                is RichTextToolbarRegistryAction.ApplyHighlight -> {
+                    RichTextSwatchButton(
+                        color = Color(action.colorHex.toColorLong()),
+                        selected = if (hasRange) {
+                            spans.any { span ->
+                                span.start <= range.min && span.end >= range.max &&
+                                    span.highlight == action.colorHex
+                            }
+                        } else {
+                            typingHighlight == action.colorHex
+                        },
+                        enabled = true,
+                        onClick = { onApplyHighlight(action.colorHex) },
+                    )
+                }
+            }
         }
-        RichTextActionButton(
-            label = "Link",
-            enabled = true,
-            onClick = onApplyLink,
-        )
-        RichTextSwatchButton(
-            color = Color(0xFF1565C0),
-            selected = if (hasRange) {
-                spans.any { span ->
-                    span.start <= range.min && span.end >= range.max && span.color == "#1565C0"
-                }
-            } else {
-                typingColor == "#1565C0"
-            },
-            enabled = true,
-            onClick = { onApplyColor("#1565C0") },
-        )
-        RichTextSwatchButton(
-            color = Color(0xFFFFF59D),
-            selected = if (hasRange) {
-                spans.any { span ->
-                    span.start <= range.min && span.end >= range.max && span.highlight == "#FFF59D"
-                }
-            } else {
-                typingHighlight == "#FFF59D"
-            },
-            enabled = true,
-            onClick = { onApplyHighlight("#FFF59D") },
-        )
     }
 }
 
@@ -723,21 +842,16 @@ private fun RichTextSwatchButton(
     }
 }
 
-private val RichTextFormat.label: String
-    get() = when (this) {
-        RichTextFormat.Bold -> "B"
-        RichTextFormat.Italic -> "I"
-        RichTextFormat.Underline -> "U"
-        RichTextFormat.Strikethrough -> "S"
-        RichTextFormat.Code -> "<>"
-    }
-
 private fun PageBlock.toTextFieldValue(): TextFieldValue {
     val spans = RichTextSpanEngine.normalize(richTextSpans, text)
     return TextFieldValue(
         annotatedString = buildRichTextAnnotatedString(text, spans),
         selection = TextRange(text.length),
     )
+}
+
+private fun String.toColorLong(): ULong {
+    return removePrefix("#").toULong(radix = 16) or 0xFF000000uL
 }
 
 private fun buildRichTextAnnotatedString(
@@ -780,6 +894,52 @@ private fun String.toAutoBlockTypeOrNull(): PageBlockType? {
         "> " -> PageBlockType.Quote
         else -> null
     }
+}
+
+private fun Context.richClipboardHtmlForPaste(
+    oldText: String,
+    newText: String,
+): String? {
+    val inserted = RichTextPasteParser.insertedTextForChange(oldText, newText)
+        ?.takeIf { text -> text.length > 1 }
+        ?: return null
+    val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return null
+    val item = clipboard.primaryClip
+        ?.takeIf { clip -> clip.itemCount > 0 }
+        ?.getItemAt(0)
+        ?: return null
+    val html = item.htmlText
+        ?.takeIf { value -> value.isNotBlank() }
+        ?: return null
+    val plainText = item.coerceToText(this)?.toString().orEmpty()
+    val parsedText = RichTextPasteParser
+        .parseClipboard(rawText = plainText, htmlText = html)
+        .joinToString("\n") { block -> block.text }
+
+    return if (
+        inserted.matchesClipboardPasteText(plainText) ||
+        inserted.matchesClipboardPasteText(parsedText)
+    ) {
+        html
+    } else {
+        null
+    }
+}
+
+private fun String.matchesClipboardPasteText(other: String): Boolean {
+    val self = normalizeClipboardPasteText()
+    val candidate = other.normalizeClipboardPasteText()
+    if (self.isBlank() || candidate.isBlank()) return false
+    return self == candidate
+}
+
+private fun String.normalizeClipboardPasteText(): String {
+    return replace("\r\n", "\n")
+        .replace('\u00A0', ' ')
+        .lines()
+        .joinToString(" ") { line -> line.trim() }
+        .replace(Regex("\\s+"), " ")
+        .trim()
 }
 
 private fun TextFieldValue.toPageTextSpans(): List<PageTextSpan> {

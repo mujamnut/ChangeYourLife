@@ -25,7 +25,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.Article
 import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.automirrored.rounded.Undo
 import androidx.compose.material.icons.rounded.AutoAwesome
@@ -39,7 +38,6 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
@@ -63,6 +61,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.changeyourlife.cyl.domain.model.AiActionUndoState
 import com.changeyourlife.cyl.domain.model.Page
+import com.changeyourlife.cyl.presentation.page.EditorSuggestionController
+import com.changeyourlife.cyl.presentation.page.RichTextCommandPalette
+import com.changeyourlife.cyl.presentation.page.RichTextCommandPaletteKind
+import com.changeyourlife.cyl.presentation.page.paletteItemId
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -103,17 +105,12 @@ fun AiChatSheet(
         ?: AiChatMode.Planning
     val listState = rememberLazyListState()
     val context = LocalContext.current
-    val mentionQuery = inputText.activeMentionQuery()
-    val mentionSuggestions = if (mentionQuery != null) {
-        mentionPages
-            .filter { page ->
-                val title = page.title.ifBlank { "Untitled page" }
-                mentionQuery.isBlank() || title.contains(mentionQuery, ignoreCase = true)
-            }
-            .take(6)
-    } else {
-        emptyList()
-    }
+    val mentionSuggestionState = EditorSuggestionController.resolve(
+        text = inputText,
+        cursor = inputText.length,
+        mentionPages = mentionPages,
+        enabledKinds = setOf(RichTextCommandPaletteKind.Mention),
+    )
 
     LaunchedEffect(messages.size) {
         if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
@@ -309,16 +306,22 @@ fun AiChatSheet(
                 }
             }
 
-            if (mentionSuggestions.isNotEmpty()) {
-                AiMentionSuggestions(
-                    pages = mentionSuggestions,
-                    onSelectPage = { page ->
-                        inputText = inputText.insertMention(page.title.ifBlank { "Untitled page" })
-                        selectedMentionPageIds = (selectedMentionPageIds + page.id)
-                            .filter { id -> id.isNotBlank() }
-                            .distinct()
+            if (mentionSuggestionState != null) {
+                RichTextCommandPalette(
+                    items = mentionSuggestionState.items,
+                    onSelect = { item ->
+                        val page = mentionPages.firstOrNull { candidate ->
+                            candidate.paletteItemId() == item.id
+                        }
+                        if (page != null) {
+                            inputText = inputText.insertMention(page.title.ifBlank { "Untitled page" })
+                            selectedMentionPageIds = (selectedMentionPageIds + page.id)
+                                .filter { id -> id.isNotBlank() }
+                                .distinct()
+                        }
                     },
                     modifier = Modifier.padding(horizontal = 16.dp),
+                    selectedItemId = mentionSuggestionState.selectedItem?.id,
                 )
             }
 
@@ -673,43 +676,6 @@ private fun EmptyAiMessageHint(attachedPageTitle: String?) {
 }
 
 @Composable
-private fun AiMentionSuggestions(
-    pages: List<Page>,
-    onSelectPage: (Page) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Card(
-        modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-        ),
-    ) {
-        Column {
-            pages.forEach { page ->
-                ListItem(
-                    headlineContent = {
-                        Text(
-                            text = page.title.ifBlank { "Untitled page" },
-                            maxLines = 1,
-                        )
-                    },
-                    supportingContent = { Text(text = "Mention page") },
-                    leadingContent = {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Rounded.Article,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                        )
-                    },
-                    modifier = Modifier.clickable { onSelectPage(page) },
-                )
-            }
-        }
-    }
-}
-
-@Composable
 private fun AiChatPageLinks(
     links: List<AiChatPageLink>,
     onOpenPage: (String, String, String) -> Unit,
@@ -727,14 +693,6 @@ private fun AiChatPageLinks(
             }
         }
     }
-}
-
-private fun String.activeMentionQuery(): String? {
-    val atIndex = lastIndexOf('@')
-    if (atIndex < 0) return null
-    val query = substring(atIndex + 1)
-    if (query.contains('\n') || query.endsWith(" ")) return null
-    return query.trim()
 }
 
 private fun String.insertMention(title: String): String {

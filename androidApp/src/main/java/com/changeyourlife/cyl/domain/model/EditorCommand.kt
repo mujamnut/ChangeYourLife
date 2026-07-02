@@ -32,6 +32,12 @@ sealed interface EditorCommand {
         val direction: Int,
     ) : EditorCommand
 
+    data class MoveBlockToParent(
+        val blockId: String,
+        val parentBlockId: String? = null,
+        val index: Int? = null,
+    ) : EditorCommand
+
     data class ReplaceBlockMediaAttachments(
         val blockId: String,
         val mediaAttachments: List<PageMediaAttachment>,
@@ -74,6 +80,7 @@ object EditorCommandExecutor {
             is EditorCommand.InsertBlock -> document.insertBlock(command)
             is EditorCommand.DeleteBlock -> document.deleteBlock(command)
             is EditorCommand.MoveBlock -> document.moveBlock(command)
+            is EditorCommand.MoveBlockToParent -> document.moveBlockToParent(command)
             is EditorCommand.ReplaceBlockMediaAttachments -> document.replaceBlockMediaAttachments(command)
             is EditorCommand.ReplaceTable -> document.replaceTable(command)
             is EditorCommand.InsertProperty -> document.insertProperty(command)
@@ -203,6 +210,44 @@ object EditorCommandExecutor {
             undoCommand = EditorCommand.MoveBlock(
                 blockId = command.blockId,
                 direction = -command.direction,
+            ),
+            changed = true,
+        )
+    }
+
+    private fun PageBlockDocument.moveBlockToParent(
+        command: EditorCommand.MoveBlockToParent,
+    ): EditorCommandResult {
+        val existing = blocks.findBlock(command.blockId)
+            ?: return unchanged()
+        val targetParentId = command.parentBlockId?.takeIf(String::isNotBlank)
+        if (targetParentId == command.blockId) return unchanged()
+        if (targetParentId != null && blocks.findBlock(targetParentId) == null) {
+            return unchanged()
+        }
+        if (existing.block.containsDescendant(targetParentId)) {
+            return unchanged()
+        }
+
+        val targetIndex = command.index
+            ?.let { index ->
+                if (existing.parentBlockId == targetParentId && index > existing.index) index - 1 else index
+            }
+        val movedBlocks = blocks
+            .deleteBlock(command.blockId)
+            .insertBlock(
+                parentBlockId = targetParentId,
+                index = targetIndex,
+                block = existing.block,
+            )
+        if (movedBlocks == blocks) return unchanged()
+
+        return EditorCommandResult(
+            document = copy(blocks = movedBlocks),
+            undoCommand = EditorCommand.MoveBlockToParent(
+                blockId = command.blockId,
+                parentBlockId = existing.parentBlockId,
+                index = existing.index,
             ),
             changed = true,
         )
@@ -427,4 +472,11 @@ object EditorCommandExecutor {
         val blocks: List<PageBlock>,
         val changed: Boolean = false,
     )
+
+    private fun PageBlock.containsDescendant(blockId: String?): Boolean {
+        if (blockId == null) return false
+        return children.any { child ->
+            child.id == blockId || child.containsDescendant(blockId)
+        }
+    }
 }
