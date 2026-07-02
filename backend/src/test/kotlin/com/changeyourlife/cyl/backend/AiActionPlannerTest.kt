@@ -5,6 +5,7 @@ import com.changeyourlife.cyl.backend.service.AiService
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 
 class AiActionPlannerTest {
     private val planner = AiActionPlanner()
@@ -114,5 +115,53 @@ class AiActionPlannerTest {
         val action = assertNotNull(result).actions.single()
         assertEquals("ADD_BLOCK", action.type)
         assertEquals("Draft outline", action.content)
+    }
+
+    @Test
+    fun doesNotUsePromptFallbackForCreativeTableCreationWhenModelHasNoAction() {
+        val promptResult = AiService.AiActionResult(
+            reply = "Siap - saya buat table itu.",
+            actions = listOf(
+                AiService.AiActionItem(
+                    type = "CREATE_PAGE",
+                    title = "Penjagaan Ayam",
+                    tableTitle = "Penjagaan Ayam",
+                ),
+            ),
+        )
+
+        val result = planner.selectActionResult(
+            prompt = "buat jadual penjagaan ayam",
+            modelResult = null,
+            promptResult = promptResult,
+        )
+
+        assertNull(result)
+    }
+
+    @Test
+    fun keepsModelEmptyActionReplyInsteadOfInventingCreativeTableFallback() {
+        val modelResult = AiService.AiActionResult(
+            reply = "Saya boleh buat jadual itu, tapi belum ada action JSON.",
+            actions = emptyList(),
+        )
+        val promptResult = AiService.AiActionResult(
+            reply = "Siap - saya buat table itu.",
+            actions = listOf(
+                AiService.AiActionItem(
+                    type = "CREATE_DATABASE",
+                    targetTitle = "Ayam",
+                    tableTitle = "Penjagaan Ayam",
+                ),
+            ),
+        )
+
+        val result = planner.selectActionResult(
+            prompt = "buat jadual penjagaan ayam dalam @Ayam",
+            modelResult = modelResult,
+            promptResult = promptResult,
+        )
+
+        assertEquals(modelResult, result)
     }
 }

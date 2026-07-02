@@ -345,7 +345,7 @@ class AiActionRecoveryTest {
     }
 
     @Test
-    fun chatWithActionsRecoversHomeCreateExpensePageBeforeMarkdownAnswer() {
+    fun chatWithActionsDoesNotInventHomeExpensePageWhenModelHasNoAction() {
         val sandboxService = AiService()
         val result = sandboxService.chatWithActions(
             messages = listOf(
@@ -357,16 +357,11 @@ class AiActionRecoveryTest {
             pages = emptyList(),
         )
 
-        val action = result.actions.single()
-        assertEquals("CREATE_PAGE", action.type)
-        assertEquals("July Monthly Expenses", action.title)
-        assertEquals("Monthly Expenses", action.tableTitle)
-        assertEquals("Salary", action.tableRows.single()["Category"])
-        assertEquals("1488", action.tableRows.single()["Budget"])
+        assertEquals(emptyList(), result.actions)
     }
 
     @Test
-    fun chatWithActionsRecoversHomeTableRequestBeforeMarkdownAnswer() {
+    fun chatWithActionsDoesNotInventHomeTableWhenModelHasNoAction() {
         val sandboxService = AiService()
         val result = sandboxService.chatWithActions(
             messages = listOf(
@@ -378,11 +373,7 @@ class AiActionRecoveryTest {
             pages = emptyList(),
         )
 
-        val action = result.actions.single()
-        assertEquals("CREATE_PAGE", action.type)
-        assertEquals("Penjagaan Ayam", action.title)
-        assertEquals("Penjagaan Ayam", action.tableTitle)
-        assertEquals(listOf("Name", "Status", "Notes"), action.tableColumns.map { it.name })
+        assertEquals(emptyList(), result.actions)
     }
 
     @Test

@@ -7,6 +7,12 @@ class AiActionPlanner {
         promptResult: AiService.AiActionResult?,
     ): AiService.AiActionResult? {
         if (promptResult != null &&
+            promptResult.isCreativeCreationFallback() &&
+            (modelResult == null || modelResult.actions.isEmpty())
+        ) {
+            return modelResult
+        }
+        if (promptResult != null &&
             (
                 modelResult == null ||
                     modelResult.actions.isEmpty() ||
@@ -25,6 +31,16 @@ class AiActionPlanner {
         }
         return modelResult
     }
+
+    private fun AiService.AiActionResult.isCreativeCreationFallback(): Boolean =
+        actions.any { action ->
+            action.type.normalizedActionType() in setOf(
+                "CREATE_PAGE",
+                "CREATE_SUBPAGE",
+                "CREATE_DATABASE",
+                "CREATE_TABLE",
+            )
+        }
 
     private fun AiService.AiActionResult.shouldReplaceModelResult(
         modelResult: AiService.AiActionResult,

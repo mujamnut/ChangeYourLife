@@ -129,10 +129,10 @@ Goal: AI faham arahan Malay/English dan execute action secara konsisten.
 - Android masih ada guard kecil untuk skip unsafe qualitative table rename, dan guard itu direkod sebagai validation issue dalam `Action details`.
 - Android AI action execution decision sudah diextract ke `AiActionExecutionPolicy`, jadi `HomeViewModel` tidak lagi pegang local fallback/recovery rule.
 - Android regression test cover policy: planning tidak execute, backend kosong tidak invent action, backend action execute, vague rename ditolak, concrete rename dibenarkan.
-- Backend prompt recovery sekarang support Home AI create page tanpa mention/current page untuk monthly expenses, termasuk salary row dan table columns.
 - Home AI sekarang boleh execute global `CREATE_PAGE` action terus dari home chat dan simpan page link dalam jawapan AI.
 - Backend `chat-actions` sekarang AI-first: live model diberi CYL action schema/context dan cuba hasilkan action JSON dahulu; prompt recovery hanya fallback bila model kosong/invalid/markdown.
-- Backend prompt recovery masih support Home AI `buat jadual/table/tracker ...` tanpa mention sebagai `CREATE_PAGE` dengan database table, tapi ia tidak lagi override action model yang valid.
+- Backend prompt recovery masih wujud untuk direct unit recovery, tetapi `chat-actions` tidak lagi execute prompt-only creative creation seperti `CREATE_PAGE`, `CREATE_DATABASE`, atau `CREATE_TABLE` bila model tidak beri action valid.
+- Backend prompt fallback masih boleh baiki action kecil/targeted seperti row/delete/update supaya AI yang tersalah target tidak terus merosakkan data.
 - Mention/context page tetap menang untuk request table; prompt seperti `buat jadual ... dalam @Page` masih jadi page-scoped `CREATE_DATABASE`, bukan page baru.
 - Android Home AI sekarang boleh treat global `CREATE_DATABASE`/`CREATE_TABLE` tanpa target sebagai create page berisi table, supaya response model lama tidak terus gagal di Home.
 - Android Home AI ada safety net untuk convert markdown table daripada model kepada CYL action bila backend pulangkan `actions` kosong untuk prompt create table yang jelas.
