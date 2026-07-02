@@ -16,6 +16,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -237,6 +238,8 @@ fun PageEditorRoute(
         onDeleteTableColumn = viewModel::deleteTableColumn,
         onAddTableRow = viewModel::addTableRow,
         onDeleteTableRow = viewModel::deleteTableRow,
+        onDuplicateTableRow = viewModel::duplicateTableRow,
+        onMoveTableRow = viewModel::moveTableRow,
         onTableRowBlockTextChange = viewModel::updateTableRowBlockText,
         onTableRowBlockRichTextChange = viewModel::updateTableRowBlockRichText,
         onTableRowBlockPasteBlocks = viewModel::pasteTableRowBlocks,
@@ -248,6 +251,8 @@ fun PageEditorRoute(
         onInsertTableRowPageBlockNear = viewModel::insertTableRowPageBlockNear,
         onCreateLinkedChildPageFromTableRowBlock = viewModel::createLinkedChildPageFromTableRowBlock,
         onDeleteTableRowPageBlock = viewModel::deleteTableRowPageBlock,
+        onMoveTableRowPageBlockUp = viewModel::moveTableRowPageBlockUp,
+        onMoveTableRowPageBlockDown = viewModel::moveTableRowPageBlockDown,
         onIndentTableRowPageBlock = viewModel::indentTableRowPageBlock,
         onOutdentTableRowPageBlock = viewModel::outdentTableRowPageBlock,
         onAddProperty = viewModel::addProperty,
@@ -324,6 +329,8 @@ internal fun PageEditorScreen(
     onDeleteTableColumn: (String, String) -> Unit,
     onAddTableRow: (String) -> Unit,
     onDeleteTableRow: (String, String) -> Unit,
+    onDuplicateTableRow: (String, String) -> Unit,
+    onMoveTableRow: (String, String, Int) -> Unit,
     onTableRowBlockTextChange: (String, String, String, String) -> Unit,
     onTableRowBlockRichTextChange: (String, String, String, String, List<PageTextSpan>) -> Unit,
     onTableRowBlockPasteBlocks: (String, String, String, List<RichTextPasteBlock>) -> Unit,
@@ -335,6 +342,8 @@ internal fun PageEditorScreen(
     onInsertTableRowPageBlockNear: (String, String, String, PageBlockType, PageBlockInsertPosition) -> Unit,
     onCreateLinkedChildPageFromTableRowBlock: (String, String, String) -> Unit,
     onDeleteTableRowPageBlock: (String, String, String) -> Unit,
+    onMoveTableRowPageBlockUp: (String, String, String) -> Unit,
+    onMoveTableRowPageBlockDown: (String, String, String) -> Unit,
     onIndentTableRowPageBlock: (String, String, String) -> Unit,
     onOutdentTableRowPageBlock: (String, String, String) -> Unit,
     onAddProperty: (PagePropertyType, String) -> Unit,
@@ -428,7 +437,13 @@ internal fun PageEditorScreen(
                 richTextToolbarState = richTextToolbarState,
                 onAddBlock = onAddBlock,
                 onChangeActiveBlockType = { type ->
-                    activeBlockId?.let { blockId -> onBlockTypeChange(blockId, type) } ?: onAddBlock(type)
+                    if (type == PageBlockType.DatabaseTable) {
+                        activeBlockId?.let { blockId ->
+                            onInsertBlockNear(blockId, type, PageBlockInsertPosition.Below)
+                        } ?: onAddBlock(type)
+                    } else {
+                        activeBlockId?.let { blockId -> onBlockTypeChange(blockId, type) } ?: onAddBlock(type)
+                    }
                 },
                 onAddChildToActiveBlock = { type ->
                     activeBlockId?.let { blockId -> onAddChildBlock(blockId, type) }
@@ -599,8 +614,10 @@ internal fun PageEditorScreen(
                         items = uiState.blocks,
                         key = { block -> block.id },
                     ) { block ->
-                        BlockEditorCard(
+                        PageEditorBlock(
                             block = block,
+                            pageId = uiState.page.id,
+                            pageUpdatedAt = uiState.page.updatedAt,
                             isFirstBlock = uiState.blocks.firstOrNull()?.id == block.id,
                             indentLevel = 0,
                             onTextChange = onBlockTextChange,
@@ -647,6 +664,8 @@ internal fun PageEditorScreen(
                             onDeleteTableColumn = onDeleteTableColumn,
                             onAddTableRow = onAddTableRow,
                             onDeleteTableRow = onDeleteTableRow,
+                            onDuplicateTableRow = onDuplicateTableRow,
+                            onMoveTableRow = onMoveTableRow,
                             onTableRowBlockTextChange = onTableRowBlockTextChange,
                             onTableRowBlockRichTextChange = onTableRowBlockRichTextChange,
                             onTableRowBlockPasteBlocks = onTableRowBlockPasteBlocks,
@@ -658,6 +677,8 @@ internal fun PageEditorScreen(
                             onInsertTableRowPageBlockNear = onInsertTableRowPageBlockNear,
                             onCreateLinkedChildPageFromTableRowBlock = onCreateLinkedChildPageFromTableRowBlock,
                             onDeleteTableRowPageBlock = onDeleteTableRowPageBlock,
+                            onMoveTableRowPageBlockUp = onMoveTableRowPageBlockUp,
+                            onMoveTableRowPageBlockDown = onMoveTableRowPageBlockDown,
                             onIndentTableRowPageBlock = onIndentTableRowPageBlock,
                             onOutdentTableRowPageBlock = onOutdentTableRowPageBlock,
                             tableReferences = tableReferences,
@@ -667,11 +688,15 @@ internal fun PageEditorScreen(
                     }
 
                     item(key = "page-body-tap-target") {
+                        val bodyTapInteractionSource = remember { MutableInteractionSource() }
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(160.dp)
-                                .clickable {
+                                .clickable(
+                                    interactionSource = bodyTapInteractionSource,
+                                    indication = null,
+                                ) {
                                     richTextToolbarState = null
                                     uiState.blocks.firstFocusableEditorBlockId()?.let { blockId ->
                                         requestEditorFocus(blockId, PageEditorFocusScope.Body)

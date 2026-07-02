@@ -18,6 +18,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.awaitLongPressOrCancellation
+import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -119,6 +123,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -133,6 +138,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -140,10 +146,12 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.YearMonth
+import java.time.ZoneId
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 import java.util.UUID
+import kotlin.math.abs
 import com.changeyourlife.cyl.domain.model.Page
 import com.changeyourlife.cyl.domain.model.PageBlock
 import com.changeyourlife.cyl.domain.model.PageBlockInsertPosition
@@ -181,6 +189,8 @@ import kotlinx.serialization.json.Json
 @Composable
 internal fun DatabaseTableBlockEditor(
     tableBlockId: String,
+    pageId: String,
+    pageUpdatedAt: Long,
     table: PageTable,
     tableReferences: List<PageTableReference>,
     onTitleChange: (String) -> Unit,
@@ -208,6 +218,8 @@ internal fun DatabaseTableBlockEditor(
     onDeleteColumn: (String) -> Unit,
     onAddRow: () -> Unit,
     onDeleteRow: (String) -> Unit,
+    onDuplicateRow: (String) -> Unit,
+    onMoveRow: (String, Int) -> Unit,
     onRowBlockTextChange: (String, String, String) -> Unit,
     onRowBlockRichTextChange: (String, String, String, List<PageTextSpan>) -> Unit,
     onRowBlockPasteBlocks: (String, String, List<RichTextPasteBlock>) -> Unit,
@@ -219,6 +231,8 @@ internal fun DatabaseTableBlockEditor(
     onInsertRowPageBlockNear: (String, String, PageBlockType, PageBlockInsertPosition) -> Unit,
     onCreateRowLinkedPage: (String, String) -> Unit,
     onDeleteRowPageBlock: (String, String) -> Unit,
+    onMoveRowPageBlockUp: (String, String) -> Unit,
+    onMoveRowPageBlockDown: (String, String) -> Unit,
     onIndentRowPageBlock: (String, String) -> Unit,
     onOutdentRowPageBlock: (String, String) -> Unit,
     mentionPages: List<Page> = emptyList(),
@@ -227,6 +241,7 @@ internal fun DatabaseTableBlockEditor(
 ) {
     val horizontalScrollState = rememberScrollState()
     var openRowId by remember { mutableStateOf<String?>(null) }
+    var tableSearchQuery by rememberSaveable(tableBlockId) { mutableStateOf("") }
     val openRow = table.rows.firstOrNull { row -> row.id == openRowId }
     val highlightedRowId = remember(table.rows, searchTargetType, searchTargetId) {
         table.highlightedRowId(searchTargetType, searchTargetId)
@@ -279,6 +294,8 @@ internal fun DatabaseTableBlockEditor(
             },
             onCreateLinkedPage = { rowBlockId -> onCreateRowLinkedPage(openRow.id, rowBlockId) },
             onDeleteBlock = { rowBlockId -> onDeleteRowPageBlock(openRow.id, rowBlockId) },
+            onMoveBlockUp = { rowBlockId -> onMoveRowPageBlockUp(openRow.id, rowBlockId) },
+            onMoveBlockDown = { rowBlockId -> onMoveRowPageBlockDown(openRow.id, rowBlockId) },
             onIndentBlock = { rowBlockId -> onIndentRowPageBlock(openRow.id, rowBlockId) },
             onOutdentBlock = { rowBlockId -> onOutdentRowPageBlock(openRow.id, rowBlockId) },
             mentionPages = mentionPages,
@@ -294,6 +311,8 @@ internal fun DatabaseTableBlockEditor(
             onSortChange = onSortChange,
             onFilterChange = onFilterChange,
             onGroupChange = onGroupChange,
+            searchQuery = tableSearchQuery,
+            onSearchQueryChange = { tableSearchQuery = it },
         )
 
         TableViewConfigControls(
@@ -322,16 +341,45 @@ internal fun DatabaseTableBlockEditor(
                 onInsertColumn = onInsertColumn,
                 onDuplicateColumn = onDuplicateColumn,
                 onDeleteRow = onDeleteRow,
+                onDuplicateRow = onDuplicateRow,
+                onMoveRow = onMoveRow,
                 onAddRow = onAddRow,
                 onOpenRow = { rowId -> openRowId = rowId },
                 highlightedRowId = highlightedRowId,
+                searchQuery = tableSearchQuery,
+                pageId = pageId,
+                pageUpdatedAt = pageUpdatedAt,
             )
-            PageTableView.List -> TableListView(table = table, tableReferences = tableReferences)
-            PageTableView.Board -> TableBoardView(table = table, tableReferences = tableReferences)
-            PageTableView.Calendar -> TableCalendarView(table = table, tableReferences = tableReferences)
-            PageTableView.Gallery -> TableGalleryView(table = table, tableReferences = tableReferences)
-            PageTableView.Timeline -> TableTimelineView(table = table, tableReferences = tableReferences)
-            PageTableView.Dashboard -> TableDashboardView(table = table, tableReferences = tableReferences)
+            PageTableView.List -> TableListView(
+                table = table,
+                tableReferences = tableReferences,
+                searchQuery = tableSearchQuery,
+            )
+            PageTableView.Board -> TableBoardView(
+                table = table,
+                tableReferences = tableReferences,
+                searchQuery = tableSearchQuery,
+            )
+            PageTableView.Calendar -> TableCalendarView(
+                table = table,
+                tableReferences = tableReferences,
+                searchQuery = tableSearchQuery,
+            )
+            PageTableView.Gallery -> TableGalleryView(
+                table = table,
+                tableReferences = tableReferences,
+                searchQuery = tableSearchQuery,
+            )
+            PageTableView.Timeline -> TableTimelineView(
+                table = table,
+                tableReferences = tableReferences,
+                searchQuery = tableSearchQuery,
+            )
+            PageTableView.Dashboard -> TableDashboardView(
+                table = table,
+                tableReferences = tableReferences,
+                searchQuery = tableSearchQuery,
+            )
         }
     }
 }
@@ -344,7 +392,12 @@ internal fun TableToolbar(
     onSortChange: (String, PageTableSortDirection) -> Unit,
     onFilterChange: (String, String) -> Unit,
     onGroupChange: (String) -> Unit,
+    searchQuery: String,
+    onSearchQueryChange: (String) -> Unit,
 ) {
+    var isSearchOpen by rememberSaveable { mutableStateOf(false) }
+    val showSearch = isSearchOpen || searchQuery.isNotBlank()
+
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -361,6 +414,12 @@ internal fun TableToolbar(
                 onViewChange = onViewChange,
             )
             Spacer(modifier = Modifier.weight(1f))
+            TableControlIconButton(
+                icon = Icons.Rounded.Search,
+                selected = searchQuery.isNotBlank(),
+                contentDescription = "Search database",
+                onClick = { isSearchOpen = !isSearchOpen },
+            )
             TableControls(
                 table = table,
                 onSortChange = onSortChange,
@@ -368,8 +427,84 @@ internal fun TableToolbar(
                 onGroupChange = onGroupChange,
             )
         }
-        TableActiveControlsRow(table = table)
+        if (showSearch) {
+            TableSearchField(
+                query = searchQuery,
+                onQueryChange = onSearchQueryChange,
+                onClose = {
+                    onSearchQueryChange("")
+                    isSearchOpen = false
+                },
+            )
+        }
+        TableActiveControlsRow(
+            table = table,
+            searchQuery = searchQuery,
+        )
     }
+}
+
+@Composable
+internal fun TableSearchField(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    onClose: () -> Unit,
+) {
+    BasicTextField(
+        value = query,
+        onValueChange = onQueryChange,
+        modifier = Modifier.fillMaxWidth(),
+        singleLine = true,
+        textStyle = MaterialTheme.typography.bodyMedium.copy(
+            color = MaterialTheme.colorScheme.onSurface,
+        ),
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+        decorationBox = { innerTextField ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(42.dp)
+                    .clip(RoundedCornerShape(21.dp))
+                    .background(MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.72f))
+                    .padding(start = 13.dp, end = 2.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Search,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Box(
+                    modifier = Modifier.weight(1f),
+                    contentAlignment = Alignment.CenterStart,
+                ) {
+                    if (query.isBlank()) {
+                        Text(
+                            text = "Search database",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.68f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    innerTextField()
+                }
+                IconButton(
+                    onClick = onClose,
+                    modifier = Modifier.size(40.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Close,
+                        contentDescription = "Close search",
+                        modifier = Modifier.size(19.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        },
+    )
 }
 
 @Composable
@@ -678,7 +813,10 @@ internal fun TableControlIconButton(
 }
 
 @Composable
-internal fun TableActiveControlsRow(table: PageTable) {
+internal fun TableActiveControlsRow(
+    table: PageTable,
+    searchQuery: String,
+) {
     val sortColumn = table.columns.firstOrNull { column -> column.id == table.sort.columnId }
     val filterColumn = table.columns.firstOrNull { column -> column.id == table.filter.columnId }
     val groupColumn = table.columns.firstOrNull { column -> column.id == table.groupByColumnId }
@@ -691,6 +829,9 @@ internal fun TableActiveControlsRow(table: PageTable) {
         }
         if (groupColumn != null) {
             add("Group ${groupColumn.name.ifBlank { "Untitled" }}")
+        }
+        if (searchQuery.isNotBlank()) {
+            add("Search $searchQuery")
         }
     }
     if (labels.isEmpty()) return
@@ -931,11 +1072,19 @@ internal fun TableGridEditor(
     onInsertColumn: (String, TableColumnInsertSide) -> Unit,
     onDuplicateColumn: (String) -> Unit,
     onDeleteRow: (String) -> Unit,
+    onDuplicateRow: (String) -> Unit,
+    onMoveRow: (String, Int) -> Unit,
     onAddRow: () -> Unit,
     onOpenRow: (String) -> Unit,
     highlightedRowId: String? = null,
+    searchQuery: String = "",
+    pageId: String,
+    pageUpdatedAt: Long,
 ) {
-    val visibleRows = table.visibleRows(tableReferences)
+    val visibleRows = table.visibleRows(
+        tableReferences = tableReferences,
+        searchQuery = searchQuery,
+    )
     val groupColumn = table.groupColumn()
 
     Column(
@@ -971,14 +1120,21 @@ internal fun TableGridEditor(
             visibleRows.groupBy { row -> table.groupLabel(row, groupColumn, tableReferences) }.forEach { (group, rows) ->
                 TableGroupHeader(label = group, count = rows.size)
                 rows.forEach { row ->
+                    val rowIndex = table.rows.indexOfFirst { tableRow -> tableRow.id == row.id }
                     TableDataRow(
                         row = row,
+                        rowIndex = rowIndex,
+                        totalRows = table.rows.size,
+                        pageId = pageId,
+                        pageUpdatedAt = pageUpdatedAt,
                         table = table,
                         columns = table.columns,
                         tableReferences = tableReferences,
                         onColumnDateSettingsChange = onColumnDateSettingsChange,
                         onCellChange = onCellChange,
                         onDeleteRow = onDeleteRow,
+                        onDuplicateRow = onDuplicateRow,
+                        onMoveRow = onMoveRow,
                         onOpenRow = onOpenRow,
                         isHighlighted = row.id == highlightedRowId,
                     )
@@ -990,14 +1146,21 @@ internal fun TableGridEditor(
             )
         } else {
             visibleRows.forEach { row ->
+                val rowIndex = table.rows.indexOfFirst { tableRow -> tableRow.id == row.id }
                 TableDataRow(
                     row = row,
+                    rowIndex = rowIndex,
+                    totalRows = table.rows.size,
+                    pageId = pageId,
+                    pageUpdatedAt = pageUpdatedAt,
                     table = table,
                     columns = table.columns,
                     tableReferences = tableReferences,
                     onColumnDateSettingsChange = onColumnDateSettingsChange,
                     onCellChange = onCellChange,
                     onDeleteRow = onDeleteRow,
+                    onDuplicateRow = onDuplicateRow,
+                    onMoveRow = onMoveRow,
                     onOpenRow = onOpenRow,
                     isHighlighted = row.id == highlightedRowId,
                 )
@@ -1100,32 +1263,11 @@ internal fun TableHeaderRow(
     Row(horizontalArrangement = Arrangement.spacedBy(0.dp)) {
         if (primaryColumn != null) {
             HeaderColumn(primaryColumn)
-            TableOpenHeaderCell()
         }
         remainingColumns.forEach { column ->
             HeaderColumn(column)
         }
         TableAddColumnCell(onAddColumn = onAddColumn)
-    }
-}
-
-@Composable
-internal fun TableOpenHeaderCell() {
-    Row(
-        modifier = Modifier
-            .width(TableOpenWidth)
-            .height(TableHeaderHeight)
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-            .padding(horizontal = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            text = "Open",
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
     }
 }
 
@@ -2042,7 +2184,6 @@ internal fun TableGroupHeader(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Spacer(modifier = Modifier.width(TableOpenWidth))
         Text(
             text = "$label ($count)",
             modifier = Modifier.width(TableGroupHeaderWidth),
@@ -2056,6 +2197,10 @@ internal fun TableGroupHeader(
 @Composable
 internal fun TableDataRow(
     row: PageTableRow,
+    rowIndex: Int,
+    totalRows: Int,
+    pageId: String,
+    pageUpdatedAt: Long,
     table: PageTable,
     columns: List<PageTableColumn>,
     tableReferences: List<PageTableReference>,
@@ -2068,25 +2213,74 @@ internal fun TableDataRow(
     ) -> Unit,
     onCellChange: (String, String, String) -> Unit,
     onDeleteRow: (String) -> Unit,
+    onDuplicateRow: (String) -> Unit,
+    onMoveRow: (String, Int) -> Unit,
     onOpenRow: (String) -> Unit,
     isHighlighted: Boolean = false,
 ) {
     val primaryColumn = columns.firstOrNull()
     val remainingColumns = columns.drop(1)
+    var isActionSheetOpen by remember(row.id) { mutableStateOf(false) }
+    val context = LocalContext.current
+
+    if (isActionSheetOpen) {
+        TableRowActionSheet(
+            rowTitle = row.cellText(table.titleColumn()).ifBlank { "Untitled row" },
+            lastEditedAt = pageUpdatedAt,
+            onEditProperties = {
+                isActionSheetOpen = false
+                onOpenRow(row.id)
+            },
+            onCopyLink = {
+                val rowLink = "cyl://page/$pageId?targetType=row&targetId=${row.id}"
+                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                clipboard?.setPrimaryClip(ClipData.newPlainText("CYL row link", rowLink))
+                Toast.makeText(context, "Row link copied", Toast.LENGTH_SHORT).show()
+                isActionSheetOpen = false
+            },
+            onDuplicate = {
+                onDuplicateRow(row.id)
+                isActionSheetOpen = false
+            },
+            onMoveUp = {
+                if (rowIndex > 0) onMoveRow(row.id, rowIndex - 1)
+                isActionSheetOpen = false
+            },
+            onMoveDown = {
+                if (rowIndex >= 0 && rowIndex < totalRows - 1) onMoveRow(row.id, rowIndex + 1)
+                isActionSheetOpen = false
+            },
+            onMoveToTrash = {
+                onDeleteRow(row.id)
+                isActionSheetOpen = false
+            },
+            canMoveUp = rowIndex > 0,
+            canMoveDown = rowIndex >= 0 && rowIndex < totalRows - 1,
+            onDismiss = { isActionSheetOpen = false },
+        )
+    }
 
     Row(
-        modifier = Modifier.background(
-            if (isHighlighted) {
-                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
-            } else {
-                MaterialTheme.colorScheme.surface
-            },
-        ),
+        modifier = Modifier
+            .background(
+                if (isHighlighted) {
+                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+                } else {
+                    MaterialTheme.colorScheme.surface
+                },
+            )
+            .tableRowHoldGesture(
+                rowId = row.id,
+                rowIndex = rowIndex,
+                totalRows = totalRows,
+                onStationaryLongPress = { isActionSheetOpen = true },
+                onMoveRow = onMoveRow,
+            ),
         horizontalArrangement = Arrangement.spacedBy(0.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (primaryColumn != null) {
-            TableCellEditor(
+            PrimaryTableCellEditor(
                 column = primaryColumn,
                 row = row,
                 table = table,
@@ -2096,13 +2290,13 @@ internal fun TableDataRow(
                 onDateSettingsChange = { dateFormat, timeFormat, reminder, timezoneLabel ->
                     onColumnDateSettingsChange(primaryColumn.id, dateFormat, timeFormat, reminder, timezoneLabel)
                 },
-                modifier = Modifier
-                    .width(TableCellWidth)
-                    .background(MaterialTheme.colorScheme.surface),
+                onOpenRow = { onOpenRow(row.id) },
             )
-            TableOpenRowCell(onClick = { onOpenRow(row.id) })
         } else {
-            TableOpenRowCell(onClick = { onOpenRow(row.id) })
+            TableOpenRowCell(
+                modifier = Modifier.width(TableCellWidth),
+                onClick = { onOpenRow(row.id) },
+            )
         }
         remainingColumns.forEach { column ->
             TableCellEditor(
@@ -2130,23 +2324,252 @@ internal fun TableDataRow(
     HorizontalDivider()
 }
 
+private fun Modifier.tableRowHoldGesture(
+    rowId: String,
+    rowIndex: Int,
+    totalRows: Int,
+    onStationaryLongPress: () -> Unit,
+    onMoveRow: (String, Int) -> Unit,
+): Modifier {
+    if (rowIndex < 0 || totalRows <= 0) return this
+    return pointerInput(rowId, rowIndex, totalRows) {
+        awaitEachGesture {
+            val down = awaitFirstDown(requireUnconsumed = false)
+            val longPress = awaitLongPressOrCancellation(down.id) ?: return@awaitEachGesture
+            var currentIndex = rowIndex
+            var dragOffset = 0f
+            var moved = false
+            val rowStepThreshold = TableRowHeight.toPx() * 0.58f
+
+            drag(longPress.id) { change ->
+                val deltaY = change.positionChange().y
+                if (deltaY == 0f) return@drag
+                dragOffset += deltaY
+                if (abs(dragOffset) >= rowStepThreshold) {
+                    val direction = if (dragOffset > 0f) 1 else -1
+                    val targetIndex = (currentIndex + direction).coerceIn(0, totalRows - 1)
+                    if (targetIndex != currentIndex) {
+                        onMoveRow(rowId, targetIndex)
+                        currentIndex = targetIndex
+                        moved = true
+                    }
+                    dragOffset = 0f
+                }
+                if (moved || abs(dragOffset) > 4f) {
+                    change.consume()
+                }
+            }
+
+            if (!moved) {
+                onStationaryLongPress()
+            }
+        }
+    }
+}
+
 @Composable
-internal fun TableOpenRowCell(onClick: () -> Unit) {
-    Box(
+internal fun TableRowActionSheet(
+    rowTitle: String,
+    lastEditedAt: Long,
+    onEditProperties: () -> Unit,
+    onCopyLink: () -> Unit,
+    onDuplicate: () -> Unit,
+    onMoveUp: () -> Unit,
+    onMoveDown: () -> Unit,
+    onMoveToTrash: () -> Unit,
+    canMoveUp: Boolean,
+    canMoveDown: Boolean,
+    onDismiss: () -> Unit,
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = rowTitle,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                text = "Last edited ${lastEditedAt.toTableRowActionDateTime()}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.52f)),
+            ) {
+                TableRowActionItem(
+                    icon = Icons.Rounded.CheckCircle,
+                    label = "Add to favourite",
+                    enabled = false,
+                    onClick = {},
+                )
+                TableRowActionItem(
+                    icon = Icons.Rounded.Edit,
+                    label = "Edit icon",
+                    enabled = false,
+                    onClick = {},
+                )
+                TableRowActionItem(
+                    icon = Icons.Rounded.Tune,
+                    label = "Edit property",
+                    onClick = onEditProperties,
+                )
+                TableRowActionItem(
+                    icon = Icons.Rounded.ContentCopy,
+                    label = "Copy link",
+                    onClick = onCopyLink,
+                )
+                TableRowActionItem(
+                    icon = Icons.Rounded.ContentCopy,
+                    label = "Duplicate",
+                    onClick = onDuplicate,
+                )
+                TableRowActionItem(
+                    icon = Icons.Rounded.KeyboardArrowUp,
+                    label = "Move up",
+                    enabled = canMoveUp,
+                    onClick = onMoveUp,
+                )
+                TableRowActionItem(
+                    icon = Icons.Rounded.KeyboardArrowDown,
+                    label = "Move down",
+                    enabled = canMoveDown,
+                    onClick = onMoveDown,
+                )
+                TableRowActionItem(
+                    icon = Icons.Rounded.SwapVert,
+                    label = "Move to",
+                    enabled = false,
+                    onClick = {},
+                )
+                TableRowActionItem(
+                    icon = Icons.Rounded.Delete,
+                    label = "Move to trash",
+                    destructive = true,
+                    onClick = onMoveToTrash,
+                )
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+        }
+    }
+}
+
+@Composable
+internal fun TableRowActionItem(
+    icon: ImageVector,
+    label: String,
+    enabled: Boolean = true,
+    destructive: Boolean = false,
+    onClick: () -> Unit,
+) {
+    val color = when {
+        !enabled -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.42f)
+        destructive -> MaterialTheme.colorScheme.error
+        else -> MaterialTheme.colorScheme.onSurface
+    }
+    Row(
         modifier = Modifier
-            .width(TableOpenWidth)
+            .fillMaxWidth()
+            .height(48.dp)
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 14.dp),
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            modifier = Modifier.size(20.dp),
+            tint = color,
+        )
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyLarge,
+            color = color,
+        )
+    }
+}
+
+private fun Long.toTableRowActionDateTime(): String {
+    if (this <= 0L) return "unknown"
+    return Instant.ofEpochMilli(this)
+        .atZone(ZoneId.systemDefault())
+        .format(DateTimeFormatter.ofPattern("MMM d, h:mm a", Locale.US))
+}
+
+@Composable
+internal fun PrimaryTableCellEditor(
+    column: PageTableColumn,
+    row: PageTableRow,
+    table: PageTable,
+    tableReferences: List<PageTableReference>,
+    value: String,
+    onValueChange: (String) -> Unit,
+    onDateSettingsChange: (
+        PageTableDateFormat,
+        PageTableTimeFormat,
+        PageTableDateReminder,
+        String,
+    ) -> Unit,
+    onOpenRow: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .width(TableCellWidth)
             .height(TableRowHeight)
             .background(MaterialTheme.colorScheme.surface),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        TableCellEditor(
+            column = column,
+            row = row,
+            table = table,
+            tableReferences = tableReferences,
+            value = value,
+            onValueChange = onValueChange,
+            onDateSettingsChange = onDateSettingsChange,
+            modifier = Modifier.weight(1f),
+        )
+        TableOpenRowCell(
+            modifier = Modifier.width(44.dp),
+            onClick = onOpenRow,
+        )
+    }
+}
+
+@Composable
+internal fun TableOpenRowCell(
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    Box(
+        modifier = modifier
+            .height(TableRowHeight)
+            .background(MaterialTheme.colorScheme.surface)
+            .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         Text(
-            text = "Open",
+            text = "OPEN",
             modifier = Modifier
-                .clip(RoundedCornerShape(9.dp))
+                .clip(RoundedCornerShape(8.dp))
                 .background(MaterialTheme.colorScheme.surfaceContainer)
-                .clickable(onClick = onClick)
-                .padding(horizontal = 12.dp, vertical = 7.dp),
-            style = MaterialTheme.typography.labelSmall,
+                .padding(horizontal = 6.dp, vertical = 4.dp),
+            style = MaterialTheme.typography.labelSmall.copy(
+                fontSize = 8.sp,
+                lineHeight = 8.sp,
+                letterSpacing = 0.sp,
+            ),
             fontWeight = FontWeight.SemiBold,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -2158,7 +2581,6 @@ internal fun TableAddRowRow(
     columns: List<PageTableColumn>,
     onAddRow: () -> Unit,
 ) {
-    val hasPrimaryColumn = columns.isNotEmpty()
     val remainingColumnCount = (columns.size - 1).coerceAtLeast(0)
 
     Row(
@@ -2169,21 +2591,13 @@ internal fun TableAddRowRow(
             modifier = Modifier.width(TableCellWidth),
             onAddRow = onAddRow,
         )
-        if (hasPrimaryColumn) {
+        repeat(remainingColumnCount) {
             Box(
                 modifier = Modifier
-                    .width(TableOpenWidth)
+                    .width(TableCellWidth)
                     .height(TableRowHeight)
                     .background(MaterialTheme.colorScheme.surface),
             )
-            repeat(remainingColumnCount) {
-                Box(
-                    modifier = Modifier
-                        .width(TableCellWidth)
-                        .height(TableRowHeight)
-                        .background(MaterialTheme.colorScheme.surface),
-                )
-            }
         }
         Box(
             modifier = Modifier

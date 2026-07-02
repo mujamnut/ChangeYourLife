@@ -320,8 +320,14 @@ class TableMutationUseCase(
         document: PageBlockDocument,
         tableBlockId: String,
         row: PageTableRow,
+        targetIndex: Int? = null,
     ): TableMutationResult = replaceTable(document, tableBlockId) { table ->
-        table.copy(rows = table.rows + row)
+        val insertIndex = targetIndex?.coerceIn(0, table.rows.size) ?: table.rows.size
+        table.copy(
+            rows = table.rows.toMutableList().apply {
+                add(insertIndex, row)
+            },
+        )
     }
 
     fun deleteRow(
@@ -330,6 +336,21 @@ class TableMutationUseCase(
         rowId: String,
     ): TableMutationResult = replaceTable(document, tableBlockId) { table ->
         table.copy(rows = table.rows.filterNot { row -> row.id == rowId })
+    }
+
+    fun moveRow(
+        document: PageBlockDocument,
+        tableBlockId: String,
+        rowId: String,
+        targetIndex: Int,
+    ): TableMutationResult = replaceTable(document, tableBlockId) { table ->
+        val currentIndex = table.rows.indexOfFirst { row -> row.id == rowId }
+        if (currentIndex < 0) return@replaceTable table
+        val mutableRows = table.rows.toMutableList()
+        val row = mutableRows.removeAt(currentIndex)
+        val nextIndex = targetIndex.coerceIn(0, mutableRows.size)
+        mutableRows.add(nextIndex, row)
+        table.copy(rows = mutableRows)
     }
 
     fun updateRowBlocks(

@@ -89,8 +89,6 @@ object PageContentCodec {
     private fun newTable(): PageTable {
         val columns = listOf(
             newTableColumn("Name"),
-            newTableColumn("Status", PageTableColumnType.Status),
-            newTableColumn("Date", PageTableColumnType.Date),
         )
         return PageTable(
             title = "Untitled database",

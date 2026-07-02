@@ -143,7 +143,11 @@ private fun RichTextSlashCommand.defaultGroup(): EditorCommandGroup {
             "Database" -> EditorCommandGroup.Database
             else -> EditorCommandGroup.Basic
         }
-        is RichTextSlashAction.InsertBlock -> EditorCommandGroup.Insert
+        is RichTextSlashAction.InsertBlock -> if (label == "Database") {
+            EditorCommandGroup.Database
+        } else {
+            EditorCommandGroup.Insert
+        }
         RichTextSlashAction.CreateLinkedPage -> EditorCommandGroup.Page
         RichTextSlashAction.OpenPropertySheet -> EditorCommandGroup.Database
         RichTextSlashAction.IndentBlock,

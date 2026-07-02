@@ -576,7 +576,6 @@ internal data class DashboardStat(
 )
 
 internal val TableCellWidth = 180.dp
-internal val TableOpenWidth = 76.dp
 internal val TableActionWidth = 48.dp
 internal val TableAddColumnWidth = 64.dp
 internal val TableHeaderHeight = 44.dp
@@ -772,13 +771,17 @@ internal fun PageTable.rowSummaries(
     dateColumnId: String = "",
     endDateColumnId: String = "",
     statusColumnId: String = "",
+    searchQuery: String = "",
 ): List<TableRowSummary> {
     val titleColumn = titleColumn()
     val statusColumn = statusColumn(statusColumnId)
     val dateColumn = dateColumn(dateColumnId)
     val endDateColumn = columns.firstOrNull { column -> column.id == endDateColumnId }
 
-    return visibleRows(tableReferences).map { row ->
+    return visibleRows(
+        tableReferences = tableReferences,
+        searchQuery = searchQuery,
+    ).map { row ->
         val excludedForDetails = setOfNotNull(titleColumn?.id)
         val excludedForTimeline = setOfNotNull(titleColumn?.id, statusColumn?.id, dateColumn?.id, endDateColumn?.id)
         TableRowSummary(
@@ -793,15 +796,23 @@ internal fun PageTable.rowSummaries(
     }
 }
 
-internal fun PageTable.visibleRows(tableReferences: List<PageTableReference> = emptyList()): List<PageTableRow> {
+internal fun PageTable.visibleRows(
+    tableReferences: List<PageTableReference> = emptyList(),
+    searchQuery: String = "",
+): List<PageTableRow> {
     val filterColumn = columns.firstOrNull { column -> column.id == filter.columnId }
     val filteredRows = if (filterColumn != null && filter.query.isNotBlank()) {
         rows.filter { row -> displayCellText(row, filterColumn, tableReferences).contains(filter.query, ignoreCase = true) }
     } else {
         rows
     }
-    val sortColumn = columns.firstOrNull { column -> column.id == sort.columnId } ?: return filteredRows
-    val sortedRows = filteredRows.sortedWith { left, right ->
+    val searchedRows = if (searchQuery.isBlank()) {
+        filteredRows
+    } else {
+        filteredRows.filter { row -> row.matchesTableSearch(this, searchQuery, tableReferences) }
+    }
+    val sortColumn = columns.firstOrNull { column -> column.id == sort.columnId } ?: return searchedRows
+    val sortedRows = searchedRows.sortedWith { left, right ->
         compareRowsByColumn(left, right, sortColumn, tableReferences)
     }
     return if (sort.direction == PageTableSortDirection.Descending) {
@@ -817,9 +828,13 @@ internal fun PageTable.groupColumn(): PageTableColumn? {
 
 internal fun PageTable.groupedSummaries(
     tableReferences: List<PageTableReference>,
+    searchQuery: String = "",
     defaultToStatus: Boolean = false,
 ): List<Pair<String, List<TableRowSummary>>> {
-    val summaries = rowSummaries(tableReferences)
+    val summaries = rowSummaries(
+        tableReferences = tableReferences,
+        searchQuery = searchQuery,
+    )
     val groupingColumn = groupColumn()
     if (groupingColumn != null) {
         return summaries.groupBy { summary -> groupLabel(summary.row, groupingColumn, tableReferences) }.toList()
@@ -828,6 +843,55 @@ internal fun PageTable.groupedSummaries(
         return summaries.groupBy { summary -> summary.status }.toList()
     }
     return listOf("" to summaries)
+}
+
+internal fun PageTableRow.matchesTableSearch(
+    table: PageTable,
+    query: String,
+    tableReferences: List<PageTableReference>,
+): Boolean {
+    val terms = query
+        .trim()
+        .split(Regex("\\s+"))
+        .filter { term -> term.isNotBlank() }
+    if (terms.isEmpty()) return true
+
+    val searchableText = buildString {
+        table.columns.forEach { column ->
+            append(column.name)
+            append(' ')
+            append(table.displayCellText(this@matchesTableSearch, column, tableReferences))
+            append(' ')
+        }
+        blocks.forEach { block ->
+            append(block.searchText())
+            append(' ')
+        }
+    }
+    return terms.all { term -> searchableText.contains(term, ignoreCase = true) }
+}
+
+internal fun PageBlock.searchText(): String {
+    return buildString {
+        append(text)
+        append(' ')
+        mediaAttachments.forEach { attachment ->
+            append(attachment.name)
+            append(' ')
+        }
+        if (type == PageBlockType.DatabaseTable) {
+            append(table.title)
+            append(' ')
+            table.columns.forEach { column ->
+                append(column.name)
+                append(' ')
+            }
+        }
+        children.forEach { child ->
+            append(child.searchText())
+            append(' ')
+        }
+    }
 }
 
 internal fun PageTable.groupLabel(
@@ -1304,6 +1368,8 @@ internal fun PageEditorScreenPreview() {
             onDeleteTableColumn = { _, _ -> },
             onAddTableRow = {},
             onDeleteTableRow = { _, _ -> },
+            onDuplicateTableRow = { _, _ -> },
+            onMoveTableRow = { _, _, _ -> },
             onTableRowBlockTextChange = { _, _, _, _ -> },
             onTableRowBlockRichTextChange = { _, _, _, _, _ -> },
             onTableRowBlockPasteBlocks = { _, _, _, _ -> },
@@ -1314,6 +1380,8 @@ internal fun PageEditorScreenPreview() {
             onAddTableRowPageBlock = { _, _, _ -> },
             onInsertTableRowPageBlockNear = { _, _, _, _, _ -> },
             onDeleteTableRowPageBlock = { _, _, _ -> },
+            onMoveTableRowPageBlockUp = { _, _, _ -> },
+            onMoveTableRowPageBlockDown = { _, _, _ -> },
             onIndentTableRowPageBlock = { _, _, _ -> },
             onOutdentTableRowPageBlock = { _, _, _ -> },
             onAddProperty = { _, _ -> },

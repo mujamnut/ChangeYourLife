@@ -48,6 +48,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import java.util.UUID
 
 private const val MaxEditorUndoSnapshots = 40
 enum class TableColumnInsertSide {
@@ -678,6 +679,14 @@ class PageEditorViewModel @Inject constructor(
     }
 
     fun changeBlockType(blockId: String, type: PageBlockType) {
+        if (type == PageBlockType.DatabaseTable) {
+            insertBlockNear(
+                blockId = blockId,
+                type = type,
+                position = PageBlockInsertPosition.Below,
+            )
+            return
+        }
         val currentUiState = uiState.value
         if (currentUiState.page != null) {
             val document = currentDocument(currentUiState) ?: return
@@ -1382,6 +1391,81 @@ class PageEditorViewModel @Inject constructor(
         }
     }
 
+    fun duplicateTableRow(
+        blockId: String,
+        rowId: String,
+    ) {
+        val currentUiState = uiState.value
+        if (currentUiState.page != null) {
+            val document = currentDocument(currentUiState) ?: return
+            val tableBlock = document.findTableBlock(blockId) ?: return
+            val sourceIndex = tableBlock.table.rows.indexOfFirst { row -> row.id == rowId }
+            if (sourceIndex < 0) return
+            val sourceRow = tableBlock.table.rows[sourceIndex]
+            val duplicatedRow = PageBlockCodec.newTableRow(tableBlock.table.columns).copy(
+                cells = sourceRow.cells,
+                blocks = sourceRow.blocks.map { block -> block.duplicatedForTableRow() },
+            )
+            val targetIndex = sourceIndex + 1
+            val result = tableMutationUseCase.addRow(
+                document = document,
+                tableBlockId = blockId,
+                row = duplicatedRow,
+                targetIndex = targetIndex,
+            )
+            if (!result.changed) return
+            recordTableUndo(result)
+            queueGranularDocumentUpdate(
+                previous = document,
+                fallback = result.document,
+                recordUndo = false,
+            ) {
+                pageRepository.addTableRow(
+                    pageId = pageId,
+                    tableBlockId = blockId,
+                    row = duplicatedRow,
+                    targetIndex = targetIndex,
+                )
+            }
+        }
+    }
+
+    fun moveTableRow(
+        blockId: String,
+        rowId: String,
+        targetIndex: Int,
+    ) {
+        val currentUiState = uiState.value
+        if (currentUiState.page != null) {
+            val document = currentDocument(currentUiState) ?: return
+            val tableBlock = document.findTableBlock(blockId) ?: return
+            val currentIndex = tableBlock.table.rows.indexOfFirst { row -> row.id == rowId }
+            if (currentIndex < 0) return
+            val boundedTargetIndex = targetIndex.coerceIn(0, tableBlock.table.rows.lastIndex.coerceAtLeast(0))
+            if (currentIndex == boundedTargetIndex) return
+            val result = tableMutationUseCase.moveRow(
+                document = document,
+                tableBlockId = blockId,
+                rowId = rowId,
+                targetIndex = boundedTargetIndex,
+            )
+            if (!result.changed) return
+            recordTableUndo(result)
+            queueGranularDocumentUpdate(
+                previous = document,
+                fallback = result.document,
+                recordUndo = false,
+            ) {
+                pageRepository.moveTableRow(
+                    pageId = pageId,
+                    tableBlockId = blockId,
+                    rowId = rowId,
+                    targetIndex = boundedTargetIndex,
+                )
+            }
+        }
+    }
+
     fun updateTableRowBlockText(
         tableBlockId: String,
         rowId: String,
@@ -1473,6 +1557,16 @@ class PageEditorViewModel @Inject constructor(
         rowBlockId: String,
         type: PageBlockType,
     ) {
+        if (type == PageBlockType.DatabaseTable) {
+            insertTableRowPageBlockNear(
+                tableBlockId = tableBlockId,
+                rowId = rowId,
+                rowBlockId = rowBlockId,
+                type = type,
+                position = PageBlockInsertPosition.Below,
+            )
+            return
+        }
         val currentUiState = uiState.value
         if (currentUiState.page != null) {
             val document = currentDocument(currentUiState) ?: return
@@ -1653,6 +1747,56 @@ class PageEditorViewModel @Inject constructor(
             val document = currentDocument(currentUiState) ?: return
             val result = document.replaceTableRowBlocksWithCommand(tableBlockId, rowId) {
                 EditorCommand.DeleteBlock(rowBlockId)
+            }
+            if (!result.changed) return
+            queueTableRowPatchPendingDocument(
+                tableBlockId = tableBlockId,
+                rowId = rowId,
+                updated = result.document,
+            )
+        }
+    }
+
+    fun moveTableRowPageBlockUp(
+        tableBlockId: String,
+        rowId: String,
+        rowBlockId: String,
+    ) {
+        moveTableRowPageBlock(
+            tableBlockId = tableBlockId,
+            rowId = rowId,
+            rowBlockId = rowBlockId,
+            direction = -1,
+        )
+    }
+
+    fun moveTableRowPageBlockDown(
+        tableBlockId: String,
+        rowId: String,
+        rowBlockId: String,
+    ) {
+        moveTableRowPageBlock(
+            tableBlockId = tableBlockId,
+            rowId = rowId,
+            rowBlockId = rowBlockId,
+            direction = 1,
+        )
+    }
+
+    private fun moveTableRowPageBlock(
+        tableBlockId: String,
+        rowId: String,
+        rowBlockId: String,
+        direction: Int,
+    ) {
+        val currentUiState = uiState.value
+        if (currentUiState.page != null) {
+            val document = currentDocument(currentUiState) ?: return
+            val result = document.replaceTableRowBlocksWithCommand(tableBlockId, rowId) {
+                EditorCommand.MoveBlock(
+                    blockId = rowBlockId,
+                    direction = direction,
+                )
             }
             if (!result.changed) return
             queueTableRowPatchPendingDocument(
@@ -1952,6 +2096,21 @@ private fun PageBlock.withAppendedPageMention(page: Page): PageBlock {
             end = start + label.length,
             mentionPageId = page.id,
             mentionLabel = label,
+        ),
+    )
+}
+
+private fun PageBlock.duplicatedForTableRow(): PageBlock {
+    return copy(
+        id = UUID.randomUUID().toString(),
+        children = children.map { child -> child.duplicatedForTableRow() },
+        table = table.copy(
+            rows = table.rows.map { row ->
+                row.copy(
+                    id = UUID.randomUUID().toString(),
+                    blocks = row.blocks.map { block -> block.duplicatedForTableRow() },
+                )
+            },
         ),
     )
 }

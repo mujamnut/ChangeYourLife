@@ -180,8 +180,12 @@ import kotlinx.serialization.json.Json
 internal fun TableListView(
     table: PageTable,
     tableReferences: List<PageTableReference>,
+    searchQuery: String = "",
 ) {
-    val groupedSummaries = table.groupedSummaries(tableReferences = tableReferences)
+    val groupedSummaries = table.groupedSummaries(
+        tableReferences = tableReferences,
+        searchQuery = searchQuery,
+    )
 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (groupedSummaries.all { group -> group.second.isEmpty() }) {
@@ -216,8 +220,13 @@ internal fun TableListView(
 internal fun TableBoardView(
     table: PageTable,
     tableReferences: List<PageTableReference>,
+    searchQuery: String = "",
 ) {
-    val groupedRows = table.groupedSummaries(tableReferences = tableReferences, defaultToStatus = true)
+    val groupedRows = table.groupedSummaries(
+        tableReferences = tableReferences,
+        searchQuery = searchQuery,
+        defaultToStatus = true,
+    )
 
     if (groupedRows.all { group -> group.second.isEmpty() }) {
         EmptyTableMessage()
@@ -258,10 +267,12 @@ internal fun TableBoardView(
 internal fun TableCalendarView(
     table: PageTable,
     tableReferences: List<PageTableReference>,
+    searchQuery: String = "",
 ) {
     val summaries = table.rowSummaries(
         tableReferences = tableReferences,
         dateColumnId = table.viewConfig.calendarDateColumnId,
+        searchQuery = searchQuery,
     )
     val groupedRows = summaries
         .groupBy { summary -> summary.date }
@@ -307,8 +318,12 @@ internal fun TableCalendarView(
 internal fun TableGalleryView(
     table: PageTable,
     tableReferences: List<PageTableReference>,
+    searchQuery: String = "",
 ) {
-    val summaries = table.rowSummaries(tableReferences)
+    val summaries = table.rowSummaries(
+        tableReferences = tableReferences,
+        searchQuery = searchQuery,
+    )
 
     if (summaries.isEmpty()) {
         EmptyTableMessage()
@@ -351,12 +366,14 @@ internal fun TableGalleryView(
 internal fun TableTimelineView(
     table: PageTable,
     tableReferences: List<PageTableReference>,
+    searchQuery: String = "",
 ) {
     val summaries = if (table.sort.columnId.isBlank()) {
         table.rowSummaries(
             tableReferences = tableReferences,
             dateColumnId = table.viewConfig.timelineStartColumnId,
             endDateColumnId = table.viewConfig.timelineEndColumnId,
+            searchQuery = searchQuery,
         ).sortedWith(
             compareBy<TableRowSummary> { summary -> summary.date.dateSortKey() }
                 .thenBy { summary -> summary.title },
@@ -366,6 +383,7 @@ internal fun TableTimelineView(
             tableReferences = tableReferences,
             dateColumnId = table.viewConfig.timelineStartColumnId,
             endDateColumnId = table.viewConfig.timelineEndColumnId,
+            searchQuery = searchQuery,
         )
     }
 
@@ -425,9 +443,16 @@ internal fun TableTimelineView(
 internal fun TableDashboardView(
     table: PageTable,
     tableReferences: List<PageTableReference>,
+    searchQuery: String = "",
 ) {
-    val summaries = table.rowSummaries(tableReferences)
-    val rows = table.visibleRows(tableReferences)
+    val summaries = table.rowSummaries(
+        tableReferences = tableReferences,
+        searchQuery = searchQuery,
+    )
+    val rows = table.visibleRows(
+        tableReferences = tableReferences,
+        searchQuery = searchQuery,
+    )
     val groupColumn = table.columns.firstOrNull { column -> column.id == table.viewConfig.dashboardGroupColumnId }
         ?: table.statusColumn()
     val metricColumn = table.columns.firstOrNull { column -> column.id == table.viewConfig.dashboardMetricColumnId }

@@ -118,20 +118,20 @@ Home:
 Page editor:
 
 - The current direction is correct: text-like blocks must stay plain.
-- Remaining issue is implementation structure: `BlockEditorCard` still carries too much responsibility even after text-like blocks route through a plain path.
-- Next UI polish should be paired with component extraction to avoid reintroducing card-like behavior accidentally.
+- The block render path now separates plain text rows from structured containers, which reduces the chance of card-like behavior returning accidentally.
+- Next UI polish should continue by tightening database/table and row-page interaction details rather than adding more persistent controls.
 
 Table:
 
 - The grid is moving in the right direction, but it still needs a dedicated table token system: row height, header height, border color, selected/hover/active state, property icon size.
 - Table should not inherit generic card/sheet spacing too often.
-- A true table search control should wait until there is table-local query state.
+- A true table search control is now present as transient table-local UI state.
 
 Row page:
 
 - The row page is closer to a database item now.
-- Remaining issue: row block actions are still not the same contextual system as normal page blocks.
-- The add property affordance is now in the right location, but the property list needs tighter value alignment and better empty states.
+- Row block actions now use the same focused toolbar pattern as normal page blocks.
+- Remaining issue: the property list can still be tightened further with stronger value alignment and better empty states.
 
 AI chat:
 
@@ -232,20 +232,20 @@ Files:
 
 - `androidApp/src/main/java/com/changeyourlife/cyl/presentation/page/PageEditorRoute.kt`
 - `androidApp/src/main/java/com/changeyourlife/cyl/presentation/page/RichTextBlockEditor.kt`
-- `androidApp/src/main/java/com/changeyourlife/cyl/presentation/page/EditorBlockActionMenu.kt`
+- `androidApp/src/main/java/com/changeyourlife/cyl/presentation/page/PageEditorBlocks.kt`
 
 Findings:
 
-- `BlockEditorCard` still wraps every block in a `Card`, even when the container is transparent. This keeps a card mental model in the code and spacing.
-- Every block reserves a 30dp handle column. This makes the page feel like an editor control surface, not a plain document.
-- Top bar shows page title, sync text, and block count. This is useful for debugging but not clean as a document UI.
-- Bottom bar works, but page top bar plus bottom bar plus block handles can feel like too many persistent controls.
-- Search highlight and non-text blocks still need separation, but text blocks should be visually plain.
+- Page blocks now render through `PlainTextBlockRow` or `StructuredBlockContainer` instead of one card-like wrapper.
+- The fixed 30dp block handle has been removed from page blocks.
+- Top bar no longer shows permanent debug-like block count/status text.
+- Bottom bar remains the main command surface for search, AI, create, and focused block tools.
+- Search highlight and structured-block active state are handled without adding visible handles to every block.
 
 Decision:
 
 - Text-like blocks should not be rendered through `Card`.
-- Block handle should be overlay/focus-only, not layout-reserved for every block.
+- Block actions should live in the keyboard/focused toolbar, not in a visible handle beside every block.
 - Page top bar should be quieter: back, title only if needed, sync icon/status hidden unless not clean.
 - Page top bar can show a small sync/status icon on the right side of the header. Tapping it opens sync detail; text like block count should not be permanently visible.
 - Bottom command bar remains the stable search/AI/create entry point.
@@ -275,7 +275,7 @@ Findings:
 - `TableHeaderCell` uses large body text and dropdown icon in every header, making headers feel noisy.
 - Add column is correct as the last header cell, but it needs stronger spreadsheet visual alignment.
 - Property creation sheet is close to Notion style, but the empty-name warning adds noise. The better interaction is disabled type rows until name exists, with subtle input focus.
-- Row page sheet still feels like a form: title, buttons, "Properties" label, all property rows, block toolbar, delete icon for each row block.
+- Row page sheet is moving away from a form layout: top buttons and permanent row block delete icons have been removed, but property alignment still needs a later pass.
 
 Decision:
 
@@ -375,7 +375,7 @@ Goal: make the main page feel like a document.
 
 Tasks:
 
-- Replace `BlockEditorCard` with separate render paths:
+- Keep separate block render paths:
   - `PlainTextBlockRow` for text, heading, todo, bullet, numbered, quote.
   - `StructuredBlockContainer` for table, media, divider, special blocks.
 - Remove fixed 30dp handle space from plain text blocks.
@@ -399,9 +399,9 @@ Current progress:
 - Done: page title editor is isolated into `PageTitleEditor` with larger document-title typography and softer placeholder.
 - Done: text-like blocks are classified separately from table/media/divider blocks.
 - Done: normal text, heading, todo, bullet, numbered, and quote blocks no longer keep a permanent 30dp handle column when inactive.
-- Done: text-like blocks render through a plain `Box` path, not a `Card`, with tighter page rhythm.
-- Done: active block handle is narrower/lower contrast, reducing visual noise while keeping block actions reachable.
-- Done: structured blocks still use `Card` only where a real framed surface is useful, with flatter/less rounded treatment.
+- Done: text-like blocks render through `PlainTextBlockRow`, not a `Card`, with tighter page rhythm.
+- Done: visible block handles were removed from page blocks; focused-block actions now live in the toolbar above the keyboard.
+- Done: structured blocks render through `StructuredBlockContainer`, with tap/long-press selection and no permanent handle.
 - Done: page editor content now avoids card-in-card composition; block wrappers are plain `Box`/background surfaces instead of `Card`.
 - Done: sync conflict banner also uses a plain clipped background instead of `Card`, so page editor has no remaining card container in normal page chrome.
 - Done: page scaffold uses the same plain background as the editor body so normal blocks do not sit on a separate panel color.
@@ -411,8 +411,8 @@ Current progress:
 - Done: rich clipboard paste detection is fail-safe, so clipboard/HTML parser errors cannot crash normal typing.
 - Done: rich-text toolbar color parsing now uses safe RGB `Color(red, green, blue, alpha)` construction instead of packed `ULong`, fixing the keyboard-open crash from `RichTextSwatchButton` / `Color.copy()`.
 - Done: new-block sheet is a compact command-style list instead of a heavy settings-style list.
-- Still planned: split the remaining `BlockEditorCard` internals into `PlainTextBlockRow` and `StructuredBlockContainer` so the inner code model matches the visual model.
-- Still planned: replace the active text-block leading handle with an overlay/focus affordance to avoid any content shift.
+- Done: the old `BlockEditorCard` wrapper has been replaced by `PageEditorBlock`, which routes to `PlainTextBlockRow` or `StructuredBlockContainer`.
+- Done: structured blocks remain selectable without visible handles, so database/media/divider block actions are still reachable from the focused toolbar.
 
 ### Phase 2: Table Visual Pass
 
@@ -451,7 +451,13 @@ Current progress:
 - Done: table row/header heights are slightly denser for a spreadsheet-like rhythm.
 - Done: empty table/list/calendar/gallery/timeline/dashboard states now render as quiet inline hints instead of framed cards.
 - Done: sort/filter/group controls are tighter 40dp icon controls and active summaries are quieter chips.
-- Still planned: add a true table-specific search control when the table model has local query state.
+- Done: added a true table-specific search control in the database toolbar.
+- Done: table search is transient UI state, applies across table/list/board/calendar/gallery/timeline/dashboard views, and searches column display values plus row-page content.
+- Done: row `OPEN` action is now embedded inside the first/name column instead of living in a separate Open column/header.
+- Done: new blank databases now start with only the `Name` property, so Status/Date/etc. are opt-in properties.
+- Done: table rows now support long-press drag reordering in the table view.
+- Done: stationary long-press on a table row opens a row action sheet with edit properties, copy link, duplicate, move up/down, move to trash, and last-edited info.
+- Still planned: row-level favourite, icon, and move-to-location need real row metadata/storage before those actions can be enabled safely.
 
 ### Phase 3: Row Page Sheet Clean Pass
 
@@ -478,8 +484,9 @@ Current progress:
 
 - Done: removed the large top `Row` and `Property` buttons from row page sheet.
 - Done: add property is now a small icon action beside the properties heading.
-- Done: row block delete action is visually quieter while still reachable.
-- Still planned: move row block actions into the same contextual block menu used by normal page blocks.
+- Done: removed always-visible row block delete icons.
+- Done: row page blocks now track focused/selected block state and use the same compact keyboard block toolbar pattern as normal page blocks.
+- Done: row page block toolbar supports change type, insert above/below, move up/down, indent/outdent, linked page creation, and delete.
 
 ### Phase 4: AI Chat Polish
 
@@ -584,8 +591,8 @@ Reason:
 
 Suggested first PR/change batch:
 
-1. Introduce `PlainTextBlockRow` and `StructuredBlockContainer`.
-2. Route text-like blocks away from `Card`.
-3. Make block handle focus-only without permanent 30dp column for text blocks.
-4. Keep tests unchanged, then compile.
-5. Manually verify page with text, todo, bullet, table, media, and row page.
+1. Done: introduce `PlainTextBlockRow` and `StructuredBlockContainer`.
+2. Done: route text-like blocks away from `Card`.
+3. Done: remove permanent block handle and keep actions in focused toolbar.
+4. Done: compile after the clean pass.
+5. Manual QA still recommended on device: page with text, todo, bullet, database, media, and row page.

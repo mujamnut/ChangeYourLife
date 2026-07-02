@@ -15,6 +15,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.verticalScroll
@@ -177,8 +178,10 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
 @Composable
-internal fun BlockEditorCard(
+internal fun PageEditorBlock(
     block: PageBlock,
+    pageId: String,
+    pageUpdatedAt: Long,
     isFirstBlock: Boolean = false,
     indentLevel: Int = 0,
     onTextChange: (String, String) -> Unit,
@@ -227,6 +230,8 @@ internal fun BlockEditorCard(
     onDeleteTableColumn: (String, String) -> Unit,
     onAddTableRow: (String) -> Unit,
     onDeleteTableRow: (String, String) -> Unit,
+    onDuplicateTableRow: (String, String) -> Unit,
+    onMoveTableRow: (String, String, Int) -> Unit,
     onTableRowBlockTextChange: (String, String, String, String) -> Unit,
     onTableRowBlockRichTextChange: (String, String, String, String, List<PageTextSpan>) -> Unit,
     onTableRowBlockPasteBlocks: (String, String, String, List<RichTextPasteBlock>) -> Unit,
@@ -238,6 +243,8 @@ internal fun BlockEditorCard(
     onInsertTableRowPageBlockNear: (String, String, String, PageBlockType, PageBlockInsertPosition) -> Unit,
     onCreateLinkedChildPageFromTableRowBlock: (String, String, String) -> Unit,
     onDeleteTableRowPageBlock: (String, String, String) -> Unit,
+    onMoveTableRowPageBlockUp: (String, String, String) -> Unit,
+    onMoveTableRowPageBlockDown: (String, String, String) -> Unit,
     onIndentTableRowPageBlock: (String, String, String) -> Unit,
     onOutdentTableRowPageBlock: (String, String, String) -> Unit,
     tableReferences: List<PageTableReference>,
@@ -294,6 +301,7 @@ internal fun BlockEditorCard(
                     onOutdentBlockCommand = { onOutdentBlock(block.id) },
                     onCreateLinkedPageCommand = { onCreateLinkedChildPageFromBlock(block.id) },
                     focusRequestToken = focusRequestToken,
+                    onFocusBlock = { onBlockFocused(block.id) },
                     onRichTextToolbarChange = onRichTextToolbarChange,
                     showInlineRichTextToolbar = false,
                     mentionPages = mentionPages,
@@ -301,6 +309,8 @@ internal fun BlockEditorCard(
                 )
                 PageBlockType.DatabaseTable -> DatabaseTableBlockEditor(
                     tableBlockId = block.id,
+                    pageId = pageId,
+                    pageUpdatedAt = pageUpdatedAt,
                     table = block.table,
                     tableReferences = tableReferences,
                     onTitleChange = { title -> onTableTitleChange(block.id, title) },
@@ -337,6 +347,8 @@ internal fun BlockEditorCard(
                     onDeleteColumn = { columnId -> onDeleteTableColumn(block.id, columnId) },
                     onAddRow = { onAddTableRow(block.id) },
                     onDeleteRow = { rowId -> onDeleteTableRow(block.id, rowId) },
+                    onDuplicateRow = { rowId -> onDuplicateTableRow(block.id, rowId) },
+                    onMoveRow = { rowId, targetIndex -> onMoveTableRow(block.id, rowId, targetIndex) },
                     onRowBlockTextChange = { rowId, rowBlockId, text ->
                         onTableRowBlockTextChange(block.id, rowId, rowBlockId, text)
                     },
@@ -369,6 +381,12 @@ internal fun BlockEditorCard(
                     },
                     onDeleteRowPageBlock = { rowId, rowBlockId ->
                         onDeleteTableRowPageBlock(block.id, rowId, rowBlockId)
+                    },
+                    onMoveRowPageBlockUp = { rowId, rowBlockId ->
+                        onMoveTableRowPageBlockUp(block.id, rowId, rowBlockId)
+                    },
+                    onMoveRowPageBlockDown = { rowId, rowBlockId ->
+                        onMoveTableRowPageBlockDown(block.id, rowId, rowBlockId)
                     },
                     onIndentRowPageBlock = { rowId, rowBlockId ->
                         onIndentTableRowPageBlock(block.id, rowId, rowBlockId)
@@ -488,8 +506,10 @@ internal fun BlockEditorCard(
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     block.children.forEach { child ->
                         key(child.id) {
-                            BlockEditorCard(
+                            PageEditorBlock(
                                 block = child,
+                                pageId = pageId,
+                                pageUpdatedAt = pageUpdatedAt,
                                 indentLevel = indentLevel + 1,
                                 onTextChange = onTextChange,
                                 onRichTextChange = onRichTextChange,
@@ -531,6 +551,8 @@ internal fun BlockEditorCard(
                                 onDeleteTableColumn = onDeleteTableColumn,
                                 onAddTableRow = onAddTableRow,
                                 onDeleteTableRow = onDeleteTableRow,
+                                onDuplicateTableRow = onDuplicateTableRow,
+                                onMoveTableRow = onMoveTableRow,
                                 onTableRowBlockTextChange = onTableRowBlockTextChange,
                                 onTableRowBlockRichTextChange = onTableRowBlockRichTextChange,
                                 onTableRowBlockPasteBlocks = onTableRowBlockPasteBlocks,
@@ -542,6 +564,8 @@ internal fun BlockEditorCard(
                                 onInsertTableRowPageBlockNear = onInsertTableRowPageBlockNear,
                                 onCreateLinkedChildPageFromTableRowBlock = onCreateLinkedChildPageFromTableRowBlock,
                                 onDeleteTableRowPageBlock = onDeleteTableRowPageBlock,
+                                onMoveTableRowPageBlockUp = onMoveTableRowPageBlockUp,
+                                onMoveTableRowPageBlockDown = onMoveTableRowPageBlockDown,
                                 onIndentTableRowPageBlock = onIndentTableRowPageBlock,
                                 onOutdentTableRowPageBlock = onOutdentTableRowPageBlock,
                                 tableReferences = tableReferences,
@@ -556,29 +580,69 @@ internal fun BlockEditorCard(
     }
 
     if (isTextLikeBlock) {
-        val textBlockModifier = if (isSearchHighlighted) {
-            blockModifier.background(
-                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.38f),
-                shape = RoundedCornerShape(8.dp),
-            )
-        } else {
-            blockModifier
-        }
-        Box(modifier = textBlockModifier) {
-            blockContent()
-        }
+        PlainTextBlockRow(
+            modifier = blockModifier,
+            isSearchHighlighted = isSearchHighlighted,
+            content = blockContent,
+        )
     } else {
-        val structuredBlockModifier = if (isSearchHighlighted) {
-            blockModifier.background(
-                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.38f),
-                shape = RoundedCornerShape(8.dp),
-            )
-        } else {
-            blockModifier
-        }
-        Box(modifier = structuredBlockModifier) {
-            blockContent()
-        }
+        StructuredBlockContainer(
+            modifier = blockModifier,
+            isSearchHighlighted = isSearchHighlighted,
+            onSelect = { onBlockFocused(block.id) },
+            content = blockContent,
+        )
+    }
+}
+
+@Composable
+internal fun PlainTextBlockRow(
+    modifier: Modifier = Modifier,
+    isSearchHighlighted: Boolean,
+    content: @Composable () -> Unit,
+) {
+    val highlightModifier = if (isSearchHighlighted) {
+        Modifier.background(
+            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.38f),
+            shape = RoundedCornerShape(8.dp),
+        )
+    } else {
+        Modifier
+    }
+
+    Box(modifier = modifier.then(highlightModifier)) {
+        content()
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+internal fun StructuredBlockContainer(
+    modifier: Modifier = Modifier,
+    isSearchHighlighted: Boolean,
+    onSelect: () -> Unit,
+    content: @Composable () -> Unit,
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val backgroundColor = if (isSearchHighlighted) {
+        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.38f)
+    } else {
+        Color.Transparent
+    }
+    val shape = RoundedCornerShape(10.dp)
+
+    Box(
+        modifier = modifier
+            .clip(shape)
+            .background(backgroundColor)
+            .combinedClickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onSelect,
+                onLongClick = onSelect,
+            ),
+    ) {
+        content()
     }
 }
 
@@ -782,6 +846,7 @@ internal fun MediaFileBlockEditor(
     onCreateLinkedPageCommand: () -> Unit,
     onOpenPropertySheetCommand: () -> Unit = {},
     focusRequestToken: Long = 0L,
+    onFocusBlock: () -> Unit = {},
     onRichTextToolbarChange: (RichTextToolbarUiState?) -> Unit = {},
     showInlineRichTextToolbar: Boolean = true,
     mentionPages: List<Page> = emptyList(),
@@ -856,6 +921,7 @@ internal fun MediaFileBlockEditor(
             onTextChange = { _, text -> onTextChange(text) },
             onRichTextChange = { _, text, spans -> onRichTextChange(text, spans) },
             modifier = Modifier.fillMaxWidth(),
+            onFocusBlock = onFocusBlock,
             onBlockTypeCommand = { _, type -> onBlockTypeCommand(type) },
             onInsertBlockCommand = { _, type, position -> onInsertBlockCommand(type, position) },
             onDeleteEmptyBlockCommand = { onDeleteEmptyBlockCommand() },

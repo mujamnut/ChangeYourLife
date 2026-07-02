@@ -29,6 +29,12 @@ internal fun List<PageBlock>.containsFocusableEditorBlock(blockId: String): Bool
     }
 }
 
+internal fun List<PageBlock>.containsEditorBlock(blockId: String): Boolean {
+    return any { block ->
+        block.id == blockId || block.children.containsEditorBlock(blockId)
+    }
+}
+
 internal fun List<PageBlock>.firstFocusableEditorBlockId(): String? {
     return toEditorFocusEntries()
         .firstOrNull { entry -> entry.isFocusable }
