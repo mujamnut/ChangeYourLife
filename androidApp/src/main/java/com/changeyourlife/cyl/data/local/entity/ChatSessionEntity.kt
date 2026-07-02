@@ -9,6 +9,7 @@ import androidx.room.PrimaryKey
     indices = [
         Index(value = ["scopeId"]),
         Index(value = ["updatedAt"]),
+        Index(value = ["syncStatus"]),
     ],
 )
 data class ChatSessionEntity(
@@ -18,4 +19,7 @@ data class ChatSessionEntity(
     val createdAt: Long,
     val updatedAt: Long,
     val deletedAt: Long?,
+    val syncStatus: String = SyncStatus.PendingPush,
+    val remoteUpdatedAt: Long = 0L,
+    val lastSyncedAt: Long = 0L,
 )

@@ -1,6 +1,8 @@
 package com.changeyourlife.cyl.data.repository
 
 import com.changeyourlife.cyl.data.local.dao.PageDao
+import com.changeyourlife.cyl.data.local.dao.AiActionLogDao
+import com.changeyourlife.cyl.data.local.dao.ChatMessageDao
 import com.changeyourlife.cyl.data.local.dao.SyncTombstoneDao
 import com.changeyourlife.cyl.data.local.dao.WorkspaceDao
 import com.changeyourlife.cyl.data.sync.BackgroundSyncQueue
@@ -13,6 +15,8 @@ import kotlinx.coroutines.flow.combine
 class SyncStatusRepositoryImpl @Inject constructor(
     private val workspaceDao: WorkspaceDao,
     private val pageDao: PageDao,
+    private val aiActionLogDao: AiActionLogDao,
+    private val chatMessageDao: ChatMessageDao,
     private val syncTombstoneDao: SyncTombstoneDao,
     private val backgroundSyncQueue: BackgroundSyncQueue,
 ) : SyncStatusRepository {
@@ -20,15 +24,21 @@ class SyncStatusRepositoryImpl @Inject constructor(
         val pendingCount = combine(
             workspaceDao.observeWorkspacesNeedingSyncCount(),
             pageDao.observePagesNeedingSyncCount(),
+            aiActionLogDao.observeLogsNeedingSyncCount(),
+            chatMessageDao.observeSessionsNeedingSyncCount(),
+            chatMessageDao.observeMessagesNeedingSyncCount(),
             syncTombstoneDao.observePendingTombstoneCount(),
-        ) { pendingWorkspaces, pendingPages, pendingTombstones ->
-            pendingWorkspaces + pendingPages + pendingTombstones
+        ) { counts ->
+            counts.sum()
         }
         val conflictCount = combine(
             workspaceDao.observeWorkspaceConflictCount(),
             pageDao.observePageConflictCount(),
-        ) { workspaceConflicts, pageConflicts ->
-            workspaceConflicts + pageConflicts
+            aiActionLogDao.observeLogConflictCount(),
+            chatMessageDao.observeSessionConflictCount(),
+            chatMessageDao.observeMessageConflictCount(),
+        ) { counts ->
+            counts.sum()
         }
         return combine(
             pendingCount,

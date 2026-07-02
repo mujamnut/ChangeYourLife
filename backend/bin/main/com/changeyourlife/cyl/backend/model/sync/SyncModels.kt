@@ -36,6 +36,66 @@ data class PageListResponse(
 )
 
 @Serializable
+data class AiActionLogSyncDto(
+    val auditId: String,
+    val requestMessageId: String,
+    val responseMessageId: String,
+    val sessionId: String,
+    val workspaceId: String,
+    val mode: String,
+    val provider: String,
+    val model: String,
+    val schemaName: String,
+    val schemaVersion: Int,
+    val proposedActionsJson: String,
+    val executedActionsJson: String,
+    val validationIssuesJson: String,
+    val executionMessagesJson: String,
+    val undoCommandsJson: String,
+    val undoState: String,
+    val createdAt: Long,
+    val updatedAt: Long,
+)
+
+@Serializable
+data class AiActionLogListResponse(
+    val actionLogs: List<AiActionLogSyncDto>,
+)
+
+@Serializable
+data class ChatSessionSyncDto(
+    val id: String,
+    val scopeId: String,
+    val title: String,
+    val createdAt: Long,
+    val updatedAt: Long,
+    val deletedAt: Long? = null,
+)
+
+@Serializable
+data class ChatSessionListResponse(
+    val sessions: List<ChatSessionSyncDto>,
+)
+
+@Serializable
+data class ChatMessageSyncDto(
+    val id: String,
+    val sessionId: String,
+    val scopeId: String,
+    val role: String,
+    val content: String,
+    val pageLinksJson: String = "[]",
+    val actionMetadataJson: String = "",
+    val createdAt: Long,
+    val updatedAt: Long,
+)
+
+@Serializable
+data class ChatMessageListResponse(
+    val messages: List<ChatMessageSyncDto>,
+)
+
+@Serializable
 data class PageBlockTextPatchRequest(
     val text: String,
 )

@@ -51,6 +51,48 @@ interface SyncApi {
         @Body page: PageSyncDto,
     ): PageSyncDto
 
+    @GET("api/v1/ai-action-logs")
+    suspend fun listAiActionLogs(
+        @Header("Authorization") authorization: String,
+        @Query("workspaceId") workspaceId: String,
+        @Query("updatedAfter") updatedAfter: Long = 0L,
+    ): AiActionLogListResponseDto
+
+    @PUT("api/v1/ai-action-logs/{auditId}")
+    suspend fun upsertAiActionLog(
+        @Header("Authorization") authorization: String,
+        @Path("auditId") auditId: String,
+        @Body actionLog: AiActionLogSyncDto,
+    ): AiActionLogSyncDto
+
+    @GET("api/v1/chat-sessions")
+    suspend fun listChatSessions(
+        @Header("Authorization") authorization: String,
+        @Query("scopeId") scopeId: String,
+        @Query("updatedAfter") updatedAfter: Long = 0L,
+    ): ChatSessionListResponseDto
+
+    @PUT("api/v1/chat-sessions/{id}")
+    suspend fun upsertChatSession(
+        @Header("Authorization") authorization: String,
+        @Path("id") id: String,
+        @Body session: ChatSessionSyncDto,
+    ): ChatSessionSyncDto
+
+    @GET("api/v1/chat-sessions/{sessionId}/messages")
+    suspend fun listChatMessages(
+        @Header("Authorization") authorization: String,
+        @Path("sessionId") sessionId: String,
+        @Query("updatedAfter") updatedAfter: Long = 0L,
+    ): ChatMessageListResponseDto
+
+    @PUT("api/v1/chat-messages/{id}")
+    suspend fun upsertChatMessage(
+        @Header("Authorization") authorization: String,
+        @Path("id") id: String,
+        @Body message: ChatMessageSyncDto,
+    ): ChatMessageSyncDto
+
     @POST("api/v1/pages/{id}/blocks")
     suspend fun addPageBlock(
         @Header("Authorization") authorization: String,

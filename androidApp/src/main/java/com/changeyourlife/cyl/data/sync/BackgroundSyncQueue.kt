@@ -24,6 +24,7 @@ class BackgroundSyncQueue @Inject constructor(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val operations = Channel<SyncOperation>(capacity = Channel.UNLIMITED)
     private var retryJob: Job? = null
+    private var foregroundRefreshJob: Job? = null
     private val _state = MutableStateFlow(SyncRunState())
 
     val state: StateFlow<SyncRunState> = _state.asStateFlow()
@@ -79,15 +80,47 @@ class BackgroundSyncQueue @Inject constructor(
     }
 
     fun retryPendingSoon() {
-        persistentSyncScheduler.scheduleSoon()
+        persistentSyncScheduler.schedulePendingSoon()
         schedulePendingRetry()
     }
 
     fun syncSessionSoon() {
-        persistentSyncScheduler.scheduleSoon()
+        persistentSyncScheduler.scheduleSessionSoon()
         enqueue("syncSession") {
             syncAfterAuth()
         }
+    }
+
+    fun ensurePeriodicPullScheduled() {
+        persistentSyncScheduler.schedulePeriodicPull()
+    }
+
+    fun startForegroundRefreshLoop() {
+        if (foregroundRefreshJob?.isActive == true) return
+        enqueue(
+            name = "foregroundSessionSync",
+            persistForRetry = false,
+        ) {
+            syncAfterAuth()
+        }
+        foregroundRefreshJob = scope.launch {
+            while (true) {
+                delay(ForegroundRefreshIntervalMs)
+                operations.send(
+                    SyncOperation(
+                        name = "foregroundSessionSync",
+                        scheduleRetry = false,
+                    ) {
+                        syncAfterAuth()
+                    },
+                )
+            }
+        }
+    }
+
+    fun stopForegroundRefreshLoop() {
+        foregroundRefreshJob?.cancel()
+        foregroundRefreshJob = null
     }
 
     private fun schedulePendingRetry() {
@@ -122,6 +155,7 @@ class BackgroundSyncQueue @Inject constructor(
 
     private companion object {
         const val Tag = "CYLSyncQueue"
+        const val ForegroundRefreshIntervalMs = 120_000L
         val RetryDelaysMs = listOf(0L, 1_000L, 5_000L, 15_000L)
     }
 }

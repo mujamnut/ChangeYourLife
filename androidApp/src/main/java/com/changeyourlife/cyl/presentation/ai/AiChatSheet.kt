@@ -27,6 +27,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Article
 import androidx.compose.material.icons.automirrored.rounded.Send
+import androidx.compose.material.icons.automirrored.rounded.Undo
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
@@ -60,6 +61,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.changeyourlife.cyl.domain.model.AiActionUndoState
 import com.changeyourlife.cyl.domain.model.Page
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
@@ -74,6 +76,7 @@ fun AiChatSheet(
     modelLabel: String = "AI model",
     onAiModeChange: (AiChatMode) -> Unit,
     onSendMessage: (String, List<String>, AiChatMode) -> Unit,
+    onUndoAction: (String, String) -> Unit,
     onClearHistory: () -> Unit,
     onCreateChatSession: () -> Unit,
     onDismissError: () -> Unit,
@@ -272,7 +275,11 @@ fun AiChatSheet(
                                 )
                             }
                             if (!isUser && message.actionMetadata?.hasDetails == true) {
-                                AiChatActionDetails(metadata = message.actionMetadata)
+                                AiChatActionDetails(
+                                    metadata = message.actionMetadata,
+                                    pageId = message.pageLinks.firstOrNull()?.pageId.orEmpty(),
+                                    onUndoAction = onUndoAction,
+                                )
                             }
                         }
                     }
@@ -382,7 +389,11 @@ fun AiChatSheet(
 }
 
 @Composable
-private fun AiChatActionDetails(metadata: AiChatActionMetadata) {
+private fun AiChatActionDetails(
+    metadata: AiChatActionMetadata,
+    pageId: String,
+    onUndoAction: (String, String) -> Unit,
+) {
     var isExpanded by rememberSaveable { mutableStateOf(false) }
     val validationCount = metadata.validationIssues.size
     val executedCount = metadata.executedActions.size
@@ -398,6 +409,10 @@ private fun AiChatActionDetails(metadata: AiChatActionMetadata) {
     } else {
         MaterialTheme.colorScheme.onSurfaceVariant
     }
+    val canUndo = metadata.auditId.isNotBlank() &&
+        pageId.isNotBlank() &&
+        metadata.executedActions.isNotEmpty() &&
+        metadata.undoState == AiActionUndoState.Available
 
     Column(
         modifier = Modifier.widthIn(max = 300.dp),
@@ -456,6 +471,25 @@ private fun AiChatActionDetails(metadata: AiChatActionMetadata) {
                         AiActionTextSection(
                             title = "Result",
                             lines = metadata.executionMessages,
+                        )
+                    }
+                    if (canUndo) {
+                        TextButton(
+                            onClick = { onUndoAction(metadata.auditId, pageId) },
+                            contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Rounded.Undo,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                            )
+                            Text(text = "Undo AI action")
+                        }
+                    } else if (metadata.undoState == AiActionUndoState.Applied) {
+                        Text(
+                            text = "Undone",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                 }

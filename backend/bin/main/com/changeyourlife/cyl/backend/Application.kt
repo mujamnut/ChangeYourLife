@@ -1,10 +1,16 @@
 package com.changeyourlife.cyl.backend
 
 import com.changeyourlife.cyl.backend.config.AppConfig
+import com.changeyourlife.cyl.backend.data.InMemoryAiActionLogRepository
+import com.changeyourlife.cyl.backend.data.InMemoryChatSyncRepository
 import com.changeyourlife.cyl.backend.data.InMemoryContentRepository
 import com.changeyourlife.cyl.backend.data.InMemoryUserRepository
+import com.changeyourlife.cyl.backend.data.PostgresAiActionLogRepository
+import com.changeyourlife.cyl.backend.data.PostgresChatSyncRepository
 import com.changeyourlife.cyl.backend.data.PostgresContentRepository
 import com.changeyourlife.cyl.backend.data.PostgresUserRepository
+import com.changeyourlife.cyl.backend.domain.AiActionLogRepository
+import com.changeyourlife.cyl.backend.domain.ChatSyncRepository
 import com.changeyourlife.cyl.backend.domain.ContentRepository
 import com.changeyourlife.cyl.backend.domain.UserRepository
 import com.changeyourlife.cyl.backend.plugins.configureAuthentication
@@ -51,6 +57,8 @@ fun Application.module(
     appConfig: AppConfig = AppConfig.fromEnvironment(),
     userRepositoryOverride: UserRepository? = null,
     contentRepositoryOverride: ContentRepository? = null,
+    aiActionLogRepositoryOverride: AiActionLogRepository? = null,
+    chatSyncRepositoryOverride: ChatSyncRepository? = null,
 ) {
     configureSerialization()
     configureMonitoring()
@@ -64,6 +72,12 @@ fun Application.module(
     val contentRepository = contentRepositoryOverride
         ?: dataSource?.let { PostgresContentRepository(it) }
         ?: InMemoryContentRepository()
+    val aiActionLogRepository = aiActionLogRepositoryOverride
+        ?: dataSource?.let { PostgresAiActionLogRepository(it) }
+        ?: InMemoryAiActionLogRepository()
+    val chatSyncRepository = chatSyncRepositoryOverride
+        ?: dataSource?.let { PostgresChatSyncRepository(it) }
+        ?: InMemoryChatSyncRepository()
 
     val aiService = AiService(
         glmApiKey = appConfig.glmApiKey,
@@ -80,6 +94,8 @@ fun Application.module(
     configureRouting(
         userRepository = userRepository,
         contentRepository = contentRepository,
+        aiActionLogRepository = aiActionLogRepository,
+        chatSyncRepository = chatSyncRepository,
         jwtService = JwtService(appConfig.jwt),
         databaseConfigured = dataSource != null,
         aiService = aiService,

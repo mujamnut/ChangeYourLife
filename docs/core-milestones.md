@@ -6,7 +6,7 @@ Padam fail ini bila milestone utama sudah siap dan sudah dipindahkan ke dokument
 ## Status Ringkas
 
 - Done: asas Android, backend Ktor, auth, Room DB, AI chat/action, table editor, chat history, Render/Aiven setup.
-- Not solid yet: sync sebenar, AI action contract, table typed data, editor architecture, search index, media cloud, production safety.
+- Not solid yet: table typed data, editor architecture, search index, media cloud, production safety, FCM/realtime push notifications.
 
 ## Milestone 1: Data Sync Core
 
@@ -67,6 +67,23 @@ Status: in progress. Backend API asas dan Android local-first sync sudah dibuat.
 - `BackgroundSyncQueue` expose run state (`isSyncing`, last error, last completed) dan schedule WorkManager retry untuk local mutations.
 - Home top bar ada sync status icon kecil dengan pending/conflict/error summary dan `Retry sync`.
 - Sync status repository sudah gabungkan pending workspace/page/tombstone count, conflict count, dan queue run state sebagai `SyncOverview`.
+- Backend ada Flyway migration `V5__ai_action_logs.sql` dan authenticated `/api/v1/ai-action-logs` untuk sync audit log AI per user/workspace.
+- Android Room sudah naik ke version 11: `ai_action_logs` ada `updatedAt`, `syncStatus`, `remoteUpdatedAt`, dan `lastSyncedAt`.
+- Android `SessionSyncCoordinator` sekarang pull/push `ai_action_logs` bersama workspace/page sync, termasuk retry pending log dan merge `undoState`.
+- Sync status repository sekarang kira pending/conflict `ai_action_logs`, jadi audit log AI tidak senyap bila belum sync.
+- Backend route test cover audit log upsert/list, `updatedAfter`, dan user isolation.
+- Backend ada Flyway migration `V6__chat_history_sync.sql` dan authenticated `/api/v1/chat-sessions` + `/api/v1/chat-messages` untuk sync conversation history per user.
+- Backend route test cover chat session/message upsert, list, `updatedAfter`, soft delete, dan user isolation.
+- Android Room sudah naik ke version 12: `chat_sessions` dan `chat_messages` ada `syncStatus`, `remoteUpdatedAt`, `lastSyncedAt`, serta `chat_messages.updatedAt`.
+- Android `SessionSyncCoordinator` sekarang pull/push chat sessions/messages untuk home chat scope bersama workspace/page/action-log sync.
+- Chat history repository sekarang mark session/message sebagai `PendingPush` dan enqueue background sync setiap kali chat dibuat atau mesej ditambah.
+- Sync status repository sekarang kira pending/conflict chat session/message.
+- Android migration test cover `11 -> 12` untuk chat sync metadata.
+- Android WorkManager sekarang ada periodic session sync setiap 30 minit ketika network connected untuk pull remote workspace/page/chat/action-log changes dan push pending local changes.
+- `CylSyncWorker` sekarang ada dua mode: `pendingPush` untuk retry local mutation dan `sessionSync` untuk full pull+push background refresh.
+- App foreground sekarang ada refresh loop setiap 2 minit: bila user buka app, CYL buat full session sync lebih cepat daripada periodic worker; bila app background, loop dihentikan.
+- Page sync sekarang ada granular auto-merge conflict resolver untuk perubahan page content yang tidak bertindih: contoh device A ubah block, device B ubah property/row/cell lain, app merge dan push semula tanpa paksa user pilih whole-page conflict.
+- Granular resolver masih jatuh ke conflict manual bila field/page item sama diubah di dua tempat, atau bila remote delete bertembung dengan local update.
 
 ### Belum Kukuh
 
@@ -75,12 +92,13 @@ Status: in progress. Backend API asas dan Android local-first sync sudah dibuat.
 - Page content JSON masih canonical; normalized projection sudah ada dan repository boleh mutate beberapa field direct, tapi editor/API belum fully pindah ke projection flow.
 - Conflict resolver sudah ada untuk whole page, belum granular per block/table row.
 - Default workspace id masih legacy local id di Android, tapi backend sekarang map sebagai client id per user.
-- WorkManager sekarang retry pending push/delete, tapi belum ada periodic pull/background refresh untuk remote changes yang dibuat dari device lain.
+- WorkManager sekarang retry pending push/delete, periodic pull background refresh, dan foreground refresh loop; belum ada FCM/realtime push notification dari server.
 - Sync error state bergantung pada queue/worker; beberapa coordinator path masih swallow network failure dan hanya kelihatan sebagai pending count.
+- Chat session/message sudah sync backend, periodic pull, dan foreground refresh loop, tetapi belum ada push notification sebenar ketika app tidak aktif.
 
 ### Next Work
 
-- Seterusnya masuk Milestone 2: AI Action Core. Untuk sync nanti, tambah periodic remote pull dan granular conflict resolver.
+- Untuk sync nanti, tambah FCM/realtime push-triggered refresh jika mahu perubahan dari device lain masuk segera semasa app tidak aktif.
 
 ## Milestone 2: AI Action Core
 
@@ -101,6 +119,22 @@ Goal: AI faham arahan Malay/English dan execute action secara konsisten.
 - Backend regression test sudah cover arahan multi-step Malay: padam block + tambah row, buat table + tambah row, dan elak prompt penuh masuk sebagai row.
 - Assistant chat message sekarang simpan action metadata: mode, schema, proposed actions, executed actions, execution messages, dan validation issues.
 - Chat sheet boleh buka `Action details` pada mesej assistant untuk lihat proposed/applied/rejected/result tanpa memaparkan id teknikal dalam bubble utama.
+- Chat history repository sekarang ada regression test untuk pastikan action metadata AI, page links, proposed/executed actions, validation issues, dan execution messages survive selepas repository/app recreation.
+- Chat history repository juga ignore metadata JSON corrupt tanpa menjatuhkan mesej chat.
+- Chat metadata domain-to-UI mapping sudah diextract ke `AiChatMessageMapper` dan ada regression test supaya action metadata yang persist dipaparkan semula dalam `AiChatMessage` selepas reload.
+- Chat action metadata sekarang simpan `auditId`, `requestMessageId`, `executedAt`, `provider`, dan `model` dengan regression test serta backward-compatible default untuk metadata lama.
+- Proposed/applied action metadata sekarang simpan `actionIndex`, termasuk regression test untuk multi-step prompt bila action awal ditolak tetapi action selepasnya tetap applied dengan index asal.
+- Android Room sudah naik ke version 9 dengan `ai_action_logs` table untuk audit trail AI action; schema export dan migration `8 -> 9` sudah ditambah.
+- `AiActionLogRepository` sudah ada untuk simpan/observe action log berdasarkan `auditId`, session, request message, response message, provider/model, actions, validation issue, result, dan undo state.
+- Home AI flow sekarang tulis action log selepas assistant message disimpan, menggunakan `auditId` yang sama dengan chat metadata.
+- Android Room sudah naik ke version 10 dan `ai_action_logs` sekarang simpan `undoCommandsJson` untuk link tindakan AI kepada command undo yang dihasilkan editor pipeline.
+- `AiPageActionExecutor` sekarang mengumpul payload undo command untuk fallback mutation block/table yang melalui `ApplyEditorCommandUseCase`, termasuk snapshot `ReplaceTable` untuk row/column/cell/table metadata changes.
+- `AiActionLogFactory` sekarang bezakan `PendingCommandLink` dengan `Available`: action log hanya dianggap undo-ready bila executor benar-benar pulangkan undo command.
+- Android regression test cover action log `undoCommandsJson`, factory state `Available`, repository round-trip, Room migration `9 -> 10`, dan AI executor table row mutation yang menghasilkan undo command.
+- `ApplyAiActionUndoUseCase` sudah boleh apply payload `undoCommandsJson` secara reverse kepada page content dan mark action log sebagai `Applied`.
+- Chat `Action details` sekarang ada `Undo AI action` untuk mesej assistant yang ada applied action, audit id, dan page link.
+- Home AI dan Page AI guna callback undo yang sama melalui shared `AiChatSheet`, jadi undo flow tidak duplicate antara home/page.
+- Chat message UI sekarang combine `chat_messages` dengan `ai_action_logs`, jadi `undoState` dipaparkan secara reactive dan button undo hilang selepas action sudah `Applied`.
 - Android AI executor sekarang buat semantic validation sebelum execute: block/property/table/row/column target mesti wujud untuk update/delete/move/sort/filter/group/cell/row-page actions.
 - Semantic validation issue dari executor disimpan dalam chat action metadata supaya rejected action boleh dilihat balik di `Action details`.
 - Android AI executor regression test cover missing block/column/view-config target supaya action tidak mutate page bila target tidak sah.
@@ -129,6 +163,8 @@ Goal: AI faham arahan Malay/English dan execute action secara konsisten.
 - Android masih ada guard kecil untuk skip unsafe qualitative table rename, dan guard itu direkod sebagai validation issue dalam `Action details`.
 - Android AI action execution decision sudah diextract ke `AiActionExecutionPolicy`, jadi `HomeViewModel` tidak lagi pegang local fallback/recovery rule.
 - Android regression test cover policy: planning tidak execute, backend kosong tidak invent action, backend action execute, vague rename ditolak, concrete rename dibenarkan.
+- Android chat action orchestration sudah diextract ke `AiChatActionOrchestrator`: ia urus proposed action, Planning/Edit/Auto mode, markdown table recovery, execution result, page links, dan action metadata.
+- Android regression test sekarang cover flow mode: `Planning` rekod proposed action tanpa execute, `Edit` execute backend action, dan `Auto` recover markdown table lalu execute action.
 - Home AI sekarang boleh execute global `CREATE_PAGE` action terus dari home chat dan simpan page link dalam jawapan AI.
 - Backend `chat-actions` sekarang AI-first: live model diberi CYL action schema/context dan cuba hasilkan action JSON dahulu; prompt recovery hanya fallback bila model kosong/invalid/markdown.
 - Backend prompt recovery masih wujud untuk direct unit recovery, tetapi `chat-actions` tidak lagi execute prompt-only creative creation seperti `CREATE_PAGE`, `CREATE_DATABASE`, atau `CREATE_TABLE` bila model tidak beri action valid.
@@ -138,18 +174,18 @@ Goal: AI faham arahan Malay/English dan execute action secara konsisten.
 - Android Home AI ada safety net untuk convert markdown table daripada model kepada CYL action bila backend pulangkan `actions` kosong untuk prompt create table yang jelas.
 - Android ada regression test untuk AI DTO JSON null coercion supaya field `title`, `targetTitle`, `cellValues`, dan `validationIssues` null tidak mematikan chat.
 - Backend regression test lock behavior AI-first supaya prompt fallback tidak boleh overwrite model action yang valid, dan JSON chat `actions=[]` tidak dipaparkan mentah kepada user.
+- Backend/Android sekarang sync `ai_action_logs`, jadi audit trail AI dan `undoState` boleh survive reinstall/multi-device.
 
 ### Belum Kukuh
 
 - Action schema sudah ada type/required-field validation dan semantic target validation asas, tapi semantic validation masih belum lengkap untuk semua edge case.
 - AI text/JSON fallback, model JSON normalizer, schema validator, planner selector, dan prompt recovery sudah dipisahkan dari `AiService`.
-- Android execution path sudah backend-only dan parser fallback lama sudah dibuang dari `HomeViewModel`, tapi `HomeViewModel` masih besar dan page AI flow belum diextract sebagai use-case penuh.
+- Android execution path sudah backend-only dan parser fallback lama sudah dibuang dari `HomeViewModel`; action execution orchestration sudah dipindahkan ke `AiActionExecutionUseCase`.
 - Belum semua action diuji untuk kombinasi multi-step yang sangat panjang dan ambiguous.
 
 ### Next Work
 
 - Tambah regression test untuk multi-step prompt yang panjang: create table + set formula + add rows + sort/filter dalam satu arahan.
-- Extract page AI execution orchestration dari `HomeViewModel` ke use-case supaya chat/session, execution, dan metadata lebih mudah diuji end-to-end.
 
 ## Milestone 3: Editor/Page Core
 
@@ -160,21 +196,44 @@ Goal: page editor stabil, senang maintain, dan tidak semua logic duduk dalam UI.
 - Block text, heading, todo, bullet, quote, divider, media, database table.
 - Row page dan basic undo sudah ada.
 - Table view: table/list/board/calendar/gallery/timeline/dashboard.
+- Rich text span engine sudah dipisahkan ke domain layer (`RichTextSpanEngine`) dengan unit test untuk normalize, toggle style, dan text-change adjustment.
+- Rich text Compose editor/toolbar sudah dipisahkan dari `PageEditorRoute` ke `CylRichTextBlockEditor`, jadi route tidak lagi simpan implementation rich text editor.
+- `EditorCommand` + `EditorCommandExecutor` sudah ditambah di domain layer untuk update text, tukar block type, toggle todo, insert block, dan delete block.
+- `EditorCommand` sekarang support move block dengan unit test untuk undo, nested sibling, dan boundary no-op.
+- `EditorCommand` sekarang support replace media attachments dan replace table dengan undo.
+- `PageEditorViewModel` sudah mula guna command executor untuk rich text/text update, todo toggle, block type change, add block, add child block, delete block, move block, media attachments, table metadata, table columns, table rows, table cells, dan row-page blocks.
+- `ApplyEditorCommandUseCase` sudah ditambah sebagai single command pipeline yang boleh dipakai manual editor dan nanti AI edit flow.
+- `PageEditorViewModel` tidak lagi panggil `EditorCommandExecutor` terus; semua command manual masuk melalui use-case.
+- `AiPageActionExecutor` sekarang guna `ApplyEditorCommandUseCase` untuk fallback block/table mutation seperti insert/delete/update block, create table, dan replace table selepas semantic target validation lulus.
+- `TableMutationUseCase` sudah ditambah untuk table title/view/sort/filter/group, column metadata/type/date/formula/relation/rollup, cell coercion, add/duplicate/delete column, add/delete row, dan row-page block mutation.
+- `PageEditorViewModel` table editor sekarang mula delegate mutation utama kepada `TableMutationUseCase`, sementara ViewModel kekal urus queue save/granular repository.
+- `PageMutationUseCase` sudah ditambah untuk block text/rich text, block type, todo, media attachment, add/delete/move block, dan page property mutation.
+- `PageEditorViewModel` block/property editor sekarang delegate command construction kepada `PageMutationUseCase`, sementara ViewModel kekal urus pending state, undo history, dan repository save.
+- `AiActionExecutionUseCase` sudah ditambah untuk Home AI action execution: split home-scoped action vs page-scoped action, create page/table, call `AiPageActionExecutor`, persist updated page, collect page links, dan return validation issues.
+- `HomeViewModel` tidak lagi inject/call `AiPageActionExecutor` terus untuk chat action execution; ia panggil `AiActionExecutionUseCase`.
+- `PageEditorViewModel` tidak lagi ada legacy page AI executor, direct `AiPageActionExecutor`, direct `AiRepository`, atau tool lama `summarize/extract tasks/generate plan`.
+- Helper AI lama dalam `PageEditorViewModel` sudah dibuang; page AI sekarang ikut shared chat/action flow yang sama dengan Home.
+- `EditorCommandHistory` sudah ditambah untuk command-based undo/redo stack; `PageEditorViewModel` sekarang guna command undo untuk block-level, table metadata/column/row/cell, page property, dan row-page block command mutation, dengan snapshot fallback untuk path lama.
+- `EditorCommand` sekarang support page property insert/replace/delete dengan undo yang restore posisi asal.
+- Slash command parser sudah ada dengan unit test; rich text editor sekarang boleh guna `/text`, `/heading`, `/todo`, `/bullet`, `/quote`, `/divider`, `/media`, dan `/table` untuk tukar block type.
+- Table row page blocks juga sudah ada type-change path supaya slash command di dalam row page boleh mengubah row block, bukan hanya block biasa.
 
 ### Belum Kukuh
 
 - `PageEditorRoute.kt` terlalu besar.
-- `PageEditorViewModel.kt` terlalu besar.
+- `PageEditorViewModel.kt` masih besar, tapi legacy AI fallback sudah dibuang dan tinggal fokus editor/manual mutation.
 - Mutation logic bercampur dengan UI state.
-- Undo belum jelas cover semua AI/table action.
+- Undo command sudah cover editor mutation utama dan basic AI action undo sudah tersambung dari chat action details dengan reactive `undoState`.
+- Mention trigger dalam block editor dan toolbar atas keyboard masih belum jadi sistem editor-level penuh.
+- Slash command masih basic; belum ada command untuk create linked page, insert block below, atau command yang bergantung kepada context table/property.
 
 ### Next Work
 
-- Extract `PageMutationUseCase`.
-- Extract `TableMutationUseCase`.
-- Extract `AiActionExecutionUseCase`.
+- Terus kecilkan baki table/helper manual dalam `PageEditorViewModel` dengan memindahkan lookup, queue save, dan granular save orchestration ke use-case kecil.
 - Jadikan UI hanya render state dan dispatch event.
 - Tambah unit test untuk mutation tanpa Compose UI.
+- Extract slash command UI kepada editor command palette yang boleh juga dipakai untuk mention picker.
+- Sambungkan slash command dan mention picker kepada editor event, bukan ad hoc UI state.
 
 ## Milestone 4: Typed Table Core
 
@@ -235,18 +294,25 @@ Goal: chat history bukan sekadar message list, tapi audit trail untuk AI work.
 - Chat session local sudah ada.
 - Empty session handling sudah diperbaiki.
 - Page links boleh disimpan dalam message.
+- Action metadata AI sudah disimpan sebagai JSON di Room dan ada repository regression test untuk roundtrip selepas app/repository recreation.
+- Persisted action metadata sudah ada mapper domain-ke-UI dengan regression test, jadi `Action details` boleh dibina semula selepas session reload.
+- Setiap action metadata baru sudah ada audit id, user request message id, execution timestamp, provider, dan model sebenar.
+- `ai_action_logs` local table dan repository sudah ada sebagai audit trail per message/action.
+- Action log sekarang simpan `undoCommandsJson` dan `undoState = Available` bila AI mutation melalui command pipeline yang menghasilkan undo command.
+- Chat action details boleh trigger basic `Undo AI action`; use-case apply payload undo ke page dan mark log `Applied`.
+- Chat UI model sekarang observe `undoState`, jadi action yang sudah `Applied` tidak lagi tunjuk button undo.
+- Action log sekarang sync ke backend melalui `/api/v1/ai-action-logs`, termasuk `undoCommandsJson`, `undoState`, provider/model, schema metadata, dan execution messages.
+- Chat session dan chat message sekarang sync ke backend melalui `/api/v1/chat-sessions` dan `/api/v1/chat-messages`, jadi conversation history boleh survive reinstall bila backend token/database sama.
 
 ### Belum Kukuh
 
-- Chat belum sync backend.
-- Belum simpan model/mode/action metadata lengkap.
-- Belum ada action audit untuk undo/debug.
+- Chat sudah ada backend sync untuk session/message.
+- Model/mode/action metadata dalam `chat_messages` ikut sync sebagai JSON, dan action log juga sync backend.
+- Undo AI action sudah boleh apply untuk payload command yang valid, UI observe `undoState`, state action log sync, dan conversation history boleh dipulihkan dari backend.
+- Belum ada dedicated chat full-text search dan belum ada delete lifecycle message-level; clear chat sekarang bergantung pada soft-delete session.
 
 ### Next Work
 
-- Simpan AI model, mode, action summary, execution result.
-- Tambah action log per message.
-- Hubungkan undo kepada action log.
 - Tambah chat search.
 
 ## Milestone 7: Media/File Core

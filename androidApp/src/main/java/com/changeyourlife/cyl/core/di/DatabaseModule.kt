@@ -5,6 +5,7 @@ import androidx.room.Room
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.changeyourlife.cyl.data.local.CylDatabase
+import com.changeyourlife.cyl.data.local.dao.AiActionLogDao
 import com.changeyourlife.cyl.data.local.dao.ChatMessageDao
 import com.changeyourlife.cyl.data.local.dao.PageDao
 import com.changeyourlife.cyl.data.local.dao.PageContentDao
@@ -37,6 +38,10 @@ object DatabaseModule {
             .addMigrations(MIGRATION_5_6)
             .addMigrations(MIGRATION_6_7)
             .addMigrations(MIGRATION_7_8)
+            .addMigrations(MIGRATION_8_9)
+            .addMigrations(MIGRATION_9_10)
+            .addMigrations(MIGRATION_10_11)
+            .addMigrations(MIGRATION_11_12)
             .build()
     }
 
@@ -73,6 +78,11 @@ object DatabaseModule {
     @Provides
     fun provideSyncTombstoneDao(database: CylDatabase): SyncTombstoneDao {
         return database.syncTombstoneDao()
+    }
+
+    @Provides
+    fun provideAiActionLogDao(database: CylDatabase): AiActionLogDao {
+        return database.aiActionLogDao()
     }
 
     val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -364,6 +374,117 @@ object DatabaseModule {
                 """
                 CREATE INDEX IF NOT EXISTS `index_sync_tombstones_createdAt`
                 ON `sync_tombstones` (`createdAt`)
+                """.trimIndent(),
+            )
+        }
+    }
+
+    val MIGRATION_8_9 = object : Migration(8, 9) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `ai_action_logs` (
+                    `auditId` TEXT NOT NULL,
+                    `requestMessageId` TEXT NOT NULL,
+                    `responseMessageId` TEXT NOT NULL,
+                    `sessionId` TEXT NOT NULL,
+                    `workspaceId` TEXT NOT NULL,
+                    `mode` TEXT NOT NULL,
+                    `provider` TEXT NOT NULL,
+                    `model` TEXT NOT NULL,
+                    `schemaName` TEXT NOT NULL,
+                    `schemaVersion` INTEGER NOT NULL,
+                    `proposedActionsJson` TEXT NOT NULL,
+                    `executedActionsJson` TEXT NOT NULL,
+                    `validationIssuesJson` TEXT NOT NULL,
+                    `executionMessagesJson` TEXT NOT NULL,
+                    `undoState` TEXT NOT NULL,
+                    `createdAt` INTEGER NOT NULL,
+                    PRIMARY KEY(`auditId`)
+                )
+                """.trimIndent(),
+            )
+            db.execSQL(
+                """
+                CREATE INDEX IF NOT EXISTS `index_ai_action_logs_sessionId_createdAt`
+                ON `ai_action_logs` (`sessionId`, `createdAt`)
+                """.trimIndent(),
+            )
+            db.execSQL(
+                """
+                CREATE INDEX IF NOT EXISTS `index_ai_action_logs_requestMessageId`
+                ON `ai_action_logs` (`requestMessageId`)
+                """.trimIndent(),
+            )
+            db.execSQL(
+                """
+                CREATE INDEX IF NOT EXISTS `index_ai_action_logs_responseMessageId`
+                ON `ai_action_logs` (`responseMessageId`)
+                """.trimIndent(),
+            )
+            db.execSQL(
+                """
+                CREATE INDEX IF NOT EXISTS `index_ai_action_logs_workspaceId_createdAt`
+                ON `ai_action_logs` (`workspaceId`, `createdAt`)
+                """.trimIndent(),
+            )
+        }
+    }
+
+    val MIGRATION_9_10 = object : Migration(9, 10) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE `ai_action_logs` ADD COLUMN `undoCommandsJson` TEXT NOT NULL DEFAULT '[]'")
+        }
+    }
+
+    val MIGRATION_10_11 = object : Migration(10, 11) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE `ai_action_logs` ADD COLUMN `updatedAt` INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("UPDATE `ai_action_logs` SET `updatedAt` = `createdAt` WHERE `updatedAt` = 0")
+            db.execSQL("ALTER TABLE `ai_action_logs` ADD COLUMN `syncStatus` TEXT NOT NULL DEFAULT 'PendingPush'")
+            db.execSQL("ALTER TABLE `ai_action_logs` ADD COLUMN `remoteUpdatedAt` INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE `ai_action_logs` ADD COLUMN `lastSyncedAt` INTEGER NOT NULL DEFAULT 0")
+            db.execSQL(
+                """
+                CREATE INDEX IF NOT EXISTS `index_ai_action_logs_workspaceId_updatedAt`
+                ON `ai_action_logs` (`workspaceId`, `updatedAt`)
+                """.trimIndent(),
+            )
+            db.execSQL(
+                """
+                CREATE INDEX IF NOT EXISTS `index_ai_action_logs_syncStatus`
+                ON `ai_action_logs` (`syncStatus`)
+                """.trimIndent(),
+            )
+        }
+    }
+
+    val MIGRATION_11_12 = object : Migration(11, 12) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE `chat_sessions` ADD COLUMN `syncStatus` TEXT NOT NULL DEFAULT 'PendingPush'")
+            db.execSQL("ALTER TABLE `chat_sessions` ADD COLUMN `remoteUpdatedAt` INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE `chat_sessions` ADD COLUMN `lastSyncedAt` INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE `chat_messages` ADD COLUMN `updatedAt` INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("UPDATE `chat_messages` SET `updatedAt` = `createdAt` WHERE `updatedAt` = 0")
+            db.execSQL("ALTER TABLE `chat_messages` ADD COLUMN `syncStatus` TEXT NOT NULL DEFAULT 'PendingPush'")
+            db.execSQL("ALTER TABLE `chat_messages` ADD COLUMN `remoteUpdatedAt` INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE `chat_messages` ADD COLUMN `lastSyncedAt` INTEGER NOT NULL DEFAULT 0")
+            db.execSQL(
+                """
+                CREATE INDEX IF NOT EXISTS `index_chat_sessions_syncStatus`
+                ON `chat_sessions` (`syncStatus`)
+                """.trimIndent(),
+            )
+            db.execSQL(
+                """
+                CREATE INDEX IF NOT EXISTS `index_chat_messages_updatedAt`
+                ON `chat_messages` (`updatedAt`)
+                """.trimIndent(),
+            )
+            db.execSQL(
+                """
+                CREATE INDEX IF NOT EXISTS `index_chat_messages_syncStatus`
+                ON `chat_messages` (`syncStatus`)
                 """.trimIndent(),
             )
         }

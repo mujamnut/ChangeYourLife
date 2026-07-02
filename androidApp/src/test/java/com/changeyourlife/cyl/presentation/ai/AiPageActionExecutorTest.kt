@@ -16,6 +16,7 @@ import com.changeyourlife.cyl.domain.repository.ChatAction
 import com.changeyourlife.cyl.domain.repository.PageRepository
 import com.changeyourlife.cyl.domain.repository.ReminderRepository
 import com.changeyourlife.cyl.domain.repository.TaskRepository
+import com.changeyourlife.cyl.domain.usecase.ApplyEditorCommandUseCase
 import com.changeyourlife.cyl.presentation.page.PageBlockCodec
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
@@ -83,6 +84,7 @@ class AiPageActionExecutorTest {
             pageRepository = pageRepository,
             taskRepository = FakeTaskRepository(),
             reminderRepository = FakeReminderRepository(),
+            applyEditorCommandUseCase = ApplyEditorCommandUseCase(),
         )
 
         val result = executor.executeOnPage(
@@ -176,6 +178,7 @@ class AiPageActionExecutorTest {
             pageRepository = pageRepository,
             taskRepository = FakeTaskRepository(),
             reminderRepository = FakeReminderRepository(),
+            applyEditorCommandUseCase = ApplyEditorCommandUseCase(),
         )
 
         val result = executor.executeOnPage(
@@ -204,6 +207,12 @@ class AiPageActionExecutorTest {
         assertEquals("29", row.cells[amountColumn.id])
         assertEquals("2026-06-30", row.cells[dateColumn.id])
         assertEquals("29 ringgit harini makeup", row.cells[notesColumn.id])
+        assertEquals(1, result.undoCommands.size)
+        assertEquals(0, result.undoCommands.single().actionIndex)
+        assertEquals("ReplaceTable", result.undoCommands.single().commandType)
+        assertEquals("block-table", result.undoCommands.single().targetId)
+        assertEquals("Budget", result.undoCommands.single().table?.title)
+        assertEquals(0, result.undoCommands.single().table?.rows?.size)
     }
 
     @Test
@@ -225,6 +234,7 @@ class AiPageActionExecutorTest {
             pageRepository = pageRepository,
             taskRepository = FakeTaskRepository(),
             reminderRepository = FakeReminderRepository(),
+            applyEditorCommandUseCase = ApplyEditorCommandUseCase(),
         )
 
         val result = executor.executeOnPage(
@@ -304,6 +314,7 @@ class AiPageActionExecutorTest {
             pageRepository = FakePageRepository(page, document),
             taskRepository = FakeTaskRepository(),
             reminderRepository = FakeReminderRepository(),
+            applyEditorCommandUseCase = ApplyEditorCommandUseCase(),
         )
 
         val result = executor.executeOnPage(
@@ -380,6 +391,7 @@ class AiPageActionExecutorTest {
             pageRepository = pageRepository,
             taskRepository = FakeTaskRepository(),
             reminderRepository = FakeReminderRepository(),
+            applyEditorCommandUseCase = ApplyEditorCommandUseCase(),
         )
 
         val result = executor.executeOnPage(

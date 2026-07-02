@@ -1,9 +1,14 @@
 package com.changeyourlife.cyl.data.sync
 
+import com.changeyourlife.cyl.data.local.dao.AiActionLogDao
+import com.changeyourlife.cyl.data.local.dao.ChatMessageDao
 import com.changeyourlife.cyl.data.local.dao.PageDao
 import com.changeyourlife.cyl.data.local.dao.PageContentDao
 import com.changeyourlife.cyl.data.local.dao.SyncTombstoneDao
 import com.changeyourlife.cyl.data.local.dao.WorkspaceDao
+import com.changeyourlife.cyl.data.local.entity.AiActionLogEntity
+import com.changeyourlife.cyl.data.local.entity.ChatMessageEntity
+import com.changeyourlife.cyl.data.local.entity.ChatSessionEntity
 import com.changeyourlife.cyl.data.local.entity.PageEntity
 import com.changeyourlife.cyl.data.local.entity.SyncStatus
 import com.changeyourlife.cyl.data.local.entity.SyncTombstoneType
@@ -11,8 +16,12 @@ import com.changeyourlife.cyl.data.local.entity.WorkspaceEntity
 import com.changeyourlife.cyl.data.local.mapper.toContentProjection
 import com.changeyourlife.cyl.data.local.mapper.toDomain
 import com.changeyourlife.cyl.data.local.mapper.toEntity
+import com.changeyourlife.cyl.data.local.model.PageContentSnapshot
 import com.changeyourlife.cyl.data.local.session.AuthTokenStore
 import com.changeyourlife.cyl.data.local.session.WorkspaceSelectionStore
+import com.changeyourlife.cyl.data.remote.sync.AiActionLogSyncDto
+import com.changeyourlife.cyl.data.remote.sync.ChatMessageSyncDto
+import com.changeyourlife.cyl.data.remote.sync.ChatSessionSyncDto
 import com.changeyourlife.cyl.data.remote.sync.PageBlockCreateRequestDto
 import com.changeyourlife.cyl.data.remote.sync.PageBlockPatchRequestDto
 import com.changeyourlife.cyl.data.remote.sync.PageElementPositionPatchRequestDto
@@ -44,6 +53,8 @@ class SessionSyncCoordinator @Inject constructor(
     private val workspaceDao: WorkspaceDao,
     private val pageDao: PageDao,
     private val pageContentDao: PageContentDao,
+    private val aiActionLogDao: AiActionLogDao,
+    private val chatMessageDao: ChatMessageDao,
     private val syncTombstoneDao: SyncTombstoneDao,
     private val syncApi: SyncApi,
     private val tokenStore: AuthTokenStore,
@@ -71,6 +82,8 @@ class SessionSyncCoordinator @Inject constructor(
 
         workspaceIds.forEach { workspaceId ->
             refreshPages(workspaceId = workspaceId, includeDeleted = true)
+            refreshChatSessions(scopeId = homeChatScopeId(workspaceId))
+            refreshAiActionLogs(workspaceId = workspaceId)
         }
 
         pushPendingChanges()
@@ -80,11 +93,21 @@ class SessionSyncCoordinator @Inject constructor(
         pushPendingTombstones()
         pushPendingWorkspaces()
         pushPendingPages()
+        pushPendingChatSessions()
+        pushPendingChatMessages()
+        pushPendingAiActionLogs()
     }
 
     suspend fun pushPendingChangesForWorker(): Boolean {
         if (authHeader() == null) return true
         pushPendingChanges()
+        if (authHeader() == null) return true
+        return !hasRetryablePendingChanges()
+    }
+
+    suspend fun syncSessionForWorker(): Boolean {
+        if (authHeader() == null) return true
+        syncAfterAuth()
         if (authHeader() == null) return true
         return !hasRetryablePendingChanges()
     }
@@ -126,6 +149,48 @@ class SessionSyncCoordinator @Inject constructor(
         }.onFailure(::handleSyncFailure)
     }
 
+    suspend fun refreshAiActionLogs(workspaceId: String) {
+        val header = authHeader() ?: return
+        runCatching {
+            syncApi.listAiActionLogs(
+                authorization = header,
+                workspaceId = workspaceId,
+                updatedAfter = 0L,
+            ).actionLogs
+        }.onSuccess { actionLogs ->
+            actionLogs.forEach { actionLog -> mergeAiActionLog(actionLog) }
+        }.onFailure(::handleSyncFailure)
+    }
+
+    suspend fun refreshChatSessions(scopeId: String) {
+        val header = authHeader() ?: return
+        runCatching {
+            syncApi.listChatSessions(
+                authorization = header,
+                scopeId = scopeId,
+                updatedAfter = 0L,
+            ).sessions
+        }.onSuccess { sessions ->
+            sessions.forEach { session -> mergeChatSession(session) }
+            chatMessageDao.getSessionsForScopeIncludingDeleted(scopeId)
+                .forEach { session -> refreshChatMessages(session.id) }
+        }.onFailure(::handleSyncFailure)
+    }
+
+    suspend fun refreshChatMessages(sessionId: String) {
+        val header = authHeader() ?: return
+        if (chatMessageDao.getSessionIncludingDeleted(sessionId) == null) return
+        runCatching {
+            syncApi.listChatMessages(
+                authorization = header,
+                sessionId = sessionId,
+                updatedAfter = 0L,
+            ).messages
+        }.onSuccess { messages ->
+            messages.forEach { message -> mergeChatMessage(message) }
+        }.onFailure(::handleSyncFailure)
+    }
+
     suspend fun pushWorkspace(workspace: WorkspaceEntity) {
         val header = authHeader() ?: return
         runCatching {
@@ -156,6 +221,66 @@ class SessionSyncCoordinator @Inject constructor(
             persistPage(
                 remotePage.toSyncedEntity(
                     previous = page,
+                    now = System.currentTimeMillis(),
+                ),
+            )
+        }.onFailure(::handleSyncFailure)
+    }
+
+    suspend fun pushAiActionLog(actionLog: AiActionLogEntity) {
+        val header = authHeader() ?: return
+        runCatching {
+            syncApi.upsertAiActionLog(
+                authorization = header,
+                auditId = actionLog.auditId,
+                actionLog = actionLog.toDomain().toSyncDto(),
+            )
+        }.onSuccess { remoteActionLog ->
+            aiActionLogDao.upsert(
+                remoteActionLog.toSyncedEntity(
+                    previous = actionLog,
+                    now = System.currentTimeMillis(),
+                ),
+            )
+        }.onFailure(::handleSyncFailure)
+    }
+
+    suspend fun pushChatSession(sessionId: String) {
+        val header = authHeader() ?: return
+        val session = chatMessageDao.getSessionIncludingDeleted(sessionId) ?: return
+        runCatching {
+            syncApi.upsertChatSession(
+                authorization = header,
+                id = session.id,
+                session = session.toSyncDto(),
+            )
+        }.onSuccess { remoteSession ->
+            chatMessageDao.upsertSession(
+                remoteSession.toSyncedEntity(
+                    previous = session,
+                    now = System.currentTimeMillis(),
+                ),
+            )
+        }.onFailure(::handleSyncFailure)
+    }
+
+    suspend fun pushChatMessage(messageId: String) {
+        val header = authHeader() ?: return
+        val message = chatMessageDao.getMessage(messageId) ?: return
+        val session = chatMessageDao.getSessionIncludingDeleted(message.scopeId) ?: return
+        if (session.syncStatus != SyncStatus.Synced || session.lastSyncedAt == 0L) {
+            pushChatSession(session.id)
+        }
+        runCatching {
+            syncApi.upsertChatMessage(
+                authorization = header,
+                id = message.id,
+                message = message.toSyncDto(session),
+            )
+        }.onSuccess { remoteMessage ->
+            chatMessageDao.upsertMessage(
+                remoteMessage.toSyncedEntity(
+                    previous = message,
                     now = System.currentTimeMillis(),
                 ),
             )
@@ -716,7 +841,10 @@ class SessionSyncCoordinator @Inject constructor(
     private suspend fun hasRetryablePendingChanges(): Boolean {
         return syncTombstoneDao.getPendingTombstones().isNotEmpty() ||
             workspaceDao.getWorkspacesNeedingSync().any { workspace -> workspace.syncStatus != SyncStatus.Conflict } ||
-            pageDao.getPagesNeedingSync().any { page -> page.syncStatus != SyncStatus.Conflict }
+            pageDao.getPagesNeedingSync().any { page -> page.syncStatus != SyncStatus.Conflict } ||
+            chatMessageDao.getSessionsNeedingSync().any { session -> session.syncStatus != SyncStatus.Conflict } ||
+            chatMessageDao.getMessagesNeedingSync().any { message -> message.syncStatus != SyncStatus.Conflict } ||
+            aiActionLogDao.getLogsNeedingSync().any { actionLog -> actionLog.syncStatus != SyncStatus.Conflict }
     }
 
     private suspend fun pushPendingTombstones() {
@@ -729,6 +857,24 @@ class SessionSyncCoordinator @Inject constructor(
         pageDao.getPagesNeedingSync()
             .filterNot { page -> page.syncStatus == SyncStatus.Conflict }
             .forEach { page -> pushPage(page.copy(syncStatus = SyncStatus.PendingPush)) }
+    }
+
+    private suspend fun pushPendingChatSessions() {
+        chatMessageDao.getSessionsNeedingSync()
+            .filterNot { session -> session.syncStatus == SyncStatus.Conflict }
+            .forEach { session -> pushChatSession(session.id) }
+    }
+
+    private suspend fun pushPendingChatMessages() {
+        chatMessageDao.getMessagesNeedingSync()
+            .filterNot { message -> message.syncStatus == SyncStatus.Conflict }
+            .forEach { message -> pushChatMessage(message.id) }
+    }
+
+    private suspend fun pushPendingAiActionLogs() {
+        aiActionLogDao.getLogsNeedingSync()
+            .filterNot { actionLog -> actionLog.syncStatus == SyncStatus.Conflict }
+            .forEach { actionLog -> pushAiActionLog(actionLog.copy(syncStatus = SyncStatus.PendingPush)) }
     }
 
     private suspend fun mergeWorkspace(remoteWorkspace: WorkspaceSyncDto) {
@@ -770,7 +916,18 @@ class SessionSyncCoordinator @Inject constructor(
                 localPage.remoteUpdatedAt > 0 &&
                 remotePage.updatedAt > localPage.remoteUpdatedAt &&
                 remotePage.updatedAt != localPage.updatedAt -> {
-                persistPage(localPage.copy(syncStatus = SyncStatus.Conflict))
+                val remoteEntity = remotePage.toSyncedEntity(previous = localPage, now = now)
+                val mergedPage = tryMergePageConflict(
+                    localPage = localPage,
+                    remotePage = remoteEntity,
+                    now = now,
+                )
+                if (mergedPage != null) {
+                    persistPage(mergedPage)
+                    pushPage(mergedPage)
+                } else {
+                    persistPage(localPage.copy(syncStatus = SyncStatus.Conflict))
+                }
             }
 
             remotePage.updatedAt >= localPage.updatedAt ||
@@ -781,6 +938,109 @@ class SessionSyncCoordinator @Inject constructor(
             else -> {
                 persistPage(localPage.copy(syncStatus = SyncStatus.PendingPush))
                 pushPage(localPage.copy(syncStatus = SyncStatus.PendingPush))
+            }
+        }
+    }
+
+    private suspend fun tryMergePageConflict(
+        localPage: PageEntity,
+        remotePage: PageEntity,
+        now: Long,
+    ): PageEntity? {
+        val remoteProjection = remotePage.toContentProjection() ?: return null
+        return PageContentConflictMerger.merge(
+            localPage = localPage,
+            localSnapshot = pageContentDao.getPageContentSnapshot(localPage.id),
+            remotePage = remotePage,
+            remoteSnapshot = PageContentSnapshot(
+                blocks = remoteProjection.blocks,
+                properties = remoteProjection.properties,
+                tables = remoteProjection.tables,
+                columns = remoteProjection.columns,
+                rows = remoteProjection.rows,
+                cells = remoteProjection.cells,
+            ),
+            now = now,
+        )
+    }
+
+    private suspend fun mergeAiActionLog(remoteActionLog: AiActionLogSyncDto) {
+        val localActionLog = aiActionLogDao.getByAuditId(remoteActionLog.auditId)
+        val now = System.currentTimeMillis()
+        when {
+            localActionLog == null -> {
+                aiActionLogDao.upsert(remoteActionLog.toSyncedEntity(previous = null, now = now))
+            }
+
+            localActionLog.syncStatus == SyncStatus.PendingPush &&
+                localActionLog.remoteUpdatedAt > 0 &&
+                remoteActionLog.updatedAt > localActionLog.remoteUpdatedAt &&
+                remoteActionLog.updatedAt != localActionLog.updatedAt -> {
+                aiActionLogDao.upsert(localActionLog.copy(syncStatus = SyncStatus.Conflict))
+            }
+
+            remoteActionLog.updatedAt >= localActionLog.updatedAt ||
+                localActionLog.syncStatus == SyncStatus.Synced -> {
+                aiActionLogDao.upsert(remoteActionLog.toSyncedEntity(previous = localActionLog, now = now))
+            }
+
+            else -> {
+                aiActionLogDao.upsert(localActionLog.copy(syncStatus = SyncStatus.PendingPush))
+                pushAiActionLog(localActionLog.copy(syncStatus = SyncStatus.PendingPush))
+            }
+        }
+    }
+
+    private suspend fun mergeChatSession(remoteSession: ChatSessionSyncDto) {
+        val localSession = chatMessageDao.getSessionIncludingDeleted(remoteSession.id)
+        val now = System.currentTimeMillis()
+        when {
+            localSession == null -> {
+                chatMessageDao.upsertSession(remoteSession.toSyncedEntity(previous = null, now = now))
+            }
+
+            localSession.syncStatus == SyncStatus.PendingPush &&
+                localSession.remoteUpdatedAt > 0 &&
+                remoteSession.updatedAt > localSession.remoteUpdatedAt &&
+                remoteSession.updatedAt != localSession.updatedAt -> {
+                chatMessageDao.upsertSession(localSession.copy(syncStatus = SyncStatus.Conflict))
+            }
+
+            remoteSession.updatedAt >= localSession.updatedAt ||
+                localSession.syncStatus == SyncStatus.Synced -> {
+                chatMessageDao.upsertSession(remoteSession.toSyncedEntity(previous = localSession, now = now))
+            }
+
+            else -> {
+                chatMessageDao.upsertSession(localSession.copy(syncStatus = SyncStatus.PendingPush))
+                pushChatSession(localSession.id)
+            }
+        }
+    }
+
+    private suspend fun mergeChatMessage(remoteMessage: ChatMessageSyncDto) {
+        val localMessage = chatMessageDao.getMessage(remoteMessage.id)
+        val now = System.currentTimeMillis()
+        when {
+            localMessage == null -> {
+                chatMessageDao.upsertMessage(remoteMessage.toSyncedEntity(previous = null, now = now))
+            }
+
+            localMessage.syncStatus == SyncStatus.PendingPush &&
+                localMessage.remoteUpdatedAt > 0 &&
+                remoteMessage.updatedAt > localMessage.remoteUpdatedAt &&
+                remoteMessage.updatedAt != localMessage.updatedAt -> {
+                chatMessageDao.upsertMessage(localMessage.copy(syncStatus = SyncStatus.Conflict))
+            }
+
+            remoteMessage.updatedAt >= localMessage.updatedAt ||
+                localMessage.syncStatus == SyncStatus.Synced -> {
+                chatMessageDao.upsertMessage(remoteMessage.toSyncedEntity(previous = localMessage, now = now))
+            }
+
+            else -> {
+                chatMessageDao.upsertMessage(localMessage.copy(syncStatus = SyncStatus.PendingPush))
+                pushChatMessage(localMessage.id)
             }
         }
     }
@@ -824,6 +1084,82 @@ class SessionSyncCoordinator @Inject constructor(
             )
     }
 
+    private fun AiActionLogSyncDto.toSyncedEntity(
+        previous: AiActionLogEntity?,
+        now: Long,
+    ): AiActionLogEntity {
+        return this.remoteToDomain()
+            .toEntity(
+                syncStatus = SyncStatus.Synced,
+                remoteUpdatedAt = updatedAt,
+                lastSyncedAt = now,
+            )
+            .copy(
+                createdAt = previous?.createdAt ?: createdAt,
+            )
+    }
+
+    private fun ChatSessionEntity.toSyncDto(): ChatSessionSyncDto {
+        return ChatSessionSyncDto(
+            id = id,
+            scopeId = scopeId,
+            title = title,
+            createdAt = createdAt,
+            updatedAt = updatedAt,
+            deletedAt = deletedAt,
+        )
+    }
+
+    private fun ChatSessionSyncDto.toSyncedEntity(
+        previous: ChatSessionEntity?,
+        now: Long,
+    ): ChatSessionEntity {
+        return ChatSessionEntity(
+            id = id,
+            scopeId = scopeId,
+            title = title,
+            createdAt = previous?.createdAt ?: createdAt,
+            updatedAt = updatedAt,
+            deletedAt = deletedAt,
+            syncStatus = SyncStatus.Synced,
+            remoteUpdatedAt = updatedAt,
+            lastSyncedAt = now,
+        )
+    }
+
+    private fun ChatMessageEntity.toSyncDto(session: ChatSessionEntity): ChatMessageSyncDto {
+        return ChatMessageSyncDto(
+            id = id,
+            sessionId = session.id,
+            scopeId = session.scopeId,
+            role = role,
+            content = content,
+            pageLinksJson = pageLinksJson,
+            actionMetadataJson = actionMetadataJson,
+            createdAt = createdAt,
+            updatedAt = updatedAt,
+        )
+    }
+
+    private fun ChatMessageSyncDto.toSyncedEntity(
+        previous: ChatMessageEntity?,
+        now: Long,
+    ): ChatMessageEntity {
+        return ChatMessageEntity(
+            id = id,
+            scopeId = sessionId,
+            role = role,
+            content = content,
+            pageLinksJson = pageLinksJson,
+            actionMetadataJson = actionMetadataJson,
+            createdAt = previous?.createdAt ?: createdAt,
+            updatedAt = updatedAt,
+            syncStatus = SyncStatus.Synced,
+            remoteUpdatedAt = updatedAt,
+            lastSyncedAt = now,
+        )
+    }
+
     private suspend fun persistPage(page: PageEntity) {
         pageDao.upsertPage(page)
         page.toContentProjection()?.let { projection ->
@@ -841,6 +1177,10 @@ class SessionSyncCoordinator @Inject constructor(
 
     private fun authHeader(): String? {
         return tokenStore.token.value?.takeIf { token -> token.isNotBlank() }?.let { token -> "Bearer $token" }
+    }
+
+    private fun homeChatScopeId(workspaceId: String): String {
+        return "home:$workspaceId"
     }
 
     private fun handleSyncFailure(error: Throwable) {

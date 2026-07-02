@@ -16,6 +16,12 @@ data class AiChatPageLink(
 )
 
 data class AiChatActionMetadata(
+    val auditId: String = "",
+    val requestMessageId: String = "",
+    val undoState: String = "",
+    val executedAt: Long = 0L,
+    val provider: String = "",
+    val model: String = "",
     val mode: String = "",
     val schemaName: String = "",
     val schemaVersion: Int = 1,
@@ -34,6 +40,7 @@ data class AiChatActionMetadata(
 data class AiChatActionMetadataItem(
     val type: String,
     val target: String = "",
+    val actionIndex: Int? = null,
 )
 
 data class AiChatActionValidationIssue(

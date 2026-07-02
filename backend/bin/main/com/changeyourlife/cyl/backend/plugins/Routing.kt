@@ -1,10 +1,14 @@
 package com.changeyourlife.cyl.backend.plugins
 
+import com.changeyourlife.cyl.backend.domain.AiActionLogRepository
+import com.changeyourlife.cyl.backend.domain.ChatSyncRepository
 import com.changeyourlife.cyl.backend.domain.UserRepository
 import com.changeyourlife.cyl.backend.domain.ContentRepository
 import com.changeyourlife.cyl.backend.model.HealthResponse
+import com.changeyourlife.cyl.backend.routes.aiActionLogRoutes
 import com.changeyourlife.cyl.backend.routes.aiRoutes
 import com.changeyourlife.cyl.backend.routes.authRoutes
+import com.changeyourlife.cyl.backend.routes.chatSyncRoutes
 import com.changeyourlife.cyl.backend.routes.contentRoutes
 import com.changeyourlife.cyl.backend.service.AiService
 import com.changeyourlife.cyl.backend.service.JwtService
@@ -18,6 +22,8 @@ import io.ktor.server.routing.routing
 fun Application.configureRouting(
     userRepository: UserRepository,
     contentRepository: ContentRepository,
+    aiActionLogRepository: AiActionLogRepository,
+    chatSyncRepository: ChatSyncRepository,
     jwtService: JwtService,
     databaseConfigured: Boolean,
     aiService: AiService,
@@ -47,6 +53,14 @@ fun Application.configureRouting(
 
         contentRoutes(
             contentRepository = contentRepository,
+        )
+
+        aiActionLogRoutes(
+            aiActionLogRepository = aiActionLogRepository,
+        )
+
+        chatSyncRoutes(
+            chatSyncRepository = chatSyncRepository,
         )
 
         aiRoutes(

@@ -21,9 +21,6 @@ import com.changeyourlife.cyl.domain.model.TaskItem
 import com.changeyourlife.cyl.domain.model.Workspace
 import com.changeyourlife.cyl.domain.repository.AuthRepository
 import com.changeyourlife.cyl.domain.repository.AiBlockContext
-import com.changeyourlife.cyl.domain.model.ChatActionMetadata
-import com.changeyourlife.cyl.domain.model.ChatActionMetadataItem
-import com.changeyourlife.cyl.domain.model.ChatActionValidationMetadata
 import com.changeyourlife.cyl.domain.model.ChatMessage
 import com.changeyourlife.cyl.domain.model.ChatPageLink
 import com.changeyourlife.cyl.domain.model.ChatSession
@@ -36,16 +33,16 @@ import com.changeyourlife.cyl.domain.repository.WorkspaceRepository
 import com.changeyourlife.cyl.domain.repository.AiPageContext
 import com.changeyourlife.cyl.domain.repository.AiRepository
 import com.changeyourlife.cyl.domain.repository.AiStatus
+import com.changeyourlife.cyl.domain.repository.AiActionLogRepository
 import com.changeyourlife.cyl.domain.repository.ChatAction
-import com.changeyourlife.cyl.presentation.ai.AiActionExecutionPolicy
-import com.changeyourlife.cyl.presentation.ai.AiChatActionMetadata
-import com.changeyourlife.cyl.presentation.ai.AiChatActionMetadataItem
-import com.changeyourlife.cyl.presentation.ai.AiChatActionValidationIssue
+import com.changeyourlife.cyl.domain.usecase.ApplyAiActionUndoUseCase
+import com.changeyourlife.cyl.presentation.ai.AiActionExecutionUseCase
+import com.changeyourlife.cyl.presentation.ai.AiActionLogFactory
+import com.changeyourlife.cyl.presentation.ai.AiChatActionOrchestrator
+import com.changeyourlife.cyl.presentation.ai.AiChatMessageMapper
 import com.changeyourlife.cyl.presentation.ai.AiChatMode
 import com.changeyourlife.cyl.presentation.ai.AiChatMessage
 import com.changeyourlife.cyl.presentation.ai.AiChatPageLink
-import com.changeyourlife.cyl.presentation.ai.AiMarkdownTableActionRecovery
-import com.changeyourlife.cyl.presentation.ai.AiPageActionExecutor
 import com.changeyourlife.cyl.presentation.ai.toPageTableColumnFromAi
 import com.changeyourlife.cyl.presentation.ai.toRoleContentPairs
 import com.changeyourlife.cyl.presentation.page.PageBlockCodec
@@ -76,7 +73,9 @@ class HomeViewModel @Inject constructor(
     private val authRepository: AuthRepository,
     private val reminderRepository: ReminderRepository,
     private val aiRepository: AiRepository,
-    private val aiPageActionExecutor: AiPageActionExecutor,
+    private val aiActionExecutionUseCase: AiActionExecutionUseCase,
+    private val applyAiActionUndoUseCase: ApplyAiActionUndoUseCase,
+    private val aiActionLogRepository: AiActionLogRepository,
     private val chatHistoryRepository: ChatHistoryRepository,
     private val syncStatusRepository: SyncStatusRepository,
 ) : ViewModel() {
@@ -110,13 +109,22 @@ class HomeViewModel @Inject constructor(
             if (sessionId == null) {
                 flowOf(emptyList())
             } else {
-                chatHistoryRepository.observeMessages(sessionId)
-                    .map { messages -> messages.toAiChatMessages() }
+                combine(
+                    chatHistoryRepository.observeMessages(sessionId),
+                    aiActionLogRepository.observeBySession(sessionId),
+                ) { messages, actionLogs ->
+                    AiChatMessageMapper.toAiChatMessages(
+                        messages = messages,
+                        actionLogs = actionLogs,
+                    )
+                }
             }
-    }
+        }
+
     private val isAiGeneratingChat = MutableStateFlow(false)
     private val aiChatError = MutableStateFlow<String?>(null)
     private val aiChatMode = MutableStateFlow(AiChatMode.Planning)
+    private val aiStatusState = MutableStateFlow(AiStatus())
     private val aiModelLabel = MutableStateFlow("AI model")
     private val searchQuery = MutableStateFlow("")
     private val chatHistorySearchQuery = MutableStateFlow("")
@@ -271,9 +279,11 @@ class HomeViewModel @Inject constructor(
     private suspend fun refreshAiStatus() {
         aiRepository.status()
             .onSuccess { status ->
+                aiStatusState.value = status
                 aiModelLabel.value = status.toDisplayModelLabel()
             }
             .onFailure {
+                aiStatusState.value = AiStatus()
                 aiModelLabel.value = "AI model"
             }
     }
@@ -454,6 +464,29 @@ class HomeViewModel @Inject constructor(
         )
     }
 
+    fun undoAiAction(
+        auditId: String,
+        pageId: String,
+    ) {
+        if (auditId.isBlank() || pageId.isBlank()) return
+        viewModelScope.launch {
+            aiChatError.value = null
+            val workspaceId = workspaceRepository.getActiveWorkspaceId()
+                ?.takeIf { it.isNotBlank() }
+                ?: CylDefaults.DefaultWorkspaceId
+            val session = resolveActiveChatSession(homeChatScopeId(workspaceId))
+            val result = applyAiActionUndoUseCase(auditId = auditId, pageId = pageId)
+            chatHistoryRepository.appendMessage(
+                sessionId = session.id,
+                role = "assistant",
+                content = result.message,
+            )
+            if (!result.changed) {
+                aiChatError.value = result.message
+            }
+        }
+    }
+
     private fun sendChatMessageScoped(
         prompt: String,
         mentionedPageIds: List<String>,
@@ -473,7 +506,7 @@ class HomeViewModel @Inject constructor(
             val session = resolveActiveChatSession(scopeId)
             val currentMessages = chatHistoryRepository.observeMessages(session.id)
                 .first()
-                .toAiChatMessages()
+                .let(AiChatMessageMapper::toAiChatMessages)
             val userMessage = AiChatMessage(role = "user", content = prompt)
             val updatedMessages = currentMessages + userMessage
             val savedUserMessage = chatHistoryRepository.appendMessage(
@@ -533,65 +566,38 @@ class HomeViewModel @Inject constructor(
             aiRepository.chatWithActions(messagesForAi.toRoleContentPairs(), pages = pageContext, tasks = taskContext)
                 .onSuccess { result ->
                     isAiGeneratingChat.value = false
-                    val backendReply = result.reply.ifBlank {
-                        "I received your message, but the AI returned an empty reply."
-                    }.sanitizeAiUserVisibleText()
-                    val recoveredMarkdownActions = if (result.actions.isEmpty()) {
-                        AiMarkdownTableActionRecovery.recover(
-                            prompt = prompt,
-                            reply = result.reply,
-                            targetPageTitle = scopedTargetPage?.title,
-                        )
-                    } else {
-                        emptyList()
-                    }
-                    val proposedActions = result.actions.ifEmpty { recoveredMarkdownActions }
-                    val actionDecision = AiActionExecutionPolicy.decide(
-                        mode = mode,
-                        backendActions = proposedActions,
-                    )
-                    val actionsToExecute = actionDecision.executableActions
-                    val actionResults = executeAiActions(
+                    val orchestration = AiChatActionOrchestrator.orchestrate(
                         workspaceId = workspaceId,
                         scopedTargetPage = scopedTargetPage,
-                        actions = actionsToExecute,
-                    )
-                    val assistantReply = if (mode == AiChatMode.Planning && proposedActions.isNotEmpty()) {
-                        "Saya nampak arahan untuk ubah app, tapi mode sekarang Planning. Tukar ke Edit atau Auto untuk apply perubahan ini."
-                    } else if (recoveredMarkdownActions.isNotEmpty()) {
-                        "Siap - saya tukar jadual itu kepada data CYL."
-                    } else {
-                        backendReply
+                        mode = mode,
+                        prompt = prompt,
+                        backendResult = result,
+                        requestMessageId = savedUserMessage.id,
+                        provider = aiStatusState.value.provider,
+                        model = aiStatusState.value.model,
+                    ) { targetWorkspaceId, targetPage, actions ->
+                        aiActionExecutionUseCase.execute(
+                            workspaceId = targetWorkspaceId,
+                            scopedTargetPage = targetPage,
+                            actions = actions,
+                        )
                     }
-                    val replyWithResults = listOf(
-                        assistantReply,
-                        actionResults.messages.joinToString("\n"),
-                    )
-                        .filter { message -> message.isNotBlank() }
-                        .joinToString("\n\n")
-                    val actionMetadata = ChatActionMetadata(
-                        mode = mode.name,
-                        schemaName = result.schemaName,
-                        schemaVersion = result.schemaVersion,
-                        proposedActions = proposedActions.map { action -> action.toMetadataItem() },
-                        executedActions = actionsToExecute.map { action -> action.toMetadataItem() },
-                        executionMessages = actionResults.messages,
-                        validationIssues = result.validationIssues.map { issue ->
-                            ChatActionValidationMetadata(
-                                actionIndex = issue.actionIndex,
-                                field = issue.field,
-                                code = issue.code,
-                                message = issue.message,
-                            )
-                        } + actionDecision.validationIssues + actionResults.validationIssues,
-                    )
-                    chatHistoryRepository.appendMessage(
+                    val assistantMessage = chatHistoryRepository.appendMessage(
                         sessionId = session.id,
                         role = "assistant",
-                        content = replyWithResults.sanitizeAiUserVisibleText(),
-                        pageLinks = actionResults.pageLinks.toDomainChatPageLinks(),
-                        actionMetadata = actionMetadata,
+                        content = orchestration.reply.sanitizeAiUserVisibleText(),
+                        pageLinks = orchestration.pageLinks.toDomainChatPageLinks(),
+                        actionMetadata = orchestration.actionMetadata,
                     )
+                    AiActionLogFactory.fromMetadata(
+                        sessionId = session.id,
+                        workspaceId = workspaceId,
+                        responseMessageId = assistantMessage.id,
+                        metadata = orchestration.actionMetadata,
+                        undoCommands = orchestration.undoCommands,
+                    )?.let { actionLog ->
+                        aiActionLogRepository.upsert(actionLog)
+                    }
                 }
                 .onFailure { error ->
                     isAiGeneratingChat.value = false
@@ -605,166 +611,6 @@ class HomeViewModel @Inject constructor(
                 }
         }
     }
-
-    private suspend fun executeAiActions(
-        workspaceId: String,
-        scopedTargetPage: Page?,
-        actions: List<ChatAction>,
-    ): HomeAiExecutionResult {
-        if (actions.isEmpty()) return HomeAiExecutionResult()
-        val globalActions = actions.filter { action -> action.isHomeScopedAction() }
-        val pageActions = actions.filterNot { action -> action.isHomeScopedAction() }
-        val globalResult = executeHomeScopedActions(workspaceId, globalActions)
-        val pageResult = when {
-            pageActions.isEmpty() -> HomeAiExecutionResult()
-            scopedTargetPage != null -> executePageScopedActions(scopedTargetPage, pageActions)
-            else -> HomeAiExecutionResult(
-                validationIssues = pageActions.mapIndexed { index, _ ->
-                    ChatActionValidationMetadata(
-                        actionIndex = index,
-                        field = "targetTitle",
-                        code = "target_page_required",
-                        message = "This action needs a page target. Mention a page with @ or open the page before asking AI to edit it.",
-                    )
-                },
-            )
-        }
-        return globalResult + pageResult
-    }
-
-    private suspend fun executeHomeScopedActions(
-        workspaceId: String,
-        actions: List<ChatAction>,
-    ): HomeAiExecutionResult {
-        if (actions.isEmpty()) return HomeAiExecutionResult()
-        return runCatching {
-            val messages = mutableListOf<String>()
-            val pageLinks = mutableListOf<AiChatPageLink>()
-            actions.forEach { action ->
-                when (action.type.normalizedActionType()) {
-                    "CREATE_PAGE",
-                    "CREATE_DATABASE",
-                    "CREATE_TABLE",
-                    -> {
-                        val pageTitle = action.homePageTitle()
-                        val created = pageRepository.createPage(
-                            workspaceId = workspaceId,
-                            title = pageTitle,
-                            content = action.toCreatedPageContent(),
-                        )
-                        messages += "Done: Created page ${created.title.ifBlank { "Untitled page" }}"
-                        pageLinks += created.toChatPageLink()
-                    }
-                }
-            }
-            HomeAiExecutionResult(
-                messages = messages,
-                pageLinks = pageLinks,
-            )
-        }.getOrElse { error ->
-            HomeAiExecutionResult(
-                messages = listOf(error.toAiExecutionErrorMessage().sanitizeAiUserVisibleText()),
-            )
-        }
-    }
-
-    private suspend fun executePageScopedActions(
-        page: Page,
-        actions: List<ChatAction>,
-    ): HomeAiExecutionResult {
-        return runCatching {
-            val supportedActions = actions
-                .map { action ->
-                    action.copy(
-                        targetTitle = action.targetTitle.ifBlank { page.title },
-                    )
-                }
-                .filter { action -> aiPageActionExecutor.supports(action) }
-            if (supportedActions.isEmpty()) {
-                HomeAiExecutionResult()
-            } else {
-                val execution = aiPageActionExecutor.executeOnPage(
-                    page = page,
-                    title = page.title,
-                    document = PageBlockCodec.decodeDocument(page.content),
-                    actions = supportedActions,
-                )
-                val didUpdatePage = execution.updatedTitle != null || execution.updatedDocument != null
-                val updatedPage = if (didUpdatePage) {
-                    page.copy(
-                        title = execution.updatedTitle ?: page.title,
-                        content = execution.updatedDocument?.let(PageBlockCodec::encodeDocument) ?: page.content,
-                        updatedAt = System.currentTimeMillis(),
-                    ).also { updatedPage -> pageRepository.upsertPage(updatedPage) }
-                } else {
-                    page
-                }
-
-                val pageLinks = buildList {
-                    if (didUpdatePage) add(updatedPage.toChatPageLink())
-                    addAll(execution.pageLinks)
-                    addAll(execution.createdPages.map { createdPage -> createdPage.toChatPageLink() })
-                }.distinctBy { link -> "${link.pageId}:${link.targetType}:${link.targetId}" }
-
-                HomeAiExecutionResult(
-                    messages = execution.messages.ifEmpty {
-                        if (didUpdatePage) {
-                            listOf("Done: Updated ${updatedPage.title.ifBlank { "Untitled page" }}")
-                        } else {
-                            emptyList()
-                        }
-                    },
-                    pageLinks = pageLinks,
-                    validationIssues = execution.validationIssues.map { issue ->
-                        ChatActionValidationMetadata(
-                            actionIndex = issue.actionIndex,
-                            field = issue.field,
-                            code = issue.code,
-                            message = issue.message,
-                        )
-                    },
-                )
-            }
-        }.getOrElse { error ->
-            HomeAiExecutionResult(
-                messages = listOf(error.toAiExecutionErrorMessage().sanitizeAiUserVisibleText()),
-            )
-        }
-    }
-
-    private fun ChatAction.isHomeScopedAction(): Boolean {
-        val actionType = type.normalizedActionType()
-        return actionType == "CREATE_PAGE" ||
-            (actionType in setOf("CREATE_DATABASE", "CREATE_TABLE") && targetTitle.isBlank())
-    }
-
-    private fun ChatAction.toCreatedPageContent(): String {
-        val actionType = type.normalizedActionType()
-        val moduleType = requestedModuleType(actionType)
-        if (moduleType != null) return PageModuleTemplates.contentFor(moduleType)
-        val blocks = buildList {
-            if (tableTitle.isNotBlank() || tableColumns.isNotEmpty() || tableRows.isNotEmpty() || cellValues.isNotEmpty()) {
-                add(toDatabaseBlock())
-            }
-            if (content.isNotBlank()) {
-                add(PageBlockCodec.newBlock(PageBlockType.Text).copy(text = content.trim()))
-            }
-        }
-        return PageBlockCodec.encodeDocument(PageBlockDocument(blocks = blocks))
-    }
-
-    private fun ChatAction.homePageTitle(): String {
-        return title
-            .ifBlank { tableTitle }
-            .ifBlank { content }
-            .ifBlank { "Untitled page" }
-    }
-
-    private fun String.normalizedActionType(): String =
-        trim()
-            .uppercase()
-            .replace(Regex("[^A-Z0-9]+"), "_")
-            .trim('_')
 
     private suspend fun completeTaskAndReminder(task: TaskItem) {
         taskRepository.upsertTask(
@@ -1393,52 +1239,6 @@ class HomeViewModel @Inject constructor(
         return selectedSessionId.takeIf { sessionId -> sessions.any { session -> session.id == sessionId } }
     }
 
-    private fun List<ChatMessage>.toAiChatMessages(): List<AiChatMessage> {
-        return map { message ->
-            AiChatMessage(
-                id = message.id,
-                role = message.role,
-                content = message.content,
-                pageLinks = message.pageLinks.map { link ->
-                    AiChatPageLink(
-                        pageId = link.pageId,
-                        title = link.title,
-                        targetType = link.targetType,
-                        targetId = link.targetId,
-                    )
-                },
-                actionMetadata = message.actionMetadata?.let { metadata ->
-                    AiChatActionMetadata(
-                        mode = metadata.mode,
-                        schemaName = metadata.schemaName,
-                        schemaVersion = metadata.schemaVersion,
-                        proposedActions = metadata.proposedActions.map { action ->
-                            AiChatActionMetadataItem(
-                                type = action.type,
-                                target = action.target,
-                            )
-                        },
-                        executedActions = metadata.executedActions.map { action ->
-                            AiChatActionMetadataItem(
-                                type = action.type,
-                                target = action.target,
-                            )
-                        },
-                        executionMessages = metadata.executionMessages,
-                        validationIssues = metadata.validationIssues.map { issue ->
-                            AiChatActionValidationIssue(
-                                actionIndex = issue.actionIndex,
-                                field = issue.field,
-                                code = issue.code,
-                                message = issue.message,
-                            )
-                        },
-                    )
-                },
-            )
-        }
-    }
-
     private fun List<AiChatPageLink>.toDomainChatPageLinks(): List<ChatPageLink> {
         return map { link ->
             ChatPageLink(
@@ -1448,30 +1248,6 @@ class HomeViewModel @Inject constructor(
                 targetId = link.targetId,
             )
         }
-    }
-
-    private fun ChatAction.toMetadataItem(): ChatActionMetadataItem {
-        val target = listOf(
-            targetTitle,
-            title,
-            tableTitle,
-            rowTitle,
-            newRowTitle,
-            columnName,
-            newColumnName,
-            propertyName,
-            blockText,
-            content,
-        )
-            .map { value -> value.trim() }
-            .filter { value -> value.isNotBlank() }
-            .distinct()
-            .joinToString(" / ")
-            .take(120)
-        return ChatActionMetadataItem(
-            type = type,
-            target = target,
-        )
     }
 
     private fun Page.toAiPageContext(): AiPageContext {
@@ -2176,13 +1952,6 @@ private fun Throwable.toAiChatErrorMessage(): String {
     }
 }
 
-private fun Throwable.toAiExecutionErrorMessage(): String {
-    val root = generateSequence(this) { error -> error.cause }.last()
-    val detail = root.localizedMessage?.takeIf { message -> message.isNotBlank() }
-        ?: "AI edit failed before it could update the page. (${root.javaClass.simpleName})"
-    return "Failed: $detail"
-}
-
 data class HomeUiState(
     val isLoading: Boolean = true,
     val activeWorkspaceId: String = CylDefaults.DefaultWorkspaceId,
@@ -2214,22 +1983,6 @@ data class HomeUiState(
     val aiModelLabel: String = "AI model",
     val syncOverview: SyncOverview = SyncOverview(),
 )
-
-private data class HomeAiExecutionResult(
-    val messages: List<String> = emptyList(),
-    val pageLinks: List<AiChatPageLink> = emptyList(),
-    val validationIssues: List<ChatActionValidationMetadata> = emptyList(),
-)
-
-private operator fun HomeAiExecutionResult.plus(other: HomeAiExecutionResult): HomeAiExecutionResult {
-    return HomeAiExecutionResult(
-        messages = messages + other.messages,
-        pageLinks = (pageLinks + other.pageLinks).distinctBy { link ->
-            "${link.pageId}:${link.targetType}:${link.targetId}"
-        },
-        validationIssues = validationIssues + other.validationIssues,
-    )
-}
 
 private data class HomeTableUpdateResult(
     val page: Page,

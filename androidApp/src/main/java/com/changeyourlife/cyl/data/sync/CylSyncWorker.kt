@@ -19,7 +19,12 @@ class CylSyncWorker(
             SyncWorkerEntryPoint::class.java,
         )
         return runCatching {
-            if (entryPoint.sessionSyncCoordinator().pushPendingChangesForWorker()) {
+            val syncCoordinator = entryPoint.sessionSyncCoordinator()
+            val completed = when (inputData.getString(SyncWorkerMode.InputKey)) {
+                SyncWorkerMode.SessionSync -> syncCoordinator.syncSessionForWorker()
+                else -> syncCoordinator.pushPendingChangesForWorker()
+            }
+            if (completed) {
                 Result.success()
             } else {
                 Result.retry()

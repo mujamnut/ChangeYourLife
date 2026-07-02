@@ -1,0 +1,120 @@
+package com.changeyourlife.cyl.domain.usecase
+
+import com.changeyourlife.cyl.domain.model.EditorCommand
+import com.changeyourlife.cyl.domain.model.PageBlock
+import com.changeyourlife.cyl.domain.model.PageBlockDocument
+import com.changeyourlife.cyl.domain.model.PageBlockType
+import com.changeyourlife.cyl.domain.model.PageProperty
+import com.changeyourlife.cyl.domain.model.PagePropertyType
+import com.changeyourlife.cyl.domain.model.PageTextSpan
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class PageMutationUseCaseTest {
+    private val applyUseCase = ApplyEditorCommandUseCase()
+    private val useCase = PageMutationUseCase(applyUseCase)
+
+    @Test
+    fun updateBlockTextPreservesExistingRichTextSpans() {
+        val document = PageBlockDocument(
+            blocks = listOf(
+                PageBlock(
+                    id = "block-1",
+                    type = PageBlockType.Text,
+                    text = "Old",
+                    richTextSpans = listOf(PageTextSpan(start = 0, end = 3, bold = true)),
+                ),
+            ),
+        )
+
+        val result = useCase.updateBlockText(
+            document = document,
+            blockId = "block-1",
+            text = "New",
+        )
+
+        assertTrue(result.changed)
+        assertEquals("New", result.document.blocks.single().text)
+        assertEquals(
+            listOf(PageTextSpan(start = 0, end = 3, bold = true)),
+            result.document.blocks.single().richTextSpans,
+        )
+    }
+
+    @Test
+    fun addBlockReturnsGeneratedBlockAndUndoCommand() {
+        val document = PageBlockDocument(
+            blocks = listOf(PageBlock(id = "block-1", type = PageBlockType.Text)),
+        )
+
+        val result = useCase.addBlock(document, PageBlockType.Todo)
+        val undo = applyUseCase(result.document, requireNotNull(result.applied.result.undoCommand))
+
+        assertTrue(result.changed)
+        assertEquals(PageBlockType.Todo, result.block.type)
+        assertEquals(listOf("block-1", result.block.id), result.document.blocks.map { it.id })
+        assertEquals(document, undo.document)
+    }
+
+    @Test
+    fun moveBlockReturnsRepositoryTargetIndex() {
+        val document = PageBlockDocument(
+            blocks = listOf(
+                PageBlock(id = "first", type = PageBlockType.Text),
+                PageBlock(id = "second", type = PageBlockType.Text),
+                PageBlock(id = "third", type = PageBlockType.Text),
+            ),
+        )
+
+        val result = useCase.moveBlock(document, blockId = "second", direction = 1)
+
+        assertTrue(result.changed)
+        assertEquals(2, result.targetIndex)
+        assertEquals(listOf("first", "third", "second"), result.document.blocks.map { it.id })
+    }
+
+    @Test
+    fun moveBlockAtBoundaryDoesNotChange() {
+        val document = PageBlockDocument(
+            blocks = listOf(
+                PageBlock(id = "first", type = PageBlockType.Text),
+                PageBlock(id = "second", type = PageBlockType.Text),
+            ),
+        )
+
+        val result = useCase.moveBlock(document, blockId = "first", direction = -1)
+
+        assertFalse(result.changed)
+        assertEquals(null, result.targetIndex)
+        assertEquals(document, result.document)
+    }
+
+    @Test
+    fun propertyMutationsReturnPropertyAndUndoCommand() {
+        val document = PageBlockDocument(
+            properties = listOf(PageProperty(id = "status", name = "Status", type = PagePropertyType.Status)),
+        )
+
+        val addResult = useCase.addProperty(document, type = PagePropertyType.Date, name = "Deadline")
+        val addedProperty = requireNotNull(addResult.property)
+        val renameResult = useCase.updatePropertyName(
+            document = addResult.document,
+            propertyId = addedProperty.id,
+            name = "Due date",
+        )
+        val deleteResult = useCase.deleteProperty(
+            document = renameResult.document,
+            propertyId = addedProperty.id,
+        )
+
+        assertTrue(addResult.changed)
+        assertEquals("Deadline", addedProperty.name)
+        assertTrue(addResult.applied.result.undoCommand is EditorCommand.DeleteProperty)
+        assertEquals("Due date", requireNotNull(renameResult.property).name)
+        assertTrue(renameResult.applied.result.undoCommand is EditorCommand.ReplaceProperty)
+        assertEquals(listOf("status"), deleteResult.document.properties.map { it.id })
+        assertTrue(deleteResult.applied.result.undoCommand is EditorCommand.InsertProperty)
+    }
+}

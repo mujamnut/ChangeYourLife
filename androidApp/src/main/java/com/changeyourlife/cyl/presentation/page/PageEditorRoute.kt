@@ -116,24 +116,18 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -188,6 +182,7 @@ fun PageEditorRoute(
     initialSearchTargetId: String = "",
     onOpenPage: (String, String, String) -> Unit,
     onSendAiMessage: (String, List<String>, AiChatMode, String?) -> Unit,
+    onUndoAiAction: (String, String) -> Unit,
     onHomeAiModeChange: (AiChatMode) -> Unit,
     onClearHomeAiHistory: () -> Unit,
     onCreateHomeChatSession: () -> Unit,
@@ -207,6 +202,7 @@ fun PageEditorRoute(
         onTitleChange = viewModel::updateTitle,
         onBlockTextChange = viewModel::updateBlockText,
         onBlockRichTextChange = viewModel::updateBlockRichText,
+        onBlockTypeChange = viewModel::changeBlockType,
         onBlockMediaAdd = viewModel::addBlockMediaAttachments,
         onBlockMediaRemove = viewModel::removeBlockMediaAttachment,
         onToggleTodo = viewModel::toggleTodoBlock,
@@ -236,6 +232,7 @@ fun PageEditorRoute(
         onDeleteTableRow = viewModel::deleteTableRow,
         onTableRowBlockTextChange = viewModel::updateTableRowBlockText,
         onTableRowBlockRichTextChange = viewModel::updateTableRowBlockRichText,
+        onTableRowBlockTypeChange = viewModel::changeTableRowBlockType,
         onTableRowBlockMediaAdd = viewModel::addTableRowBlockMediaAttachments,
         onTableRowBlockMediaRemove = viewModel::removeTableRowBlockMediaAttachment,
         onToggleTableRowTodoBlock = viewModel::toggleTableRowTodoBlock,
@@ -254,6 +251,7 @@ fun PageEditorRoute(
         onKeepLocalConflict = viewModel::keepLocalConflict,
         onUseRemoteConflict = viewModel::useRemoteConflict,
         onSendAiMessage = onSendAiMessage,
+        onUndoAiAction = onUndoAiAction,
         onHomeAiModeChange = onHomeAiModeChange,
         onClearHomeAiHistory = onClearHomeAiHistory,
         onCreateHomeChatSession = onCreateHomeChatSession,
@@ -274,6 +272,7 @@ private fun PageEditorScreen(
     onTitleChange: (String) -> Unit,
     onBlockTextChange: (String, String) -> Unit,
     onBlockRichTextChange: (String, String, List<PageTextSpan>) -> Unit,
+    onBlockTypeChange: (String, PageBlockType) -> Unit,
     onBlockMediaAdd: (String, List<PageMediaAttachment>) -> Unit,
     onBlockMediaRemove: (String, String) -> Unit,
     onToggleTodo: (String) -> Unit,
@@ -310,6 +309,7 @@ private fun PageEditorScreen(
     onDeleteTableRow: (String, String) -> Unit,
     onTableRowBlockTextChange: (String, String, String, String) -> Unit,
     onTableRowBlockRichTextChange: (String, String, String, String, List<PageTextSpan>) -> Unit,
+    onTableRowBlockTypeChange: (String, String, String, PageBlockType) -> Unit,
     onTableRowBlockMediaAdd: (String, String, String, List<PageMediaAttachment>) -> Unit,
     onTableRowBlockMediaRemove: (String, String, String, String) -> Unit,
     onToggleTableRowTodoBlock: (String, String, String) -> Unit,
@@ -324,6 +324,7 @@ private fun PageEditorScreen(
     onKeepLocalConflict: () -> Unit,
     onUseRemoteConflict: () -> Unit,
     onSendAiMessage: (String, List<String>, AiChatMode, String?) -> Unit,
+    onUndoAiAction: (String, String) -> Unit,
     onHomeAiModeChange: (AiChatMode) -> Unit,
     onClearHomeAiHistory: () -> Unit,
     onCreateHomeChatSession: () -> Unit,
@@ -387,6 +388,7 @@ private fun PageEditorScreen(
                 onSendMessage = { message, mentionedPageIds, mode ->
                     onSendAiMessage(message, mentionedPageIds, mode, uiState.page?.id)
                 },
+                onUndoAction = onUndoAiAction,
                 onClearHistory = onClearHomeAiHistory,
                 onCreateChatSession = onCreateHomeChatSession,
                 onDismissError = onDismissHomeAiError,
@@ -521,6 +523,7 @@ private fun PageEditorScreen(
                             indentLevel = 0,
                             onTextChange = onBlockTextChange,
                             onRichTextChange = onBlockRichTextChange,
+                            onBlockTypeChange = onBlockTypeChange,
                             onMediaAdd = onBlockMediaAdd,
                             onMediaRemove = onBlockMediaRemove,
                             onToggleTodo = onToggleTodo,
@@ -550,6 +553,7 @@ private fun PageEditorScreen(
                             onDeleteTableRow = onDeleteTableRow,
                             onTableRowBlockTextChange = onTableRowBlockTextChange,
                             onTableRowBlockRichTextChange = onTableRowBlockRichTextChange,
+                            onTableRowBlockTypeChange = onTableRowBlockTypeChange,
                             onTableRowBlockMediaAdd = onTableRowBlockMediaAdd,
                             onTableRowBlockMediaRemove = onTableRowBlockMediaRemove,
                             onToggleTableRowTodoBlock = onToggleTableRowTodoBlock,
@@ -1361,6 +1365,7 @@ private fun BlockEditorCard(
     indentLevel: Int = 0,
     onTextChange: (String, String) -> Unit,
     onRichTextChange: (String, String, List<PageTextSpan>) -> Unit,
+    onBlockTypeChange: (String, PageBlockType) -> Unit,
     onMediaAdd: (String, List<PageMediaAttachment>) -> Unit,
     onMediaRemove: (String, String) -> Unit,
     onToggleTodo: (String) -> Unit,
@@ -1397,6 +1402,7 @@ private fun BlockEditorCard(
     onDeleteTableRow: (String, String) -> Unit,
     onTableRowBlockTextChange: (String, String, String, String) -> Unit,
     onTableRowBlockRichTextChange: (String, String, String, String, List<PageTextSpan>) -> Unit,
+    onTableRowBlockTypeChange: (String, String, String, PageBlockType) -> Unit,
     onTableRowBlockMediaAdd: (String, String, String, List<PageMediaAttachment>) -> Unit,
     onTableRowBlockMediaRemove: (String, String, String, String) -> Unit,
     onToggleTableRowTodoBlock: (String, String, String) -> Unit,
@@ -1496,6 +1502,7 @@ private fun BlockEditorCard(
                     onRemoveAttachment = { attachmentId -> onMediaRemove(block.id, attachmentId) },
                     onTextChange = { text -> onTextChange(block.id, text) },
                     onRichTextChange = { text, spans -> onRichTextChange(block.id, text, spans) },
+                    onBlockTypeCommand = { type -> onBlockTypeChange(block.id, type) },
                 )
                 PageBlockType.DatabaseTable -> DatabaseTableBlockEditor(
                     tableBlockId = block.id,
@@ -1541,6 +1548,9 @@ private fun BlockEditorCard(
                     onRowBlockRichTextChange = { rowId, rowBlockId, text, spans ->
                         onTableRowBlockRichTextChange(block.id, rowId, rowBlockId, text, spans)
                     },
+                    onRowBlockTypeChange = { rowId, rowBlockId, type ->
+                        onTableRowBlockTypeChange(block.id, rowId, rowBlockId, type)
+                    },
                     onRowBlockMediaAdd = { rowId, rowBlockId, attachments ->
                         onTableRowBlockMediaAdd(block.id, rowId, rowBlockId, attachments)
                     },
@@ -1564,6 +1574,7 @@ private fun BlockEditorCard(
                     block = block,
                     onTextChange = onTextChange,
                     onRichTextChange = onRichTextChange,
+                    onBlockTypeCommand = onBlockTypeChange,
                     onToggleTodo = onToggleTodo,
                     onFocusBlock = { onBlockFocused(block.id) },
                 )
@@ -1573,6 +1584,7 @@ private fun BlockEditorCard(
                     block = block,
                     onTextChange = onTextChange,
                     onRichTextChange = onRichTextChange,
+                    onBlockTypeCommand = onBlockTypeChange,
                     onFocusBlock = { onBlockFocused(block.id) },
                 )
                 PageBlockType.Quote -> LeadingTextBlockEditor(
@@ -1581,6 +1593,7 @@ private fun BlockEditorCard(
                     block = block,
                     onTextChange = onTextChange,
                     onRichTextChange = onRichTextChange,
+                    onBlockTypeCommand = onBlockTypeChange,
                     fontStyle = FontStyle.Italic,
                     onFocusBlock = { onBlockFocused(block.id) },
                 )
@@ -1591,6 +1604,7 @@ private fun BlockEditorCard(
                     block = block,
                     onTextChange = onTextChange,
                     onRichTextChange = onRichTextChange,
+                    onBlockTypeCommand = onBlockTypeChange,
                     onFocusBlock = { onBlockFocused(block.id) },
                 )
             }
@@ -1604,6 +1618,7 @@ private fun BlockEditorCard(
                                 indentLevel = indentLevel + 1,
                                 onTextChange = onTextChange,
                                 onRichTextChange = onRichTextChange,
+                                onBlockTypeChange = onBlockTypeChange,
                                 onMediaAdd = onMediaAdd,
                                 onMediaRemove = onMediaRemove,
                                 onToggleTodo = onToggleTodo,
@@ -1633,6 +1648,7 @@ private fun BlockEditorCard(
                                 onDeleteTableRow = onDeleteTableRow,
                                 onTableRowBlockTextChange = onTableRowBlockTextChange,
                                 onTableRowBlockRichTextChange = onTableRowBlockRichTextChange,
+                                onTableRowBlockTypeChange = onTableRowBlockTypeChange,
                                 onTableRowBlockMediaAdd = onTableRowBlockMediaAdd,
                                 onTableRowBlockMediaRemove = onTableRowBlockMediaRemove,
                                 onToggleTableRowTodoBlock = onToggleTableRowTodoBlock,
@@ -1656,15 +1672,17 @@ private fun TextBlockEditor(
     block: PageBlock,
     onTextChange: (String, String) -> Unit,
     onRichTextChange: (String, String, List<PageTextSpan>) -> Unit,
+    onBlockTypeCommand: (String, PageBlockType) -> Unit,
     onFocusBlock: () -> Unit = {},
 ) {
-    RichTextBlockEditor(
+    CylRichTextBlockEditor(
         blockId = blockId,
         block = block,
         onTextChange = onTextChange,
         onRichTextChange = onRichTextChange,
         modifier = Modifier.fillMaxWidth(),
         onFocusBlock = onFocusBlock,
+        onBlockTypeCommand = onBlockTypeCommand,
         minLines = if (block.type == PageBlockType.Heading) 1 else 2,
         textStyle = when (block.type) {
             PageBlockType.Heading -> MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.SemiBold)
@@ -1680,6 +1698,7 @@ private fun TodoBlockEditor(
     block: PageBlock,
     onTextChange: (String, String) -> Unit,
     onRichTextChange: (String, String, List<PageTextSpan>) -> Unit,
+    onBlockTypeCommand: (String, PageBlockType) -> Unit,
     onToggleTodo: (String) -> Unit,
     onFocusBlock: () -> Unit = {},
 ) {
@@ -1691,13 +1710,14 @@ private fun TodoBlockEditor(
             checked = block.isChecked,
             onCheckedChange = { onToggleTodo(blockId) },
         )
-        RichTextBlockEditor(
+        CylRichTextBlockEditor(
             blockId = blockId,
             block = block,
             onTextChange = onTextChange,
             onRichTextChange = onRichTextChange,
             modifier = Modifier.weight(1f),
             onFocusBlock = onFocusBlock,
+            onBlockTypeCommand = onBlockTypeCommand,
             singleLine = true,
             placeholder = "Todo item",
         )
@@ -1711,6 +1731,7 @@ private fun LeadingTextBlockEditor(
     block: PageBlock,
     onTextChange: (String, String) -> Unit,
     onRichTextChange: (String, String, List<PageTextSpan>) -> Unit,
+    onBlockTypeCommand: (String, PageBlockType) -> Unit,
     fontStyle: FontStyle? = null,
     onFocusBlock: () -> Unit = {},
 ) {
@@ -1726,155 +1747,19 @@ private fun LeadingTextBlockEditor(
             style = MaterialTheme.typography.titleMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        RichTextBlockEditor(
+        CylRichTextBlockEditor(
             blockId = blockId,
             block = block,
             onTextChange = onTextChange,
             onRichTextChange = onRichTextChange,
             modifier = Modifier.weight(1f),
             onFocusBlock = onFocusBlock,
+            onBlockTypeCommand = onBlockTypeCommand,
             minLines = 2,
             textStyle = MaterialTheme.typography.bodyLarge.copy(
                 fontStyle = fontStyle,
             ),
             placeholder = block.type.placeholder,
-        )
-    }
-}
-
-@Composable
-private fun RichTextBlockEditor(
-    blockId: String,
-    block: PageBlock,
-    onTextChange: (String, String) -> Unit,
-    onRichTextChange: (String, String, List<PageTextSpan>) -> Unit,
-    modifier: Modifier = Modifier,
-    onFocusBlock: () -> Unit = {},
-    minLines: Int = 1,
-    singleLine: Boolean = false,
-    textStyle: TextStyle = MaterialTheme.typography.bodyLarge,
-    placeholder: String,
-) {
-    var fieldValue by remember(block.id) {
-        mutableStateOf(block.toTextFieldValue())
-    }
-
-    LaunchedEffect(block.text, block.richTextSpans) {
-        val normalized = block.richTextSpans.normalizedForText(block.text)
-        if (fieldValue.text != block.text || fieldValue.toPageTextSpans() != normalized) {
-            fieldValue = TextFieldValue(
-                annotatedString = buildRichTextAnnotatedString(block.text, normalized),
-                selection = fieldValue.selection.coerceInText(block.text),
-            )
-        }
-    }
-
-    Column(
-        modifier = modifier,
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        OutlinedTextField(
-            value = fieldValue,
-            onValueChange = { incoming ->
-                val previousSpans = fieldValue.toPageTextSpans()
-                val incomingSpans = incoming.toPageTextSpans()
-                val nextSpans = if (
-                    incoming.text == fieldValue.text ||
-                    incomingSpans.isNotEmpty() ||
-                    previousSpans.isEmpty()
-                ) {
-                    incomingSpans
-                } else {
-                    previousSpans.adjustForTextChange(
-                        oldText = fieldValue.text,
-                        newText = incoming.text,
-                    )
-                }.normalizedForText(incoming.text)
-                val nextValue = TextFieldValue(
-                    annotatedString = buildRichTextAnnotatedString(incoming.text, nextSpans),
-                    selection = incoming.selection.coerceInText(incoming.text),
-                    composition = incoming.composition,
-                )
-                fieldValue = nextValue
-                onRichTextChange(blockId, nextValue.text, nextSpans)
-            },
-            modifier = Modifier
-                .fillMaxWidth()
-                .onFocusChanged { focusState ->
-                    if (focusState.hasFocus) onFocusBlock()
-                },
-            minLines = minLines,
-            singleLine = singleLine,
-            textStyle = textStyle,
-            placeholder = {
-                Text(text = placeholder)
-            },
-            colors = plainBlockTextFieldColors(),
-        )
-    }
-}
-
-@Composable
-private fun RichTextToolbar(
-    value: TextFieldValue,
-    spans: List<PageTextSpan>,
-    onToggle: (RichTextFormat) -> Unit,
-) {
-    val range = value.effectiveFormatRange()
-    val hasRange = range.min != range.max
-    Row(
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        RichTextFormat.entries.forEach { format ->
-            RichTextFormatButton(
-                label = format.label,
-                selected = hasRange && spans.hasFormat(format, range),
-                enabled = hasRange,
-                onClick = { onToggle(format) },
-            )
-        }
-    }
-}
-
-@Composable
-private fun RichTextFormatButton(
-    label: String,
-    selected: Boolean,
-    enabled: Boolean,
-    onClick: () -> Unit,
-) {
-    IconButton(
-        onClick = onClick,
-        enabled = enabled,
-        modifier = Modifier
-            .size(36.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(
-                if (selected) {
-                    MaterialTheme.colorScheme.primaryContainer
-                } else {
-                    MaterialTheme.colorScheme.surfaceContainerHighest
-                },
-            ),
-    ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelLarge.copy(
-                fontWeight = if (label == "B") FontWeight.Bold else FontWeight.SemiBold,
-                fontStyle = if (label == "I") FontStyle.Italic else null,
-                textDecoration = when (label) {
-                    "U" -> TextDecoration.Underline
-                    "S" -> TextDecoration.LineThrough
-                    else -> null
-                },
-            ),
-            color = if (selected) {
-                MaterialTheme.colorScheme.onPrimaryContainer
-            } else {
-                MaterialTheme.colorScheme.onSurfaceVariant
-            },
-            textAlign = TextAlign.Center,
         )
     }
 }
@@ -1886,6 +1771,7 @@ private fun MediaFileBlockEditor(
     onRemoveAttachment: (String) -> Unit,
     onTextChange: (String) -> Unit,
     onRichTextChange: (String, List<PageTextSpan>) -> Unit,
+    onBlockTypeCommand: (PageBlockType) -> Unit,
 ) {
     val context = LocalContext.current
     val filePicker = rememberLauncherForActivityResult(
@@ -1949,12 +1835,13 @@ private fun MediaFileBlockEditor(
             }
         }
 
-        RichTextBlockEditor(
+        CylRichTextBlockEditor(
             blockId = block.id,
             block = block,
             onTextChange = { _, text -> onTextChange(text) },
             onRichTextChange = { _, text, spans -> onRichTextChange(text, spans) },
             modifier = Modifier.fillMaxWidth(),
+            onBlockTypeCommand = { _, type -> onBlockTypeCommand(type) },
             minLines = 1,
             placeholder = "Caption",
         )
@@ -2070,6 +1957,7 @@ private fun DatabaseTableBlockEditor(
     onDeleteRow: (String) -> Unit,
     onRowBlockTextChange: (String, String, String) -> Unit,
     onRowBlockRichTextChange: (String, String, String, List<PageTextSpan>) -> Unit,
+    onRowBlockTypeChange: (String, String, PageBlockType) -> Unit,
     onRowBlockMediaAdd: (String, String, List<PageMediaAttachment>) -> Unit,
     onRowBlockMediaRemove: (String, String, String) -> Unit,
     onToggleRowTodoBlock: (String, String) -> Unit,
@@ -2112,6 +2000,9 @@ private fun DatabaseTableBlockEditor(
             onBlockTextChange = { rowBlockId, text -> onRowBlockTextChange(openRow.id, rowBlockId, text) },
             onBlockRichTextChange = { rowBlockId, text, spans ->
                 onRowBlockRichTextChange(openRow.id, rowBlockId, text, spans)
+            },
+            onBlockTypeChange = { rowBlockId, type ->
+                onRowBlockTypeChange(openRow.id, rowBlockId, type)
             },
             onBlockMediaAdd = { rowBlockId, attachments ->
                 onRowBlockMediaAdd(openRow.id, rowBlockId, attachments)
@@ -4972,6 +4863,7 @@ private fun TableRowPageSheet(
     onAddRow: () -> Unit,
     onBlockTextChange: (String, String) -> Unit,
     onBlockRichTextChange: (String, String, List<PageTextSpan>) -> Unit,
+    onBlockTypeChange: (String, PageBlockType) -> Unit,
     onBlockMediaAdd: (String, List<PageMediaAttachment>) -> Unit,
     onBlockMediaRemove: (String, String) -> Unit,
     onToggleTodo: (String) -> Unit,
@@ -5104,12 +4996,14 @@ private fun TableRowPageSheet(
                                     onRemoveAttachment = { attachmentId -> onBlockMediaRemove(block.id, attachmentId) },
                                     onTextChange = { text -> onBlockTextChange(block.id, text) },
                                     onRichTextChange = { text, spans -> onBlockRichTextChange(block.id, text, spans) },
+                                    onBlockTypeCommand = { type -> onBlockTypeChange(block.id, type) },
                                 )
                                 PageBlockType.Todo -> TodoBlockEditor(
                                     blockId = block.id,
                                     block = block,
                                     onTextChange = { _, text -> onBlockTextChange(block.id, text) },
                                     onRichTextChange = { _, text, spans -> onBlockRichTextChange(block.id, text, spans) },
+                                    onBlockTypeCommand = { _, type -> onBlockTypeChange(block.id, type) },
                                     onToggleTodo = { onToggleTodo(block.id) },
                                 )
                                 PageBlockType.Bullet -> LeadingTextBlockEditor(
@@ -5118,6 +5012,7 @@ private fun TableRowPageSheet(
                                     block = block,
                                     onTextChange = { _, text -> onBlockTextChange(block.id, text) },
                                     onRichTextChange = { _, text, spans -> onBlockRichTextChange(block.id, text, spans) },
+                                    onBlockTypeCommand = { _, type -> onBlockTypeChange(block.id, type) },
                                 )
                                 PageBlockType.Quote -> LeadingTextBlockEditor(
                                     blockId = block.id,
@@ -5125,6 +5020,7 @@ private fun TableRowPageSheet(
                                     block = block,
                                     onTextChange = { _, text -> onBlockTextChange(block.id, text) },
                                     onRichTextChange = { _, text, spans -> onBlockRichTextChange(block.id, text, spans) },
+                                    onBlockTypeCommand = { _, type -> onBlockTypeChange(block.id, type) },
                                     fontStyle = FontStyle.Italic,
                                 )
                                 PageBlockType.DatabaseTable,
@@ -5135,6 +5031,7 @@ private fun TableRowPageSheet(
                                     block = block,
                                     onTextChange = { _, text -> onBlockTextChange(block.id, text) },
                                     onRichTextChange = { _, text, spans -> onBlockRichTextChange(block.id, text, spans) },
+                                    onBlockTypeCommand = { _, type -> onBlockTypeChange(block.id, type) },
                                 )
                             }
                         }
@@ -5728,261 +5625,6 @@ private data class BlockTypeOption(
             BlockTypeOption(PageBlockType.DatabaseTable, "Table"),
         )
     }
-}
-
-private enum class RichTextFormat(
-    val label: String,
-) {
-    Bold("B"),
-    Italic("I"),
-    Underline("U"),
-    Strikethrough("S"),
-}
-
-private data class RichTextFlags(
-    var bold: Boolean = false,
-    var italic: Boolean = false,
-    var underline: Boolean = false,
-    var strikethrough: Boolean = false,
-) {
-    fun isEmpty(): Boolean = !bold && !italic && !underline && !strikethrough
-
-    fun has(format: RichTextFormat): Boolean {
-        return when (format) {
-            RichTextFormat.Bold -> bold
-            RichTextFormat.Italic -> italic
-            RichTextFormat.Underline -> underline
-            RichTextFormat.Strikethrough -> strikethrough
-        }
-    }
-
-    fun set(format: RichTextFormat, value: Boolean) {
-        when (format) {
-            RichTextFormat.Bold -> bold = value
-            RichTextFormat.Italic -> italic = value
-            RichTextFormat.Underline -> underline = value
-            RichTextFormat.Strikethrough -> strikethrough = value
-        }
-    }
-
-    fun sameStyleAs(other: RichTextFlags): Boolean {
-        return bold == other.bold &&
-            italic == other.italic &&
-            underline == other.underline &&
-            strikethrough == other.strikethrough
-    }
-
-    fun toSpan(start: Int, end: Int): PageTextSpan {
-        return PageTextSpan(
-            start = start,
-            end = end,
-            bold = bold,
-            italic = italic,
-            underline = underline,
-            strikethrough = strikethrough,
-        )
-    }
-}
-
-private fun PageBlock.toTextFieldValue(): TextFieldValue {
-    val spans = richTextSpans.normalizedForText(text)
-    return TextFieldValue(
-        annotatedString = buildRichTextAnnotatedString(text, spans),
-        selection = TextRange(text.length),
-    )
-}
-
-private fun buildRichTextAnnotatedString(
-    text: String,
-    spans: List<PageTextSpan>,
-): AnnotatedString {
-    val builder = AnnotatedString.Builder(text)
-    spans.normalizedForText(text).forEach { span ->
-        builder.addStyle(span.toSpanStyle(), span.start, span.end)
-    }
-    return builder.toAnnotatedString()
-}
-
-private fun PageTextSpan.toSpanStyle(): SpanStyle {
-    val textDecorations = buildList {
-        if (underline) add(TextDecoration.Underline)
-        if (strikethrough) add(TextDecoration.LineThrough)
-    }
-    return SpanStyle(
-        fontWeight = if (bold) FontWeight.Bold else null,
-        fontStyle = if (italic) FontStyle.Italic else null,
-        textDecoration = if (textDecorations.isEmpty()) {
-            null
-        } else {
-            TextDecoration.combine(textDecorations)
-        },
-    )
-}
-
-private fun TextFieldValue.toPageTextSpans(): List<PageTextSpan> {
-    return annotatedString.spanStyles.mapNotNull { range ->
-        val style = range.item
-        val span = PageTextSpan(
-            start = range.start,
-            end = range.end,
-            bold = style.fontWeight?.let { weight -> weight.weight >= FontWeight.SemiBold.weight } == true,
-            italic = style.fontStyle == FontStyle.Italic,
-            underline = style.textDecoration?.contains(TextDecoration.Underline) == true,
-            strikethrough = style.textDecoration?.contains(TextDecoration.LineThrough) == true,
-        )
-        if (span.hasAnyStyle()) span else null
-    }.normalizedForText(text)
-}
-
-private fun List<PageTextSpan>.normalizedForText(text: String): List<PageTextSpan> {
-    if (text.isEmpty()) return emptyList()
-    return mapNotNull { span ->
-        val start = span.start.coerceIn(0, text.length)
-        val end = span.end.coerceIn(0, text.length)
-        if (start >= end || !span.hasAnyStyle()) {
-            null
-        } else {
-            span.copy(start = start, end = end)
-        }
-    }.mergeAdjacentTextSpans()
-}
-
-private fun List<PageTextSpan>.mergeAdjacentTextSpans(): List<PageTextSpan> {
-    if (isEmpty()) return emptyList()
-    return sortedWith(compareBy<PageTextSpan> { it.start }.thenBy { it.end })
-        .fold(mutableListOf()) { merged, span ->
-            val last = merged.lastOrNull()
-            if (last != null && last.end >= span.start && last.sameStyleAs(span)) {
-                merged[merged.lastIndex] = last.copy(end = maxOf(last.end, span.end))
-            } else {
-                merged += span
-            }
-            merged
-        }
-}
-
-private fun List<PageTextSpan>.adjustForTextChange(
-    oldText: String,
-    newText: String,
-): List<PageTextSpan> {
-    if (isEmpty() || oldText == newText) return normalizedForText(newText)
-    val prefixLength = oldText.commonPrefixWith(newText).length
-    val suffixLength = oldText
-        .drop(prefixLength)
-        .commonSuffixWith(newText.drop(prefixLength))
-        .length
-    val oldChangeEnd = oldText.length - suffixLength
-    val newChangeEnd = newText.length - suffixLength
-    val delta = newChangeEnd - oldChangeEnd
-
-    return mapNotNull { span ->
-        when {
-            span.end <= prefixLength -> span
-            span.start >= oldChangeEnd -> span.copy(
-                start = span.start + delta,
-                end = span.end + delta,
-            )
-            else -> span.copy(end = (span.end + delta).coerceAtLeast(prefixLength))
-        }
-    }.normalizedForText(newText)
-}
-
-private fun List<PageTextSpan>.toggleFormat(
-    format: RichTextFormat,
-    range: TextRange,
-    textLength: Int,
-): List<PageTextSpan> {
-    val start = range.min.coerceIn(0, textLength)
-    val end = range.max.coerceIn(0, textLength)
-    if (start >= end) return this
-    val flags = toRichTextFlags(textLength)
-    val shouldEnable = (start until end).any { index -> !flags[index].has(format) }
-    for (index in start until end) {
-        flags[index].set(format, shouldEnable)
-    }
-    return flags.toTextSpans()
-}
-
-private fun List<PageTextSpan>.hasFormat(
-    format: RichTextFormat,
-    range: TextRange,
-): Boolean {
-    val flags = toRichTextFlags(range.max)
-    return (range.min until range.max).all { index -> flags[index].has(format) }
-}
-
-private fun List<PageTextSpan>.toRichTextFlags(textLength: Int): MutableList<RichTextFlags> {
-    val flags = MutableList(textLength) { RichTextFlags() }
-    normalizedForText(" ".repeat(textLength)).forEach { span ->
-        for (index in span.start until span.end) {
-            flags[index].bold = flags[index].bold || span.bold
-            flags[index].italic = flags[index].italic || span.italic
-            flags[index].underline = flags[index].underline || span.underline
-            flags[index].strikethrough = flags[index].strikethrough || span.strikethrough
-        }
-    }
-    return flags
-}
-
-private fun List<RichTextFlags>.toTextSpans(): List<PageTextSpan> {
-    val spans = mutableListOf<PageTextSpan>()
-    var spanStart = -1
-    var current = RichTextFlags()
-    forEachIndexed { index, flags ->
-        if (flags.isEmpty()) {
-            if (spanStart != -1) {
-                spans += current.toSpan(spanStart, index)
-                spanStart = -1
-                current = RichTextFlags()
-            }
-        } else if (spanStart == -1) {
-            spanStart = index
-            current = flags.copy()
-        } else if (!current.sameStyleAs(flags)) {
-            spans += current.toSpan(spanStart, index)
-            spanStart = index
-            current = flags.copy()
-        }
-    }
-    if (spanStart != -1) {
-        spans += current.toSpan(spanStart, size)
-    }
-    return spans
-}
-
-private fun PageTextSpan.hasAnyStyle(): Boolean {
-    return bold || italic || underline || strikethrough
-}
-
-private fun PageTextSpan.sameStyleAs(other: PageTextSpan): Boolean {
-    return bold == other.bold &&
-        italic == other.italic &&
-        underline == other.underline &&
-        strikethrough == other.strikethrough
-}
-
-private fun TextFieldValue.effectiveFormatRange(): TextRange {
-    val start = selection.min.coerceIn(0, text.length)
-    val end = selection.max.coerceIn(0, text.length)
-    if (start != end) return TextRange(start, end)
-    if (text.isBlank()) return TextRange(start)
-
-    var wordStart = start
-    while (wordStart > 0 && !text[wordStart - 1].isWhitespace()) {
-        wordStart--
-    }
-    var wordEnd = start
-    while (wordEnd < text.length && !text[wordEnd].isWhitespace()) {
-        wordEnd++
-    }
-    return TextRange(wordStart, wordEnd)
-}
-
-private fun TextRange.coerceInText(text: String): TextRange {
-    return TextRange(
-        start.coerceIn(0, text.length),
-        end.coerceIn(0, text.length),
-    )
 }
 
 private fun Uri.toPageMediaAttachment(context: Context): PageMediaAttachment? {
@@ -6972,6 +6614,7 @@ private fun PageEditorScreenPreview() {
             onTitleChange = {},
             onBlockTextChange = { _, _ -> },
             onBlockRichTextChange = { _, _, _ -> },
+            onBlockTypeChange = { _, _ -> },
             onBlockMediaAdd = { _, _ -> },
             onBlockMediaRemove = { _, _ -> },
             onToggleTodo = {},
@@ -7000,6 +6643,7 @@ private fun PageEditorScreenPreview() {
             onDeleteTableRow = { _, _ -> },
             onTableRowBlockTextChange = { _, _, _, _ -> },
             onTableRowBlockRichTextChange = { _, _, _, _, _ -> },
+            onTableRowBlockTypeChange = { _, _, _, _ -> },
             onTableRowBlockMediaAdd = { _, _, _, _ -> },
             onTableRowBlockMediaRemove = { _, _, _, _ -> },
             onToggleTableRowTodoBlock = { _, _, _ -> },
@@ -7015,6 +6659,7 @@ private fun PageEditorScreenPreview() {
             onKeepLocalConflict = {},
             onUseRemoteConflict = {},
             onSendAiMessage = { _, _, _, _ -> },
+            onUndoAiAction = { _, _ -> },
             onHomeAiModeChange = {},
             onClearHomeAiHistory = {},
             onCreateHomeChatSession = {},

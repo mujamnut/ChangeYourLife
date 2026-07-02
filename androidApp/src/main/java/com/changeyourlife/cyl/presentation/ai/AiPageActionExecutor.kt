@@ -4,6 +4,8 @@ import com.changeyourlife.cyl.domain.model.Page
 import com.changeyourlife.cyl.domain.model.PageBlock
 import com.changeyourlife.cyl.domain.model.PageBlockDocument
 import com.changeyourlife.cyl.domain.model.PageBlockType
+import com.changeyourlife.cyl.domain.model.EditorCommand
+import com.changeyourlife.cyl.domain.model.AiUndoCommandSummary
 import com.changeyourlife.cyl.domain.model.PageMediaAttachment
 import com.changeyourlife.cyl.domain.model.PagePropertyType
 import com.changeyourlife.cyl.domain.model.PageTable
@@ -18,10 +20,12 @@ import com.changeyourlife.cyl.domain.model.PageTableView
 import com.changeyourlife.cyl.domain.model.PageTableViewConfig
 import com.changeyourlife.cyl.domain.model.Reminder
 import com.changeyourlife.cyl.domain.model.TaskItem
+import com.changeyourlife.cyl.domain.model.toAiUndoCommandSummary
 import com.changeyourlife.cyl.domain.repository.ChatAction
 import com.changeyourlife.cyl.domain.repository.PageRepository
 import com.changeyourlife.cyl.domain.repository.ReminderRepository
 import com.changeyourlife.cyl.domain.repository.TaskRepository
+import com.changeyourlife.cyl.domain.usecase.ApplyEditorCommandUseCase
 import com.changeyourlife.cyl.presentation.page.PageBlockCodec
 import com.changeyourlife.cyl.presentation.page.PageModuleTemplates
 import com.changeyourlife.cyl.presentation.page.PageModuleType
@@ -35,6 +39,7 @@ class AiPageActionExecutor @Inject constructor(
     private val pageRepository: PageRepository,
     private val taskRepository: TaskRepository,
     private val reminderRepository: ReminderRepository,
+    private val applyEditorCommandUseCase: ApplyEditorCommandUseCase,
 ) {
     fun supports(action: ChatAction): Boolean {
         return action.type.normalizedActionType() in supportedActions
@@ -56,6 +61,7 @@ class AiPageActionExecutor @Inject constructor(
         val createdPages = mutableListOf<Page>()
         val createdTasks = mutableListOf<TaskItem>()
         val createdReminders = mutableListOf<Reminder>()
+        val undoCommands = mutableListOf<AiUndoCommandSummary>()
 
         for ((actionIndex, action) in actions.withIndex()) {
             val actionType = action.type.normalizedActionType()
@@ -102,7 +108,14 @@ class AiPageActionExecutor @Inject constructor(
                             }
                             directPageChanged = true
                         } else {
-                            workingDocument = workingDocument.copy(blocks = workingDocument.blocks + block)
+                            workingDocument = workingDocument.applyAiEditorCommand(
+                                EditorCommand.InsertBlock(
+                                    block = block,
+                                    index = action.targetIndex?.toAiZeroBasedIndex(),
+                                ),
+                                actionIndex = actionIndex,
+                                undoCommands = undoCommands,
+                            )
                             documentChanged = true
                         }
                         "Added ${block.type.name} block"
@@ -171,7 +184,13 @@ class AiPageActionExecutor @Inject constructor(
 
                     "DELETE_ALL_BLOCKS" -> {
                         val deletedCount = workingDocument.blocks.countNestedBlocks()
-                        workingDocument = workingDocument.copy(blocks = emptyList())
+                        workingDocument = workingDocument.blocks.fold(workingDocument) { currentDocument, block ->
+                            currentDocument.applyAiEditorCommand(
+                                command = EditorCommand.DeleteBlock(block.id),
+                                actionIndex = actionIndex,
+                                undoCommands = undoCommands,
+                            )
+                        }
                         documentChanged = deletedCount > 0
                         if (deletedCount > 0) {
                             "Deleted all blocks"
@@ -191,7 +210,7 @@ class AiPageActionExecutor @Inject constructor(
                             directPageChanged = true
                             "Deleted block"
                         } else {
-                            val deleteResult = workingDocument.deleteMatchingBlock(action)
+                            val deleteResult = workingDocument.deleteMatchingBlock(action, actionIndex, undoCommands)
                             workingDocument = deleteResult.document
                             documentChanged = true
                             "Deleted block: ${deleteResult.label}"
@@ -218,7 +237,7 @@ class AiPageActionExecutor @Inject constructor(
                             directPageChanged = true
                             "Updated block"
                         } else {
-                            val updateResult = workingDocument.updateMatchingBlock(action)
+                            val updateResult = workingDocument.updateMatchingBlock(action, actionIndex, undoCommands)
                             workingDocument = updateResult.document
                             documentChanged = true
                             "Updated block: ${updateResult.label}"
@@ -238,7 +257,14 @@ class AiPageActionExecutor @Inject constructor(
                             }
                             directPageChanged = true
                         } else {
-                            workingDocument = workingDocument.copy(blocks = workingDocument.blocks + tableBlock)
+                            workingDocument = workingDocument.applyAiEditorCommand(
+                                EditorCommand.InsertBlock(
+                                    block = tableBlock,
+                                    index = action.targetIndex?.toAiZeroBasedIndex(),
+                                ),
+                                actionIndex = actionIndex,
+                                undoCommands = undoCommands,
+                            )
                             documentChanged = true
                         }
                         "Created database: ${tableBlock.table.title}"
@@ -250,7 +276,7 @@ class AiPageActionExecutor @Inject constructor(
                             .ifBlank { action.content }
                             .ifBlank { action.newColumnName }
                             .ifBlank { error("Missing new table title") }
-                        val update = workingDocument.updateMatchingTable(action) { block ->
+                        val update = workingDocument.updateMatchingTable(action, actionIndex, undoCommands) { block ->
                             block.copy(table = block.table.copy(title = newTitle))
                         }
                         workingDocument = update.document
@@ -297,7 +323,7 @@ class AiPageActionExecutor @Inject constructor(
                             directPageChanged = true
                             "Added column $columnName to ${targetTable.table.title}"
                         } else {
-                            val update = workingDocument.updateMatchingTable(resolvedAction) { block ->
+                            val update = workingDocument.updateMatchingTable(resolvedAction, actionIndex, undoCommands) { block ->
                                 val column = PageBlockCodec.newTableColumn(columnName, columnType)
                                     .withActionConfig(
                                         action = resolvedAction,
@@ -344,7 +370,7 @@ class AiPageActionExecutor @Inject constructor(
                             directPageChanged = true
                             "Deleted column ${targetColumn.name} from ${targetTable.table.title}"
                         } else {
-                            val update = workingDocument.updateMatchingTable(action) { block ->
+                            val update = workingDocument.updateMatchingTable(action, actionIndex, undoCommands) { block ->
                                 block.deleteTableColumn(action.columnId, columnName)
                             }
                             workingDocument = update.document
@@ -359,7 +385,7 @@ class AiPageActionExecutor @Inject constructor(
                             .ifBlank { action.value }
                             .ifBlank { action.content }
                             .ifBlank { error("Missing new column name") }
-                        val update = workingDocument.updateMatchingTable(action) { block ->
+                        val update = workingDocument.updateMatchingTable(action, actionIndex, undoCommands) { block ->
                             block.renameTableColumn(action.columnId, columnName, newColumnName)
                         }
                         workingDocument = update.document
@@ -375,7 +401,7 @@ class AiPageActionExecutor @Inject constructor(
                             .ifBlank { action.content }
                             .ifBlank { error("Missing column type") }
                             .toPageTableColumnType()
-                        val update = workingDocument.updateMatchingTable(resolvedAction) { block ->
+                        val update = workingDocument.updateMatchingTable(resolvedAction, actionIndex, undoCommands) { block ->
                             block.updateTableColumnType(resolvedAction.columnId, columnName, columnType, resolvedAction, workingDocument)
                         }
                         workingDocument = update.document
@@ -389,7 +415,7 @@ class AiPageActionExecutor @Inject constructor(
                         val columnName = resolvedAction.columnName
                             .ifBlank { resolvedAction.propertyName }
                             .ifBlank { resolvedAction.title }
-                        val update = workingDocument.updateMatchingTable(resolvedAction) { block ->
+                        val update = workingDocument.updateMatchingTable(resolvedAction, actionIndex, undoCommands) { block ->
                             block.configureTableColumn(
                                 columnId = resolvedAction.columnId,
                                 columnName = columnName,
@@ -423,7 +449,7 @@ class AiPageActionExecutor @Inject constructor(
                             directPageChanged = true
                             "Moved column in ${targetTable.table.title}"
                         } else {
-                            val update = workingDocument.updateMatchingTable(action) { block ->
+                            val update = workingDocument.updateMatchingTable(action, actionIndex, undoCommands) { block ->
                                 block.reorderTableColumn(
                                     columnId = action.columnId,
                                     columnName = columnName,
@@ -463,7 +489,7 @@ class AiPageActionExecutor @Inject constructor(
                                 directPageChanged = true
                                 "Added row to ${targetTable.table.title}"
                             } else {
-                                val update = workingDocument.updateMatchingTable(action) { block ->
+                                val update = workingDocument.updateMatchingTable(action, actionIndex, undoCommands) { block ->
                                     block.copy(table = block.table.copy(rows = block.table.rows + block.table.newRowFromAction(action)))
                                 }
                                 workingDocument = update.document
@@ -492,7 +518,7 @@ class AiPageActionExecutor @Inject constructor(
                             directPageChanged = true
                             "Deleted row ${rowTitle.ifBlank { targetRow.id }} from ${targetTable.table.title}"
                         } else {
-                            val update = workingDocument.updateMatchingTable(action) { block ->
+                            val update = workingDocument.updateMatchingTable(action, actionIndex, undoCommands) { block ->
                                 block.deleteTableRow(action.rowId, rowTitle)
                             }
                             workingDocument = update.document
@@ -504,7 +530,7 @@ class AiPageActionExecutor @Inject constructor(
                     "UPDATE_TABLE_ROW", "RENAME_TABLE_ROW" -> {
                         val rowTitle = action.rowTitle.ifBlank { action.title }
                         val newRowTitle = action.newRowTitle.ifBlank { action.value }.ifBlank { action.content }
-                        val update = workingDocument.updateMatchingTable(action) { block ->
+                        val update = workingDocument.updateMatchingTable(action, actionIndex, undoCommands) { block ->
                             block.updateTableRow(action.rowId, rowTitle, newRowTitle, action.cellValues)
                         }
                         workingDocument = update.document
@@ -533,7 +559,7 @@ class AiPageActionExecutor @Inject constructor(
                             directPageChanged = true
                             "Moved row in ${targetTable.table.title}"
                         } else {
-                            val update = workingDocument.updateMatchingTable(action) { block ->
+                            val update = workingDocument.updateMatchingTable(action, actionIndex, undoCommands) { block ->
                                 block.reorderTableRow(
                                     rowId = action.rowId,
                                     rowTitle = rowTitle,
@@ -550,7 +576,7 @@ class AiPageActionExecutor @Inject constructor(
                         val rowTitle = action.rowTitle.ifBlank { action.targetTitle }.ifBlank { action.title }
                         if (rowTitle.isBlank() && action.rowId.isBlank()) error("Missing row target")
                         val rowBlock = action.toPageBlock()
-                        val update = workingDocument.updateMatchingTable(action) { block ->
+                        val update = workingDocument.updateMatchingTable(action, actionIndex, undoCommands) { block ->
                             block.addRowPageBlock(
                                 rowId = action.rowId,
                                 rowTitle = rowTitle,
@@ -566,7 +592,7 @@ class AiPageActionExecutor @Inject constructor(
                     "CHECK_ROW_PAGE_BLOCK", "UNCHECK_ROW_PAGE_BLOCK" -> {
                         val rowTitle = action.rowTitle.ifBlank { action.targetTitle }.ifBlank { action.title }
                         if (rowTitle.isBlank() && action.rowId.isBlank()) error("Missing row target")
-                        val update = workingDocument.updateMatchingTable(action) { block ->
+                        val update = workingDocument.updateMatchingTable(action, actionIndex, undoCommands) { block ->
                             block.updateRowPageBlock(
                                 rowId = action.rowId,
                                 rowTitle = rowTitle,
@@ -582,7 +608,7 @@ class AiPageActionExecutor @Inject constructor(
                     "DELETE_ROW_PAGE_BLOCK", "DELETE_TABLE_ROW_BLOCK" -> {
                         val rowTitle = action.rowTitle.ifBlank { action.targetTitle }.ifBlank { action.title }
                         if (rowTitle.isBlank() && action.rowId.isBlank()) error("Missing row target")
-                        val update = workingDocument.updateMatchingTable(action) { block ->
+                        val update = workingDocument.updateMatchingTable(action, actionIndex, undoCommands) { block ->
                             block.deleteRowPageBlock(
                                 rowId = action.rowId,
                                 rowTitle = rowTitle,
@@ -613,7 +639,7 @@ class AiPageActionExecutor @Inject constructor(
                             directPageChanged = true
                             "Updated ${columnName.ifBlank { action.columnId }} for ${rowTitle.ifBlank { action.rowId }}"
                         } else {
-                            val update = workingDocument.updateMatchingTable(action) { block ->
+                            val update = workingDocument.updateMatchingTable(action, actionIndex, undoCommands) { block ->
                                 block.updateCellByNames(
                                     rowId = action.rowId,
                                     rowTitle = rowTitle,
@@ -630,7 +656,7 @@ class AiPageActionExecutor @Inject constructor(
 
                     "CHANGE_TABLE_VIEW", "SET_TABLE_VIEW" -> {
                         val view = action.tableView.ifBlank { action.value }.ifBlank { action.content }.toPageTableView()
-                        val update = workingDocument.updateMatchingTable(action) { block ->
+                        val update = workingDocument.updateMatchingTable(action, actionIndex, undoCommands) { block ->
                             block.copy(table = block.table.copy(view = view))
                         }
                         workingDocument = update.document
@@ -639,7 +665,7 @@ class AiPageActionExecutor @Inject constructor(
                     }
 
                     "SET_TABLE_VIEW_CONFIG", "CONFIGURE_TABLE_VIEW", "UPDATE_TABLE_VIEW_CONFIG" -> {
-                        val update = workingDocument.updateMatchingTable(action) { block ->
+                        val update = workingDocument.updateMatchingTable(action, actionIndex, undoCommands) { block ->
                             block.copy(table = block.table.copy(viewConfig = action.toTableViewConfig(block.table)))
                         }
                         workingDocument = update.document
@@ -650,7 +676,7 @@ class AiPageActionExecutor @Inject constructor(
                     "SORT_TABLE", "SET_TABLE_SORT" -> {
                         val columnName = action.columnName.ifBlank { action.propertyName }.ifBlank { action.title }
                         val direction = action.sortDirection.ifBlank { action.value }.ifBlank { action.content }.toPageTableSortDirection()
-                        val update = workingDocument.updateMatchingTable(action) { block ->
+                        val update = workingDocument.updateMatchingTable(action, actionIndex, undoCommands) { block ->
                             block.sortTable(action.columnId, columnName, direction)
                         }
                         workingDocument = update.document
@@ -659,7 +685,7 @@ class AiPageActionExecutor @Inject constructor(
                     }
 
                     "CLEAR_TABLE_SORT" -> {
-                        val update = workingDocument.updateMatchingTable(action) { block ->
+                        val update = workingDocument.updateMatchingTable(action, actionIndex, undoCommands) { block ->
                             block.copy(table = block.table.copy(sort = PageTableSort()))
                         }
                         workingDocument = update.document
@@ -670,7 +696,7 @@ class AiPageActionExecutor @Inject constructor(
                     "FILTER_TABLE", "SET_TABLE_FILTER" -> {
                         val columnName = action.columnName.ifBlank { action.propertyName }.ifBlank { action.title }
                         val query = action.filterQuery.ifBlank { action.value }.ifBlank { action.content }.ifBlank { error("Missing filter query") }
-                        val update = workingDocument.updateMatchingTable(action) { block ->
+                        val update = workingDocument.updateMatchingTable(action, actionIndex, undoCommands) { block ->
                             block.filterTable(action.columnId, columnName, query)
                         }
                         workingDocument = update.document
@@ -679,7 +705,7 @@ class AiPageActionExecutor @Inject constructor(
                     }
 
                     "CLEAR_TABLE_FILTER" -> {
-                        val update = workingDocument.updateMatchingTable(action) { block ->
+                        val update = workingDocument.updateMatchingTable(action, actionIndex, undoCommands) { block ->
                             block.copy(table = block.table.copy(filter = PageTableFilter()))
                         }
                         workingDocument = update.document
@@ -690,7 +716,7 @@ class AiPageActionExecutor @Inject constructor(
                     "GROUP_TABLE", "SET_TABLE_GROUP" -> {
                         val columnId = action.groupByColumnId.ifBlank { action.columnId }
                         val columnName = action.groupByColumnName.ifBlank { action.columnName }.ifBlank { action.propertyName }.ifBlank { action.title }
-                        val update = workingDocument.updateMatchingTable(action) { block ->
+                        val update = workingDocument.updateMatchingTable(action, actionIndex, undoCommands) { block ->
                             block.groupTable(columnId, columnName)
                         }
                         workingDocument = update.document
@@ -699,7 +725,7 @@ class AiPageActionExecutor @Inject constructor(
                     }
 
                     "CLEAR_TABLE_GROUP" -> {
-                        val update = workingDocument.updateMatchingTable(action) { block ->
+                        val update = workingDocument.updateMatchingTable(action, actionIndex, undoCommands) { block ->
                             block.copy(table = block.table.copy(groupByColumnId = ""))
                         }
                         workingDocument = update.document
@@ -776,6 +802,124 @@ class AiPageActionExecutor @Inject constructor(
             createdReminders = createdReminders,
             pageLinks = pageLinks,
             validationIssues = validationIssues,
+            undoCommands = undoCommands,
+        )
+    }
+
+    private fun PageBlockDocument.applyAiEditorCommand(
+        command: EditorCommand,
+        actionIndex: Int,
+        undoCommands: MutableList<AiUndoCommandSummary>,
+    ): PageBlockDocument {
+        val applied = applyEditorCommandUseCase(this, command)
+        if (applied.changed) {
+            applied.result.undoCommand
+                ?.toAiUndoCommandSummary(actionIndex)
+                ?.let(undoCommands::add)
+        }
+        return applied.document
+    }
+
+    private fun PageBlockDocument.deleteMatchingBlock(
+        action: ChatAction,
+        actionIndex: Int,
+        undoCommands: MutableList<AiUndoCommandSummary>,
+    ): DocumentBlockMutationResult {
+        val target = blocks.findMatchingBlock(action)
+            ?: error("Could not find block to delete")
+        return DocumentBlockMutationResult(
+            document = applyAiEditorCommand(
+                command = EditorCommand.DeleteBlock(target.id),
+                actionIndex = actionIndex,
+                undoCommands = undoCommands,
+            ),
+            label = target.blockLabel(),
+        )
+    }
+
+    private fun PageBlockDocument.updateMatchingBlock(
+        action: ChatAction,
+        actionIndex: Int,
+        undoCommands: MutableList<AiUndoCommandSummary>,
+    ): DocumentBlockMutationResult {
+        val target = blocks.findMatchingBlock(action)
+            ?: error("Could not find block to update")
+        val updatedBlock = target.withActionUpdate(action)
+        var updatedDocument = this
+
+        if (target.type != updatedBlock.type) {
+            updatedDocument = updatedDocument.applyAiEditorCommand(
+                EditorCommand.ChangeBlockType(
+                    blockId = target.id,
+                    type = updatedBlock.type,
+                ),
+                actionIndex = actionIndex,
+                undoCommands = undoCommands,
+            )
+        }
+        if (updatedBlock.type == PageBlockType.DatabaseTable) {
+            if (target.table != updatedBlock.table) {
+                updatedDocument = updatedDocument.applyAiEditorCommand(
+                    EditorCommand.ReplaceTable(
+                        blockId = target.id,
+                        table = updatedBlock.table,
+                    ),
+                    actionIndex = actionIndex,
+                    undoCommands = undoCommands,
+                )
+            }
+        } else if (target.text != updatedBlock.text || target.richTextSpans != updatedBlock.richTextSpans) {
+            updatedDocument = updatedDocument.applyAiEditorCommand(
+                EditorCommand.UpdateBlockText(
+                    blockId = target.id,
+                    text = updatedBlock.text,
+                    richTextSpans = updatedBlock.richTextSpans,
+                ),
+                actionIndex = actionIndex,
+                undoCommands = undoCommands,
+            )
+        }
+        if (target.isChecked != updatedBlock.isChecked) {
+            updatedDocument = updatedDocument.applyAiEditorCommand(
+                EditorCommand.ToggleTodo(
+                    blockId = target.id,
+                    isChecked = updatedBlock.isChecked,
+                ),
+                actionIndex = actionIndex,
+                undoCommands = undoCommands,
+            )
+        }
+
+        return DocumentBlockMutationResult(
+            document = updatedDocument,
+            label = target.blockLabel(),
+        )
+    }
+
+    private fun PageBlockDocument.updateMatchingTable(
+        action: ChatAction,
+        actionIndex: Int,
+        undoCommands: MutableList<AiUndoCommandSummary>,
+        transform: (PageBlock) -> PageBlock,
+    ): DocumentTableUpdateResult {
+        val target = blocks.findMatchingTable(action)
+            ?: error("Could not find table: ${action.tableTitle.ifBlank { action.blockId.ifBlank { "first table" } }}")
+        val updatedBlock = transform(target)
+        val updatedDocument = if (target.table == updatedBlock.table) {
+            this
+        } else {
+            applyAiEditorCommand(
+                EditorCommand.ReplaceTable(
+                    blockId = target.id,
+                    table = updatedBlock.table,
+                ),
+                actionIndex = actionIndex,
+                undoCommands = undoCommands,
+            )
+        }
+        return DocumentTableUpdateResult(
+            document = updatedDocument,
+            tableTitle = updatedBlock.table.title,
         )
     }
 
@@ -870,6 +1014,7 @@ data class AiPageActionExecutionResult(
     val createdReminders: List<Reminder> = emptyList(),
     val pageLinks: List<AiChatPageLink> = emptyList(),
     val validationIssues: List<AiPageActionValidationIssue> = emptyList(),
+    val undoCommands: List<AiUndoCommandSummary> = emptyList(),
 )
 
 data class AiPageActionValidationIssue(
@@ -1639,6 +1784,14 @@ private fun List<PageBlock>.anyMatchingBlock(action: ChatAction): Boolean {
     return any { block ->
         block.matchesBlockAction(action) || block.children.anyMatchingBlock(action)
     }
+}
+
+private fun List<PageBlock>.findMatchingBlock(action: ChatAction): PageBlock? {
+    for (block in this) {
+        if (block.matchesBlockAction(action)) return block
+        block.children.findMatchingBlock(action)?.let { return it }
+    }
+    return null
 }
 
 private fun List<PageBlock>.deleteMatchingBlock(action: ChatAction): BlockMutationResult {

@@ -3,6 +3,8 @@ package com.changeyourlife.cyl.data.repository
 import com.changeyourlife.cyl.data.local.dao.ChatMessageDao
 import com.changeyourlife.cyl.data.local.entity.ChatMessageEntity
 import com.changeyourlife.cyl.data.local.entity.ChatSessionEntity
+import com.changeyourlife.cyl.data.local.entity.SyncStatus
+import com.changeyourlife.cyl.data.sync.ChatSyncScheduler
 import com.changeyourlife.cyl.domain.model.ChatActionMetadata
 import com.changeyourlife.cyl.domain.model.ChatActionMetadataItem
 import com.changeyourlife.cyl.domain.model.ChatActionValidationMetadata
@@ -19,6 +21,7 @@ import kotlinx.serialization.json.Json
 
 class ChatHistoryRepositoryImpl @Inject constructor(
     private val chatMessageDao: ChatMessageDao,
+    private val chatSyncScheduler: ChatSyncScheduler,
 ) : ChatHistoryRepository {
     private val json = Json {
         ignoreUnknownKeys = true
@@ -58,6 +61,7 @@ class ChatHistoryRepositoryImpl @Inject constructor(
             updatedAt = now,
         )
         chatMessageDao.upsertSession(session.toEntity())
+        chatSyncScheduler.pushSession(session.id)
         return session
     }
 
@@ -88,6 +92,7 @@ class ChatHistoryRepositoryImpl @Inject constructor(
             session.copy(
                 title = updatedTitle,
                 updatedAt = now,
+                syncStatus = SyncStatus.PendingPush,
             ),
         )
         val message = ChatMessage(
@@ -100,6 +105,8 @@ class ChatHistoryRepositoryImpl @Inject constructor(
             createdAt = now,
         )
         chatMessageDao.upsertMessage(message.toEntity(json))
+        chatSyncScheduler.pushSession(session.id)
+        chatSyncScheduler.pushMessage(message.id)
         return message
     }
 
@@ -112,6 +119,7 @@ class ChatHistoryRepositoryImpl @Inject constructor(
             sessionId = sessionId,
             deletedAt = System.currentTimeMillis(),
         )
+        chatSyncScheduler.pushSession(sessionId)
     }
 
     override suspend fun deleteEmptySessions(scopeId: String) {
@@ -119,6 +127,7 @@ class ChatHistoryRepositoryImpl @Inject constructor(
             scopeId = scopeId,
             deletedAt = System.currentTimeMillis(),
         )
+        chatSyncScheduler.pushPending()
     }
 }
 
@@ -173,6 +182,7 @@ private fun ChatMessage.toEntity(json: Json): ChatMessageEntity {
             json.encodeToString(metadata.toDto())
         }.orEmpty(),
         createdAt = createdAt,
+        updatedAt = createdAt,
     )
 }
 
@@ -186,6 +196,11 @@ private data class ChatPageLinkDto(
 
 @Serializable
 private data class ChatActionMetadataDto(
+    val auditId: String = "",
+    val requestMessageId: String = "",
+    val executedAt: Long = 0L,
+    val provider: String = "",
+    val model: String = "",
     val mode: String = "",
     val schemaName: String = "",
     val schemaVersion: Int = 1,
@@ -199,6 +214,7 @@ private data class ChatActionMetadataDto(
 private data class ChatActionMetadataItemDto(
     val type: String = "",
     val target: String = "",
+    val actionIndex: Int? = null,
 )
 
 @Serializable
@@ -229,6 +245,11 @@ private fun ChatPageLink.toDto(): ChatPageLinkDto {
 
 private fun ChatActionMetadataDto.toDomain(): ChatActionMetadata {
     return ChatActionMetadata(
+        auditId = auditId,
+        requestMessageId = requestMessageId,
+        executedAt = executedAt,
+        provider = provider,
+        model = model,
         mode = mode,
         schemaName = schemaName,
         schemaVersion = schemaVersion,
@@ -241,6 +262,11 @@ private fun ChatActionMetadataDto.toDomain(): ChatActionMetadata {
 
 private fun ChatActionMetadata.toDto(): ChatActionMetadataDto {
     return ChatActionMetadataDto(
+        auditId = auditId,
+        requestMessageId = requestMessageId,
+        executedAt = executedAt,
+        provider = provider,
+        model = model,
         mode = mode,
         schemaName = schemaName,
         schemaVersion = schemaVersion,
@@ -255,6 +281,7 @@ private fun ChatActionMetadataItemDto.toDomain(): ChatActionMetadataItem {
     return ChatActionMetadataItem(
         type = type,
         target = target,
+        actionIndex = actionIndex,
     )
 }
 
@@ -262,6 +289,7 @@ private fun ChatActionMetadataItem.toDto(): ChatActionMetadataItemDto {
     return ChatActionMetadataItemDto(
         type = type,
         target = target,
+        actionIndex = actionIndex,
     )
 }
 

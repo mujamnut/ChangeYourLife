@@ -9,6 +9,12 @@ import com.changeyourlife.cyl.backend.model.ai.ChatMessage
 import com.changeyourlife.cyl.backend.model.ai.ChatWithActionsResponse
 import com.changeyourlife.cyl.backend.model.auth.AuthResponse
 import com.changeyourlife.cyl.backend.model.auth.ForgotPasswordResponse
+import com.changeyourlife.cyl.backend.model.sync.AiActionLogListResponse
+import com.changeyourlife.cyl.backend.model.sync.AiActionLogSyncDto
+import com.changeyourlife.cyl.backend.model.sync.ChatMessageListResponse
+import com.changeyourlife.cyl.backend.model.sync.ChatMessageSyncDto
+import com.changeyourlife.cyl.backend.model.sync.ChatSessionListResponse
+import com.changeyourlife.cyl.backend.model.sync.ChatSessionSyncDto
 import com.changeyourlife.cyl.backend.model.sync.PageBlockCreateRequest
 import com.changeyourlife.cyl.backend.model.sync.PageBlockPatchRequest
 import com.changeyourlife.cyl.backend.model.sync.PageElementPositionPatchRequest
@@ -370,6 +376,169 @@ class ApplicationTest {
             header(HttpHeaders.Authorization, authHeader)
         }
         assertEquals(HttpStatusCode.NoContent, restoreResponse.status)
+    }
+
+    @Test
+    fun authenticatedAiActionLogSyncRoundTripIsUserScoped() = testApplication {
+        application {
+            module(appConfig = inMemoryTestConfig())
+        }
+
+        val firstUserAuth = registerAndReturnAuthHeader(
+            email = "ai-log-owner-a@example.com",
+            password = "sync-password",
+        )
+        val secondUserAuth = registerAndReturnAuthHeader(
+            email = "ai-log-owner-b@example.com",
+            password = "sync-password",
+        )
+
+        val actionLog = AiActionLogSyncDto(
+            auditId = "audit-sync-1",
+            requestMessageId = "request-1",
+            responseMessageId = "response-1",
+            sessionId = "session-1",
+            workspaceId = "workspace-sync",
+            mode = "Edit",
+            provider = "openrouter",
+            model = "openai/gpt-oss-20b:free",
+            schemaName = "CYL_ACTION_SCHEMA",
+            schemaVersion = 2,
+            proposedActionsJson = """[{"type":"ADD_TABLE_ROW"}]""",
+            executedActionsJson = """[{"type":"ADD_TABLE_ROW"}]""",
+            validationIssuesJson = "[]",
+            executionMessagesJson = """["Done"]""",
+            undoCommandsJson = """[{"commandType":"DeleteBlock"}]""",
+            undoState = "Available",
+            createdAt = 1000L,
+            updatedAt = 1000L,
+        )
+
+        val upsertResponse = client.put("/api/v1/ai-action-logs/${actionLog.auditId}") {
+            header(HttpHeaders.Authorization, firstUserAuth)
+            contentType(ContentType.Application.Json)
+            setBody(Json.encodeToString(actionLog))
+        }
+        assertEquals(HttpStatusCode.OK, upsertResponse.status)
+
+        val ownerListResponse = client.get("/api/v1/ai-action-logs?workspaceId=${actionLog.workspaceId}") {
+            header(HttpHeaders.Authorization, firstUserAuth)
+        }
+        assertEquals(HttpStatusCode.OK, ownerListResponse.status)
+        val ownerList = Json.decodeFromString<AiActionLogListResponse>(ownerListResponse.bodyAsText())
+        assertEquals(listOf(actionLog.auditId), ownerList.actionLogs.map { it.auditId })
+        assertEquals("Available", ownerList.actionLogs.single().undoState)
+
+        val otherUserListResponse = client.get("/api/v1/ai-action-logs?workspaceId=${actionLog.workspaceId}") {
+            header(HttpHeaders.Authorization, secondUserAuth)
+        }
+        assertEquals(HttpStatusCode.OK, otherUserListResponse.status)
+        val otherUserList = Json.decodeFromString<AiActionLogListResponse>(otherUserListResponse.bodyAsText())
+        assertTrue(otherUserList.actionLogs.isEmpty())
+
+        val updatedLog = actionLog.copy(undoState = "Applied", updatedAt = 2000L)
+        val updateResponse = client.put("/api/v1/ai-action-logs/${actionLog.auditId}") {
+            header(HttpHeaders.Authorization, firstUserAuth)
+            contentType(ContentType.Application.Json)
+            setBody(Json.encodeToString(updatedLog))
+        }
+        assertEquals(HttpStatusCode.OK, updateResponse.status)
+
+        val updatedListResponse = client.get("/api/v1/ai-action-logs?workspaceId=${actionLog.workspaceId}&updatedAfter=1500") {
+            header(HttpHeaders.Authorization, firstUserAuth)
+        }
+        val updatedList = Json.decodeFromString<AiActionLogListResponse>(updatedListResponse.bodyAsText())
+        assertEquals(listOf("Applied"), updatedList.actionLogs.map { it.undoState })
+    }
+
+    @Test
+    fun authenticatedChatHistorySyncRoundTripIsUserScoped() = testApplication {
+        application {
+            module(appConfig = inMemoryTestConfig())
+        }
+
+        val firstUserAuth = registerAndReturnAuthHeader(
+            email = "chat-sync-owner-a@example.com",
+            password = "sync-password",
+        )
+        val secondUserAuth = registerAndReturnAuthHeader(
+            email = "chat-sync-owner-b@example.com",
+            password = "sync-password",
+        )
+
+        val session = ChatSessionSyncDto(
+            id = "session-sync-1",
+            scopeId = "home:workspace-sync",
+            title = "Budget chat",
+            createdAt = 1000L,
+            updatedAt = 1000L,
+        )
+        val upsertSessionResponse = client.put("/api/v1/chat-sessions/${session.id}") {
+            header(HttpHeaders.Authorization, firstUserAuth)
+            contentType(ContentType.Application.Json)
+            setBody(Json.encodeToString(session))
+        }
+        assertEquals(HttpStatusCode.OK, upsertSessionResponse.status)
+
+        val message = ChatMessageSyncDto(
+            id = "message-sync-1",
+            sessionId = session.id,
+            scopeId = session.scopeId,
+            role = "user",
+            content = "buat budget bulan 7",
+            pageLinksJson = "[]",
+            actionMetadataJson = "",
+            createdAt = 1100L,
+            updatedAt = 1100L,
+        )
+        val upsertMessageResponse = client.put("/api/v1/chat-messages/${message.id}") {
+            header(HttpHeaders.Authorization, firstUserAuth)
+            contentType(ContentType.Application.Json)
+            setBody(Json.encodeToString(message))
+        }
+        assertEquals(HttpStatusCode.OK, upsertMessageResponse.status)
+
+        val ownerSessionListResponse = client.get("/api/v1/chat-sessions?scopeId=${session.scopeId}") {
+            header(HttpHeaders.Authorization, firstUserAuth)
+        }
+        assertEquals(HttpStatusCode.OK, ownerSessionListResponse.status)
+        val ownerSessions = Json.decodeFromString<ChatSessionListResponse>(ownerSessionListResponse.bodyAsText())
+        assertEquals(listOf(session.id), ownerSessions.sessions.map { it.id })
+
+        val ownerMessageListResponse = client.get("/api/v1/chat-sessions/${session.id}/messages") {
+            header(HttpHeaders.Authorization, firstUserAuth)
+        }
+        assertEquals(HttpStatusCode.OK, ownerMessageListResponse.status)
+        val ownerMessages = Json.decodeFromString<ChatMessageListResponse>(ownerMessageListResponse.bodyAsText())
+        assertEquals(listOf("buat budget bulan 7"), ownerMessages.messages.map { it.content })
+
+        val otherUserSessionListResponse = client.get("/api/v1/chat-sessions?scopeId=${session.scopeId}") {
+            header(HttpHeaders.Authorization, secondUserAuth)
+        }
+        assertEquals(HttpStatusCode.OK, otherUserSessionListResponse.status)
+        val otherUserSessions = Json.decodeFromString<ChatSessionListResponse>(otherUserSessionListResponse.bodyAsText())
+        assertTrue(otherUserSessions.sessions.isEmpty())
+
+        val otherUserCannotUpsertMessage = client.put("/api/v1/chat-messages/message-sync-2") {
+            header(HttpHeaders.Authorization, secondUserAuth)
+            contentType(ContentType.Application.Json)
+            setBody(Json.encodeToString(message.copy(id = "message-sync-2")))
+        }
+        assertEquals(HttpStatusCode.Forbidden, otherUserCannotUpsertMessage.status)
+
+        val deletedSession = session.copy(deletedAt = 2000L, updatedAt = 2000L)
+        val deleteSessionResponse = client.put("/api/v1/chat-sessions/${session.id}") {
+            header(HttpHeaders.Authorization, firstUserAuth)
+            contentType(ContentType.Application.Json)
+            setBody(Json.encodeToString(deletedSession))
+        }
+        assertEquals(HttpStatusCode.OK, deleteSessionResponse.status)
+
+        val updatedSessionListResponse = client.get("/api/v1/chat-sessions?scopeId=${session.scopeId}&updatedAfter=1500") {
+            header(HttpHeaders.Authorization, firstUserAuth)
+        }
+        val updatedSessions = Json.decodeFromString<ChatSessionListResponse>(updatedSessionListResponse.bodyAsText())
+        assertEquals(listOf(2000L), updatedSessions.sessions.map { it.deletedAt })
     }
 
     @Test

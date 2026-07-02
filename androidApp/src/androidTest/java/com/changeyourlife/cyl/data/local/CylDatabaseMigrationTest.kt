@@ -21,7 +21,7 @@ class CylDatabaseMigrationTest {
     )
 
     @Test
-    fun migrate1To7_preservesLegacyWorkspaceAndCreatesCurrentSchema() {
+    fun migrate1To12_preservesLegacyWorkspaceAndCreatesCurrentSchema() {
         helper.createDatabase(TEST_DATABASE, 1).apply {
             execSQL(
                 """
@@ -34,7 +34,7 @@ class CylDatabaseMigrationTest {
 
         val database = helper.runMigrationsAndValidate(
             TEST_DATABASE,
-            7,
+            12,
             true,
             DatabaseModule.MIGRATION_1_2,
             DatabaseModule.MIGRATION_2_3,
@@ -42,6 +42,11 @@ class CylDatabaseMigrationTest {
             DatabaseModule.MIGRATION_4_5,
             DatabaseModule.MIGRATION_5_6,
             DatabaseModule.MIGRATION_6_7,
+            DatabaseModule.MIGRATION_7_8,
+            DatabaseModule.MIGRATION_8_9,
+            DatabaseModule.MIGRATION_9_10,
+            DatabaseModule.MIGRATION_10_11,
+            DatabaseModule.MIGRATION_11_12,
         )
 
         database.query("SELECT * FROM `workspaces` WHERE `id` = 'workspace-legacy'").use { cursor ->
@@ -62,7 +67,88 @@ class CylDatabaseMigrationTest {
         assertTrue(database.tableExists("page_table_columns"))
         assertTrue(database.tableExists("page_table_rows"))
         assertTrue(database.tableExists("page_table_cells"))
+        assertTrue(database.tableExists("sync_tombstones"))
+        assertTrue(database.tableExists("ai_action_logs"))
         assertTrue(database.columnExists("chat_messages", "actionMetadataJson"))
+        assertTrue(database.columnExists("ai_action_logs", "undoCommandsJson"))
+        assertTrue(database.columnExists("ai_action_logs", "updatedAt"))
+        assertTrue(database.columnExists("ai_action_logs", "syncStatus"))
+        assertTrue(database.columnExists("ai_action_logs", "remoteUpdatedAt"))
+        assertTrue(database.columnExists("ai_action_logs", "lastSyncedAt"))
+        assertTrue(database.columnExists("chat_sessions", "syncStatus"))
+        assertTrue(database.columnExists("chat_sessions", "remoteUpdatedAt"))
+        assertTrue(database.columnExists("chat_sessions", "lastSyncedAt"))
+        assertTrue(database.columnExists("chat_messages", "updatedAt"))
+        assertTrue(database.columnExists("chat_messages", "syncStatus"))
+        assertTrue(database.columnExists("chat_messages", "remoteUpdatedAt"))
+        assertTrue(database.columnExists("chat_messages", "lastSyncedAt"))
+
+        database.close()
+    }
+
+    @Test
+    fun migrate11To12AddsSyncMetadataToChatHistoryTables() {
+        helper.createDatabase(TEST_DATABASE, 11).apply {
+            execSQL(
+                """
+                INSERT INTO `chat_sessions` (
+                    `id`,
+                    `scopeId`,
+                    `title`,
+                    `createdAt`,
+                    `updatedAt`,
+                    `deletedAt`
+                )
+                VALUES ('session-1', 'home:workspace-1', 'Budget chat', 1000, 2000, NULL)
+                """.trimIndent(),
+            )
+            execSQL(
+                """
+                INSERT INTO `chat_messages` (
+                    `id`,
+                    `scopeId`,
+                    `role`,
+                    `content`,
+                    `pageLinksJson`,
+                    `actionMetadataJson`,
+                    `createdAt`
+                )
+                VALUES ('message-1', 'session-1', 'assistant', 'Done', '[]', '', 3000)
+                """.trimIndent(),
+            )
+            close()
+        }
+
+        val database = helper.runMigrationsAndValidate(
+            TEST_DATABASE,
+            12,
+            true,
+            DatabaseModule.MIGRATION_11_12,
+        )
+
+        assertTrue(database.columnExists("chat_sessions", "syncStatus"))
+        assertTrue(database.columnExists("chat_sessions", "remoteUpdatedAt"))
+        assertTrue(database.columnExists("chat_sessions", "lastSyncedAt"))
+        assertTrue(database.columnExists("chat_messages", "updatedAt"))
+        assertTrue(database.columnExists("chat_messages", "syncStatus"))
+        assertTrue(database.columnExists("chat_messages", "remoteUpdatedAt"))
+        assertTrue(database.columnExists("chat_messages", "lastSyncedAt"))
+
+        database.query("SELECT * FROM `chat_sessions` WHERE `id` = 'session-1'").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("Budget chat", cursor.stringValue("title"))
+            assertEquals("PendingPush", cursor.stringValue("syncStatus"))
+            assertEquals(0L, cursor.longValue("remoteUpdatedAt"))
+            assertEquals(0L, cursor.longValue("lastSyncedAt"))
+        }
+        database.query("SELECT * FROM `chat_messages` WHERE `id` = 'message-1'").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("Done", cursor.stringValue("content"))
+            assertEquals(3000L, cursor.longValue("updatedAt"))
+            assertEquals("PendingPush", cursor.stringValue("syncStatus"))
+            assertEquals(0L, cursor.longValue("remoteUpdatedAt"))
+            assertEquals(0L, cursor.longValue("lastSyncedAt"))
+        }
 
         database.close()
     }
@@ -247,6 +333,161 @@ class CylDatabaseMigrationTest {
             assertTrue(cursor.moveToFirst())
             assertEquals("Done", cursor.stringValue("content"))
             assertEquals("", cursor.stringValue("actionMetadataJson"))
+        }
+
+        database.close()
+    }
+
+    @Test
+    fun migrate8To9AddsAiActionLogTable() {
+        helper.createDatabase(TEST_DATABASE, 8).apply {
+            close()
+        }
+
+        val database = helper.runMigrationsAndValidate(
+            TEST_DATABASE,
+            9,
+            true,
+            DatabaseModule.MIGRATION_8_9,
+        )
+
+        assertTrue(database.tableExists("ai_action_logs"))
+        assertTrue(database.columnExists("ai_action_logs", "auditId"))
+        assertTrue(database.columnExists("ai_action_logs", "requestMessageId"))
+        assertTrue(database.columnExists("ai_action_logs", "responseMessageId"))
+        assertTrue(database.columnExists("ai_action_logs", "undoState"))
+
+        database.close()
+    }
+
+    @Test
+    fun migrate9To10AddsUndoCommandsJsonToAiActionLogTable() {
+        helper.createDatabase(TEST_DATABASE, 9).apply {
+            execSQL(
+                """
+                INSERT INTO `ai_action_logs` (
+                    `auditId`,
+                    `requestMessageId`,
+                    `responseMessageId`,
+                    `sessionId`,
+                    `workspaceId`,
+                    `mode`,
+                    `provider`,
+                    `model`,
+                    `schemaName`,
+                    `schemaVersion`,
+                    `proposedActionsJson`,
+                    `executedActionsJson`,
+                    `validationIssuesJson`,
+                    `executionMessagesJson`,
+                    `undoState`,
+                    `createdAt`
+                )
+                VALUES (
+                    'audit-1',
+                    'request-1',
+                    'response-1',
+                    'session-1',
+                    'workspace-1',
+                    'Edit',
+                    'openrouter',
+                    'openai/gpt-oss-20b:free',
+                    'CYL_ACTION_SCHEMA',
+                    2,
+                    '[]',
+                    '[]',
+                    '[]',
+                    '[]',
+                    'PendingCommandLink',
+                    3000
+                )
+                """.trimIndent(),
+            )
+            close()
+        }
+
+        val database = helper.runMigrationsAndValidate(
+            TEST_DATABASE,
+            10,
+            true,
+            DatabaseModule.MIGRATION_9_10,
+        )
+
+        assertTrue(database.columnExists("ai_action_logs", "undoCommandsJson"))
+        database.query("SELECT `undoCommandsJson` FROM `ai_action_logs` WHERE `auditId` = 'audit-1'").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("[]", cursor.stringValue("undoCommandsJson"))
+        }
+
+        database.close()
+    }
+
+    @Test
+    fun migrate10To11AddsSyncMetadataToAiActionLogTable() {
+        helper.createDatabase(TEST_DATABASE, 10).apply {
+            execSQL(
+                """
+                INSERT INTO `ai_action_logs` (
+                    `auditId`,
+                    `requestMessageId`,
+                    `responseMessageId`,
+                    `sessionId`,
+                    `workspaceId`,
+                    `mode`,
+                    `provider`,
+                    `model`,
+                    `schemaName`,
+                    `schemaVersion`,
+                    `proposedActionsJson`,
+                    `executedActionsJson`,
+                    `validationIssuesJson`,
+                    `executionMessagesJson`,
+                    `undoCommandsJson`,
+                    `undoState`,
+                    `createdAt`
+                )
+                VALUES (
+                    'audit-1',
+                    'request-1',
+                    'response-1',
+                    'session-1',
+                    'workspace-1',
+                    'Edit',
+                    'openrouter',
+                    'openai/gpt-oss-20b:free',
+                    'CYL_ACTION_SCHEMA',
+                    2,
+                    '[]',
+                    '[]',
+                    '[]',
+                    '[]',
+                    '[{"commandType":"DeleteBlock"}]',
+                    'Available',
+                    3000
+                )
+                """.trimIndent(),
+            )
+            close()
+        }
+
+        val database = helper.runMigrationsAndValidate(
+            TEST_DATABASE,
+            11,
+            true,
+            DatabaseModule.MIGRATION_10_11,
+        )
+
+        assertTrue(database.columnExists("ai_action_logs", "updatedAt"))
+        assertTrue(database.columnExists("ai_action_logs", "syncStatus"))
+        assertTrue(database.columnExists("ai_action_logs", "remoteUpdatedAt"))
+        assertTrue(database.columnExists("ai_action_logs", "lastSyncedAt"))
+        database.query("SELECT * FROM `ai_action_logs` WHERE `auditId` = 'audit-1'").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(3000L, cursor.longValue("updatedAt"))
+            assertEquals("PendingPush", cursor.stringValue("syncStatus"))
+            assertEquals(0L, cursor.longValue("remoteUpdatedAt"))
+            assertEquals(0L, cursor.longValue("lastSyncedAt"))
+            assertEquals("""[{"commandType":"DeleteBlock"}]""", cursor.stringValue("undoCommandsJson"))
         }
 
         database.close()

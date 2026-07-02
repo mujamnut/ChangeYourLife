@@ -5,6 +5,7 @@ import com.changeyourlife.cyl.domain.model.PageBlock
 import com.changeyourlife.cyl.domain.model.PageMediaAttachment
 import com.changeyourlife.cyl.domain.model.PageTextSpan
 import com.changeyourlife.cyl.domain.model.Workspace
+import com.changeyourlife.cyl.domain.model.AiActionLog
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -37,6 +38,66 @@ data class PageSyncDto(
 @Serializable
 data class PageListResponseDto(
     val pages: List<PageSyncDto>,
+)
+
+@Serializable
+data class AiActionLogSyncDto(
+    val auditId: String,
+    val requestMessageId: String,
+    val responseMessageId: String,
+    val sessionId: String,
+    val workspaceId: String,
+    val mode: String,
+    val provider: String,
+    val model: String,
+    val schemaName: String,
+    val schemaVersion: Int,
+    val proposedActionsJson: String,
+    val executedActionsJson: String,
+    val validationIssuesJson: String,
+    val executionMessagesJson: String,
+    val undoCommandsJson: String,
+    val undoState: String,
+    val createdAt: Long,
+    val updatedAt: Long,
+)
+
+@Serializable
+data class AiActionLogListResponseDto(
+    val actionLogs: List<AiActionLogSyncDto>,
+)
+
+@Serializable
+data class ChatSessionSyncDto(
+    val id: String,
+    val scopeId: String,
+    val title: String,
+    val createdAt: Long,
+    val updatedAt: Long,
+    val deletedAt: Long? = null,
+)
+
+@Serializable
+data class ChatSessionListResponseDto(
+    val sessions: List<ChatSessionSyncDto>,
+)
+
+@Serializable
+data class ChatMessageSyncDto(
+    val id: String,
+    val sessionId: String,
+    val scopeId: String,
+    val role: String,
+    val content: String,
+    val pageLinksJson: String,
+    val actionMetadataJson: String,
+    val createdAt: Long,
+    val updatedAt: Long,
+)
+
+@Serializable
+data class ChatMessageListResponseDto(
+    val messages: List<ChatMessageSyncDto>,
 )
 
 @Serializable
@@ -185,5 +246,51 @@ fun PageSyncDto.toDomain(): Page {
         createdAt = createdAt,
         updatedAt = updatedAt,
         deletedAt = deletedAt,
+    )
+}
+
+fun AiActionLog.toSyncDto(): AiActionLogSyncDto {
+    return AiActionLogSyncDto(
+        auditId = auditId,
+        requestMessageId = requestMessageId,
+        responseMessageId = responseMessageId,
+        sessionId = sessionId,
+        workspaceId = workspaceId,
+        mode = mode,
+        provider = provider,
+        model = model,
+        schemaName = schemaName,
+        schemaVersion = schemaVersion,
+        proposedActionsJson = proposedActionsJson,
+        executedActionsJson = executedActionsJson,
+        validationIssuesJson = validationIssuesJson,
+        executionMessagesJson = executionMessagesJson,
+        undoCommandsJson = undoCommandsJson,
+        undoState = undoState,
+        createdAt = createdAt,
+        updatedAt = updatedAt,
+    )
+}
+
+fun AiActionLogSyncDto.toDomain(): AiActionLog {
+    return AiActionLog(
+        auditId = auditId,
+        requestMessageId = requestMessageId,
+        responseMessageId = responseMessageId,
+        sessionId = sessionId,
+        workspaceId = workspaceId,
+        mode = mode,
+        provider = provider,
+        model = model,
+        schemaName = schemaName,
+        schemaVersion = schemaVersion,
+        proposedActionsJson = proposedActionsJson,
+        executedActionsJson = executedActionsJson,
+        validationIssuesJson = validationIssuesJson,
+        executionMessagesJson = executionMessagesJson,
+        undoCommandsJson = undoCommandsJson,
+        undoState = undoState,
+        createdAt = createdAt,
+        updatedAt = updatedAt,
     )
 }

@@ -10,6 +10,8 @@ import androidx.room.PrimaryKey
     indices = [
         Index(value = ["scopeId"]),
         Index(value = ["createdAt"]),
+        Index(value = ["updatedAt"]),
+        Index(value = ["syncStatus"]),
     ],
 )
 data class ChatMessageEntity(
@@ -21,4 +23,8 @@ data class ChatMessageEntity(
     @ColumnInfo(defaultValue = "''")
     val actionMetadataJson: String,
     val createdAt: Long,
+    val updatedAt: Long,
+    val syncStatus: String = SyncStatus.PendingPush,
+    val remoteUpdatedAt: Long = 0L,
+    val lastSyncedAt: Long = 0L,
 )
