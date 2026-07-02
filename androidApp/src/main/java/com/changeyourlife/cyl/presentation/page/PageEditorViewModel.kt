@@ -1347,6 +1347,40 @@ class PageEditorViewModel @Inject constructor(
         }
     }
 
+    fun pasteTableRowBlocks(
+        tableBlockId: String,
+        rowId: String,
+        rowBlockId: String,
+        pasteBlocks: List<RichTextPasteBlock>,
+    ) {
+        if (pasteBlocks.isEmpty()) return
+        val currentUiState = uiState.value
+        if (currentUiState.page != null) {
+            val document = currentDocument(currentUiState) ?: return
+            val replacementBlocks = pasteBlocks.map { pasteBlock ->
+                PageContentCodec.newBlock(pasteBlock.type).copy(
+                    text = pasteBlock.text,
+                    richTextSpans = pasteBlock.spans,
+                    isChecked = pasteBlock.isChecked,
+                )
+            }
+            val result = tableMutationUseCase.replaceRowBlockWithBlocks(
+                document = document,
+                tableBlockId = tableBlockId,
+                rowId = rowId,
+                rowBlockId = rowBlockId,
+                replacementBlocks = replacementBlocks,
+            )
+            if (!result.changed) return
+            recordTableUndo(result)
+            queueTableRowPatchPendingDocument(
+                tableBlockId = tableBlockId,
+                rowId = rowId,
+                updated = result.document,
+            )
+        }
+    }
+
     fun changeTableRowBlockType(
         tableBlockId: String,
         rowId: String,

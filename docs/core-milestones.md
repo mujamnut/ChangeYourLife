@@ -223,6 +223,7 @@ Goal: page editor stabil, senang maintain, dan tidak semua logic duduk dalam UI.
 - `RichTextController` sudah ditambah untuk urus `TextFieldValue`, selection, active format, format toggle, link apply, mention replacement, dan text-change span adjustment di luar `PageEditorRoute`.
 - `RichTextMentionParser` dan `RichTextPasteParser` sudah ada; paste parser boleh pecah markdown ringan kepada block text/heading/bullet/todo/quote serta inline `**bold**` dan `[link](url)`.
 - Blank text block sekarang boleh menerima multi-line paste dan auto-create beberapa page block melalui editor mutation path, bukan simpan semua sebagai satu text block.
+- Row-page blank text block dalam table sekarang juga boleh menerima multi-line paste dan auto-create beberapa row-content block, dengan table undo path yang restore state asal.
 - Block editor sekarang ada mention picker `@Page` yang guna senarai page sebenar dan simpan mention sebagai span metadata, bukan teks kosong sahaja.
 - Rich text toolbar sekarang support `B/I/U/S`, `Code`, link, text color swatch, dan highlight swatch dengan canonical spans yang tidak hilang bila user sambung menaip.
 - Page editor utama sekarang render rich text toolbar di bottom keyboard area melalui shared toolbar state, bukan toolbar duplicate dalam setiap block page utama.
@@ -238,7 +239,7 @@ Goal: page editor stabil, senang maintain, dan tidak semua logic duduk dalam UI.
 - Mention trigger dalam block editor dan row-page block sudah ada, tapi belum jadi command palette/editor-level penuh untuk semua context seperti table cell dan reusable picker global.
 - Toolbar rich text sudah naik ke bottom keyboard area untuk page utama, tapi belum diseragamkan penuh untuk row-page sheet, table cell, dan semua editor context.
 - Slash command masih basic; belum ada command untuk create linked page, insert block below/above, atau command yang bergantung kepada context table/property.
-- Paste advanced belum kukuh untuk non-empty selection, row page block, table cell, dan media caption; basic blank-block multi-line paste sudah wired.
+- Paste advanced belum kukuh untuk non-empty selection, table cell, dan media caption; blank-block multi-line paste untuk page biasa dan row-page sudah wired.
 
 ### Next Work
 
@@ -247,7 +248,7 @@ Goal: page editor stabil, senang maintain, dan tidak semua logic duduk dalam UI.
 - Tambah unit test untuk mutation tanpa Compose UI.
 - Extract slash command UI kepada editor command palette yang boleh juga dipakai untuk mention picker.
 - Sambungkan slash command dan mention picker kepada editor event, bukan ad hoc UI state.
-- Matangkan paste advanced: non-empty selection, row page block, table cell, dan media caption rules yang selamat.
+- Matangkan paste advanced: non-empty selection, table cell, dan media caption rules yang selamat.
 - Seragamkan rich toolbar untuk row-page sheet, table cell, dan semua editor context supaya behavior formatting tidak bercabang.
 
 ## Milestone 4: Typed Table Core

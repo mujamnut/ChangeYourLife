@@ -362,6 +362,40 @@ class TableMutationUseCase(
         )
     }
 
+    fun replaceRowBlockWithBlocks(
+        document: PageBlockDocument,
+        tableBlockId: String,
+        rowId: String,
+        rowBlockId: String,
+        replacementBlocks: List<PageBlock>,
+    ): TableMutationResult {
+        val tableBlock = document.findTableBlock(tableBlockId)
+            ?: return document.noTableResult(tableBlockId)
+        if (replacementBlocks.isEmpty()) {
+            return document.unchangedTableResult(tableBlockId, tableBlock.table)
+        }
+
+        var didChange = false
+        val rows = tableBlock.table.rows.map { row ->
+            if (row.id == rowId) {
+                val rowDocument = PageBlockDocument(blocks = row.blocks.normalizedRowBlocks())
+                val result = rowDocument.blocks.replaceBlockWithBlocks(rowBlockId, replacementBlocks)
+                didChange = didChange || result.changed
+                row.copy(blocks = result.blocks.normalizedRowBlocks())
+            } else {
+                row
+            }
+        }
+        if (!didChange) {
+            return document.unchangedTableResult(tableBlockId, tableBlock.table)
+        }
+
+        return document.replaceTableResult(
+            tableBlockId = tableBlockId,
+            table = tableBlock.table.copy(rows = rows),
+        )
+    }
+
     private fun PageBlockDocument.replaceTableResult(
         tableBlockId: String,
         table: PageTable,
@@ -375,6 +409,17 @@ class TableMutationUseCase(
         ).result
         return TableMutationResult(
             commandResult = result,
+            tableBlockId = tableBlockId,
+            table = table,
+        )
+    }
+
+    private fun PageBlockDocument.unchangedTableResult(
+        tableBlockId: String,
+        table: PageTable?,
+    ): TableMutationResult {
+        return TableMutationResult(
+            commandResult = EditorCommandResult(document = this),
             tableBlockId = tableBlockId,
             table = table,
         )
@@ -394,6 +439,42 @@ class TableMutationUseCase(
             table = null,
         )
     }
+}
+
+private data class ReplaceRowBlocksResult(
+    val blocks: List<PageBlock>,
+    val changed: Boolean,
+)
+
+private fun List<PageBlock>.replaceBlockWithBlocks(
+    blockId: String,
+    replacementBlocks: List<PageBlock>,
+): ReplaceRowBlocksResult {
+    val directIndex = indexOfFirst { block -> block.id == blockId }
+    if (directIndex >= 0) {
+        val currentBlock = this[directIndex]
+        val replacements = replacementBlocks.mapIndexed { index, block ->
+            if (index == 0) block.copy(id = currentBlock.id) else block
+        }
+        return ReplaceRowBlocksResult(
+            blocks = take(directIndex) + replacements + drop(directIndex + 1),
+            changed = true,
+        )
+    }
+
+    forEachIndexed { index, block ->
+        val childResult = block.children.replaceBlockWithBlocks(blockId, replacementBlocks)
+        if (childResult.changed) {
+            return ReplaceRowBlocksResult(
+                blocks = toMutableList().apply {
+                    set(index, block.copy(children = childResult.blocks))
+                },
+                changed = true,
+            )
+        }
+    }
+
+    return ReplaceRowBlocksResult(blocks = this, changed = false)
 }
 
 data class TableMutationResult(

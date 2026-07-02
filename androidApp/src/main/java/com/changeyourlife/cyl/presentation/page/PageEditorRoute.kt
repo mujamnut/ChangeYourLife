@@ -233,6 +233,7 @@ fun PageEditorRoute(
         onDeleteTableRow = viewModel::deleteTableRow,
         onTableRowBlockTextChange = viewModel::updateTableRowBlockText,
         onTableRowBlockRichTextChange = viewModel::updateTableRowBlockRichText,
+        onTableRowBlockPasteBlocks = viewModel::pasteTableRowBlocks,
         onTableRowBlockTypeChange = viewModel::changeTableRowBlockType,
         onTableRowBlockMediaAdd = viewModel::addTableRowBlockMediaAttachments,
         onTableRowBlockMediaRemove = viewModel::removeTableRowBlockMediaAttachment,
@@ -311,6 +312,7 @@ private fun PageEditorScreen(
     onDeleteTableRow: (String, String) -> Unit,
     onTableRowBlockTextChange: (String, String, String, String) -> Unit,
     onTableRowBlockRichTextChange: (String, String, String, String, List<PageTextSpan>) -> Unit,
+    onTableRowBlockPasteBlocks: (String, String, String, List<RichTextPasteBlock>) -> Unit,
     onTableRowBlockTypeChange: (String, String, String, PageBlockType) -> Unit,
     onTableRowBlockMediaAdd: (String, String, String, List<PageMediaAttachment>) -> Unit,
     onTableRowBlockMediaRemove: (String, String, String, String) -> Unit,
@@ -562,6 +564,7 @@ private fun PageEditorScreen(
                             onDeleteTableRow = onDeleteTableRow,
                             onTableRowBlockTextChange = onTableRowBlockTextChange,
                             onTableRowBlockRichTextChange = onTableRowBlockRichTextChange,
+                            onTableRowBlockPasteBlocks = onTableRowBlockPasteBlocks,
                             onTableRowBlockTypeChange = onTableRowBlockTypeChange,
                             onTableRowBlockMediaAdd = onTableRowBlockMediaAdd,
                             onTableRowBlockMediaRemove = onTableRowBlockMediaRemove,
@@ -1438,6 +1441,7 @@ private fun BlockEditorCard(
     onDeleteTableRow: (String, String) -> Unit,
     onTableRowBlockTextChange: (String, String, String, String) -> Unit,
     onTableRowBlockRichTextChange: (String, String, String, String, List<PageTextSpan>) -> Unit,
+    onTableRowBlockPasteBlocks: (String, String, String, List<RichTextPasteBlock>) -> Unit,
     onTableRowBlockTypeChange: (String, String, String, PageBlockType) -> Unit,
     onTableRowBlockMediaAdd: (String, String, String, List<PageMediaAttachment>) -> Unit,
     onTableRowBlockMediaRemove: (String, String, String, String) -> Unit,
@@ -1585,6 +1589,9 @@ private fun BlockEditorCard(
                     onRowBlockRichTextChange = { rowId, rowBlockId, text, spans ->
                         onTableRowBlockRichTextChange(block.id, rowId, rowBlockId, text, spans)
                     },
+                    onRowBlockPasteBlocks = { rowId, rowBlockId, pasteBlocks ->
+                        onTableRowBlockPasteBlocks(block.id, rowId, rowBlockId, pasteBlocks)
+                    },
                     onRowBlockTypeChange = { rowId, rowBlockId, type ->
                         onTableRowBlockTypeChange(block.id, rowId, rowBlockId, type)
                     },
@@ -1705,6 +1712,7 @@ private fun BlockEditorCard(
                                 onDeleteTableRow = onDeleteTableRow,
                                 onTableRowBlockTextChange = onTableRowBlockTextChange,
                                 onTableRowBlockRichTextChange = onTableRowBlockRichTextChange,
+                                onTableRowBlockPasteBlocks = onTableRowBlockPasteBlocks,
                                 onTableRowBlockTypeChange = onTableRowBlockTypeChange,
                                 onTableRowBlockMediaAdd = onTableRowBlockMediaAdd,
                                 onTableRowBlockMediaRemove = onTableRowBlockMediaRemove,
@@ -2040,6 +2048,7 @@ private fun DatabaseTableBlockEditor(
     onDeleteRow: (String) -> Unit,
     onRowBlockTextChange: (String, String, String) -> Unit,
     onRowBlockRichTextChange: (String, String, String, List<PageTextSpan>) -> Unit,
+    onRowBlockPasteBlocks: (String, String, List<RichTextPasteBlock>) -> Unit,
     onRowBlockTypeChange: (String, String, PageBlockType) -> Unit,
     onRowBlockMediaAdd: (String, String, List<PageMediaAttachment>) -> Unit,
     onRowBlockMediaRemove: (String, String, String) -> Unit,
@@ -2084,6 +2093,9 @@ private fun DatabaseTableBlockEditor(
             onBlockTextChange = { rowBlockId, text -> onRowBlockTextChange(openRow.id, rowBlockId, text) },
             onBlockRichTextChange = { rowBlockId, text, spans ->
                 onRowBlockRichTextChange(openRow.id, rowBlockId, text, spans)
+            },
+            onBlockPasteBlocks = { rowBlockId, pasteBlocks ->
+                onRowBlockPasteBlocks(openRow.id, rowBlockId, pasteBlocks)
             },
             onBlockTypeChange = { rowBlockId, type ->
                 onRowBlockTypeChange(openRow.id, rowBlockId, type)
@@ -4948,6 +4960,7 @@ private fun TableRowPageSheet(
     onAddRow: () -> Unit,
     onBlockTextChange: (String, String) -> Unit,
     onBlockRichTextChange: (String, String, List<PageTextSpan>) -> Unit,
+    onBlockPasteBlocks: (String, List<RichTextPasteBlock>) -> Unit,
     onBlockTypeChange: (String, PageBlockType) -> Unit,
     onBlockMediaAdd: (String, List<PageMediaAttachment>) -> Unit,
     onBlockMediaRemove: (String, String) -> Unit,
@@ -5090,6 +5103,7 @@ private fun TableRowPageSheet(
                                     block = block,
                                     onTextChange = { _, text -> onBlockTextChange(block.id, text) },
                                     onRichTextChange = { _, text, spans -> onBlockRichTextChange(block.id, text, spans) },
+                                    onPasteBlocks = onBlockPasteBlocks,
                                     onBlockTypeCommand = { _, type -> onBlockTypeChange(block.id, type) },
                                     onToggleTodo = { onToggleTodo(block.id) },
                                     mentionPages = mentionPages,
@@ -5100,6 +5114,7 @@ private fun TableRowPageSheet(
                                     block = block,
                                     onTextChange = { _, text -> onBlockTextChange(block.id, text) },
                                     onRichTextChange = { _, text, spans -> onBlockRichTextChange(block.id, text, spans) },
+                                    onPasteBlocks = onBlockPasteBlocks,
                                     onBlockTypeCommand = { _, type -> onBlockTypeChange(block.id, type) },
                                     mentionPages = mentionPages,
                                 )
@@ -5109,6 +5124,7 @@ private fun TableRowPageSheet(
                                     block = block,
                                     onTextChange = { _, text -> onBlockTextChange(block.id, text) },
                                     onRichTextChange = { _, text, spans -> onBlockRichTextChange(block.id, text, spans) },
+                                    onPasteBlocks = onBlockPasteBlocks,
                                     onBlockTypeCommand = { _, type -> onBlockTypeChange(block.id, type) },
                                     fontStyle = FontStyle.Italic,
                                     mentionPages = mentionPages,
@@ -5121,6 +5137,7 @@ private fun TableRowPageSheet(
                                     block = block,
                                     onTextChange = { _, text -> onBlockTextChange(block.id, text) },
                                     onRichTextChange = { _, text, spans -> onBlockRichTextChange(block.id, text, spans) },
+                                    onPasteBlocks = onBlockPasteBlocks,
                                     onBlockTypeCommand = { _, type -> onBlockTypeChange(block.id, type) },
                                     mentionPages = mentionPages,
                                 )
@@ -6735,6 +6752,7 @@ private fun PageEditorScreenPreview() {
             onDeleteTableRow = { _, _ -> },
             onTableRowBlockTextChange = { _, _, _, _ -> },
             onTableRowBlockRichTextChange = { _, _, _, _, _ -> },
+            onTableRowBlockPasteBlocks = { _, _, _, _ -> },
             onTableRowBlockTypeChange = { _, _, _, _ -> },
             onTableRowBlockMediaAdd = { _, _, _, _ -> },
             onTableRowBlockMediaRemove = { _, _, _, _ -> },

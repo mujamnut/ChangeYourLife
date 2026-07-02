@@ -185,6 +185,45 @@ class TableMutationUseCaseTest {
     }
 
     @Test
+    fun replaceRowBlockWithBlocksKeepsFirstIdAndReturnsTableUndo() {
+        val document = tableDocument(
+            columns = listOf(PageTableColumn(id = "name", name = "Name")),
+            rows = listOf(
+                PageTableRow(
+                    id = "row-1",
+                    cells = mapOf("name" to "Food"),
+                    blocks = listOf(
+                        PageBlock(id = "before", type = PageBlockType.Text, text = "Before"),
+                        PageBlock(id = "target", type = PageBlockType.Text, text = "Old"),
+                        PageBlock(id = "after", type = PageBlockType.Text, text = "After"),
+                    ),
+                ),
+            ),
+        )
+
+        val result = useCase.replaceRowBlockWithBlocks(
+            document = document,
+            tableBlockId = "table-1",
+            rowId = "row-1",
+            rowBlockId = "target",
+            replacementBlocks = listOf(
+                PageBlock(id = "new-heading", type = PageBlockType.Heading, text = "Plan"),
+                PageBlock(id = "new-bullet", type = PageBlockType.Bullet, text = "Buy rice"),
+            ),
+        )
+        val undoResult = ApplyEditorCommandUseCase()(result.document, requireNotNull(result.commandResult.undoCommand))
+
+        assertTrue(result.changed)
+        val rowBlocks = result.document.table.rows.single().blocks
+        assertEquals(listOf("before", "target", "new-bullet", "after"), rowBlocks.map { block -> block.id })
+        assertEquals(PageBlockType.Heading, rowBlocks[1].type)
+        assertEquals("Plan", rowBlocks[1].text)
+        assertEquals(PageBlockType.Bullet, rowBlocks[2].type)
+        assertTrue(result.commandResult.undoCommand is EditorCommand.ReplaceTable)
+        assertEquals(document, undoResult.document)
+    }
+
+    @Test
     fun tableMutationsExposeUndoCommand() {
         val document = tableDocument(
             columns = listOf(PageTableColumn(id = "name", name = "Name")),
