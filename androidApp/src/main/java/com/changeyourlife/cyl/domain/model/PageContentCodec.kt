@@ -93,7 +93,7 @@ object PageContentCodec {
             newTableColumn("Date", PageTableColumnType.Date),
         )
         return PageTable(
-            title = "Untitled table",
+            title = "Untitled database",
             columns = columns,
             rows = listOf(newTableRow(columns)),
         )

@@ -101,7 +101,7 @@ enum class PageBlockType {
 
 @Serializable
 data class PageTable(
-    val title: String = "Untitled table",
+    val title: String = "Untitled database",
     val view: PageTableView = PageTableView.Table,
     val viewConfig: PageTableViewConfig = PageTableViewConfig(),
     val columns: List<PageTableColumn> = emptyList(),

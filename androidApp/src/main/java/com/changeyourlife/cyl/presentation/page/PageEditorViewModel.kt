@@ -834,7 +834,7 @@ class PageEditorViewModel @Inject constructor(
             val parent = pageRepository.getPage(pageId) ?: return@launch
             val childPage = pageRepository.createPage(
                 workspaceId = parent.workspaceId,
-                title = "Untitled page",
+                title = "",
                 content = PageBlockCodec.encode(listOf(PageBlockCodec.newBlock(PageBlockType.Text))),
                 parentPageId = parent.id,
             )
@@ -1619,7 +1619,7 @@ class PageEditorViewModel @Inject constructor(
             val parent = pageRepository.getPage(pageId) ?: return@launch
             val childPage = pageRepository.createPage(
                 workspaceId = parent.workspaceId,
-                title = "Untitled page",
+                title = "",
                 content = PageBlockCodec.encode(listOf(PageBlockCodec.newBlock(PageBlockType.Text))),
                 parentPageId = parent.id,
             )
@@ -1803,7 +1803,7 @@ class PageEditorViewModel @Inject constructor(
             val parent = pageRepository.getPage(pageId) ?: return@launch
             val childPage = pageRepository.createPage(
                 workspaceId = parent.workspaceId,
-                title = "Untitled page",
+                title = "",
                 content = PageBlockCodec.encode(listOf(PageBlockCodec.newBlock(PageBlockType.Text))),
                 parentPageId = parent.id,
             )

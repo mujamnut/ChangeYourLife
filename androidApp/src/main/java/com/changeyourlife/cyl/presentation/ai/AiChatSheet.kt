@@ -29,6 +29,8 @@ import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.automirrored.rounded.Undo
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -124,54 +126,47 @@ fun AiChatSheet(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                    .padding(horizontal = 16.dp, vertical = 6.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Row(
+                Column(
                     modifier = Modifier.weight(1f),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    Icon(
-                        imageVector = Icons.Rounded.AutoAwesome,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(20.dp),
+                    AiModeModelSelector(
+                        mode = effectiveMode,
+                        availableModes = availableModes,
+                        modelLabel = modelLabel,
+                        onModeChange = onAiModeChange,
                     )
-                    Column(
-                        modifier = Modifier.weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(3.dp),
-                    ) {
+                    if (!attachedPageTitle.isNullOrBlank()) {
                         Text(
-                            text = "CYL AI",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold,
+                            text = attachedPageTitle.ifBlank { "Untitled page" },
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(999.dp))
+                                .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.58f))
+                                .padding(horizontal = 10.dp, vertical = 4.dp),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
-                        AiModeModelSelector(
-                            mode = effectiveMode,
-                            availableModes = availableModes,
-                            modelLabel = modelLabel,
-                            onModeChange = onAiModeChange,
-                        )
-                        if (!attachedPageTitle.isNullOrBlank()) {
-                            Text(
-                                text = "This page: ${attachedPageTitle.ifBlank { "Untitled page" }}",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.primary,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
                     }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(onClick = onCreateChatSession) {
-                        Text(text = "New")
+                    IconButton(onClick = onCreateChatSession) {
+                        Icon(
+                            imageVector = Icons.Rounded.Add,
+                            contentDescription = "New chat",
+                        )
                     }
                     if (messages.isNotEmpty()) {
-                        TextButton(onClick = onClearHistory) {
-                            Text(text = "Clear")
+                        IconButton(onClick = onClearHistory) {
+                            Icon(
+                                imageVector = Icons.Rounded.Delete,
+                                contentDescription = "Clear chat",
+                            )
                         }
                     }
                     IconButton(onClick = onDismiss) {
@@ -231,11 +226,6 @@ fun AiChatSheet(
                             horizontalAlignment = if (isUser) Alignment.End else Alignment.Start,
                             verticalArrangement = Arrangement.spacedBy(4.dp),
                         ) {
-                            Text(
-                                text = if (isUser) "You" else "CYL AI",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
                             Text(
                                 text = messageText,
                                 modifier = Modifier
@@ -576,7 +566,7 @@ private fun AiModeModelSelector(
     val displayModel = modelLabel.compactAiModelLabel()
     val selectorModifier = Modifier
         .clip(RoundedCornerShape(999.dp))
-        .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+        .background(MaterialTheme.colorScheme.surfaceContainer)
         .let { base ->
             if (canSwitchMode) {
                 base.clickable { isMenuOpen = true }
@@ -592,6 +582,12 @@ private fun AiModeModelSelector(
             horizontalArrangement = Arrangement.spacedBy(4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            Icon(
+                imageVector = Icons.Rounded.AutoAwesome,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(16.dp),
+            )
             Text(
                 text = "${mode.label} - $displayModel",
                 style = MaterialTheme.typography.labelMedium,

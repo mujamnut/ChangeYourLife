@@ -12,7 +12,7 @@ internal val PageBlockType.label: String
         PageBlockType.Quote -> "Quote"
         PageBlockType.Divider -> "Divider"
         PageBlockType.MediaFile -> "Media/file"
-        PageBlockType.DatabaseTable -> "Table"
+        PageBlockType.DatabaseTable -> "Database"
     }
 
 internal val PageBlockType.placeholder: String
@@ -28,7 +28,7 @@ internal val PageBlockType.placeholder: String
         PageBlockType.DatabaseTable -> ""
     }
 
-internal val PageBlockType.isPlainEditorBlock: Boolean
+internal val PageBlockType.isTextLikeEditorBlock: Boolean
     get() = when (this) {
         PageBlockType.Text,
         PageBlockType.Heading,
@@ -36,10 +36,11 @@ internal val PageBlockType.isPlainEditorBlock: Boolean
         PageBlockType.Bullet,
         PageBlockType.Numbered,
         PageBlockType.Quote,
+        -> true
         PageBlockType.Divider,
         PageBlockType.MediaFile,
-        -> true
-        PageBlockType.DatabaseTable -> false
+        PageBlockType.DatabaseTable,
+        -> false
     }
 
 internal data class BlockTypeOption(
@@ -56,7 +57,7 @@ internal data class BlockTypeOption(
             BlockTypeOption(PageBlockType.Quote, "Quote"),
             BlockTypeOption(PageBlockType.Divider, "Divider"),
             BlockTypeOption(PageBlockType.MediaFile, "Media/file"),
-            BlockTypeOption(PageBlockType.DatabaseTable, "Table"),
+            BlockTypeOption(PageBlockType.DatabaseTable, "Database"),
         )
     }
 }

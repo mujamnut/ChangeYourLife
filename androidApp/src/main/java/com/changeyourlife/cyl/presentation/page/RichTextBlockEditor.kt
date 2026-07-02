@@ -714,7 +714,7 @@ private fun RichTextToolbar(
                 }
                 is RichTextToolbarRegistryAction.ApplyColor -> {
                     RichTextSwatchButton(
-                        color = Color(action.colorHex.toColorLong()),
+                        color = action.colorHex.toToolbarSwatchColor(),
                         selected = if (hasRange) {
                             spans.any { span ->
                                 span.start <= range.min && span.end >= range.max && span.color == action.colorHex
@@ -728,7 +728,7 @@ private fun RichTextToolbar(
                 }
                 is RichTextToolbarRegistryAction.ApplyHighlight -> {
                     RichTextSwatchButton(
-                        color = Color(action.colorHex.toColorLong()),
+                        color = action.colorHex.toToolbarSwatchColor(),
                         selected = if (hasRange) {
                             spans.any { span ->
                                 span.start <= range.min && span.end >= range.max &&
@@ -850,8 +850,8 @@ private fun PageBlock.toTextFieldValue(): TextFieldValue {
     )
 }
 
-private fun String.toColorLong(): ULong {
-    return removePrefix("#").toULong(radix = 16) or 0xFF000000uL
+private fun String.toToolbarSwatchColor(): Color {
+    return toOpaqueRgbColorOrNull() ?: Color.Black
 }
 
 private fun buildRichTextAnnotatedString(
@@ -903,18 +903,24 @@ private fun Context.richClipboardHtmlForPaste(
     val inserted = RichTextPasteParser.insertedTextForChange(oldText, newText)
         ?.takeIf { text -> text.length > 1 }
         ?: return null
-    val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return null
-    val item = clipboard.primaryClip
-        ?.takeIf { clip -> clip.itemCount > 0 }
-        ?.getItemAt(0)
-        ?: return null
-    val html = item.htmlText
-        ?.takeIf { value -> value.isNotBlank() }
-        ?: return null
-    val plainText = item.coerceToText(this)?.toString().orEmpty()
-    val parsedText = RichTextPasteParser
-        .parseClipboard(rawText = plainText, htmlText = html)
-        .joinToString("\n") { block -> block.text }
+    val clipboardPayload = runCatching {
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return null
+        val item = clipboard.primaryClip
+            ?.takeIf { clip -> clip.itemCount > 0 }
+            ?.getItemAt(0)
+            ?: return null
+        val html = item.htmlText
+            ?.takeIf { value -> value.isNotBlank() }
+            ?: return null
+        val plainText = item.coerceToText(this)?.toString().orEmpty()
+        html to plainText
+    }.getOrNull() ?: return null
+    val (html, plainText) = clipboardPayload
+    val parsedText = runCatching {
+        RichTextPasteParser
+            .parseClipboard(rawText = plainText, htmlText = html)
+            .joinToString("\n") { block -> block.text }
+    }.getOrDefault("")
 
     return if (
         inserted.matchesClipboardPasteText(plainText) ||
@@ -959,17 +965,26 @@ private fun TextFieldValue.toPageTextSpans(): List<PageTextSpan> {
 }
 
 private fun String.toComposeColorOrUnspecified(): Color {
+    return toOpaqueRgbColorOrNull() ?: Color.Unspecified
+}
+
+private fun String.toOpaqueRgbColorOrNull(): Color? {
     val normalized = trim().removePrefix("#")
-    if (normalized.length != 6) return Color.Unspecified
-    val value = normalized.toLongOrNull(radix = 16) ?: return Color.Unspecified
-    return Color(0xFF000000 or value)
+    if (normalized.length != 6) return null
+    val value = normalized.toIntOrNull(radix = 16) ?: return null
+    return Color(
+        red = ((value shr 16) and 0xFF) / 255f,
+        green = ((value shr 8) and 0xFF) / 255f,
+        blue = (value and 0xFF) / 255f,
+        alpha = 1f,
+    )
 }
 
 @Composable
 private fun plainRichTextFieldColors() = TextFieldDefaults.colors(
-    focusedContainerColor = MaterialTheme.colorScheme.surface,
-    unfocusedContainerColor = MaterialTheme.colorScheme.surface,
-    disabledContainerColor = MaterialTheme.colorScheme.surface,
-    focusedIndicatorColor = MaterialTheme.colorScheme.surface,
-    unfocusedIndicatorColor = MaterialTheme.colorScheme.surface,
+    focusedContainerColor = Color.Transparent,
+    unfocusedContainerColor = Color.Transparent,
+    disabledContainerColor = Color.Transparent,
+    focusedIndicatorColor = Color.Transparent,
+    unfocusedIndicatorColor = Color.Transparent,
 )

@@ -140,7 +140,7 @@ private fun RichTextSlashCommand.defaultGroup(): EditorCommandGroup {
         is RichTextSlashAction.ChangeType -> when (label) {
             "Bullet", "Numbered", "Todo" -> EditorCommandGroup.Lists
             "Media" -> EditorCommandGroup.Media
-            "Table" -> EditorCommandGroup.Database
+            "Database" -> EditorCommandGroup.Database
             else -> EditorCommandGroup.Basic
         }
         is RichTextSlashAction.InsertBlock -> EditorCommandGroup.Insert

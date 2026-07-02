@@ -8,6 +8,7 @@ import com.changeyourlife.cyl.domain.model.Page
 import com.changeyourlife.cyl.domain.model.PageBlock
 import com.changeyourlife.cyl.domain.model.PageBlockDocument
 import com.changeyourlife.cyl.domain.model.PageBlockType
+import com.changeyourlife.cyl.domain.model.PageContentCodec
 import com.changeyourlife.cyl.domain.model.PagePropertyType
 import com.changeyourlife.cyl.domain.model.PageTable
 import com.changeyourlife.cyl.domain.model.PageTableColumn
@@ -295,7 +296,8 @@ class HomeViewModel @Inject constructor(
             ?: CylDefaults.DefaultWorkspaceId
         return pageRepository.createPage(
             workspaceId = workspaceId,
-            title = "Untitled page",
+            title = "",
+            content = PageContentCodec.encode(listOf(PageContentCodec.newBlock(PageBlockType.Text))),
         )
     }
 

@@ -53,6 +53,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
@@ -86,14 +87,15 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.changeyourlife.cyl.domain.model.ChatSession
 import com.changeyourlife.cyl.domain.model.Page
-import com.changeyourlife.cyl.domain.model.PageBlockType
 import com.changeyourlife.cyl.domain.model.SyncOverview
 import com.changeyourlife.cyl.presentation.ai.AiChatMode
 import com.changeyourlife.cyl.presentation.ai.AiChatSheet
 import com.changeyourlife.cyl.presentation.ai.AiChatMessage
 import com.changeyourlife.cyl.presentation.ai.AiChatPageLink
 import com.changeyourlife.cyl.presentation.components.CylBottomCommandBar
+import com.changeyourlife.cyl.presentation.components.CylChromePill
 import com.changeyourlife.cyl.presentation.components.CylChromeIconButton
+import com.changeyourlife.cyl.presentation.components.CylFloatingChromeSurface
 import com.changeyourlife.cyl.presentation.page.PageModuleType
 import com.changeyourlife.cyl.presentation.theme.ChangeYourLifeTheme
 import java.time.Instant
@@ -124,11 +126,6 @@ fun HomeRoute(
         onCreateModule = { type ->
             viewModel.createModulePage(type) { page ->
                 onOpenPage(page.id, "", "")
-            }
-        },
-        onAddBlockToPage = { pageId, type ->
-            viewModel.addBlockToPage(pageId, type) { updatedPageId, blockId ->
-                onOpenPage(updatedPageId, "block", blockId)
             }
         },
         onDeletePage = viewModel::deletePage,
@@ -183,7 +180,6 @@ private fun HomeScreen(
     uiState: HomeUiState,
     onCreatePage: () -> Unit,
     onCreateModule: (PageModuleType) -> Unit,
-    onAddBlockToPage: (String, PageBlockType) -> Unit,
     onDeletePage: (String) -> Unit,
     onRestorePage: (String) -> Unit,
     onDeletePagePermanently: (String) -> Unit,
@@ -279,14 +275,6 @@ private fun HomeScreen(
     selectedPageActionPage?.let { page ->
         HomePageActionSheet(
             page = page,
-            onOpenPage = {
-                selectedPageActionId = null
-                onOpenPage(page.id)
-            },
-            onAddBlock = { type ->
-                selectedPageActionId = null
-                onAddBlockToPage(page.id, type)
-            },
             onDeletePage = {
                 selectedPageActionId = null
                 onDeletePage(page.id)
@@ -373,7 +361,7 @@ private fun HomeScreen(
                 end = 20.dp,
                 bottom = innerPadding.calculateBottomPadding() + 24.dp,
             ),
-            verticalArrangement = Arrangement.spacedBy(18.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             when (selectedHomeTab) {
                 HomeTab.Home -> {
@@ -391,7 +379,8 @@ private fun HomeScreen(
                     item {
                         HomeSectionHeader(
                             text = "Private",
-                            actionLabel = "New",
+                            actionIcon = Icons.Rounded.Add,
+                            actionContentDescription = "Create private page",
                             onAction = { isCreateSheetOpen = true },
                         )
                         Spacer(modifier = Modifier.height(6.dp))
@@ -416,7 +405,8 @@ private fun HomeScreen(
                     item {
                         HomeSectionHeader(
                             text = "Chat History",
-                            actionLabel = "New",
+                            actionIcon = Icons.Rounded.Add,
+                            actionContentDescription = "New chat",
                             onAction = {
                                 onCreateChatSession()
                                 isChatSheetOpen = true
@@ -585,10 +575,7 @@ private fun HomeSearchScreen(
 
             if (uiState.searchQuery.isBlank()) {
                 item {
-                    EmptyHomeTabCard(
-                        title = "Type to search your workspace",
-                        icon = Icons.Rounded.Search,
-                    )
+                    SearchPromptState()
                 }
             } else {
                 item {
@@ -613,6 +600,7 @@ private fun HomeSearchScreen(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun HomeHeader(
     workspaceName: String,
@@ -624,7 +612,24 @@ private fun HomeHeader(
     onLogout: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var isProfileMenuOpen by rememberSaveable { mutableStateOf(false) }
+    var isProfileSheetOpen by rememberSaveable { mutableStateOf(false) }
+
+    if (isProfileSheetOpen) {
+        HomeProfileSheet(
+            workspaceName = workspaceName,
+            syncOverview = syncOverview,
+            onRetrySync = onRetrySync,
+            onOpenTrash = {
+                isProfileSheetOpen = false
+                onOpenTrash()
+            },
+            onLogout = {
+                isProfileSheetOpen = false
+                onLogout()
+            },
+            onDismiss = { isProfileSheetOpen = false },
+        )
+    }
 
     Row(
         modifier = modifier
@@ -635,13 +640,14 @@ private fun HomeHeader(
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box {
+        CylFloatingChromeSurface(
+            modifier = Modifier
+                .size(44.dp)
+                .clickable { isProfileSheetOpen = true },
+            shape = RoundedCornerShape(14.dp),
+        ) {
             Box(
-                modifier = Modifier
-                    .size(44.dp)
-                    .clip(RoundedCornerShape(14.dp))
-                    .clickable { isProfileMenuOpen = true }
-                    .background(MaterialTheme.colorScheme.surfaceContainerHigh),
+                modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
@@ -651,71 +657,154 @@ private fun HomeHeader(
                     color = MaterialTheme.colorScheme.primary,
                 )
             }
-            DropdownMenu(
-                expanded = isProfileMenuOpen,
-                onDismissRequest = { isProfileMenuOpen = false },
+        }
+        CylFloatingChromeSurface(
+            modifier = Modifier
+                .weight(1f)
+                .height(52.dp),
+            shape = RoundedCornerShape(26.dp),
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                DropdownMenuItem(
-                    text = { Text(text = "Trash") },
-                    leadingIcon = {
-                        Icon(
-                            imageVector = Icons.Rounded.Delete,
-                            contentDescription = null,
-                        )
-                    },
-                    onClick = {
-                        isProfileMenuOpen = false
-                        onOpenTrash()
-                    },
+                HomeTopTabButton(
+                    tab = HomeTab.Home,
+                    selectedTab = selectedTab,
+                    onSelectTab = onSelectTab,
+                    modifier = Modifier.weight(1f),
                 )
-                DropdownMenuItem(
-                    text = { Text(text = "Logout") },
-                    leadingIcon = {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Rounded.Logout,
-                            contentDescription = null,
-                        )
-                    },
-                    onClick = {
-                        isProfileMenuOpen = false
-                        onLogout()
-                    },
+                HomeTopTabButton(
+                    tab = HomeTab.Chat,
+                    selectedTab = selectedTab,
+                    onSelectTab = onSelectTab,
+                    modifier = Modifier.weight(1f),
+                )
+                HomeTopTabButton(
+                    tab = HomeTab.Activity,
+                    selectedTab = selectedTab,
+                    onSelectTab = onSelectTab,
+                    modifier = Modifier.weight(1f),
                 )
             }
         }
-        Row(
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun HomeProfileSheet(
+    workspaceName: String,
+    syncOverview: SyncOverview,
+    onRetrySync: () -> Unit,
+    onOpenTrash: () -> Unit,
+    onLogout: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val statusColor = syncOverview.syncStatusColor()
+
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
             modifier = Modifier
-                .weight(1f)
-                .height(52.dp)
-                .clip(RoundedCornerShape(26.dp))
-                .background(MaterialTheme.colorScheme.surfaceContainer)
-                .padding(4.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-            verticalAlignment = Alignment.CenterVertically,
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            HomeTopTabButton(
-                tab = HomeTab.Home,
-                selectedTab = selectedTab,
-                onSelectTab = onSelectTab,
-                modifier = Modifier.weight(1f),
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(MaterialTheme.colorScheme.surfaceContainerHigh),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = workspaceName.firstOrNull()?.uppercaseChar()?.toString() ?: "C",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = workspaceName.ifBlank { "CYL Workspace" },
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = "Profile and workspace",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+
+            HorizontalDivider()
+
+            ListItem(
+                headlineContent = { Text(text = syncOverview.statusTitle()) },
+                supportingContent = {
+                    Text(
+                        text = syncOverview.statusDetail(),
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                },
+                leadingContent = {
+                    if (syncOverview.isSyncing) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            strokeWidth = 2.dp,
+                            color = statusColor,
+                        )
+                    } else {
+                        Icon(
+                            imageVector = syncOverview.syncStatusIcon(),
+                            contentDescription = null,
+                            tint = statusColor,
+                        )
+                    }
+                },
+                trailingContent = {
+                    TextButton(onClick = onRetrySync) {
+                        Text(text = "Retry")
+                    }
+                },
             )
-            HomeTopTabButton(
-                tab = HomeTab.Chat,
-                selectedTab = selectedTab,
-                onSelectTab = onSelectTab,
-                modifier = Modifier.weight(1f),
+
+            ListItem(
+                headlineContent = { Text(text = "Trash") },
+                supportingContent = { Text(text = "Restore or permanently delete pages") },
+                leadingContent = {
+                    Icon(
+                        imageVector = Icons.Rounded.Delete,
+                        contentDescription = null,
+                    )
+                },
+                modifier = Modifier.clickable(onClick = onOpenTrash),
             )
-            HomeTopTabButton(
-                tab = HomeTab.Activity,
-                selectedTab = selectedTab,
-                onSelectTab = onSelectTab,
-                modifier = Modifier.weight(1f),
+            ListItem(
+                headlineContent = { Text(text = "Logout") },
+                leadingContent = {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Rounded.Logout,
+                        contentDescription = null,
+                    )
+                },
+                modifier = Modifier.clickable(onClick = onLogout),
             )
+
+            Spacer(modifier = Modifier.height(12.dp))
         }
-        SyncStatusButton(
-            syncOverview = syncOverview,
-            onRetrySync = onRetrySync,
-        )
     }
 }
 
@@ -829,6 +918,17 @@ private fun SyncOverview.statusDetail(): String {
     }
 }
 
+@Composable
+private fun SyncOverview.syncStatusColor() = when {
+    hasConflict || hasError -> MaterialTheme.colorScheme.error
+    hasPending || isSyncing -> MaterialTheme.colorScheme.primary
+    else -> MaterialTheme.colorScheme.onSurfaceVariant
+}
+
+private fun SyncOverview.syncStatusIcon(): ImageVector {
+    return if (isClean) Icons.Rounded.CheckCircle else Icons.Rounded.Notifications
+}
+
 private enum class HomeTab(
     val icon: ImageVector,
     val contentDescription: String,
@@ -859,19 +959,10 @@ private fun HomeTopTabButton(
     modifier: Modifier = Modifier,
 ) {
     val isSelected = tab == selectedTab
-    Box(
-        modifier = modifier
-            .height(44.dp)
-            .clip(RoundedCornerShape(22.dp))
-            .clickable { onSelectTab(tab) }
-            .background(
-                if (isSelected) {
-                    MaterialTheme.colorScheme.surface
-                } else {
-                    MaterialTheme.colorScheme.surfaceContainer
-                },
-            ),
-        contentAlignment = Alignment.Center,
+    CylChromePill(
+        selected = isSelected,
+        onClick = { onSelectTab(tab) },
+        modifier = modifier,
     ) {
         Icon(
             imageVector = tab.icon,
@@ -964,21 +1055,28 @@ private fun EmptyHomeTabCard(
     title: String,
     icon: ImageVector,
 ) {
-    Card(
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainer,
-        ),
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(220.dp),
+        contentAlignment = Alignment.Center,
     ) {
-        ListItem(
-            headlineContent = { Text(text = title) },
-            leadingContent = {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            },
-        )
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
+                modifier = Modifier.size(28.dp),
+            )
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 
@@ -1013,6 +1111,27 @@ private fun CenteredHomeEmptyLabel(
 }
 
 @Composable
+private fun HomeRowIconFrame(
+    imageVector: ImageVector,
+    tint: androidx.compose.ui.graphics.Color,
+) {
+    Box(
+        modifier = Modifier
+            .size(40.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.72f)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = imageVector,
+            contentDescription = null,
+            tint = tint,
+            modifier = Modifier.size(20.dp),
+        )
+    }
+}
+
+@Composable
 private fun HomeChatSessionRow(
     session: ChatSession,
     isActive: Boolean,
@@ -1026,29 +1145,27 @@ private fun HomeChatSessionRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .height(58.dp)
-            .clip(RoundedCornerShape(12.dp))
+            .height(64.dp)
+            .clip(RoundedCornerShape(14.dp))
             .background(
                 if (isActive) {
                     MaterialTheme.colorScheme.surfaceContainer
                 } else {
-                    MaterialTheme.colorScheme.background
+                    MaterialTheme.colorScheme.background.copy(alpha = 0f)
                 },
             )
             .clickable(onClick = onClick)
-            .padding(start = 10.dp, end = 2.dp),
+            .padding(start = 8.dp, end = 2.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(
+        HomeRowIconFrame(
             imageVector = Icons.Rounded.AutoAwesome,
-            contentDescription = null,
             tint = if (isActive) {
-                MaterialTheme.colorScheme.onPrimaryContainer
+                MaterialTheme.colorScheme.primary
             } else {
                 MaterialTheme.colorScheme.onSurfaceVariant
             },
-            modifier = Modifier.size(22.dp),
         )
         Column(
             modifier = Modifier.weight(1f),
@@ -1069,7 +1186,10 @@ private fun HomeChatSessionRow(
             )
         }
         Box {
-            IconButton(onClick = { isMenuOpen = true }) {
+            IconButton(
+                onClick = { isMenuOpen = true },
+                modifier = Modifier.size(44.dp),
+            ) {
                 Icon(
                     imageVector = Icons.Rounded.MoreVert,
                     contentDescription = "Chat session actions",
@@ -1102,10 +1222,14 @@ private fun HomeChatSessionRow(
 private fun HomeSectionHeader(
     text: String,
     actionLabel: String? = null,
+    actionIcon: ImageVector? = null,
+    actionContentDescription: String? = null,
     onAction: (() -> Unit)? = null,
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(44.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -1118,6 +1242,17 @@ private fun HomeSectionHeader(
         if (actionLabel != null && onAction != null) {
             TextButton(onClick = onAction) {
                 Text(text = actionLabel)
+            }
+        } else if (actionIcon != null && onAction != null) {
+            IconButton(
+                onClick = onAction,
+                modifier = Modifier.size(44.dp),
+            ) {
+                Icon(
+                    imageVector = actionIcon,
+                    contentDescription = actionContentDescription,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }
@@ -1150,27 +1285,31 @@ private fun RecentPageCard(
 ) {
     Card(
         modifier = Modifier
-            .widthIn(min = 148.dp, max = 176.dp)
-            .height(116.dp)
+            .widthIn(min = 150.dp, max = 190.dp)
+            .height(72.dp)
             .clickable { onOpenPage(page.id) },
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceContainer,
         ),
     ) {
-        Column(
-            modifier = Modifier.padding(14.dp),
-            verticalArrangement = Arrangement.SpaceBetween,
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(
                 imageVector = Icons.AutoMirrored.Rounded.Article,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(20.dp),
             )
             Text(
                 text = page.title.ifBlank { "Untitled page" },
-                style = MaterialTheme.typography.bodyLarge,
-                fontWeight = FontWeight.SemiBold,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -1187,28 +1326,39 @@ private fun HomePageRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .height(52.dp)
+            .height(64.dp)
             .clip(RoundedCornerShape(14.dp))
             .clickable { onOpenPage(page.id) }
-            .padding(horizontal = 10.dp),
+            .padding(start = 8.dp, end = 2.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(
+        HomeRowIconFrame(
             imageVector = Icons.AutoMirrored.Rounded.Article,
-            contentDescription = null,
             tint = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Text(
-            text = page.title.ifBlank { "Untitled page" },
-            style = MaterialTheme.typography.bodyLarge,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
+        Column(
             modifier = Modifier.weight(1f),
-        )
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(
+                text = page.title.ifBlank { "Untitled page" },
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = page.updatedAt.toDisplayDateTime(),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
         IconButton(
             onClick = onOpenActions,
-            modifier = Modifier.size(40.dp),
+            modifier = Modifier.size(44.dp),
         ) {
             Icon(
                 imageVector = Icons.Rounded.MoreVert,
@@ -1223,8 +1373,6 @@ private fun HomePageRow(
 @Composable
 private fun HomePageActionSheet(
     page: Page,
-    onOpenPage: () -> Unit,
-    onAddBlock: (PageBlockType) -> Unit,
     onDeletePage: () -> Unit,
     onDismiss: () -> Unit,
     sheetState: androidx.compose.material3.SheetState,
@@ -1237,47 +1385,35 @@ private fun HomePageActionSheet(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(start = 20.dp, end = 20.dp, bottom = 28.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text(
-                text = page.title.ifBlank { "Untitled page" },
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(bottom = 8.dp),
-            )
-            HomePageActionRow(
-                icon = Icons.AutoMirrored.Rounded.Article,
-                text = "Open page",
-                onClick = onOpenPage,
-            )
-            Text(
-                text = "Add block",
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 10.dp, bottom = 4.dp),
-            )
-            HomePageActionRow(
-                icon = Icons.AutoMirrored.Rounded.Article,
-                text = "Text",
-                onClick = { onAddBlock(PageBlockType.Text) },
-            )
-            HomePageActionRow(
-                icon = Icons.AutoMirrored.Rounded.Article,
-                text = "Heading",
-                onClick = { onAddBlock(PageBlockType.Heading) },
-            )
-            HomePageActionRow(
-                icon = Icons.Rounded.CheckCircle,
-                text = "To-do",
-                onClick = { onAddBlock(PageBlockType.Todo) },
-            )
-            HomePageActionRow(
-                icon = Icons.Rounded.Add,
-                text = "Table",
-                onClick = { onAddBlock(PageBlockType.DatabaseTable) },
-            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                HomeRowIconFrame(
+                    imageVector = Icons.AutoMirrored.Rounded.Article,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = page.title.ifBlank { "Untitled page" },
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = "Page",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
             HomePageActionRow(
                 icon = Icons.Rounded.Delete,
                 text = "Delete page",
@@ -1305,7 +1441,7 @@ private fun HomePageActionRow(
             .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
             .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 14.dp),
+            .padding(horizontal = 10.dp, vertical = 12.dp),
         horizontalArrangement = Arrangement.spacedBy(14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -1329,59 +1465,58 @@ private fun TrashPageRow(
     onRestore: () -> Unit,
     onDeletePermanently: () -> Unit,
 ) {
-    Column(
+    Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainer)
-            .padding(14.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+            .height(64.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.62f))
+            .padding(start = 8.dp, end = 2.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
+        HomeRowIconFrame(
+            imageVector = Icons.AutoMirrored.Rounded.Article,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(
+                text = page.title.ifBlank { "Untitled page" },
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = "Deleted ${page.deletedAt?.toDisplayDateTime().orEmpty()}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        IconButton(
+            onClick = onRestore,
+            modifier = Modifier.size(44.dp),
         ) {
             Icon(
-                imageVector = Icons.AutoMirrored.Rounded.Article,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                imageVector = Icons.Rounded.CheckCircle,
+                contentDescription = "Restore",
+                tint = MaterialTheme.colorScheme.primary,
             )
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = page.title.ifBlank { "Untitled page" },
-                    style = MaterialTheme.typography.bodyLarge,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    text = "Deleted ${page.deletedAt?.toDisplayDateTime().orEmpty()}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
         }
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.End,
-            verticalAlignment = Alignment.CenterVertically,
+        IconButton(
+            onClick = onDeletePermanently,
+            modifier = Modifier.size(44.dp),
         ) {
-            IconButton(onClick = onRestore) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Rounded.Article,
-                    contentDescription = "Restore",
-                    tint = MaterialTheme.colorScheme.primary,
-                )
-            }
-            IconButton(onClick = onDeletePermanently) {
-                Icon(
-                    imageVector = Icons.Rounded.Delete,
-                    contentDescription = "Delete permanently",
-                    tint = MaterialTheme.colorScheme.error,
-                )
-            }
+            Icon(
+                imageVector = Icons.Rounded.Delete,
+                contentDescription = "Delete permanently",
+                tint = MaterialTheme.colorScheme.error,
+            )
         }
     }
 }
@@ -1427,51 +1562,44 @@ private fun GlobalPageSearch(
     onQueryChange: (String) -> Unit,
     onClear: () -> Unit,
 ) {
-    Card(
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainer,
-        ),
+    Column(
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Column(
-            modifier = Modifier.padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            OutlinedTextField(
-                value = query,
-                onValueChange = onQueryChange,
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-                placeholder = { Text(text = "Search pages, tables, rows") },
-                leadingIcon = {
-                    Icon(
-                        imageVector = Icons.Rounded.Search,
-                        contentDescription = null,
-                    )
-                },
-                trailingIcon = {
-                    if (query.isNotBlank()) {
-                        IconButton(onClick = onClear) {
-                            Icon(
-                                imageVector = Icons.Rounded.Close,
-                                contentDescription = "Clear search",
-                            )
-                        }
-                    }
-                },
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                shape = RoundedCornerShape(16.dp),
-                colors = TextFieldDefaults.colors(
-                    focusedContainerColor = MaterialTheme.colorScheme.surface,
-                    unfocusedContainerColor = MaterialTheme.colorScheme.surface,
-                ),
-            )
-            if (query.isNotBlank()) {
-                Text(
-                    text = "$resultCount result${if (resultCount == 1) "" else "s"}",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+        OutlinedTextField(
+            value = query,
+            onValueChange = onQueryChange,
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            placeholder = { Text(text = "Search pages, tables, rows") },
+            leadingIcon = {
+                Icon(
+                    imageVector = Icons.Rounded.Search,
+                    contentDescription = null,
                 )
-            }
+            },
+            trailingIcon = {
+                if (query.isNotBlank()) {
+                    IconButton(onClick = onClear) {
+                        Icon(
+                            imageVector = Icons.Rounded.Close,
+                            contentDescription = "Clear search",
+                        )
+                    }
+                }
+            },
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            shape = RoundedCornerShape(18.dp),
+            colors = TextFieldDefaults.colors(
+                focusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
+                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
+            ),
+        )
+        if (query.isNotBlank()) {
+            Text(
+                text = "$resultCount result${if (resultCount == 1) "" else "s"}",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
@@ -1481,14 +1609,7 @@ private fun SearchResultCard(
     result: PageSearchResult,
     onOpenPage: (String, String, String) -> Unit,
 ) {
-    Card(
-        modifier = Modifier.clickable {
-            onOpenPage(result.page.id, result.targetType, result.targetId)
-        },
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainer,
-        ),
-    ) {
+    Column {
         ListItem(
             headlineContent = {
                 Text(text = result.page.title.ifBlank { "Untitled page" })
@@ -1503,31 +1624,56 @@ private fun SearchResultCard(
                     tint = MaterialTheme.colorScheme.primary,
                 )
             },
+            modifier = Modifier.clickable {
+                onOpenPage(result.page.id, result.targetType, result.targetId)
+            },
         )
+        HorizontalDivider()
+    }
+}
+
+@Composable
+private fun SearchPromptState() {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 48.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Search,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(28.dp),
+            )
+            Text(
+                text = "Type to search your workspace",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 
 @Composable
 private fun EmptySearchCard() {
-    Card(
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainer,
-        ),
-    ) {
-        ListItem(
-            headlineContent = { Text(text = "No matching pages") },
-            supportingContent = {
-                Text(text = "Try another word from a page, table, row, or property.")
-            },
-            leadingContent = {
-                Icon(
-                    imageVector = Icons.Rounded.Search,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.secondary,
-                )
-            },
-        )
-    }
+    ListItem(
+        headlineContent = { Text(text = "No matching pages") },
+        supportingContent = {
+            Text(text = "Try another word from a page, table, row, or property.")
+        },
+        leadingContent = {
+            Icon(
+                imageVector = Icons.Rounded.Search,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.secondary,
+            )
+        },
+    )
 }
 
 @Composable
@@ -1572,24 +1718,32 @@ private fun CreateWorkspaceDialog(
 
 @Composable
 private fun EmptyStateCard() {
-    Card(
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainer,
-        ),
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 10.dp, vertical = 18.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        ListItem(
-            headlineContent = { Text(text = "No pages yet") },
-            supportingContent = {
-                Text(text = "Tap + to create a blank page or start from a module.")
-            },
-            leadingContent = {
-                Icon(
-                    imageVector = Icons.Rounded.Notifications,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.secondary,
-                )
-            },
+        Icon(
+            imageVector = Icons.AutoMirrored.Rounded.Article,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
         )
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                text = "No pages yet",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                text = "Tap + to create a blank page or start from a module.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }
 
@@ -1610,7 +1764,6 @@ private fun HomeRoutePreview() {
             ),
             onCreatePage = {},
             onCreateModule = {},
-            onAddBlockToPage = { _, _ -> },
             onDeletePage = {},
             onRestorePage = {},
             onDeletePagePermanently = {},
