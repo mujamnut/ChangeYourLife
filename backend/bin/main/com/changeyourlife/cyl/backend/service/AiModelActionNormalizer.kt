@@ -29,20 +29,21 @@ class AiModelActionNormalizer(
         val jsonElement = runCatching { json.parseToJsonElement(cleaned) }.getOrNull() ?: return null
         val jsonObject = jsonElement as? JsonObject ?: return null
 
-        runCatching { json.decodeFromString<AiActionEnvelope>(cleaned) }
-            .getOrNull()
-            ?.takeIf { envelope -> envelope.actions.isNotEmpty() }
-            ?.let { envelope ->
-                val normalizedActions = envelope.actions.map { action -> action.normalizedJsonAction(pages, prompt) }
-                val validation = actionSchemaValidator.validate(normalizedActions)
-                return AiService.AiActionResult(
-                    reply = envelope.reply.ifBlank {
-                        validation.actions.ifEmpty { normalizedActions }.recoveredReplyForPrompt(prompt)
-                    },
-                    actions = validation.actions,
-                    validationIssues = validation.issues,
-                )
-            }
+        if (jsonObject.containsKey("actions") || (jsonObject.containsKey("reply") && !jsonObject.containsKey("action"))) {
+            runCatching { json.decodeFromString<AiActionEnvelope>(cleaned) }
+                .getOrNull()
+                ?.let { envelope ->
+                    val normalizedActions = envelope.actions.map { action -> action.normalizedJsonAction(pages, prompt) }
+                    val validation = actionSchemaValidator.validate(normalizedActions)
+                    return AiService.AiActionResult(
+                        reply = envelope.reply.ifBlank {
+                            validation.actions.ifEmpty { normalizedActions }.recoveredReplyForPrompt(prompt)
+                        },
+                        actions = validation.actions,
+                        validationIssues = validation.issues,
+                    )
+                }
+        }
 
         runCatching { json.decodeFromString<AiService.AiActionItem>(cleaned) }
             .getOrNull()

@@ -131,11 +131,13 @@ Goal: AI faham arahan Malay/English dan execute action secara konsisten.
 - Android regression test cover policy: planning tidak execute, backend kosong tidak invent action, backend action execute, vague rename ditolak, concrete rename dibenarkan.
 - Backend prompt recovery sekarang support Home AI create page tanpa mention/current page untuk monthly expenses, termasuk salary row dan table columns.
 - Home AI sekarang boleh execute global `CREATE_PAGE` action terus dari home chat dan simpan page link dalam jawapan AI.
-- Backend prompt recovery sekarang support Home AI `buat jadual/table/tracker ...` tanpa mention sebagai `CREATE_PAGE` dengan database table, jadi model tidak perlu jawab markdown untuk table baru.
+- Backend `chat-actions` sekarang AI-first: live model diberi CYL action schema/context dan cuba hasilkan action JSON dahulu; prompt recovery hanya fallback bila model kosong/invalid/markdown.
+- Backend prompt recovery masih support Home AI `buat jadual/table/tracker ...` tanpa mention sebagai `CREATE_PAGE` dengan database table, tapi ia tidak lagi override action model yang valid.
 - Mention/context page tetap menang untuk request table; prompt seperti `buat jadual ... dalam @Page` masih jadi page-scoped `CREATE_DATABASE`, bukan page baru.
 - Android Home AI sekarang boleh treat global `CREATE_DATABASE`/`CREATE_TABLE` tanpa target sebagai create page berisi table, supaya response model lama tidak terus gagal di Home.
 - Android Home AI ada safety net untuk convert markdown table daripada model kepada CYL action bila backend pulangkan `actions` kosong untuk prompt create table yang jelas.
 - Android ada regression test untuk AI DTO JSON null coercion supaya field `title`, `targetTitle`, `cellValues`, dan `validationIssues` null tidak mematikan chat.
+- Backend regression test lock behavior AI-first supaya prompt fallback tidak boleh overwrite model action yang valid, dan JSON chat `actions=[]` tidak dipaparkan mentah kepada user.
 
 ### Belum Kukuh
 

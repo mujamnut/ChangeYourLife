@@ -23,6 +23,7 @@ class AiService(
     private val actionSchemaValidator: AiActionSchemaValidator = AiActionSchemaValidator(),
     private val modelActionNormalizer: AiModelActionNormalizer = AiModelActionNormalizer(actionSchemaValidator),
     private val promptActionRecovery: AiPromptActionRecovery = AiPromptActionRecovery(actionSchemaValidator),
+    private val completionProvider: ((List<ChatMessage>, Boolean, Double) -> String)? = null,
 ) {
     private val json = Json {
         ignoreUnknownKeys = true
@@ -88,6 +89,7 @@ class AiService(
         }
 
     fun chat(messages: List<ChatMessage>): String {
+        completionProvider?.invoke(messages, false, 0.7)?.let { reply -> return reply }
         if (isMockMode) {
             val userMsg = messages.lastOrNull { it.role == "user" }?.content.orEmpty()
             return "[AI Sandbox Mode - No API Key]\nHere is a simulated response to your question: \"$userMsg\". Add OPENROUTER_API_KEY to enable live AI answers."
@@ -215,17 +217,17 @@ class AiService(
         val userMessage = messages.lastOrNull { message -> message.role.equals("user", ignoreCase = true) }
             ?.content
             .orEmpty()
-        recoverActionFromPrompt(
-            prompt = userMessage,
-            pages = pages,
-        )?.takeIf { result -> result.actions.isNotEmpty() }?.let { result ->
-            return result
-        }
 
         val reply = if (isMockMode) {
             "[AI Sandbox Mode - No API Key]\nHere is a simulated response to your question: \"$userMessage\". Add OPENROUTER_API_KEY to enable live AI answers."
         } else {
-            chat(messages).ifBlank { "I received your message, but the AI returned an empty reply." }
+            chatForActions(
+                messages = messages,
+                pages = pages,
+                tasks = tasks,
+                clientDate = clientDate,
+                clientTimezone = clientTimezone,
+            ).ifBlank { "I received your message, but the AI returned an empty reply." }
         }
 
         val modelResult = recoverActionFromModelReply(
@@ -242,6 +244,135 @@ class AiService(
         )?.let { result -> return result }
 
         return AiActionResult(reply = reply, actions = emptyList())
+    }
+
+    private fun chatForActions(
+        messages: List<ChatMessage>,
+        pages: List<AiPageContext>,
+        tasks: List<AiTaskContext>,
+        clientDate: String,
+        clientTimezone: String,
+    ): String {
+        val actionMessages = buildActionPlannerMessages(
+            messages = messages,
+            pages = pages,
+            tasks = tasks,
+            clientDate = clientDate,
+            clientTimezone = clientTimezone,
+        )
+        completionProvider?.invoke(actionMessages, true, 0.15)?.let { reply -> return reply }
+        return runCatching {
+            chatCompletionsJson(actionMessages, temperature = 0.15)
+        }.getOrElse {
+            chat(actionMessages)
+        }
+    }
+
+    private fun buildActionPlannerMessages(
+        messages: List<ChatMessage>,
+        pages: List<AiPageContext>,
+        tasks: List<AiTaskContext>,
+        clientDate: String,
+        clientTimezone: String,
+    ): List<ChatMessage> {
+        val context = buildString {
+            appendLine("Client date: ${clientDate.ifBlank { "unknown" }}")
+            appendLine("Client timezone: ${clientTimezone.ifBlank { "unknown" }}")
+            appendLine()
+            appendLine("Pages:")
+            if (pages.isEmpty()) {
+                appendLine("- none")
+            } else {
+                pages.take(MaxActionContextPages).forEach { page ->
+                    appendLine("- title=\"${page.title.ifBlank { "Untitled" }}\"")
+                    val tableBlocks = page.blocks.filter { block ->
+                        block.type.equals("DatabaseTable", ignoreCase = true) ||
+                            block.tableTitle.isNotBlank()
+                    }
+                    if (tableBlocks.isNotEmpty()) {
+                        tableBlocks.take(MaxActionContextTablesPerPage).forEach { block ->
+                            appendLine("  table=\"${block.tableTitle.ifBlank { "Table" }}\" ${block.text.take(MaxActionContextBlockText)}")
+                        }
+                    }
+                    val normalBlocks = page.blocks.filterNot { block -> block in tableBlocks }
+                    if (normalBlocks.isNotEmpty()) {
+                        normalBlocks.take(MaxActionContextBlocksPerPage).forEach { block ->
+                            appendLine("  block ${block.type}: ${block.text.take(MaxActionContextBlockText)}")
+                        }
+                    }
+                }
+            }
+            appendLine()
+            appendLine("Open tasks:")
+            if (tasks.isEmpty()) {
+                appendLine("- none")
+            } else {
+                tasks.take(MaxActionContextTasks).forEach { task ->
+                    appendLine("- ${task.title}")
+                }
+            }
+        }
+
+        val systemPrompt = """
+            You are CYL AI, the planner and editor for the ChangeYourLife app.
+            Understand Malay, Indonesian, and English naturally, including typos and mixed language.
+
+            Return ONLY one valid JSON object:
+            {
+              "reply": "short natural reply in the user's language",
+              "actions": []
+            }
+
+            If the user is only chatting, asking questions, brainstorming, or planning, keep "actions" empty.
+            If the user asks to create, update, delete, rename, add a row, edit a table, edit a page, or change a property, produce CYL actions.
+            Do not answer with markdown tables when the user wants data created in the app. Convert the idea into table/page actions.
+            Do not expose internal ids. Use page/table/block/row/column names from context.
+
+            Supported action types:
+            CREATE_PAGE, RENAME_PAGE, UPDATE_PAGE,
+            APPEND_BLOCK, ADD_BLOCK, UPDATE_BLOCK, DELETE_BLOCK, DELETE_ALL_BLOCKS,
+            ADD_PROPERTY, UPDATE_PROPERTY, DELETE_PROPERTY,
+            CREATE_DATABASE, CREATE_TABLE, RENAME_TABLE, ADD_TABLE_COLUMN, DELETE_TABLE_COLUMN,
+            RENAME_TABLE_COLUMN, UPDATE_TABLE_COLUMN_TYPE, UPDATE_TABLE_COLUMN_CONFIG,
+            ADD_TABLE_ROW, UPDATE_TABLE_ROW, DELETE_TABLE_ROW, UPDATE_TABLE_CELL,
+            ADD_ROW_PAGE_BLOCK, UPDATE_ROW_PAGE_BLOCK, DELETE_ROW_PAGE_BLOCK,
+            CHANGE_TABLE_VIEW, SET_TABLE_VIEW_CONFIG, SORT_TABLE, FILTER_TABLE, GROUP_TABLE.
+
+            Main fields you may use:
+            targetTitle, title, content, blockType, blockText, propertyName, propertyType, value,
+            tableTitle, tableView, columnName, newColumnName, columnType, rowTitle, newRowTitle,
+            cellValues, tableColumns, tableRows, formula, sortDirection, filterQuery, groupByColumnName.
+
+            Table column types:
+            Text, Number, Select, MultiSelect, Status, Date, Person, Files, Checkbox, URL, Email, Phone,
+            Formula, Relation, Rollup, CreatedTime, CreatedBy, LastEditedTime, LastEditedBy, Button, Place, ID.
+
+            Decision rules:
+            - Home request to create a new tracker/jadual/table/page: use CREATE_PAGE with tableTitle, tableColumns, and tableRows when useful.
+            - Request inside or mentioning an existing page to create a table: use CREATE_DATABASE with targetTitle.
+            - Request to add spending/expense/record to an existing table: use ADD_TABLE_ROW. Do not create a new table unless user asks for a new table/page.
+            - If a page is mentioned in CYL_MENTION_CONTEXT, treat that as the exact target page.
+            - If one current/mentioned page is clearly in context and user does not mention a page, use that page.
+            - For date words like harini/today, use the client date.
+            - For money like "29 ringgit", put the numeric value in an amount/price/cost column if such column exists or create a Number column.
+            - For table creation, infer sensible columns and rows from the user's intent instead of using fixed templates.
+            - For multi-step requests, return multiple actions in order.
+
+            Examples:
+            User: buatkan page baru untuk bulan 7 punya monthly expenses,dengan gaji 1488
+            JSON: {"reply":"Siap - saya buat page monthly expenses bulan 7.","actions":[{"type":"CREATE_PAGE","title":"Monthly Expenses July","tableTitle":"Monthly Expenses","tableColumns":[{"name":"Category","type":"Text"},{"name":"Budget","type":"Number"},{"name":"Actual","type":"Number"},{"name":"Status","type":"Status"},{"name":"Notes","type":"Text"}],"tableRows":[{"Category":"Salary","Budget":"1488","Actual":"1488","Status":"Income"}]}]}
+
+            User: saya guna 29 ringgit harini beli makeup
+            JSON: {"reply":"Siap - saya tambah rekod belanja itu.","actions":[{"type":"ADD_TABLE_ROW","rowTitle":"makeup","cellValues":{"Item":"makeup","Amount":"29","Date":"${clientDate.ifBlank { "today" }}"}}]}
+
+            User: @Budget Tracker ubah nama table jadi Expenses
+            JSON: {"reply":"Siap - saya rename table itu.","actions":[{"type":"RENAME_TABLE","targetTitle":"Budget Tracker","title":"Expenses"}]}
+
+            Context:
+            $context
+        """.trimIndent()
+
+        return listOf(ChatMessage(role = "system", content = systemPrompt)) + messages
     }
 
     internal fun selectActionResultForPrompt(
@@ -486,6 +617,14 @@ class AiService(
     private data class ApiChoice(
         val message: ApiMessage
     )
+
+    private companion object {
+        const val MaxActionContextPages = 25
+        const val MaxActionContextTablesPerPage = 5
+        const val MaxActionContextBlocksPerPage = 6
+        const val MaxActionContextTasks = 20
+        const val MaxActionContextBlockText = 260
+    }
 }
 
 internal fun String.cleanAiJson(): String {

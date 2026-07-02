@@ -9,6 +9,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class AiActionRecoveryTest {
     private val service = AiService(openRouterApiKey = "test-key")
@@ -382,6 +383,61 @@ class AiActionRecoveryTest {
         assertEquals("Penjagaan Ayam", action.title)
         assertEquals("Penjagaan Ayam", action.tableTitle)
         assertEquals(listOf("Name", "Status", "Notes"), action.tableColumns.map { it.name })
+    }
+
+    @Test
+    fun chatWithActionsUsesModelActionBeforePromptFallback() {
+        val aiFirstService = AiService(
+            openRouterApiKey = "test-key",
+            completionProvider = { messages, jsonMode, _ ->
+                assertTrue(jsonMode)
+                assertTrue(messages.first().content.contains("Return ONLY one valid JSON object"))
+                """
+                    {
+                      "reply": "Siap - saya buat jadual ikut arahan AI.",
+                      "actions": [
+                        {
+                          "type": "CREATE_PAGE",
+                          "title": "AI Planned Chicken Care",
+                          "tableTitle": "Care Schedule",
+                          "tableColumns": [
+                            { "name": "When", "type": "Text" },
+                            { "name": "Task", "type": "Text" }
+                          ],
+                          "tableRows": [
+                            { "When": "Morning", "Task": "Feed chickens" }
+                          ]
+                        }
+                      ]
+                    }
+                """.trimIndent()
+            },
+        )
+
+        val result = aiFirstService.chatWithActions(
+            messages = listOf(ChatMessage(role = "user", content = "buat jadual penjagaan ayam")),
+            pages = emptyList(),
+        )
+
+        val action = result.actions.single()
+        assertEquals("CREATE_PAGE", action.type)
+        assertEquals("AI Planned Chicken Care", action.title)
+        assertEquals("Care Schedule", action.tableTitle)
+        assertEquals("Morning", action.tableRows.single()["When"])
+    }
+
+    @Test
+    fun modelJsonWithEmptyActionsKeepsConversationalReply() {
+        val result = service.recoverActionFromModelReply(
+            reply = """{"reply":"Boleh, kita bincang dulu tanpa ubah app.","actions":[]}""",
+            prompt = "kita planning dulu",
+            pages = emptyList(),
+        )
+
+        val recovered = assertNotNull(result)
+        assertEquals("Boleh, kita bincang dulu tanpa ubah app.", recovered.reply)
+        assertEquals(emptyList(), recovered.actions)
+        assertEquals(emptyList(), recovered.validationIssues)
     }
 
     @Test
