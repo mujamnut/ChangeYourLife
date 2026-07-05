@@ -291,6 +291,8 @@ class AiActionExecutionUseCaseTest {
 
         override suspend fun upsertReminder(reminder: Reminder) = Unit
 
+        override suspend fun reschedulePendingReminders() = Unit
+
         override suspend fun createReminder(
             workspaceId: String,
             title: String,

@@ -1194,13 +1194,12 @@ class PageEditorViewModel @Inject constructor(
 
     fun updateTableFilter(
         blockId: String,
-        columnId: String,
-        query: String,
+        filter: PageTableFilter,
     ) {
         val currentUiState = uiState.value
         if (currentUiState.page != null) {
             val document = currentDocument(currentUiState) ?: return
-            val result = tableMutationUseCase.updateFilter(document, blockId, columnId, query)
+            val result = tableMutationUseCase.updateFilter(document, blockId, filter)
             if (!result.changed) return
             recordTableUndo(result)
             queueTablePatchPendingDocument(blockId, result.document)

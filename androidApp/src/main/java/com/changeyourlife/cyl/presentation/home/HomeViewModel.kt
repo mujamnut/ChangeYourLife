@@ -20,6 +20,7 @@ import com.changeyourlife.cyl.domain.model.Reminder
 import com.changeyourlife.cyl.domain.model.SyncOverview
 import com.changeyourlife.cyl.domain.model.TaskItem
 import com.changeyourlife.cyl.domain.model.Workspace
+import com.changeyourlife.cyl.domain.model.isActive
 import com.changeyourlife.cyl.domain.repository.AuthRepository
 import com.changeyourlife.cyl.domain.repository.AiBlockContext
 import com.changeyourlife.cyl.domain.model.ChatMessage
@@ -1843,10 +1844,10 @@ private fun PageTableRow.cellText(column: PageTableColumn?): String {
 
 private fun PageTable.contextStateText(): String {
     val sortText = if (sort.columnId.isBlank()) "none" else "${sort.columnId}:${sort.direction.name}"
-    val filterText = if (filter.columnId.isBlank() || filter.query.isBlank()) {
+    val filterText = if (!filter.isActive()) {
         "none"
     } else {
-        "${filter.columnId}:${filter.query}"
+        "${filter.columnId}:${filter.operator.name}:${filter.query}"
     }
     val groupText = groupByColumnId.ifBlank { "none" }
     val viewConfigText = listOf(

@@ -167,7 +167,7 @@ object PageContentCodec {
             columns = normalizedColumns,
             rows = normalizedRows,
             sort = if (sort.columnId in validColumnIds) sort else PageTableSort(),
-            filter = if (filter.columnId in validColumnIds && filter.query.isNotBlank()) {
+            filter = if (filter.columnId in validColumnIds && filter.isActive()) {
                 filter
             } else {
                 PageTableFilter()

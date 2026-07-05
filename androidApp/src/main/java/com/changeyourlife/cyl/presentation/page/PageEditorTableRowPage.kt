@@ -156,6 +156,7 @@ import com.changeyourlife.cyl.domain.model.PageTableColumnConfig
 import com.changeyourlife.cyl.domain.model.PageTableColumnType
 import com.changeyourlife.cyl.domain.model.PageTableDateFormat
 import com.changeyourlife.cyl.domain.model.PageTableDateReminder
+import com.changeyourlife.cyl.domain.model.PageTableFilter
 import com.changeyourlife.cyl.domain.model.PageTableTimeFormat
 import com.changeyourlife.cyl.domain.model.PageTableRow
 import com.changeyourlife.cyl.domain.model.PageTableRollupAggregation
@@ -189,7 +190,7 @@ internal fun TableRowPageSheet(
     searchTargetType: String = "",
     searchTargetId: String = "",
     onSortChange: (String, PageTableSortDirection) -> Unit,
-    onFilterChange: (String, String) -> Unit,
+    onFilterChange: (PageTableFilter) -> Unit,
     onGroupChange: (String) -> Unit,
     onColumnNameChange: (String, String) -> Unit,
     onColumnTypeChange: (String, PageTableColumnType) -> Unit,
@@ -359,19 +360,14 @@ internal fun TableRowPageSheet(
             table = table,
             column = editingPropertyColumn,
             tableReferences = tableReferences,
-            onSort = {
-                onSortChange(
-                    editingPropertyColumn.id,
-                    if (table.sort.columnId == editingPropertyColumn.id &&
-                        table.sort.direction == PageTableSortDirection.Ascending
-                    ) {
-                        PageTableSortDirection.Descending
-                    } else {
-                        PageTableSortDirection.Ascending
-                    },
-                )
+            onSort = { direction ->
+                if (direction == null) {
+                    onSortChange("", PageTableSortDirection.Ascending)
+                } else {
+                    onSortChange(editingPropertyColumn.id, direction)
+                }
             },
-            onFilter = { query -> onFilterChange(editingPropertyColumn.id, query) },
+            onFilter = { filter -> onFilterChange(filter.copy(columnId = editingPropertyColumn.id)) },
             onGroup = { onGroupChange(editingPropertyColumn.id) },
             onColumnNameChange = { name -> onColumnNameChange(editingPropertyColumn.id, name) },
             onColumnTypeChange = { type -> onColumnTypeChange(editingPropertyColumn.id, type) },

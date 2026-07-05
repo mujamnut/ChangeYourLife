@@ -144,7 +144,30 @@ enum class PageTableSortDirection {
 data class PageTableFilter(
     val columnId: String = "",
     val query: String = "",
+    val operator: PageTableFilterOperator = PageTableFilterOperator.Contains,
 )
+
+@Serializable
+enum class PageTableFilterOperator {
+    Contains,
+    Equals,
+    NotEquals,
+    IsEmpty,
+    IsNotEmpty,
+    GreaterThan,
+    LessThan,
+    Before,
+    After,
+    OnOrBefore,
+    OnOrAfter,
+}
+
+fun PageTableFilter.isActive(): Boolean {
+    if (columnId.isBlank()) return false
+    return operator == PageTableFilterOperator.IsEmpty ||
+        operator == PageTableFilterOperator.IsNotEmpty ||
+        query.isNotBlank()
+}
 
 @Serializable
 data class PageTableColumn(

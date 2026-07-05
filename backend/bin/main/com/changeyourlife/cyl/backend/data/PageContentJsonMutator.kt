@@ -139,6 +139,7 @@ object PageContentJsonMutator {
         sortDirection: String?,
         filterColumnId: String?,
         filterQuery: String?,
+        filterOperator: String?,
         groupByColumnId: String?,
     ): String? {
         if (tableBlockId.isBlank()) return null
@@ -171,10 +172,13 @@ object PageContentJsonMutator {
                 updatedTable = updatedTable.withElement("sort", sort)
             }
 
-            if (filterColumnId != null || filterQuery != null) {
+            if (filterColumnId != null || filterQuery != null || filterOperator != null) {
                 var filter = updatedTable["filter"] as? JsonObject ?: JsonObject(emptyMap())
                 filterColumnId?.let { filter = filter.withString("columnId", it) }
                 filterQuery?.let { filter = filter.withString("query", it) }
+                filterOperator
+                    ?.takeIf { operator -> operator in ValidTableFilterOperators }
+                    ?.let { filter = filter.withString("operator", it) }
                 updatedTable = updatedTable.withElement("filter", filter)
             }
 
@@ -748,6 +752,20 @@ object PageContentJsonMutator {
             }
         }
     }
+
+    private val ValidTableFilterOperators = setOf(
+        "Contains",
+        "Equals",
+        "NotEquals",
+        "IsEmpty",
+        "IsNotEmpty",
+        "GreaterThan",
+        "LessThan",
+        "Before",
+        "After",
+        "OnOrBefore",
+        "OnOrAfter",
+    )
 }
 
 private data class Mutation<T>(

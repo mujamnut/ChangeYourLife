@@ -594,6 +594,7 @@ Current progress:
 - Done: table row/header heights are slightly denser for a spreadsheet-like rhythm.
 - Done: empty table/list/calendar/gallery/timeline/dashboard states now render as quiet inline hints instead of framed cards.
 - Done: sort/filter/group controls are tighter 40dp icon controls and active summaries are quieter chips.
+- Done: active sort/filter/group/search state now appears as compact chips under the table toolbar, with per-chip clear and a `Clear all` action when multiple controls are active.
 - Done: added a true table-specific search control in the database toolbar.
 - Done: table search is transient UI state, applies across table/list/board/calendar/gallery/timeline/dashboard views, and searches column display values plus row-page content.
 - Done: row `OPEN` action is now embedded inside the first/name column instead of living in a separate Open column/header.

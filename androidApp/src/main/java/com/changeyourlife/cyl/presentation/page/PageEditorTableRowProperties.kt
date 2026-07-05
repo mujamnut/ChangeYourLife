@@ -119,6 +119,11 @@ internal fun RowPagePropertyList(
     currentPageId: String,
     onAddRelationTargetRow: (String) -> Unit,
 ) {
+    val propertyCountLabel = if (table.columns.isEmpty()) {
+        "Properties"
+    } else {
+        "Properties · ${table.columns.size}"
+    }
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -136,7 +141,7 @@ internal fun RowPagePropertyList(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = "Properties",
+                text = propertyCountLabel,
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -448,7 +453,7 @@ private fun RowPageCheckboxPropertyValue(
             onCheckedChange = { checked -> onValueChange(if (checked) CheckboxValueChecked else "") },
         )
         Text(
-            text = if (value == CheckboxValueChecked) "Checked" else "Empty",
+            text = if (value == CheckboxValueChecked) "Done" else "Empty",
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             style = MaterialTheme.typography.bodyMedium,
@@ -510,10 +515,11 @@ private fun RowPageChoicePropertyValue(
 ) {
     var isExpanded by remember { mutableStateOf(false) }
     val selectedValues = remember(value) { value.selectedChoiceValues() }
+    val displayValue = remember(selectedValues) { selectedValues.joinToString(", ") }
     Box(modifier = modifier) {
         RowPageClickablePropertyValue(
-            text = value.ifBlank { "Empty" },
-            isEmpty = value.isBlank(),
+            text = displayValue.ifBlank { "Empty" },
+            isEmpty = displayValue.isBlank(),
             modifier = Modifier.fillMaxWidth(),
             onClick = {
                 onFocusProperties()
@@ -547,7 +553,7 @@ private fun RowPageChoicePropertyValue(
                 val selected = option.name in selectedValues
                 DropdownMenuItem(
                     text = { Text(text = option.name) },
-                    trailingIcon = if (column.type == PageTableColumnType.MultiSelect && selected) {
+                    trailingIcon = if (selected) {
                         {
                             Icon(
                                 imageVector = Icons.Rounded.CheckCircle,

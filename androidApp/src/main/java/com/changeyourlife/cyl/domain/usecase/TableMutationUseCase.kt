@@ -14,6 +14,7 @@ import com.changeyourlife.cyl.domain.model.PageTableColumnType
 import com.changeyourlife.cyl.domain.model.PageTableDateFormat
 import com.changeyourlife.cyl.domain.model.PageTableDateReminder
 import com.changeyourlife.cyl.domain.model.PageTableFilter
+import com.changeyourlife.cyl.domain.model.PageTableFilterOperator
 import com.changeyourlife.cyl.domain.model.PageTableRollupAggregation
 import com.changeyourlife.cyl.domain.model.PageTableRow
 import com.changeyourlife.cyl.domain.model.PageTableSort
@@ -21,6 +22,7 @@ import com.changeyourlife.cyl.domain.model.PageTableSortDirection
 import com.changeyourlife.cyl.domain.model.PageTableTimeFormat
 import com.changeyourlife.cyl.domain.model.PageTableView
 import com.changeyourlife.cyl.domain.model.PageTableViewConfig
+import com.changeyourlife.cyl.domain.model.isActive
 import com.changeyourlife.cyl.domain.model.normalizedForType
 import com.changeyourlife.cyl.domain.model.toTypedCellValue
 import com.changeyourlife.cyl.domain.model.withColumnType
@@ -156,13 +158,26 @@ class TableMutationUseCase(
         tableBlockId: String,
         columnId: String,
         query: String,
+    ): TableMutationResult = updateFilter(
+        document = document,
+        tableBlockId = tableBlockId,
+        filter = PageTableFilter(
+            columnId = columnId,
+            query = query,
+            operator = PageTableFilterOperator.Contains,
+        ),
+    )
+
+    fun updateFilter(
+        document: PageBlockDocument,
+        tableBlockId: String,
+        filter: PageTableFilter,
     ): TableMutationResult = replaceTable(document, tableBlockId) { table ->
+        val normalizedFilter = filter.takeIf { candidate ->
+            candidate.isActive() && table.columns.any { column -> column.id == candidate.columnId }
+        }
         table.copy(
-            filter = if (columnId.isBlank() || query.isBlank()) {
-                PageTableFilter()
-            } else {
-                PageTableFilter(columnId = columnId, query = query)
-            },
+            filter = normalizedFilter ?: PageTableFilter(),
         )
     }
 

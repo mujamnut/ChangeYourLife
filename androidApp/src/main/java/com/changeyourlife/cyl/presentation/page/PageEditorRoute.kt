@@ -157,6 +157,7 @@ import com.changeyourlife.cyl.domain.model.PageTableColumnConfig
 import com.changeyourlife.cyl.domain.model.PageTableColumnType
 import com.changeyourlife.cyl.domain.model.PageTableDateFormat
 import com.changeyourlife.cyl.domain.model.PageTableDateReminder
+import com.changeyourlife.cyl.domain.model.PageTableFilter
 import com.changeyourlife.cyl.domain.model.PageTableTimeFormat
 import com.changeyourlife.cyl.domain.model.PageTableRow
 import com.changeyourlife.cyl.domain.model.PageTableRollupAggregation
@@ -313,7 +314,7 @@ internal fun PageEditorScreen(
     onTableViewConfigChange: (String, PageTableViewConfig) -> Unit,
     onTableDataSourceChange: (String, PageTableReference?) -> Unit,
     onTableSortChange: (String, String, PageTableSortDirection) -> Unit,
-    onTableFilterChange: (String, String, String) -> Unit,
+    onTableFilterChange: (String, PageTableFilter) -> Unit,
     onTableGroupChange: (String, String) -> Unit,
     onTableColumnNameChange: (String, String, String) -> Unit,
     onTableColumnTypeChange: (String, String, PageTableColumnType) -> Unit,

@@ -157,6 +157,7 @@ import com.changeyourlife.cyl.domain.model.PageTableColumnConfig
 import com.changeyourlife.cyl.domain.model.PageTableColumnType
 import com.changeyourlife.cyl.domain.model.PageTableDateFormat
 import com.changeyourlife.cyl.domain.model.PageTableDateReminder
+import com.changeyourlife.cyl.domain.model.PageTableFilter
 import com.changeyourlife.cyl.domain.model.PageTableTimeFormat
 import com.changeyourlife.cyl.domain.model.PageTableRow
 import com.changeyourlife.cyl.domain.model.PageTableRollupAggregation
@@ -211,7 +212,7 @@ internal fun PageEditorBlock(
     onTableViewConfigChange: (String, PageTableViewConfig) -> Unit,
     onTableDataSourceChange: (String, PageTableReference?) -> Unit,
     onTableSortChange: (String, String, PageTableSortDirection) -> Unit,
-    onTableFilterChange: (String, String, String) -> Unit,
+    onTableFilterChange: (String, PageTableFilter) -> Unit,
     onTableGroupChange: (String, String) -> Unit,
     onTableColumnNameChange: (String, String, String) -> Unit,
     onTableColumnTypeChange: (String, String, PageTableColumnType) -> Unit,
@@ -325,7 +326,7 @@ internal fun PageEditorBlock(
                     onViewConfigChange = { config -> onTableViewConfigChange(block.id, config) },
                     onDataSourceChange = { source -> onTableDataSourceChange(block.id, source) },
                     onSortChange = { columnId, direction -> onTableSortChange(block.id, columnId, direction) },
-                    onFilterChange = { columnId, query -> onTableFilterChange(block.id, columnId, query) },
+                    onFilterChange = { filter -> onTableFilterChange(block.id, filter) },
                     onGroupChange = { columnId -> onTableGroupChange(block.id, columnId) },
                     onColumnNameChange = { columnId, name -> onTableColumnNameChange(block.id, columnId, name) },
                     onColumnTypeChange = { columnId, type -> onTableColumnTypeChange(block.id, columnId, type) },

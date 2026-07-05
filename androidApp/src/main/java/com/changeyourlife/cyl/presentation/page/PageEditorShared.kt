@@ -155,6 +155,8 @@ import com.changeyourlife.cyl.domain.model.PageTableColumn
 import com.changeyourlife.cyl.domain.model.PageTableColumnType
 import com.changeyourlife.cyl.domain.model.PageTableDateFormat
 import com.changeyourlife.cyl.domain.model.PageTableDateReminder
+import com.changeyourlife.cyl.domain.model.PageTableFilter
+import com.changeyourlife.cyl.domain.model.PageTableFilterOperator
 import com.changeyourlife.cyl.domain.model.PageTableTimeFormat
 import com.changeyourlife.cyl.domain.model.PageTableRow
 import com.changeyourlife.cyl.domain.model.PageTableRollupAggregation
@@ -165,6 +167,7 @@ import com.changeyourlife.cyl.domain.model.PageTableViewConfig
 import com.changeyourlife.cyl.domain.model.PageSyncState
 import com.changeyourlife.cyl.domain.model.PageTextSpan
 import com.changeyourlife.cyl.domain.model.displayValue
+import com.changeyourlife.cyl.domain.model.isActive
 import com.changeyourlife.cyl.domain.model.withColumnType
 import com.changeyourlife.cyl.presentation.ai.AiChatMode
 import com.changeyourlife.cyl.presentation.ai.AiChatSheet
@@ -857,8 +860,8 @@ internal fun PageTable.visibleRows(
     searchQuery: String = "",
 ): List<PageTableRow> {
     val filterColumn = columns.firstOrNull { column -> column.id == filter.columnId }
-    val filteredRows = if (filterColumn != null && filter.query.isNotBlank()) {
-        rows.filter { row -> displayCellText(row, filterColumn, tableReferences).contains(filter.query, ignoreCase = true) }
+    val filteredRows = if (filterColumn != null && filter.isActive()) {
+        rows.filter { row -> row.matchesTableFilter(this, filterColumn, filter, tableReferences) }
     } else {
         rows
     }
@@ -948,6 +951,86 @@ internal fun PageBlock.searchText(): String {
             append(' ')
         }
     }
+}
+
+internal fun PageTableRow.matchesTableFilter(
+    table: PageTable,
+    column: PageTableColumn,
+    filter: PageTableFilter,
+    tableReferences: List<PageTableReference>,
+): Boolean {
+    val displayText = table.displayCellText(this, column, tableReferences)
+    val query = filter.query.trim()
+    val isEmpty = displayText.isBlank()
+    return when (filter.operator) {
+        PageTableFilterOperator.IsEmpty -> isEmpty
+        PageTableFilterOperator.IsNotEmpty -> !isEmpty
+        PageTableFilterOperator.Contains -> displayText.contains(query, ignoreCase = true)
+        PageTableFilterOperator.Equals -> column.matchesFilterEquals(this, displayText, query, tableReferences)
+        PageTableFilterOperator.NotEquals -> !column.matchesFilterEquals(this, displayText, query, tableReferences)
+        PageTableFilterOperator.GreaterThan -> column.compareFilterNumberOrText(this, displayText, query, tableReferences) > 0
+        PageTableFilterOperator.LessThan -> column.compareFilterNumberOrText(this, displayText, query, tableReferences) < 0
+        PageTableFilterOperator.Before -> column.compareFilterDateOrText(this, displayText, query, tableReferences) < 0
+        PageTableFilterOperator.After -> column.compareFilterDateOrText(this, displayText, query, tableReferences) > 0
+        PageTableFilterOperator.OnOrBefore -> column.compareFilterDateOrText(this, displayText, query, tableReferences) <= 0
+        PageTableFilterOperator.OnOrAfter -> column.compareFilterDateOrText(this, displayText, query, tableReferences) >= 0
+    }
+}
+
+private fun PageTableColumn.matchesFilterEquals(
+    row: PageTableRow,
+    displayText: String,
+    query: String,
+    tableReferences: List<PageTableReference>,
+): Boolean = when (type) {
+    PageTableColumnType.Checkbox -> {
+        val expected = query.equals("true", ignoreCase = true) ||
+            query.equals("checked", ignoreCase = true) ||
+            query.equals("done", ignoreCase = true) ||
+            query.equals("yes", ignoreCase = true)
+        (row.cellText(this) == CheckboxValueChecked) == expected
+    }
+    PageTableColumnType.Number -> displayText.toDoubleOrNull() == query.toDoubleOrNull()
+    PageTableColumnType.Date -> compareFilterDateOrText(row, displayText, query, tableReferences) == 0
+    PageTableColumnType.MultiSelect -> row.cellText(this)
+        .selectedChoiceValues()
+        .any { value -> value.equals(query, ignoreCase = true) }
+    else -> displayText.equals(query, ignoreCase = true)
+}
+
+private fun PageTableColumn.compareFilterNumberOrText(
+    row: PageTableRow,
+    displayText: String,
+    query: String,
+    tableReferences: List<PageTableReference>,
+): Int {
+    val leftNumber = when (type) {
+        PageTableColumnType.Number,
+        PageTableColumnType.Formula,
+        PageTableColumnType.Rollup,
+        -> displayText.toDoubleOrNull()
+        else -> null
+    }
+    val rightNumber = query.toDoubleOrNull()
+    if (leftNumber != null && rightNumber != null) {
+        return leftNumber.compareTo(rightNumber)
+    }
+    return compareFilterDateOrText(row, displayText, query, tableReferences)
+}
+
+private fun PageTableColumn.compareFilterDateOrText(
+    row: PageTableRow,
+    displayText: String,
+    query: String,
+    tableReferences: List<PageTableReference>,
+): Int {
+    val leftDate = row.cellValues[id]?.date?.startDate?.toLocalDateOrNull()
+        ?: displayText.toLocalDateOrNull()
+    val rightDate = query.toLocalDateOrNull()
+    if (leftDate != null && rightDate != null) {
+        return leftDate.compareTo(rightDate)
+    }
+    return displayText.lowercase(Locale.US).compareTo(query.lowercase(Locale.US))
 }
 
 internal fun PageTable.groupLabel(
@@ -1514,7 +1597,7 @@ internal fun PageEditorScreenPreview() {
             onTableViewChange = { _, _ -> },
             onTableViewConfigChange = { _, _ -> },
             onTableSortChange = { _, _, _ -> },
-            onTableFilterChange = { _, _, _ -> },
+            onTableFilterChange = { _, _ -> },
             onTableGroupChange = { _, _ -> },
             onTableColumnNameChange = { _, _, _ -> },
             onTableColumnTypeChange = { _, _, _ -> },

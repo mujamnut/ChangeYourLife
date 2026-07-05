@@ -395,6 +395,7 @@ fun Route.contentRoutes(contentRepository: ContentRepository) {
                             sortDirection = request.sortDirection,
                             filterColumnId = request.filterColumnId,
                             filterQuery = request.filterQuery,
+                            filterOperator = request.filterOperator,
                             groupByColumnId = request.groupByColumnId,
                         )
                     }

@@ -137,6 +137,7 @@ data class PageTablePatchRequest(
     val sortDirection: String? = null,
     val filterColumnId: String? = null,
     val filterQuery: String? = null,
+    val filterOperator: String? = null,
     val groupByColumnId: String? = null,
 )
 

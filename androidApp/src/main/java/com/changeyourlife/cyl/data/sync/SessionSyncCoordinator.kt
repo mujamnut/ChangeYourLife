@@ -1229,6 +1229,7 @@ class SessionSyncCoordinator @Inject constructor(
             sortDirection = sort.direction.name,
             filterColumnId = filter.columnId,
             filterQuery = filter.query,
+            filterOperator = filter.operator.name,
             groupByColumnId = groupByColumnId,
         )
     }
