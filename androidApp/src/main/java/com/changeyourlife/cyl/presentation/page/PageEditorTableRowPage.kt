@@ -182,6 +182,7 @@ import kotlinx.serialization.json.Json
 @Composable
 internal fun TableRowPageSheet(
     currentTableBlockId: String,
+    currentPageId: String,
     table: PageTable,
     row: PageTableRow,
     tableReferences: List<PageTableReference>,
@@ -194,6 +195,7 @@ internal fun TableRowPageSheet(
     onColumnTypeChange: (String, PageTableColumnType) -> Unit,
     onColumnConfigChange: (String, PageTableColumnConfig) -> Unit,
     onCellChange: (String, String, String) -> Unit,
+    onRelationCellChange: (String, String, List<String>) -> Unit,
     onAddColumn: (String, PageTableColumnType) -> Unit,
     onInsertColumn: (String, TableColumnInsertSide) -> Unit,
     onDuplicateColumn: (String) -> Unit,
@@ -209,6 +211,7 @@ internal fun TableRowPageSheet(
     onColumnRelationTargetChange: (String, String) -> Unit,
     onColumnRollupChange: (String, String, String, PageTableRollupAggregation) -> Unit,
     onAddRow: () -> Unit,
+    onAddRelationTargetRow: (String) -> Unit,
     onBlockTextChange: (String, String) -> Unit,
     onBlockRichTextChange: (String, String, List<PageTextSpan>) -> Unit,
     onBlockPasteBlocks: (String, List<RichTextPasteBlock>) -> Unit,
@@ -462,8 +465,13 @@ internal fun TableRowPageSheet(
                     editingPropertyColumnId = column.id
                 },
                 onCellChange = { columnId, value -> onCellChange(row.id, columnId, value) },
+                onRelationCellChange = { columnId, relationRowIds ->
+                    onRelationCellChange(row.id, columnId, relationRowIds)
+                },
                 onColumnDateSettingsChange = onColumnDateSettingsChange,
                 onFocusProperties = ::clearRowEditorFocus,
+                currentPageId = currentPageId,
+                onAddRelationTargetRow = onAddRelationTargetRow,
             )
 
             HorizontalDivider()

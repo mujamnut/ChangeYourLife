@@ -107,6 +107,7 @@ internal fun RowPagePropertyList(
     onAddProperty: () -> Unit,
     onEditProperty: (PageTableColumn) -> Unit,
     onCellChange: (String, String) -> Unit,
+    onRelationCellChange: (String, List<String>) -> Unit,
     onColumnDateSettingsChange: (
         String,
         PageTableDateFormat,
@@ -115,6 +116,8 @@ internal fun RowPagePropertyList(
         String,
     ) -> Unit,
     onFocusProperties: () -> Unit,
+    currentPageId: String,
+    onAddRelationTargetRow: (String) -> Unit,
 ) {
     Column(
         modifier = Modifier.fillMaxWidth(),
@@ -184,11 +187,14 @@ internal fun RowPagePropertyList(
                     column = column,
                     tableReferences = tableReferences,
                     onValueChange = { value -> onCellChange(column.id, value) },
+                    onRelationValueChange = { relationRowIds -> onRelationCellChange(column.id, relationRowIds) },
                     onDateSettingsChange = { dateFormat, timeFormat, reminder, timezoneLabel ->
                         onColumnDateSettingsChange(column.id, dateFormat, timeFormat, reminder, timezoneLabel)
                     },
                     onEditProperty = { onEditProperty(column) },
                     onFocusProperties = onFocusProperties,
+                    currentPageId = currentPageId,
+                    onAddRelationTargetRow = onAddRelationTargetRow,
                 )
                 if (index < table.columns.lastIndex) {
                     HorizontalDivider(
@@ -208,6 +214,7 @@ private fun RowPagePropertyItem(
     column: PageTableColumn,
     tableReferences: List<PageTableReference>,
     onValueChange: (String) -> Unit,
+    onRelationValueChange: (List<String>) -> Unit,
     onDateSettingsChange: (
         PageTableDateFormat,
         PageTableTimeFormat,
@@ -216,6 +223,8 @@ private fun RowPagePropertyItem(
     ) -> Unit,
     onEditProperty: () -> Unit,
     onFocusProperties: () -> Unit,
+    currentPageId: String,
+    onAddRelationTargetRow: (String) -> Unit,
 ) {
     val tableColors = TableGridTokens.colors()
     Row(
@@ -257,8 +266,11 @@ private fun RowPagePropertyItem(
             tableReferences = tableReferences,
             value = row.cellText(column),
             onValueChange = onValueChange,
+            onRelationValueChange = onRelationValueChange,
             onDateSettingsChange = onDateSettingsChange,
             onFocusProperties = onFocusProperties,
+            currentPageId = currentPageId,
+            onAddRelationTargetRow = onAddRelationTargetRow,
             modifier = Modifier.weight(1f),
         )
     }
@@ -273,6 +285,7 @@ private fun RowPagePropertyValueEditor(
     tableReferences: List<PageTableReference>,
     value: String,
     onValueChange: (String) -> Unit,
+    onRelationValueChange: (List<String>) -> Unit,
     onDateSettingsChange: (
         PageTableDateFormat,
         PageTableTimeFormat,
@@ -280,6 +293,8 @@ private fun RowPagePropertyValueEditor(
         String,
     ) -> Unit,
     onFocusProperties: () -> Unit,
+    currentPageId: String,
+    onAddRelationTargetRow: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     when (column.type) {
@@ -294,6 +309,9 @@ private fun RowPagePropertyValueEditor(
             value = value,
             tableReferences = tableReferences,
             onValueChange = onValueChange,
+            onRelationValueChange = onRelationValueChange,
+            currentPageId = currentPageId,
+            onCreateTargetRow = onAddRelationTargetRow,
             modifier = modifier,
         )
         PageTableColumnType.Checkbox -> RowPageCheckboxPropertyValue(

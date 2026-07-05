@@ -1047,13 +1047,41 @@ internal fun PageTable.displayCellText(
     column: PageTableColumn?,
     tableReferences: List<PageTableReference>,
     depth: Int = 0,
+    evaluationPath: Set<String> = emptySet(),
 ): String {
-    if (column == null || depth > 4) return ""
+    if (column == null) return ""
+    if (depth > 24) return CircularDependencyText
     val rawValue = row.cellText(column)
     return when (column.type) {
-        PageTableColumnType.Formula -> evaluateFormula(row, column.formula, tableReferences, depth + 1)
+        PageTableColumnType.Formula -> {
+            val key = evaluationKey(row, column, tableReferences)
+            if (key in evaluationPath) {
+                CircularDependencyText
+            } else {
+                evaluateFormula(
+                    row = row,
+                    sourceColumn = column,
+                    tableReferences = tableReferences,
+                    depth = depth + 1,
+                    evaluationPath = evaluationPath + key,
+                )
+            }
+        }
         PageTableColumnType.Relation -> relationDisplayText(rawValue, column, tableReferences)
-        PageTableColumnType.Rollup -> rollupDisplayText(row, column, tableReferences, depth + 1)
+        PageTableColumnType.Rollup -> {
+            val key = evaluationKey(row, column, tableReferences)
+            if (key in evaluationPath) {
+                CircularDependencyText
+            } else {
+                rollupDisplayText(
+                    row = row,
+                    column = column,
+                    tableReferences = tableReferences,
+                    depth = depth + 1,
+                    evaluationPath = evaluationPath + key,
+                )
+            }
+        }
         PageTableColumnType.Checkbox -> if (rawValue == CheckboxValueChecked) "Checked" else ""
         PageTableColumnType.FilesMedia -> rawValue.toTableMediaAttachments()
             .joinToString(separator = ", ") { attachment -> attachment.name }
@@ -1069,21 +1097,27 @@ internal fun PageTable.displayCellText(
 
 internal fun PageTable.evaluateFormula(
     row: PageTableRow,
-    formula: String,
+    sourceColumn: PageTableColumn,
     tableReferences: List<PageTableReference>,
     depth: Int,
+    evaluationPath: Set<String>,
 ): String {
+    val formula = sourceColumn.formula
     if (formula.isBlank()) return ""
     var expression = formula
+    var hasCircularDependency = false
     columns
-        .filterNot { column -> column.type == PageTableColumnType.Formula && column.formula == formula }
+        .filterNot { column -> column.id == sourceColumn.id }
         .sortedByDescending { column -> column.name.length }
         .forEach { column ->
-            val value = displayCellText(row, column, tableReferences, depth)
-                .toDoubleOrNull()
-                ?: 0.0
+            val displayValue = displayCellText(row, column, tableReferences, depth, evaluationPath)
+            if (displayValue == CircularDependencyText) {
+                hasCircularDependency = true
+            }
+            val value = displayValue.toDoubleOrNull() ?: 0.0
             expression = expression.replace("{${column.name}}", value.toString(), ignoreCase = true)
         }
+    if (hasCircularDependency) return CircularDependencyText
     return expression.evaluateArithmeticExpression()
         ?.formatTableNumber()
         .orEmpty()
@@ -1095,10 +1129,10 @@ internal fun PageTable.relationDisplayText(
     tableReferences: List<PageTableReference>,
 ): String {
     val targetTable = tableReferences.firstOrNull { reference -> reference.blockId == column.relationTargetTableId }?.table
-        ?: return ""
-    val relatedIds = rawValue.relatedRowIds()
-    return targetTable.rows
-        .filter { row -> row.id in relatedIds }
+        ?: return if (column.relationTargetTableId.isBlank()) "" else MissingSourceText
+    val rowsById = targetTable.rows.associateBy { row -> row.id }
+    return rawValue.relatedRowIdList()
+        .mapNotNull { rowId -> rowsById[rowId] }
         .joinToString { row -> targetTable.rowTitle(row) }
 }
 
@@ -1107,32 +1141,66 @@ internal fun PageTable.rollupDisplayText(
     column: PageTableColumn,
     tableReferences: List<PageTableReference>,
     depth: Int,
+    evaluationPath: Set<String> = emptySet(),
 ): String {
     val relationColumn = columns.firstOrNull { candidate -> candidate.id == column.rollupRelationColumnId }
-        ?: return ""
+        ?: return "Set relation"
+    if (relationColumn.type != PageTableColumnType.Relation) return "Invalid relation"
     val targetTable = tableReferences.firstOrNull { reference ->
         reference.blockId == relationColumn.relationTargetTableId
-    }?.table ?: return ""
+    }?.table ?: return if (relationColumn.relationTargetTableId.isBlank()) "Set target" else MissingSourceText
     val targetColumn = targetTable.columns.firstOrNull { target -> target.id == column.rollupTargetColumnId }
-    val relatedIds = row.cellText(relationColumn).relatedRowIds()
-    val values = targetTable.rows
-        .filter { relatedRow -> relatedRow.id in relatedIds }
-        .map { relatedRow -> targetTable.displayCellText(relatedRow, targetColumn, tableReferences, depth) }
+        ?: return MissingPropertyText
+    val rowsById = targetTable.rows.associateBy { targetRow -> targetRow.id }
+    val relatedRows = row.cellText(relationColumn)
+        .relatedRowIdList()
+        .mapNotNull { rowId -> rowsById[rowId] }
+    if (relatedRows.isEmpty()) return ""
+    val values = relatedRows
+        .map { relatedRow ->
+            targetTable.displayCellText(
+                row = relatedRow,
+                column = targetColumn,
+                tableReferences = tableReferences,
+                depth = depth,
+                evaluationPath = evaluationPath,
+            )
+        }
+    if (values.any { value -> value == CircularDependencyText }) return CircularDependencyText
+    if (values.any { value -> value == MissingSourceText }) return MissingSourceText
+    if (values.any { value -> value == MissingPropertyText }) return MissingPropertyText
+    val nonBlankValues = values
         .filter { value -> value.isNotBlank() }
+    val numericValues = nonBlankValues.mapNotNull { value -> value.toDoubleOrNull() }
 
     return when (column.rollupAggregation) {
-        PageTableRollupAggregation.Count -> values.size.toString()
-        PageTableRollupAggregation.Sum -> values.sumOf { value -> value.toDoubleOrNull() ?: 0.0 }.formatTableNumber()
+        PageTableRollupAggregation.Count -> relatedRows.size.toString()
+        PageTableRollupAggregation.Sum -> numericValues.sum().formatTableNumber().takeIf { numericValues.isNotEmpty() }.orEmpty()
         PageTableRollupAggregation.Average -> {
-            if (values.isEmpty()) {
+            if (numericValues.isEmpty()) {
                 ""
             } else {
-                (values.sumOf { value -> value.toDoubleOrNull() ?: 0.0 } / values.size.toDouble()).formatTableNumber()
+                numericValues.average().formatTableNumber()
             }
         }
-        PageTableRollupAggregation.Min -> values.mapNotNull { value -> value.toDoubleOrNull() }.minOrNull()?.formatTableNumber().orEmpty()
-        PageTableRollupAggregation.Max -> values.mapNotNull { value -> value.toDoubleOrNull() }.maxOrNull()?.formatTableNumber().orEmpty()
+        PageTableRollupAggregation.Min -> numericValues.minOrNull()?.formatTableNumber().orEmpty()
+        PageTableRollupAggregation.Max -> numericValues.maxOrNull()?.formatTableNumber().orEmpty()
     }
+}
+
+private const val CircularDependencyText = "Circular dependency"
+private const val MissingSourceText = "Missing source"
+private const val MissingPropertyText = "Missing property"
+
+private fun PageTable.evaluationKey(
+    row: PageTableRow,
+    column: PageTableColumn,
+    tableReferences: List<PageTableReference>,
+): String {
+    val tableId = tableReferences.firstOrNull { reference -> reference.table === this }?.blockId
+        ?: tableReferences.firstOrNull { reference -> reference.table == this }?.blockId
+        ?: "table-${System.identityHashCode(this)}"
+    return "$tableId:${row.id}:${column.id}"
 }
 
 internal fun PageTableRow.cellText(column: PageTableColumn?): String {
@@ -1209,10 +1277,12 @@ internal fun PageTableColumn.configSummary(
     return when (type) {
         PageTableColumnType.Formula -> formula.ifBlank { "Set formula" }
         PageTableColumnType.Relation -> {
-            tableReferences.firstOrNull { reference -> reference.blockId == relationTargetTableId }
-                ?.title
-                ?.ifBlank { "Untitled database" }
-                ?: "Set target"
+            val target = tableReferences.firstOrNull { reference -> reference.blockId == relationTargetTableId }
+            when {
+                target != null -> target.title.ifBlank { "Untitled database" }
+                relationTargetTableId.isBlank() -> "Set target"
+                else -> MissingSourceText
+            }
         }
         PageTableColumnType.Rollup -> {
             val relationColumn = table.columns.firstOrNull { column -> column.id == rollupRelationColumnId }
@@ -1220,9 +1290,16 @@ internal fun PageTableColumn.configSummary(
                 reference.blockId == relationColumn?.relationTargetTableId
             }?.table
             val targetColumn = targetTable?.columns?.firstOrNull { column -> column.id == rollupTargetColumnId }
+            val targetSummary = when {
+                relationColumn == null -> null
+                relationColumn.relationTargetTableId.isBlank() -> null
+                targetTable == null -> MissingSourceText
+                targetColumn == null -> MissingPropertyText
+                else -> targetColumn.name.ifBlank { "Property" }
+            }
             listOfNotNull(
                 relationColumn?.name?.ifBlank { "Relation" },
-                targetColumn?.name?.ifBlank { "Property" },
+                targetSummary,
                 rollupAggregation.name,
             ).joinToString(" • ").ifBlank { "Set rollup" }
         }
@@ -1240,10 +1317,14 @@ internal fun PageTableColumn.configSummary(
 }
 
 internal fun String.relatedRowIds(): Set<String> {
+    return relatedRowIdList().toSet()
+}
+
+internal fun String.relatedRowIdList(): List<String> {
     return split(",")
         .map { value -> value.trim() }
         .filter { value -> value.isNotBlank() }
-        .toSet()
+        .distinct()
 }
 
 internal fun String.evaluateArithmeticExpression(): Double? {
@@ -1422,6 +1503,7 @@ internal fun PageEditorScreenPreview() {
             onTableColumnRelationTargetChange = { _, _, _ -> },
             onTableColumnRollupChange = { _, _, _, _, _ -> },
             onTableCellChange = { _, _, _, _ -> },
+            onTableRelationCellChange = { _, _, _, _ -> },
             onAddTableColumn = { _, _, _ -> },
             onInsertTableColumn = { _, _, _ -> },
             onDuplicateTableColumn = { _, _ -> },

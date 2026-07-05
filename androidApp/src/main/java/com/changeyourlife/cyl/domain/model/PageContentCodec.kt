@@ -106,19 +106,20 @@ object PageContentCodec {
     }
 
     private fun List<PageBlock>.normalizedTopLevelBlocks(): List<PageBlock> {
+        val usedRowIds = mutableSetOf<String>()
         return ifEmpty { listOf(newBlock(PageBlockType.Text)) }
-            .map { block -> block.normalizedBlock() }
+            .map { block -> block.normalizedBlock(usedRowIds) }
     }
 
-    private fun List<PageBlock>.normalizedChildBlocks(): List<PageBlock> {
-        return map { block -> block.normalizedBlock() }
+    private fun List<PageBlock>.normalizedChildBlocks(usedRowIds: MutableSet<String>): List<PageBlock> {
+        return map { block -> block.normalizedBlock(usedRowIds) }
     }
 
-    private fun PageBlock.normalizedBlock(): PageBlock {
-        val normalizedChildren = children.normalizedChildBlocks()
+    private fun PageBlock.normalizedBlock(usedRowIds: MutableSet<String>): PageBlock {
+        val normalizedChildren = children.normalizedChildBlocks(usedRowIds)
         return if (type == PageBlockType.DatabaseTable) {
             copy(
-                table = table.normalizedTable(),
+                table = table.normalizedTable(usedRowIds),
                 children = normalizedChildren,
             )
         } else {
@@ -126,13 +127,17 @@ object PageContentCodec {
         }
     }
 
-    private fun PageTable.normalizedTable(): PageTable {
+    private fun PageTable.normalizedTable(usedRowIds: MutableSet<String>): PageTable {
         val normalizedColumns = columns.ifEmpty {
             listOf(newTableColumn("Name"))
         }
         val validColumnIds = normalizedColumns.map { column -> column.id }.toSet()
         val normalizedRows = rows.map { row ->
+            val nextRowId = row.id.takeIf { id ->
+                id.isNotBlank() && usedRowIds.add(id)
+            } ?: generateUniqueRowId(usedRowIds)
             row.copy(
+                id = nextRowId,
                 cells = normalizedColumns.associate { column ->
                     column.id to row.cells[column.id].orEmpty()
                 },
@@ -143,7 +148,7 @@ object PageContentCodec {
                         ?: column.toTypedCellValue(displayValue)
                     column.id to typedValue
                 },
-                blocks = row.blocks.normalizedChildBlocks(),
+                blocks = row.blocks.normalizedChildBlocks(usedRowIds),
             )
         }
         return copy(
@@ -164,6 +169,13 @@ object PageContentCodec {
                 dashboardGroupColumnId = viewConfig.dashboardGroupColumnId.takeIf { columnId -> columnId in validColumnIds }.orEmpty(),
             ),
         )
+    }
+
+    private fun generateUniqueRowId(usedRowIds: MutableSet<String>): String {
+        while (true) {
+            val id = UUID.randomUUID().toString()
+            if (usedRowIds.add(id)) return id
+        }
     }
 
     private fun String.toLegacyBlocks(): List<PageBlock> {

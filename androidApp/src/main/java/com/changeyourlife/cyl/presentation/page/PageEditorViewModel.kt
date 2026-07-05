@@ -29,6 +29,7 @@ import com.changeyourlife.cyl.domain.model.PageTableView
 import com.changeyourlife.cyl.domain.model.PageTableViewConfig
 import com.changeyourlife.cyl.domain.model.PageSyncState
 import com.changeyourlife.cyl.domain.model.PageTextSpan
+import com.changeyourlife.cyl.domain.model.toTypedCellValue
 import com.changeyourlife.cyl.domain.repository.PageRepository
 import com.changeyourlife.cyl.domain.usecase.AppliedEditorCommand
 import com.changeyourlife.cyl.domain.usecase.ApplyEditorCommandUseCase
@@ -1093,11 +1094,7 @@ class PageEditorViewModel @Inject constructor(
             val result = tableMutationUseCase.updateColumnType(document, blockId, columnId, type)
             if (!result.changed) return
             recordTableUndo(result)
-            queueTableColumnPatchPendingDocument(
-                tableBlockId = blockId,
-                columnId = columnId,
-                updated = result.document,
-            )
+            queueDocumentUpdate(result.document)
         }
     }
 
@@ -1176,7 +1173,7 @@ class PageEditorViewModel @Inject constructor(
             val result = tableMutationUseCase.updateColumnRelationTarget(document, blockId, columnId, targetTableId)
             if (!result.changed) return
             recordTableUndo(result)
-            queueTableColumnPatchPendingDocument(blockId, columnId, result.document)
+            queueDocumentUpdate(result.document)
         }
     }
 
@@ -1214,6 +1211,37 @@ class PageEditorViewModel @Inject constructor(
         if (currentUiState.page != null) {
             val document = currentDocument(currentUiState) ?: return
             val result = tableMutationUseCase.updateCell(document, blockId, rowId, columnId, value)
+            result.coercedValue?.let { nextValue ->
+                if (!result.changed) return
+                recordTableUndo(result.mutation)
+                queueGranularPendingDocument(result.document) { normalized ->
+                    PendingGranularDocumentSave.TableCellValue(
+                        document = normalized,
+                        rowId = rowId,
+                        columnId = columnId,
+                        value = nextValue,
+                    )
+                }
+            }
+        }
+    }
+
+    fun updateTableRelationCell(
+        blockId: String,
+        rowId: String,
+        columnId: String,
+        relationRowIds: List<String>,
+    ) {
+        val currentUiState = uiState.value
+        if (currentUiState.page != null) {
+            val document = currentDocument(currentUiState) ?: return
+            val result = tableMutationUseCase.updateRelationCell(
+                document = document,
+                tableBlockId = blockId,
+                rowId = rowId,
+                columnId = columnId,
+                relationRowIds = relationRowIds,
+            )
             result.coercedValue?.let { nextValue ->
                 if (!result.changed) return
                 recordTableUndo(result.mutation)
@@ -2010,11 +2038,19 @@ class PageEditorViewModel @Inject constructor(
                 value = value,
             )
             if (block.type == PageBlockType.DatabaseTable) {
+                val column = block.table.columns.firstOrNull { tableColumn -> tableColumn.id == columnId }
                 block.copy(
                     table = block.table.copy(
                         rows = block.table.rows.map { row ->
                             if (row.id == rowId) {
-                                row.copy(cells = row.cells + (columnId to value))
+                                row.copy(
+                                    cells = row.cells + (columnId to value),
+                                    cellValues = if (column == null) {
+                                        row.cellValues
+                                    } else {
+                                        row.cellValues + (columnId to value.toTypedCellValue(column.type))
+                                    },
+                                )
                             } else {
                                 row
                             }

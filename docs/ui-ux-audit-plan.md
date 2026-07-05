@@ -332,16 +332,28 @@ What is already solid:
 - Done: AI/table type inference now recognizes select, multi-select, tags, labels, options, and choices.
 - Done: edit-property `Details` sheet now exposes description and default value.
 - Done: new rows and newly added properties apply typed default values from property config.
+- Done: Relation cells now open a real row picker bottom sheet with search, multi-select checkboxes, row labels, and non-ID display.
+- Done: Relation row picker now has selected-only filtering, selected count, clearer clear/save behavior, and same-page target databases can create a new row from the picker.
+- Done: Relation cells now write typed `relationRowIds` directly through `TableMutationUseCase.updateRelationCell`; comma-string storage remains only as sync/backward-compatible display value.
+- Done: changing a Relation target clears old row links and clears dependent Rollup target properties so stale IDs do not survive silently.
+- Done: Rollup now validates relation dependency at mutation time and ignores non-relation columns as invalid dependencies.
+- Done: Rollup display now has clearer incomplete-config states, counts related rows, and numeric aggregations ignore non-number values instead of treating them as zero.
+- Done: Formula/Rollup computed cells now use graph/path-based dependency detection, so direct and indirect circular dependencies return `Circular dependency` instead of relying on a shallow depth guard.
+- Done: Rollup config sheet now shows warnings for invalid/mismatched target property choices and includes a live preview from the first row.
+- Done: Relation/Rollup UI now distinguishes unconfigured targets from missing cross-page/source databases with `Missing source` / `Missing property` states without destructively clearing cross-page references during sync delay.
+- Done: page content normalization now repairs duplicate/blank table row IDs across the whole document, which protects relation picker keys and the projected row/cell tables.
+- Done: backend table JSON mutation now rejects invalid Formula/Relation/Rollup patch combinations, clears stale relation cells when a target changes, and generates a new row ID if a duplicate row create request reaches the server.
 - Done: added unit coverage for status config normalization, select config normalization, files/media typed value round-trip, and multi-select normalization.
-- Verification note: Android/backend compile passes. Focused unit test execution was attempted, but the Gradle wrapper tried to download its distribution and sandbox network blocked it; escalated retry could not run because the approval auth token is revoked.
+- Done: added regression coverage for formula circular dependency detection, missing rollup source states, typed relation writes, stale relation cleanup, duplicate row ID repair, and backend property validation.
+- Verification note: Android/backend compile passes. Focused Android unit tests for table mutation/content codec and focused backend mutator tests pass.
 
 Core gaps:
 
 - Property configuration still lacks persisted hidden state, wrap state, column width, and required field.
 - `PageTableColumnType` still lacks several property types already expected from the Notion-like flow: Person, URL, Email, Phone, Button, Place, Created time/by, Last edited time/by, and ID.
-- Row property editors still mostly write string values through `onCellChange`. Typed `cellValues` now exist, but the UI is not fully typed-first yet.
-- Formula, relation, and rollup are configured, but they are not yet a mature database engine. They need stronger evaluation rules, error states, dependency tracking, and clear display formatting.
-- Status uses a fixed `TableStatusOptions` UI list, not per-property custom options.
+- Row property editors now use typed relation writes, but several other property types still write through string-first paths.
+- Formula is still a basic arithmetic engine. It still needs richer functions, type-aware errors, and preview per row.
+- Relation and Rollup are now solid for MVP data integrity: typed writes, graph-based circular dependency guard, missing-source states, and backend validation are in place. Remaining later work is advanced sync conflict UX for two devices editing the same database source at the same time.
 - Files/media is still stored/displayed as a string-like cell in some places; it should be a typed list of attachments end to end.
 - Hide and unwrap content appear in the property sheet, but they currently dismiss the sheet without persistent behavior.
 - AI Autofill appears as disabled UI. It should stay hidden or become a real property action later.
@@ -409,11 +421,11 @@ Recommended implementation order:
 2. Done: make the edit-property sheet capability-aware enough to hide unsupported actions and show type-specific settings.
 3. Done: add proper Select, Multi-select, and Status option models with color and order.
 4. Done: convert table/row property editors to typed-first reads with backward-compatible string fallback.
-5. Build relation row picker and make relation display labels, not IDs.
+5. Done: build relation row picker and make relation display labels, not IDs.
 6. Done: build formula validation and computed/error display.
-7. Build rollup evaluation with relation dependency checks.
-8. Add delete-property confirmation when data exists.
-9. Add tests for property mutation, type conversion, relation config, rollup config, and typed value mapping.
+7. Done: build rollup evaluation with relation dependency checks.
+8. Done: add delete-property confirmation when data exists.
+9. Done: add tests for property mutation, type conversion, relation config, rollup config, and typed value mapping.
 10. Only after that, add advanced property types like Person, Button, Place, created/edited metadata, and ID.
 
 ### AI Chat

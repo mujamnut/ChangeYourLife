@@ -202,6 +202,9 @@ object PageContentJsonMutator {
         if (tableBlockId.isBlank() || columnId.isBlank()) return null
         return mutateTable(content, tableBlockId) { table ->
             val columns = table["columns"] as? JsonArray ?: JsonArray(emptyList())
+            val originalColumn = columns.firstNotNullOfOrNull { element ->
+                (element as? JsonObject)?.takeIf { column -> column.stringValue("id") == columnId }
+            } ?: return@mutateTable null
             var changed = false
             val updatedColumns = columns.map { element ->
                 val column = element as? JsonObject ?: return@map element
@@ -222,8 +225,71 @@ object PageContentJsonMutator {
                 if (updatedColumn != column) changed = true
                 updatedColumn
             }
+            val editedColumn = updatedColumns
+                .filterIsInstance<JsonObject>()
+                .firstOrNull { column -> column.stringValue("id") == columnId }
+                ?: return@mutateTable null
+            val effectiveType = editedColumn.stringValue("type").ifBlank { "Text" }
+            validateTableColumnPatch(
+                columns = updatedColumns.filterIsInstance<JsonObject>(),
+                effectiveType = effectiveType,
+                formula = formula,
+                relationTargetTableId = relationTargetTableId,
+                rollupRelationColumnId = rollupRelationColumnId,
+                rollupTargetColumnId = rollupTargetColumnId,
+            )
+            val relationTargetChanged = relationTargetTableId != null &&
+                originalColumn.stringValue("relationTargetTableId") != relationTargetTableId
+            val sanitizedColumns = updatedColumns.map { element ->
+                val column = element as? JsonObject ?: return@map element
+                var sanitized = column
+                if (column.stringValue("id") == columnId) {
+                    if (effectiveType != "Relation") {
+                        sanitized = sanitized.withString("relationTargetTableId", "")
+                    }
+                    if (effectiveType != "Rollup") {
+                        sanitized = sanitized
+                            .withString("rollupRelationColumnId", "")
+                            .withString("rollupTargetColumnId", "")
+                    } else {
+                        val relationColumnId = sanitized.stringValue("rollupRelationColumnId")
+                        val validRelationColumn = updatedColumns.any { candidate ->
+                            (candidate as? JsonObject)?.let { candidateColumn ->
+                                candidateColumn.stringValue("id") == relationColumnId &&
+                                    candidateColumn.stringValue("type") == "Relation"
+                            } ?: false
+                        }
+                        if (!validRelationColumn) {
+                            sanitized = sanitized
+                                .withString("rollupRelationColumnId", "")
+                                .withString("rollupTargetColumnId", "")
+                        }
+                    }
+                    if (effectiveType != "Formula") {
+                        sanitized = sanitized.withString("formula", "")
+                    }
+                } else if (relationTargetChanged && column.stringValue("rollupRelationColumnId") == columnId) {
+                    sanitized = sanitized.withString("rollupTargetColumnId", "")
+                }
+                if (sanitized != column) changed = true
+                sanitized
+            }
+            var updatedTable = table.withElement("columns", JsonArray(sanitizedColumns))
+            if (relationTargetChanged) {
+                val rows = table["rows"] as? JsonArray ?: JsonArray(emptyList())
+                val clearedRows = rows.map { element ->
+                    val row = element as? JsonObject ?: return@map element
+                    val cells = row["cells"] as? JsonObject ?: JsonObject(emptyMap())
+                    val cellValues = row["cellValues"] as? JsonObject ?: JsonObject(emptyMap())
+                    row
+                        .withElement("cells", cells.withString(columnId, ""))
+                        .withElement("cellValues", cellValues.withElement(columnId, emptyRelationCellValue()))
+                }
+                updatedTable = updatedTable.withElement("rows", JsonArray(clearedRows))
+                changed = true
+            }
             if (!changed) return@mutateTable null
-            table.withElement("columns", JsonArray(updatedColumns))
+            updatedTable
         }
     }
 
@@ -422,6 +488,8 @@ object PageContentJsonMutator {
         if (tableBlockId.isBlank()) return null
         return mutateTable(content, tableBlockId) { table ->
             val columns = table["columns"] as? JsonArray ?: JsonArray(emptyList())
+            val rows = table["rows"] as? JsonArray ?: JsonArray(emptyList())
+            val newRowId = uniqueRowId(rowId, rows)
             val normalizedCells = columns.associate { element ->
                 val column = element as? JsonObject
                 val id = column?.stringValue("id").orEmpty()
@@ -434,14 +502,13 @@ object PageContentJsonMutator {
             }.filterKeys { id -> id.isNotBlank() }
             val row = JsonObject(
                 mapOf(
-                    "id" to JsonPrimitive(rowId.ifBlank { UUID.randomUUID().toString() }),
+                    "id" to JsonPrimitive(newRowId),
                     "cells" to JsonObject(normalizedCells),
                     "cellValues" to JsonObject(normalizedCellValues),
                     "metadata" to metadata,
                     "blocks" to JsonArray(emptyList()),
                 ),
             )
-            val rows = table["rows"] as? JsonArray ?: JsonArray(emptyList())
             table.withElement("rows", rows.insertElement(row, afterBlockId = "", targetIndex = targetIndex))
         }
     }
@@ -495,6 +562,39 @@ object PageContentJsonMutator {
             }
             if (index < 0) return@mutateTable null
             table.withElement("rows", rows.moveElement(index, targetIndex))
+        }
+    }
+
+    private fun validateTableColumnPatch(
+        columns: List<JsonObject>,
+        effectiveType: String,
+        formula: String?,
+        relationTargetTableId: String?,
+        rollupRelationColumnId: String?,
+        rollupTargetColumnId: String?,
+    ) {
+        require(formula == null || formula.isBlank() || effectiveType == "Formula") {
+            "Formula can only be set on Formula properties."
+        }
+        require(relationTargetTableId == null || relationTargetTableId.isBlank() || effectiveType == "Relation") {
+            "Relation target can only be set on Relation properties."
+        }
+        val hasRollupPatch = rollupRelationColumnId?.isNotBlank() == true || rollupTargetColumnId?.isNotBlank() == true
+        require(!hasRollupPatch || effectiveType == "Rollup") {
+            "Rollup config can only be set on Rollup properties."
+        }
+        if (!hasRollupPatch) return
+
+        val relationColumnId = rollupRelationColumnId.orEmpty()
+        require(relationColumnId.isNotBlank()) {
+            "Rollup relation property is required."
+        }
+        val relationColumn = columns.firstOrNull { column -> column.stringValue("id") == relationColumnId }
+        require(relationColumn != null) {
+            "Rollup relation property does not exist."
+        }
+        require(relationColumn.stringValue("type") == "Relation") {
+            "Rollup relation property must be a Relation property."
         }
     }
 
@@ -625,6 +725,28 @@ object PageContentJsonMutator {
 
     private fun JsonObject.withoutKey(key: String): JsonObject {
         return JsonObject(toMutableMap().apply { remove(key) })
+    }
+
+    private fun emptyRelationCellValue(): JsonObject {
+        return JsonObject(
+            mapOf(
+                "type" to JsonPrimitive("Relation"),
+                "relationRowIds" to JsonArray(emptyList()),
+            ),
+        )
+    }
+
+    private fun uniqueRowId(rowId: String, rows: JsonArray): String {
+        val requestedId = rowId.trim()
+        if (requestedId.isNotBlank() && rows.none { row -> (row as? JsonObject)?.stringValue("id") == requestedId }) {
+            return requestedId
+        }
+        while (true) {
+            val generatedId = UUID.randomUUID().toString()
+            if (rows.none { row -> (row as? JsonObject)?.stringValue("id") == generatedId }) {
+                return generatedId
+            }
+        }
     }
 }
 

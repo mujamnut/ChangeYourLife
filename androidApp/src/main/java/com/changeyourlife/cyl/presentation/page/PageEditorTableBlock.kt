@@ -59,6 +59,7 @@ import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.AccessTime
 import androidx.compose.material.icons.rounded.Calculate
 import androidx.compose.material.icons.rounded.CalendarMonth
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ContentCopy
@@ -87,6 +88,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -216,6 +218,8 @@ internal fun DatabaseTableBlockEditor(
     onColumnRelationTargetChange: (String, String) -> Unit,
     onColumnRollupChange: (String, String, String, PageTableRollupAggregation) -> Unit,
     onCellChange: (String, String, String) -> Unit,
+    onRelationCellChange: (String, String, List<String>) -> Unit,
+    onAddRelationTargetRow: (String) -> Unit,
     onAddColumn: (String, PageTableColumnType) -> Unit,
     onInsertColumn: (String, TableColumnInsertSide) -> Unit,
     onDuplicateColumn: (String) -> Unit,
@@ -267,6 +271,7 @@ internal fun DatabaseTableBlockEditor(
     if (openRow != null) {
         TableRowPageSheet(
             currentTableBlockId = tableBlockId,
+            currentPageId = pageId,
             table = table,
             row = openRow,
             tableReferences = tableReferences,
@@ -279,6 +284,8 @@ internal fun DatabaseTableBlockEditor(
             onColumnTypeChange = onColumnTypeChange,
             onColumnConfigChange = onColumnConfigChange,
             onCellChange = onCellChange,
+            onRelationCellChange = onRelationCellChange,
+            onAddRelationTargetRow = onAddRelationTargetRow,
             onAddColumn = onAddColumn,
             onInsertColumn = onInsertColumn,
             onDuplicateColumn = onDuplicateColumn,
@@ -357,6 +364,8 @@ internal fun DatabaseTableBlockEditor(
                 onColumnRelationTargetChange = onColumnRelationTargetChange,
                 onColumnRollupChange = onColumnRollupChange,
                 onCellChange = onCellChange,
+                onRelationCellChange = onRelationCellChange,
+                onAddRelationTargetRow = onAddRelationTargetRow,
                 onDeleteColumn = onDeleteColumn,
                 onAddColumn = onAddColumn,
                 onInsertColumn = onInsertColumn,
@@ -1439,6 +1448,8 @@ internal fun TableGridEditor(
     onColumnRelationTargetChange: (String, String) -> Unit,
     onColumnRollupChange: (String, String, String, PageTableRollupAggregation) -> Unit,
     onCellChange: (String, String, String) -> Unit,
+    onRelationCellChange: (String, String, List<String>) -> Unit,
+    onAddRelationTargetRow: (String) -> Unit,
     onDeleteColumn: (String) -> Unit,
     onAddColumn: (String, PageTableColumnType) -> Unit,
     onInsertColumn: (String, TableColumnInsertSide) -> Unit,
@@ -1497,9 +1508,9 @@ internal fun TableGridEditor(
         } else if (groupColumn != null) {
             visibleRows.groupBy { row -> table.groupLabel(row, groupColumn, tableReferences) }.forEach { (group, rows) ->
                 TableGroupHeader(label = group, count = rows.size)
-                rows.forEach { row ->
+                rows.forEachIndexed { groupRowIndex, row ->
                     val rowIndex = table.rows.indexOfFirst { tableRow -> tableRow.id == row.id }
-                    key(row.id) {
+                    key("${row.id}-$groupRowIndex") {
                         TableDataRow(
                             row = row,
                             rowIndex = rowIndex,
@@ -1511,6 +1522,8 @@ internal fun TableGridEditor(
                             tableReferences = tableReferences,
                             onColumnDateSettingsChange = onColumnDateSettingsChange,
                             onCellChange = onCellChange,
+                            onRelationCellChange = onRelationCellChange,
+                            onAddRelationTargetRow = onAddRelationTargetRow,
                             onDeleteRow = onDeleteRow,
                             onDuplicateRow = onDuplicateRow,
                             onMoveRow = onMoveRow,
@@ -1525,9 +1538,9 @@ internal fun TableGridEditor(
                 onAddRow = onAddRow,
             )
         } else {
-            visibleRows.forEach { row ->
+            visibleRows.forEachIndexed { visibleRowIndex, row ->
                 val rowIndex = table.rows.indexOfFirst { tableRow -> tableRow.id == row.id }
-                key(row.id) {
+                key("${row.id}-$visibleRowIndex") {
                     TableDataRow(
                         row = row,
                         rowIndex = rowIndex,
@@ -1539,6 +1552,8 @@ internal fun TableGridEditor(
                         tableReferences = tableReferences,
                         onColumnDateSettingsChange = onColumnDateSettingsChange,
                         onCellChange = onCellChange,
+                        onRelationCellChange = onRelationCellChange,
+                        onAddRelationTargetRow = onAddRelationTargetRow,
                         onDeleteRow = onDeleteRow,
                         onDuplicateRow = onDuplicateRow,
                         onMoveRow = onMoveRow,
@@ -2928,12 +2943,18 @@ internal fun RelationColumnConfig(
     onRelationTargetChange: (String) -> Unit,
 ) {
     val targetTables = tableReferences.filterNot { reference -> reference.blockId == currentTableBlockId }
+    val selectedTargetMissing = column.relationTargetTableId.isNotBlank() &&
+        targetTables.none { reference -> reference.blockId == column.relationTargetTableId }
 
     if (targetTables.isEmpty()) {
         Text(
-            text = "Create another table in this page first.",
+            text = if (selectedTargetMissing) {
+                "The linked source database is missing."
+            } else {
+                "Create another table in this page first."
+            },
             style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = if (selectedTargetMissing) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
         )
         return
     }
@@ -2952,6 +2973,13 @@ internal fun RelationColumnConfig(
             )
         }
     }
+    if (selectedTargetMissing) {
+        Text(
+            text = "The linked source database is missing. Pick another target.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+        )
+    }
 }
 
 @Composable
@@ -2967,7 +2995,20 @@ internal fun RollupColumnConfig(
     val targetTable = tableReferences.firstOrNull { reference -> reference.blockId == selectedRelation?.relationTargetTableId }
     val selectedTargetColumnId = column.rollupTargetColumnId
         .ifBlank { targetTable?.table?.columns?.firstOrNull()?.id.orEmpty() }
+    val selectedTargetColumn = targetTable?.table?.columns?.firstOrNull { target -> target.id == selectedTargetColumnId }
     val selectedAggregation = column.rollupAggregation
+    val numericAggregationNeedsNumber = selectedAggregation.requiresNumericValues() &&
+        selectedTargetColumn != null &&
+        selectedTargetColumn.type !in setOf(
+            PageTableColumnType.Number,
+            PageTableColumnType.Formula,
+            PageTableColumnType.Rollup,
+        )
+    val previewColumn = column.copy(
+        rollupRelationColumnId = selectedRelation?.id.orEmpty(),
+        rollupTargetColumnId = selectedTargetColumnId,
+        rollupAggregation = selectedAggregation,
+    )
 
     if (relationColumns.isEmpty()) {
         Text(
@@ -3004,9 +3045,17 @@ internal fun RollupColumnConfig(
 
     if (targetTable == null) {
         Text(
-            text = "Choose a target table for the relation column.",
+            text = if (selectedRelation?.relationTargetTableId.isNullOrBlank()) {
+                "Choose a target database for the relation property first."
+            } else {
+                "The linked source database is missing. Pick another relation target."
+            },
             style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = if (selectedRelation?.relationTargetTableId.isNullOrBlank()) {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            } else {
+                MaterialTheme.colorScheme.error
+            },
         )
         return
     }
@@ -3023,6 +3072,13 @@ internal fun RollupColumnConfig(
             onRollupChange(selectedRelation?.id.orEmpty(), targetColumn.id, selectedAggregation)
         },
     )
+    if (selectedTargetColumn == null) {
+        Text(
+            text = "Choose a target property.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+        )
+    }
 
     Text(
         text = "Calculate",
@@ -3040,6 +3096,33 @@ internal fun RollupColumnConfig(
             )
         }
     }
+    if (numericAggregationNeedsNumber) {
+        Text(
+            text = "${selectedAggregation.name} works best with Number, Formula, or Rollup properties. Non-number values will be ignored.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+        )
+    }
+    table.rows.firstOrNull()?.let { firstRow ->
+        val preview = table.rollupDisplayText(
+            row = firstRow,
+            column = previewColumn,
+            tableReferences = tableReferences,
+            depth = 1,
+        )
+        Text(
+            text = "Preview: ${preview.ifBlank { "Empty" }}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+private fun PageTableRollupAggregation.requiresNumericValues(): Boolean {
+    return this == PageTableRollupAggregation.Sum ||
+        this == PageTableRollupAggregation.Average ||
+        this == PageTableRollupAggregation.Min ||
+        this == PageTableRollupAggregation.Max
 }
 
 @Composable
@@ -3079,6 +3162,8 @@ internal fun TableDataRow(
         String,
     ) -> Unit,
     onCellChange: (String, String, String) -> Unit,
+    onRelationCellChange: (String, String, List<String>) -> Unit,
+    onAddRelationTargetRow: (String) -> Unit,
     onDeleteRow: (String) -> Unit,
     onDuplicateRow: (String) -> Unit,
     onMoveRow: (String, Int) -> Unit,
@@ -3181,6 +3266,9 @@ internal fun TableDataRow(
                 tableReferences = tableReferences,
                 value = row.cellText(primaryColumn),
                 onValueChange = { value -> onCellChange(row.id, primaryColumn.id, value) },
+                onRelationValueChange = { relationRowIds -> onRelationCellChange(row.id, primaryColumn.id, relationRowIds) },
+                currentPageId = pageId,
+                onCreateTargetRow = onAddRelationTargetRow,
                 onDateSettingsChange = { dateFormat, timeFormat, reminder, timezoneLabel ->
                     onColumnDateSettingsChange(primaryColumn.id, dateFormat, timeFormat, reminder, timezoneLabel)
                 },
@@ -3200,6 +3288,9 @@ internal fun TableDataRow(
                 tableReferences = tableReferences,
                 value = row.cellText(column),
                 onValueChange = { value -> onCellChange(row.id, column.id, value) },
+                onRelationValueChange = { relationRowIds -> onRelationCellChange(row.id, column.id, relationRowIds) },
+                currentPageId = pageId,
+                onCreateTargetRow = onAddRelationTargetRow,
                 onDateSettingsChange = { dateFormat, timeFormat, reminder, timezoneLabel ->
                     onColumnDateSettingsChange(column.id, dateFormat, timeFormat, reminder, timezoneLabel)
                 },
@@ -3440,6 +3531,9 @@ internal fun PrimaryTableCellEditor(
     tableReferences: List<PageTableReference>,
     value: String,
     onValueChange: (String) -> Unit,
+    onRelationValueChange: (List<String>) -> Unit,
+    currentPageId: String,
+    onCreateTargetRow: (String) -> Unit,
     onDateSettingsChange: (
         PageTableDateFormat,
         PageTableTimeFormat,
@@ -3462,6 +3556,9 @@ internal fun PrimaryTableCellEditor(
             tableReferences = tableReferences,
             value = value,
             onValueChange = onValueChange,
+            onRelationValueChange = onRelationValueChange,
+            currentPageId = currentPageId,
+            onCreateTargetRow = onCreateTargetRow,
             onDateSettingsChange = onDateSettingsChange,
             modifier = Modifier.weight(1f),
         )
@@ -4110,6 +4207,9 @@ internal fun TableCellEditor(
     tableReferences: List<PageTableReference>,
     value: String,
     onValueChange: (String) -> Unit,
+    onRelationValueChange: (List<String>) -> Unit,
+    currentPageId: String,
+    onCreateTargetRow: ((String) -> Unit)?,
     onDateSettingsChange: (
         PageTableDateFormat,
         PageTableTimeFormat,
@@ -4133,6 +4233,9 @@ internal fun TableCellEditor(
                 value = value,
                 tableReferences = tableReferences,
                 onValueChange = onValueChange,
+                onRelationValueChange = onRelationValueChange,
+                currentPageId = currentPageId,
+                onCreateTargetRow = onCreateTargetRow,
                 modifier = modifier,
             )
         }
@@ -4487,16 +4590,40 @@ internal fun RelationCellEditor(
     value: String,
     tableReferences: List<PageTableReference>,
     onValueChange: (String) -> Unit,
+    onRelationValueChange: (List<String>) -> Unit = { ids -> onValueChange(ids.toRelationCellValue()) },
+    currentPageId: String = "",
+    onCreateTargetRow: ((String) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
-    var isExpanded by remember { mutableStateOf(false) }
+    var isPickerOpen by remember { mutableStateOf(false) }
     val targetTable = tableReferences.firstOrNull { reference -> reference.blockId == column.relationTargetTableId }
-    val selectedRowId = value.split(",").firstOrNull()?.trim().orEmpty()
-    val selectedRow = targetTable?.table?.rows?.firstOrNull { row -> row.id == selectedRowId }
+    val selectedIds = remember(value) { value.relatedRowIdList() }
+    val rowsById = remember(targetTable?.table?.rows) {
+        targetTable?.table?.rows.orEmpty().associateBy { row -> row.id }
+    }
+    val selectedTitles = selectedIds
+        .mapNotNull { rowId -> rowsById[rowId] }
+        .map { row -> targetTable?.table?.rowTitle(row).orEmpty().ifBlank { "Untitled" } }
     val displayText = when {
-        targetTable == null -> "Set target"
-        selectedRow != null -> targetTable.table.rowTitle(selectedRow)
+        targetTable == null && column.relationTargetTableId.isBlank() -> "Set target"
+        targetTable == null -> "Missing source"
+        selectedTitles.isNotEmpty() -> selectedTitles.joinToString()
         else -> "Select row"
+    }
+
+    if (isPickerOpen && targetTable != null) {
+        RelationRowPickerSheet(
+            targetTable = targetTable,
+            selectedIds = selectedIds,
+            tableReferences = tableReferences,
+            currentPageId = currentPageId,
+            onCreateTargetRow = onCreateTargetRow,
+            onSave = { nextIds ->
+                isPickerOpen = false
+                onRelationValueChange(nextIds)
+            },
+            onDismiss = { isPickerOpen = false },
+        )
     }
 
     Box(modifier = modifier) {
@@ -4504,7 +4631,7 @@ internal fun RelationCellEditor(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(TableRowHeight)
-                .clickable(enabled = targetTable != null) { isExpanded = true }
+                .clickable(enabled = targetTable != null) { isPickerOpen = true }
                 .padding(horizontal = 10.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -4515,7 +4642,7 @@ internal fun RelationCellEditor(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 style = MaterialTheme.typography.bodyMedium,
-                color = if (targetTable == null || selectedRow == null) {
+                color = if (targetTable == null || selectedTitles.isEmpty()) {
                     MaterialTheme.colorScheme.onSurfaceVariant
                 } else {
                     MaterialTheme.colorScheme.onSurface
@@ -4528,26 +4655,216 @@ internal fun RelationCellEditor(
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        DropdownMenu(
-            expanded = isExpanded,
-            onDismissRequest = { isExpanded = false },
-        ) {
-            DropdownMenuItem(
-                text = { Text(text = "Clear") },
-                onClick = {
-                    isExpanded = false
-                    onValueChange("")
-                },
-            )
-            targetTable?.table?.rows.orEmpty().forEach { targetRow ->
-                DropdownMenuItem(
-                    text = { Text(text = targetTable?.table?.rowTitle(targetRow).orEmpty().ifBlank { "Untitled" }) },
-                    onClick = {
-                        isExpanded = false
-                        onValueChange(targetRow.id)
-                    },
-                )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun RelationRowPickerSheet(
+    targetTable: PageTableReference,
+    selectedIds: List<String>,
+    tableReferences: List<PageTableReference>,
+    currentPageId: String,
+    onCreateTargetRow: ((String) -> Unit)?,
+    onSave: (List<String>) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var query by remember { mutableStateOf("") }
+    var showSelectedOnly by remember { mutableStateOf(false) }
+    var selectedRowIds by remember(targetTable.blockId, selectedIds) {
+        mutableStateOf(selectedIds)
+    }
+    val canCreateTargetRow = onCreateTargetRow != null &&
+        currentPageId.isNotBlank() &&
+        targetTable.pageId == currentPageId
+    val rows = remember(targetTable.table.rows, query, showSelectedOnly, selectedRowIds, tableReferences) {
+        val normalizedQuery = query.trim()
+        val baseRows = if (showSelectedOnly) {
+            targetTable.table.rows.filter { row -> row.id in selectedRowIds }
+        } else {
+            targetTable.table.rows
+        }
+        if (normalizedQuery.isBlank()) {
+            baseRows
+        } else {
+            baseRows.filter { row ->
+                targetTable.table.columns.any { column ->
+                    targetTable.table.displayCellText(row, column, tableReferences)
+                        .contains(normalizedQuery, ignoreCase = true)
+                }
             }
         }
     }
+
+    fun toggleRow(rowId: String) {
+        selectedRowIds = if (rowId in selectedRowIds) {
+            selectedRowIds.filterNot { selectedId -> selectedId == rowId }
+        } else {
+            selectedRowIds + rowId
+        }
+    }
+
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            PropertySheetTitle(title = targetTable.title.ifBlank { "Select rows" })
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                FilterChip(
+                    selected = showSelectedOnly,
+                    onClick = { showSelectedOnly = !showSelectedOnly },
+                    label = { Text(text = "Selected ${selectedRowIds.size}") },
+                    leadingIcon = if (showSelectedOnly) {
+                        {
+                            Icon(
+                                imageVector = Icons.Rounded.Check,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                            )
+                        }
+                    } else {
+                        null
+                    },
+                )
+                Spacer(modifier = Modifier.weight(1f))
+                FilledTonalButton(
+                    enabled = canCreateTargetRow,
+                    onClick = { onCreateTargetRow?.invoke(targetTable.blockId) },
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Add,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(text = "New row")
+                }
+            }
+            if (!canCreateTargetRow && onCreateTargetRow != null && targetTable.pageId != currentPageId) {
+                Text(
+                    text = "Open the source database to add rows.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                leadingIcon = {
+                    Icon(
+                        imageVector = Icons.Rounded.Search,
+                        contentDescription = null,
+                    )
+                },
+                placeholder = { Text(text = "Search rows") },
+                colors = blockTextFieldColors(),
+            )
+            if (targetTable.table.rows.isEmpty()) {
+                Text(
+                    text = "No rows in this database.",
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 28.dp),
+                    textAlign = TextAlign.Center,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else if (rows.isEmpty()) {
+                Text(
+                    text = "No matching rows.",
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 28.dp),
+                    textAlign = TextAlign.Center,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                LazyColumn(
+                    modifier = Modifier.height(360.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    items(
+                        count = rows.size,
+                        key = { index -> "${rows[index].id}-$index" },
+                    ) { index ->
+                        val row = rows[index]
+                        val isSelected = row.id in selectedRowIds
+                        val title = targetTable.table.rowTitle(row).ifBlank { "Untitled" }
+                        val details = targetTable.table.columns
+                            .drop(1)
+                            .map { column -> targetTable.table.displayCellText(row, column, tableReferences) }
+                            .filter { value -> value.isNotBlank() }
+                            .take(2)
+                            .joinToString(" • ")
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(56.dp)
+                                .clickable { toggleRow(row.id) }
+                                .padding(horizontal = 4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Checkbox(
+                                checked = isSelected,
+                                onCheckedChange = { toggleRow(row.id) },
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = title,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                )
+                                if (details.isNotBlank()) {
+                                    Text(
+                                        text = details,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                TextButton(
+                    modifier = Modifier.weight(1f),
+                    onClick = { selectedRowIds = emptyList() },
+                ) {
+                    Text(text = "Clear")
+                }
+                Button(
+                    modifier = Modifier.weight(1f),
+                    onClick = { onSave(selectedRowIds) },
+                ) {
+                    Text(text = "Save")
+                }
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+        }
+    }
+}
+
+private fun List<String>.toRelationCellValue(): String {
+    return filter { value -> value.isNotBlank() }
+        .distinct()
+        .joinToString(",")
 }

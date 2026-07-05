@@ -10,6 +10,7 @@ import com.changeyourlife.cyl.domain.model.PageTableColumnConfig
 import com.changeyourlife.cyl.domain.model.PageTableColumnType
 import com.changeyourlife.cyl.domain.model.PageTableFilter
 import com.changeyourlife.cyl.domain.model.PageTableRow
+import com.changeyourlife.cyl.domain.model.PageTableRollupAggregation
 import com.changeyourlife.cyl.domain.model.PageTableSelectOption
 import com.changeyourlife.cyl.domain.model.PageTableSort
 import com.changeyourlife.cyl.domain.model.PageTableSortDirection
@@ -173,6 +174,74 @@ class TableMutationUseCaseTest {
     }
 
     @Test
+    fun changingRelationTargetClearsOldRowLinksAndDependentRollupTarget() {
+        val relationColumn = PageTableColumn(
+            id = "project",
+            name = "Project",
+            type = PageTableColumnType.Relation,
+            relationTargetTableId = "old-table",
+        )
+        val rollupColumn = PageTableColumn(
+            id = "total",
+            name = "Total",
+            type = PageTableColumnType.Rollup,
+            rollupRelationColumnId = "project",
+            rollupTargetColumnId = "amount",
+            rollupAggregation = PageTableRollupAggregation.Sum,
+        )
+        val document = tableDocument(
+            columns = listOf(relationColumn, rollupColumn),
+            rows = listOf(PageTableRow(id = "row-1", cells = mapOf("project" to "old-row-1,old-row-2"))),
+        )
+
+        val result = useCase.updateColumnRelationTarget(
+            document = document,
+            tableBlockId = "table-1",
+            columnId = "project",
+            targetTableId = "new-table",
+        )
+
+        val table = result.document.table
+        val row = table.rows.single()
+        val updatedRollup = table.columns.single { column -> column.id == "total" }
+        assertTrue(result.changed)
+        assertEquals("new-table", table.columns.single { column -> column.id == "project" }.relationTargetTableId)
+        assertEquals("", row.cells.getValue("project"))
+        assertEquals(emptyList<String>(), row.cellValues.getValue("project").relationRowIds)
+        assertEquals("project", updatedRollup.rollupRelationColumnId)
+        assertEquals("", updatedRollup.rollupTargetColumnId)
+    }
+
+    @Test
+    fun rollupConfigRejectsNonRelationDependency() {
+        val nameColumn = PageTableColumn(id = "name", name = "Name")
+        val rollupColumn = PageTableColumn(
+            id = "total",
+            name = "Total",
+            type = PageTableColumnType.Rollup,
+        )
+        val document = tableDocument(
+            columns = listOf(nameColumn, rollupColumn),
+            rows = listOf(PageTableRow(id = "row-1", cells = mapOf("name" to "Food"))),
+        )
+
+        val result = useCase.updateColumnRollup(
+            document = document,
+            tableBlockId = "table-1",
+            columnId = "total",
+            relationColumnId = "name",
+            targetColumnId = "amount",
+            aggregation = PageTableRollupAggregation.Sum,
+        )
+
+        val updatedRollup = result.document.table.columns.single { column -> column.id == "total" }
+        assertTrue(result.changed)
+        assertEquals("", updatedRollup.rollupRelationColumnId)
+        assertEquals("", updatedRollup.rollupTargetColumnId)
+        assertEquals(PageTableRollupAggregation.Sum, updatedRollup.rollupAggregation)
+    }
+
+    @Test
     fun deletingColumnCleansDependentTableState() {
         val nameColumn = PageTableColumn(id = "name", name = "Name")
         val statusColumn = PageTableColumn(
@@ -260,6 +329,47 @@ class TableMutationUseCaseTest {
         assertFalse(formulaResult.changed)
         assertEquals(null, formulaResult.coercedValue)
         assertEquals("", formulaResult.document.table.rows.single().cells["total"])
+    }
+
+    @Test
+    fun updateRelationCellStoresTypedRelationIdsAndRejectsNonRelationColumn() {
+        val relationColumn = PageTableColumn(
+            id = "project",
+            name = "Project",
+            type = PageTableColumnType.Relation,
+            relationTargetTableId = "projects",
+        )
+        val textColumn = PageTableColumn(id = "note", name = "Note")
+        val document = tableDocument(
+            columns = listOf(relationColumn, textColumn),
+            rows = listOf(PageTableRow(id = "row-1", cells = mapOf("project" to "", "note" to ""))),
+        )
+
+        val relationResult = useCase.updateRelationCell(
+            document = document,
+            tableBlockId = "table-1",
+            rowId = "row-1",
+            columnId = "project",
+            relationRowIds = listOf(" target-1 ", "target-2", "target-1", ""),
+        )
+
+        val relationRow = relationResult.document.table.rows.single()
+        assertTrue(relationResult.changed)
+        assertEquals("target-1,target-2", relationResult.coercedValue)
+        assertEquals("target-1,target-2", relationRow.cells.getValue("project"))
+        assertEquals(listOf("target-1", "target-2"), relationRow.cellValues.getValue("project").relationRowIds)
+
+        val textResult = useCase.updateRelationCell(
+            document = relationResult.document,
+            tableBlockId = "table-1",
+            rowId = "row-1",
+            columnId = "note",
+            relationRowIds = listOf("target-3"),
+        )
+
+        assertFalse(textResult.changed)
+        assertEquals(null, textResult.coercedValue)
+        assertEquals("", textResult.document.table.rows.single().cells.getValue("note"))
     }
 
     @Test

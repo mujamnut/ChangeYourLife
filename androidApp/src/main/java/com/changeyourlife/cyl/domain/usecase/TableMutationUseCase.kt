@@ -7,6 +7,7 @@ import com.changeyourlife.cyl.domain.model.PageBlock
 import com.changeyourlife.cyl.domain.model.PageBlockDocument
 import com.changeyourlife.cyl.domain.model.PageBlockType
 import com.changeyourlife.cyl.domain.model.PageTable
+import com.changeyourlife.cyl.domain.model.PageTableCellValue
 import com.changeyourlife.cyl.domain.model.PageTableColumn
 import com.changeyourlife.cyl.domain.model.PageTableColumnConfig
 import com.changeyourlife.cyl.domain.model.PageTableColumnType
@@ -295,9 +296,29 @@ class TableMutationUseCase(
         columnId: String,
         targetTableId: String,
     ): TableMutationResult = replaceTable(document, tableBlockId) { table ->
+        val currentColumn = table.columns.firstOrNull { column -> column.id == columnId }
+        val targetChanged = currentColumn != null && currentColumn.relationTargetTableId != targetTableId
         table.copy(
             columns = table.columns.map { column ->
-                if (column.id == columnId) column.copy(relationTargetTableId = targetTableId) else column
+                when {
+                    column.id == columnId -> column.copy(relationTargetTableId = targetTableId)
+                    targetChanged && column.rollupRelationColumnId == columnId -> {
+                        column.copy(rollupTargetColumnId = "")
+                    }
+                    else -> column
+                }
+            },
+            rows = if (targetChanged) {
+                table.rows.map { row ->
+                    row.copy(
+                        cells = row.cells + (columnId to ""),
+                        cellValues = row.cellValues + (
+                            columnId to PageTableCellValue(type = PageTableColumnType.Relation)
+                            ),
+                    )
+                }
+            } else {
+                table.rows
             },
         )
     }
@@ -310,12 +331,15 @@ class TableMutationUseCase(
         targetColumnId: String,
         aggregation: PageTableRollupAggregation,
     ): TableMutationResult = replaceTable(document, tableBlockId) { table ->
+        val validRelationColumn = table.columns.firstOrNull { column ->
+            column.id == relationColumnId && column.type == PageTableColumnType.Relation
+        }
         table.copy(
             columns = table.columns.map { column ->
                 if (column.id == columnId) {
                     column.copy(
-                        rollupRelationColumnId = relationColumnId,
-                        rollupTargetColumnId = targetColumnId,
+                        rollupRelationColumnId = validRelationColumn?.id.orEmpty(),
+                        rollupTargetColumnId = if (validRelationColumn == null) "" else targetColumnId,
                         rollupAggregation = aggregation,
                     )
                 } else {
@@ -347,6 +371,45 @@ class TableMutationUseCase(
                         row.copy(
                             cells = row.cells + (columnId to nextValue),
                             cellValues = row.cellValues + (columnId to column.toTypedCellValue(nextValue)),
+                        )
+                    } else {
+                        row
+                    }
+                },
+            )
+        }
+        return TableCellMutationResult(
+            mutation = result,
+            coercedValue = coercedValue,
+        )
+    }
+
+    fun updateRelationCell(
+        document: PageBlockDocument,
+        tableBlockId: String,
+        rowId: String,
+        columnId: String,
+        relationRowIds: List<String>,
+    ): TableCellMutationResult {
+        var coercedValue: String? = null
+        val result = replaceTable(document, tableBlockId) { table ->
+            val column = table.columns.firstOrNull { tableColumn -> tableColumn.id == columnId }
+                ?: return@replaceTable table
+            if (column.type != PageTableColumnType.Relation) return@replaceTable table
+            val nextIds = relationRowIds.normalizedRelationRowIds()
+            val nextValue = nextIds.joinToString(",")
+            coercedValue = nextValue
+            table.copy(
+                rows = table.rows.map { row ->
+                    if (row.id == rowId) {
+                        row.copy(
+                            cells = row.cells + (columnId to nextValue),
+                            cellValues = row.cellValues + (
+                                columnId to PageTableCellValue(
+                                    type = PageTableColumnType.Relation,
+                                    relationRowIds = nextIds,
+                                )
+                                ),
                         )
                     } else {
                         row
@@ -710,9 +773,9 @@ private fun PageTableColumnType.coerceManualCellValue(value: String): String {
         PageTableColumnType.MultiSelect -> value.toTableChoiceListValue()
         PageTableColumnType.Relation,
         PageTableColumnType.Text,
-        PageTableColumnType.Number,
         PageTableColumnType.FilesMedia,
         -> value
+        PageTableColumnType.Number -> value.trim()
     }
 }
 
@@ -761,6 +824,12 @@ private fun String.toTableChoiceListValue(): String {
         .filter { value -> value.isNotBlank() }
         .distinctBy { value -> value.lowercase() }
         .joinToString(", ")
+}
+
+private fun List<String>.normalizedRelationRowIds(): List<String> {
+    return map { rowId -> rowId.trim() }
+        .filter { rowId -> rowId.isNotBlank() }
+        .distinct()
 }
 
 private fun String.toTableCheckboxValue(): String {
