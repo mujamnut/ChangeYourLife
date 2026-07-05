@@ -35,6 +35,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
@@ -198,6 +199,7 @@ import com.changeyourlife.cyl.presentation.components.CylChromeIconButton
 import com.changeyourlife.cyl.presentation.components.CylFloatingChromeSurface
 import com.changeyourlife.cyl.presentation.home.HomeUiState
 import com.changeyourlife.cyl.presentation.theme.ChangeYourLifeTheme
+import kotlinx.coroutines.delay
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
@@ -208,6 +210,8 @@ internal fun DatabaseTableBlockEditor(
     tableBlockId: String,
     pageId: String,
     pageUpdatedAt: Long,
+    syncState: PageSyncState,
+    isSaving: Boolean,
     table: PageTable,
     tableReferences: List<PageTableReference>,
     onTitleChange: (String) -> Unit,
@@ -262,10 +266,16 @@ internal fun DatabaseTableBlockEditor(
 ) {
     val horizontalScrollState = rememberScrollState()
     var openRowId by remember { mutableStateOf<String?>(null) }
+    var tableSearchInput by rememberSaveable(tableBlockId) { mutableStateOf("") }
     var tableSearchQuery by rememberSaveable(tableBlockId) { mutableStateOf("") }
     val openRow = table.rows.firstOrNull { row -> row.id == openRowId }
     val highlightedRowId = remember(table.rows, searchTargetType, searchTargetId) {
         table.highlightedRowId(searchTargetType, searchTargetId)
+    }
+
+    LaunchedEffect(tableSearchInput) {
+        delay(120)
+        tableSearchQuery = tableSearchInput.trim()
     }
 
     LaunchedEffect(table.rows, openRowId) {
@@ -287,6 +297,8 @@ internal fun DatabaseTableBlockEditor(
             currentPageId = pageId,
             table = table,
             row = openRow,
+            syncState = syncState,
+            isSaving = isSaving,
             tableReferences = tableReferences,
             searchTargetType = searchTargetType,
             searchTargetId = searchTargetId,
@@ -344,6 +356,8 @@ internal fun DatabaseTableBlockEditor(
         TableToolbar(
             table = table,
             tableBlockId = tableBlockId,
+            syncState = syncState,
+            isSaving = isSaving,
             tableReferences = tableReferences,
             onTitleChange = onTitleChange,
             onViewChange = onViewChange,
@@ -352,17 +366,21 @@ internal fun DatabaseTableBlockEditor(
             onSortChange = onSortChange,
             onFilterChange = onFilterChange,
             onGroupChange = onGroupChange,
-            searchQuery = tableSearchQuery,
-            onSearchQueryChange = { tableSearchQuery = it },
+            searchQuery = tableSearchInput,
+            onSearchQueryChange = { tableSearchInput = it },
         )
         TableActiveControlsRow(
             table = table,
-            searchQuery = tableSearchQuery,
+            searchQuery = tableSearchInput,
             onClearSort = { onSortChange("", PageTableSortDirection.Ascending) },
             onClearFilter = { onFilterChange(PageTableFilter()) },
             onClearGroup = { onGroupChange("") },
-            onClearSearch = { tableSearchQuery = "" },
+            onClearSearch = {
+                tableSearchInput = ""
+                tableSearchQuery = ""
+            },
             onClearAll = {
+                tableSearchInput = ""
                 tableSearchQuery = ""
                 onSortChange("", PageTableSortDirection.Ascending)
                 onFilterChange(PageTableFilter())
@@ -441,6 +459,8 @@ internal fun DatabaseTableBlockEditor(
 internal fun TableToolbar(
     table: PageTable,
     tableBlockId: String,
+    syncState: PageSyncState,
+    isSaving: Boolean,
     tableReferences: List<PageTableReference>,
     onTitleChange: (String) -> Unit,
     onViewChange: (PageTableView) -> Unit,
@@ -485,6 +505,10 @@ internal fun TableToolbar(
                     onViewConfigChange = onViewConfigChange,
                     onDataSourceChange = onDataSourceChange,
                 )
+                DatabaseSyncStatusChip(
+                    syncState = syncState,
+                    isSaving = isSaving,
+                )
                 Spacer(modifier = Modifier.weight(1f))
                 TableControlIconButton(
                     icon = Icons.Rounded.Search,
@@ -501,6 +525,163 @@ internal fun TableToolbar(
                 onGroupChange = onGroupChange,
             )
         }
+    }
+}
+
+@Composable
+internal fun DatabaseSyncStatusChip(
+    syncState: PageSyncState,
+    isSaving: Boolean,
+    modifier: Modifier = Modifier,
+    showDetailOnClick: Boolean = true,
+) {
+    var isSheetOpen by remember { mutableStateOf(false) }
+    val statusColor = syncState.databaseSyncColor(isSaving)
+    val backgroundColor = if (syncState.hasConflict || isSaving || syncState.isPendingPush) {
+        statusColor.copy(alpha = 0.12f)
+    } else {
+        MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.58f)
+    }
+    val clickModifier = if (showDetailOnClick) {
+        Modifier.clickable { isSheetOpen = true }
+    } else {
+        Modifier
+    }
+
+    Row(
+        modifier = modifier
+            .height(32.dp)
+            .widthIn(max = 108.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(backgroundColor)
+            .then(clickModifier)
+            .padding(horizontal = 9.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (isSaving) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(13.dp),
+                strokeWidth = 1.8.dp,
+                color = statusColor,
+            )
+        } else {
+            Icon(
+                imageVector = syncState.databaseSyncIcon(),
+                contentDescription = null,
+                modifier = Modifier.size(15.dp),
+                tint = statusColor,
+            )
+        }
+        Text(
+            text = syncState.databaseSyncLabel(isSaving),
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Medium,
+            color = statusColor,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+
+    if (isSheetOpen) {
+        ModalBottomSheet(onDismissRequest = { isSheetOpen = false }) {
+            DatabaseSyncStatusSheet(
+                syncState = syncState,
+                isSaving = isSaving,
+            )
+        }
+    }
+}
+
+@Composable
+private fun DatabaseSyncStatusSheet(
+    syncState: PageSyncState,
+    isSaving: Boolean,
+) {
+    val statusColor = syncState.databaseSyncColor(isSaving)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text(
+            text = "Database sync",
+            modifier = Modifier.fillMaxWidth(),
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            textAlign = TextAlign.Center,
+        )
+        ListItem(
+            headlineContent = { Text(text = syncState.databaseSyncTitle(isSaving)) },
+            supportingContent = { Text(text = syncState.databaseSyncDetail(isSaving)) },
+            leadingContent = {
+                if (isSaving) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp),
+                        strokeWidth = 2.dp,
+                        color = statusColor,
+                    )
+                } else {
+                    Icon(
+                        imageVector = syncState.databaseSyncIcon(),
+                        contentDescription = null,
+                        tint = statusColor,
+                    )
+                }
+            },
+        )
+        Text(
+            text = "Database rows and properties are saved locally first, then uploaded by CYL sync in the background.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+    }
+}
+
+@Composable
+private fun PageSyncState.databaseSyncColor(isSaving: Boolean) = when {
+    hasConflict -> MaterialTheme.colorScheme.error
+    isSaving || isPendingPush || lastSyncedAt == 0L -> MaterialTheme.colorScheme.primary
+    else -> MaterialTheme.colorScheme.onSurfaceVariant
+}
+
+private fun PageSyncState.databaseSyncIcon(): ImageVector {
+    return when {
+        hasConflict -> Icons.Rounded.Info
+        isPendingPush || lastSyncedAt == 0L -> Icons.Rounded.Notifications
+        else -> Icons.Rounded.CheckCircle
+    }
+}
+
+private fun PageSyncState.databaseSyncLabel(isSaving: Boolean): String {
+    return when {
+        hasConflict -> "Conflict"
+        isSaving -> "Saving"
+        isPendingPush -> "Queued"
+        lastSyncedAt == 0L -> "Not synced"
+        else -> "Saved"
+    }
+}
+
+private fun PageSyncState.databaseSyncTitle(isSaving: Boolean): String {
+    return when {
+        hasConflict -> "Database has a sync conflict"
+        isSaving -> "Saving database"
+        isPendingPush -> "Waiting to upload"
+        lastSyncedAt == 0L -> "Not synced yet"
+        else -> "Database saved"
+    }
+}
+
+private fun PageSyncState.databaseSyncDetail(isSaving: Boolean): String {
+    return when {
+        hasConflict -> "This page/database changed locally and remotely. Resolve the page sync conflict before continuing heavy edits."
+        isSaving -> "CYL is writing your latest database change to local storage."
+        isPendingPush -> "Your change is safe on this device and will upload when sync can reach the server."
+        lastSyncedAt == 0L -> "This database has local data but has not completed its first server sync."
+        else -> "All local database changes are saved and synced."
     }
 }
 
@@ -1917,15 +2098,33 @@ internal fun TableGridEditor(
     pageId: String,
     pageUpdatedAt: Long,
 ) {
-    val columnWidths = remember(table.columns, table.rows, tableReferences) {
-        table.tableColumnWidths(tableReferences)
+    val columnWidths = remember(table.columns, table.rows.size, tableReferences) {
+        table.tableColumnWidths(
+            tableReferences = tableReferences,
+            rowSampleLimit = TableWidthMeasurementRowLimit,
+        )
     }
-    val visibleRows = table.visibleRows(
-        tableReferences = tableReferences,
-        searchQuery = searchQuery,
-    )
-    val groupColumn = table.groupColumn()
-    val isStarterEmptyDatabase = table.isStarterEmptyDatabase(searchQuery)
+    val visibleRows = remember(table.rows, table.columns, table.filter, table.sort, searchQuery, tableReferences) {
+        table.visibleRows(
+            tableReferences = tableReferences,
+            searchQuery = searchQuery,
+        )
+    }
+    val groupColumn = remember(table.columns, table.groupByColumnId) {
+        table.groupColumn()
+    }
+    val rowIndexById = remember(table.rows) {
+        table.rows.mapIndexed { index, row -> row.id to index }.toMap()
+    }
+    val isStarterEmptyDatabase = remember(table.columns, table.rows.size, table.sort, table.filter, table.groupByColumnId, searchQuery) {
+        table.isStarterEmptyDatabase(searchQuery)
+    }
+    val groupedRows = remember(visibleRows, groupColumn, tableReferences) {
+        groupColumn?.let { column ->
+            visibleRows.groupBy { row -> table.groupLabel(row, column, tableReferences) }.toList()
+        }.orEmpty()
+    }
+    val useLazyRows = visibleRows.size >= TableLargeDatasetRowThreshold
 
     Column(
         modifier = Modifier.horizontalScroll(horizontalScrollState),
@@ -1966,14 +2165,137 @@ internal fun TableGridEditor(
                 onAddRow = onAddRow,
             )
         } else if (groupColumn != null) {
-            visibleRows.groupBy { row -> table.groupLabel(row, groupColumn, tableReferences) }.forEach { (group, rows) ->
-                TableGroupHeader(label = group, count = rows.size)
-                rows.forEachIndexed { groupRowIndex, row ->
-                    val rowIndex = table.rows.indexOfFirst { tableRow -> tableRow.id == row.id }
-                    key("${row.id}-$groupRowIndex") {
+            if (useLazyRows) {
+                LazyColumn(
+                    modifier = Modifier.heightIn(max = TableLargeDatasetBodyMaxHeight),
+                ) {
+                    groupedRows.forEach { (group, rows) ->
+                        item(
+                            key = "group:$group",
+                            contentType = "table-group-header",
+                        ) {
+                            TableGroupHeader(label = group, count = rows.size)
+                        }
+                        items(
+                            items = rows,
+                            key = { row -> row.id },
+                            contentType = { "table-row" },
+                        ) { row ->
+                            TableDataRow(
+                                row = row,
+                                rowIndex = rowIndexById[row.id] ?: -1,
+                                totalRows = table.rows.size,
+                                pageId = pageId,
+                                pageUpdatedAt = pageUpdatedAt,
+                                table = table,
+                                columns = table.columns,
+                                columnWidths = columnWidths,
+                                tableReferences = tableReferences,
+                                onColumnDateSettingsChange = onColumnDateSettingsChange,
+                                onCellChange = onCellChange,
+                                onRelationCellChange = onRelationCellChange,
+                                onAddRelationTargetRow = onAddRelationTargetRow,
+                                onDeleteRow = onDeleteRow,
+                                onDuplicateRow = onDuplicateRow,
+                                onMoveRow = onMoveRow,
+                                onOpenRow = onOpenRow,
+                                isHighlighted = row.id == highlightedRowId,
+                            )
+                        }
+                    }
+                    item(
+                        key = "add-row",
+                        contentType = "table-add-row",
+                    ) {
+                        TableAddRowRow(
+                            columns = table.columns,
+                            columnWidths = columnWidths,
+                            onAddRow = onAddRow,
+                        )
+                    }
+                }
+            } else {
+                groupedRows.forEach { (group, rows) ->
+                    TableGroupHeader(label = group, count = rows.size)
+                    rows.forEach { row ->
+                        key(row.id) {
+                            TableDataRow(
+                                row = row,
+                                rowIndex = rowIndexById[row.id] ?: -1,
+                                totalRows = table.rows.size,
+                                pageId = pageId,
+                                pageUpdatedAt = pageUpdatedAt,
+                                table = table,
+                                columns = table.columns,
+                                columnWidths = columnWidths,
+                                tableReferences = tableReferences,
+                                onColumnDateSettingsChange = onColumnDateSettingsChange,
+                                onCellChange = onCellChange,
+                                onRelationCellChange = onRelationCellChange,
+                                onAddRelationTargetRow = onAddRelationTargetRow,
+                                onDeleteRow = onDeleteRow,
+                                onDuplicateRow = onDuplicateRow,
+                                onMoveRow = onMoveRow,
+                                onOpenRow = onOpenRow,
+                                isHighlighted = row.id == highlightedRowId,
+                            )
+                        }
+                    }
+                }
+                TableAddRowRow(
+                    columns = table.columns,
+                    columnWidths = columnWidths,
+                    onAddRow = onAddRow,
+                )
+            }
+        } else {
+            if (useLazyRows) {
+                LazyColumn(
+                    modifier = Modifier.heightIn(max = TableLargeDatasetBodyMaxHeight),
+                ) {
+                    items(
+                        items = visibleRows,
+                        key = { row -> row.id },
+                        contentType = { "table-row" },
+                    ) { row ->
                         TableDataRow(
                             row = row,
-                            rowIndex = rowIndex,
+                            rowIndex = rowIndexById[row.id] ?: -1,
+                            totalRows = table.rows.size,
+                            pageId = pageId,
+                            pageUpdatedAt = pageUpdatedAt,
+                            table = table,
+                            columns = table.columns,
+                            columnWidths = columnWidths,
+                            tableReferences = tableReferences,
+                            onColumnDateSettingsChange = onColumnDateSettingsChange,
+                            onCellChange = onCellChange,
+                            onRelationCellChange = onRelationCellChange,
+                            onAddRelationTargetRow = onAddRelationTargetRow,
+                            onDeleteRow = onDeleteRow,
+                            onDuplicateRow = onDuplicateRow,
+                            onMoveRow = onMoveRow,
+                            onOpenRow = onOpenRow,
+                            isHighlighted = row.id == highlightedRowId,
+                        )
+                    }
+                    item(
+                        key = "add-row",
+                        contentType = "table-add-row",
+                    ) {
+                        TableAddRowRow(
+                            columns = table.columns,
+                            columnWidths = columnWidths,
+                            onAddRow = onAddRow,
+                        )
+                    }
+                }
+            } else {
+                visibleRows.forEach { row ->
+                    key(row.id) {
+                        TableDataRow(
+                            row = row,
+                            rowIndex = rowIndexById[row.id] ?: -1,
                             totalRows = table.rows.size,
                             pageId = pageId,
                             pageUpdatedAt = pageUpdatedAt,
@@ -1993,43 +2315,12 @@ internal fun TableGridEditor(
                         )
                     }
                 }
+                TableAddRowRow(
+                    columns = table.columns,
+                    columnWidths = columnWidths,
+                    onAddRow = onAddRow,
+                )
             }
-            TableAddRowRow(
-                columns = table.columns,
-                columnWidths = columnWidths,
-                onAddRow = onAddRow,
-            )
-        } else {
-            visibleRows.forEachIndexed { visibleRowIndex, row ->
-                val rowIndex = table.rows.indexOfFirst { tableRow -> tableRow.id == row.id }
-                key("${row.id}-$visibleRowIndex") {
-                    TableDataRow(
-                        row = row,
-                        rowIndex = rowIndex,
-                        totalRows = table.rows.size,
-                        pageId = pageId,
-                        pageUpdatedAt = pageUpdatedAt,
-                        table = table,
-                        columns = table.columns,
-                        columnWidths = columnWidths,
-                        tableReferences = tableReferences,
-                        onColumnDateSettingsChange = onColumnDateSettingsChange,
-                        onCellChange = onCellChange,
-                        onRelationCellChange = onRelationCellChange,
-                        onAddRelationTargetRow = onAddRelationTargetRow,
-                        onDeleteRow = onDeleteRow,
-                        onDuplicateRow = onDuplicateRow,
-                        onMoveRow = onMoveRow,
-                        onOpenRow = onOpenRow,
-                        isHighlighted = row.id == highlightedRowId,
-                    )
-                }
-            }
-            TableAddRowRow(
-                columns = table.columns,
-                columnWidths = columnWidths,
-                onAddRow = onAddRow,
-            )
         }
     }
 }
@@ -3726,15 +4017,20 @@ internal fun TableGroupHeader(
 
 private val TableInlineOpenWidth = 40.dp
 private val TableCellHorizontalPadding = 8.dp
+private const val TableLargeDatasetRowThreshold = 40
+private const val TableWidthMeasurementRowLimit = 80
+private val TableLargeDatasetBodyMaxHeight = 560.dp
 
 private fun PageTable.tableColumnWidths(
     tableReferences: List<PageTableReference>,
+    rowSampleLimit: Int,
 ): Map<String, Dp> {
     return columns.mapIndexed { index, column ->
         column.id to tableColumnWidth(
             column = column,
             tableReferences = tableReferences,
             includeInlineOpen = index == 0,
+            rowSampleLimit = rowSampleLimit,
         )
     }.toMap()
 }
@@ -3743,9 +4039,11 @@ private fun PageTable.tableColumnWidth(
     column: PageTableColumn,
     tableReferences: List<PageTableReference>,
     includeInlineOpen: Boolean,
+    rowSampleLimit: Int,
 ): Dp {
     val headerText = column.name.ifBlank { column.type.label }
     val longestCellText = rows.asSequence()
+        .take(rowSampleLimit.coerceAtLeast(0))
         .map { row -> displayCellText(row, column, tableReferences) }
         .maxByOrNull { value -> value.length }
         .orEmpty()

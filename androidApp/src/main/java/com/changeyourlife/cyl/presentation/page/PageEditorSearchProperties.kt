@@ -268,6 +268,7 @@ internal data class PageLocalSearchResult(
     val key: String,
     val title: String,
     val snippet: String,
+    val searchText: String = "",
 )
 
 internal fun pageLocalSearchResults(
@@ -291,7 +292,7 @@ internal fun pageLocalSearchResults(
         block.localSearchResults(path = "Block ${index + 1}")
     })
         .filter { result ->
-            val text = "${result.title}\n${result.snippet}"
+            val text = result.searchText.ifBlank { "${result.title}\n${result.snippet}" }
             terms.all { term -> text.contains(term, ignoreCase = true) }
         }
         .take(30)
@@ -337,19 +338,47 @@ internal fun PageTable.localSearchResults(
     path: String,
 ): List<PageLocalSearchResult> {
     val columnNames = columns.associate { column -> column.id to column.name }
+    val visibleColumns = columns.filterNot { column -> column.config.isHidden }
     val tableResult = PageLocalSearchResult(
         key = blockId,
         title = "$path · ${title.ifBlank { "Database" }}",
         snippet = columns.joinToString { column -> "${column.name} (${column.type.name})" },
+        searchText = buildString {
+            append(title)
+            append(' ')
+            columns.forEach { column ->
+                append(column.name)
+                append(' ')
+                append(column.type.label)
+                append(' ')
+            }
+        },
     )
     val rowResults = rows.flatMapIndexed { rowIndex, row ->
-        val cells = row.cells.entries.joinToString(separator = "; ") { (columnId, value) ->
-            "${columnNames[columnId].orEmpty().ifBlank { columnId }}: $value"
+        val cellPairs = visibleColumns.mapNotNull { column ->
+            val value = displayCellText(row, column, tableReferences = emptyList())
+                .ifBlank { row.cellText(column) }
+                .trim()
+            value
+                .takeIf { it.isNotBlank() }
+                ?.let { "${columnNames[column.id].orEmpty().ifBlank { column.id }}: $it" }
+        }
+        val cells = cellPairs.joinToString(separator = "; ")
+        val rowSearchText = buildString {
+            visibleColumns.forEach { column ->
+                append(displayCellText(row, column, tableReferences = emptyList()))
+                append(' ')
+            }
+            row.blocks.forEach { block ->
+                append(block.searchText())
+                append(' ')
+            }
         }
         val rowResult = PageLocalSearchResult(
             key = "$blockId:${row.id}",
             title = "Row ${rowIndex + 1}",
             snippet = cells.ifBlank { "Empty row" },
+            searchText = rowSearchText,
         )
         listOf(rowResult) + row.blocks.flatMapIndexed { blockIndex, block ->
             block.localSearchResults(path = "Row ${rowIndex + 1}.${blockIndex + 1}")

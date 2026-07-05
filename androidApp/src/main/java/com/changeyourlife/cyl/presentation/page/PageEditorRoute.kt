@@ -663,6 +663,8 @@ internal fun PageEditorScreen(
                             block = block,
                             pageId = uiState.page.id,
                             pageUpdatedAt = uiState.page.updatedAt,
+                            syncState = uiState.syncState,
+                            isSaving = uiState.isSaving,
                             isFirstBlock = uiState.blocks.firstOrNull()?.id == block.id,
                             indentLevel = 0,
                             onTextChange = onBlockTextChange,

@@ -712,6 +712,8 @@ Current progress:
 - Done: row sheet property labels/icons now open the same `Edit property` sheet as table headers, so users can rename, change type, configure date/formula/relation/rollup, duplicate, insert, delete, sort, filter, and group from inside the row sheet.
 - Done: table dimensions and key state colors now have a dedicated `TableGridTokens` source, covering grid widths/heights, row/header colors, dragged/highlighted row backgrounds, dividers, and row-property dimensions.
 - Done: row sheet title/property UI has been extracted into `PageEditorTableRowProperties.kt`, leaving `PageEditorTableRowPage.kt` closer to sheet orchestration and row content editing.
+- Done: large database tables now switch to lazy row rendering after 40 visible rows, keep stable row keys by row ID, avoid O(n^2) row-index lookup while rendering, and cap column-width measurement to a sampled row set so editing one cell does not rescan every row for layout.
+- Done: database toolbar now shows a subtle sync chip (`Saved`, `Saving`, `Queued`, `Not synced`, or `Conflict`) from the real page sync state, and tapping it opens database-specific sync detail. Row page sheets mirror the same indicator without opening nested sheets.
 
 ## Refactor After UX Direction
 

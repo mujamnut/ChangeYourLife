@@ -872,13 +872,9 @@ internal fun PageTable.visibleRows(
     }
     val sortColumn = columns.firstOrNull { column -> column.id == sort.columnId } ?: return searchedRows
     val sortedRows = searchedRows.sortedWith { left, right ->
-        compareRowsByColumn(left, right, sortColumn, tableReferences)
+        compareRowsByColumn(left, right, sortColumn, tableReferences, sort.direction)
     }
-    return if (sort.direction == PageTableSortDirection.Descending) {
-        sortedRows.asReversed()
-    } else {
-        sortedRows
-    }
+    return sortedRows
 }
 
 internal fun PageTable.groupColumn(): PageTableColumn? {
@@ -896,7 +892,10 @@ internal fun PageTable.groupedSummaries(
     )
     val groupingColumn = groupColumn()
     if (groupingColumn != null) {
-        return summaries.groupBy { summary -> groupLabel(summary.row, groupingColumn, tableReferences) }.toList()
+        return summaries
+            .groupBy { summary -> groupLabel(summary.row, groupingColumn, tableReferences) }
+            .toList()
+            .sortedWith { left, right -> compareGroupLabels(left.first, right.first, groupingColumn) }
     }
     if (defaultToStatus) {
         return summaries.groupBy { summary -> summary.status }.toList()
@@ -909,25 +908,194 @@ internal fun PageTableRow.matchesTableSearch(
     query: String,
     tableReferences: List<PageTableReference>,
 ): Boolean {
-    val terms = query
-        .trim()
-        .split(Regex("\\s+"))
-        .filter { term -> term.isNotBlank() }
-    if (terms.isEmpty()) return true
+    val searchQuery = query.toTableSearchQuery()
+    if (searchQuery.terms.isEmpty()) return true
 
-    val searchableText = buildString {
-        table.columns.forEach { column ->
-            append(column.name)
-            append(' ')
-            append(table.displayCellText(this@matchesTableSearch, column, tableReferences))
-            append(' ')
+    val visibleColumns = table.columns.filterNot { column -> column.config.isHidden }
+    val rowValueText = table.searchableRowValueText(
+        row = this,
+        columns = visibleColumns,
+        tableReferences = tableReferences,
+    )
+    val rowNotesText = blocks.joinToString(separator = " ") { block -> block.searchText() }
+
+    return searchQuery.terms.all { term ->
+        term.matchesTableRow(
+            table = table,
+            row = this,
+            columns = visibleColumns,
+            rowValueText = rowValueText,
+            rowNotesText = rowNotesText,
+            tableReferences = tableReferences,
+        )
+    }
+}
+
+private data class TableSearchQuery(
+    val terms: List<TableSearchTerm>,
+)
+
+private sealed interface TableSearchTerm {
+    val value: String
+
+    data class Phrase(
+        override val value: String,
+    ) : TableSearchTerm
+
+    data class Scoped(
+        val scope: String,
+        override val value: String,
+    ) : TableSearchTerm
+}
+
+private val TableSearchTokenRegex = Regex("\"([^\"]*)\"|'([^']*)'|\\S+")
+
+private fun String.toTableSearchQuery(): TableSearchQuery {
+    val rawTokens = TableSearchTokenRegex
+        .findAll(this)
+        .mapNotNull { match ->
+            match.groupValues.getOrNull(1)?.takeIf { it.isNotBlank() }
+                ?: match.groupValues.getOrNull(2)?.takeIf { it.isNotBlank() }
+                ?: match.value.takeIf { it.isNotBlank() }
         }
-        blocks.forEach { block ->
-            append(block.searchText())
-            append(' ')
+        .map { token -> token.trim() }
+        .filter { token -> token.isNotBlank() }
+        .toList()
+    val terms = buildList {
+        var index = 0
+        while (index < rawTokens.size) {
+            val token = rawTokens[index]
+            val next = rawTokens.getOrNull(index + 1)
+            when {
+                token.endsWith(":") && token.length > 1 && !next.isNullOrBlank() -> {
+                    add(TableSearchTerm.Scoped(scope = token.dropLast(1), value = next))
+                    index += 2
+                }
+                token.contains(":") && !token.startsWith(":") && !token.endsWith(":") -> {
+                    val scope = token.substringBefore(":")
+                    val value = token.substringAfter(":")
+                    add(TableSearchTerm.Scoped(scope = scope, value = value))
+                    index += 1
+                }
+                else -> {
+                    add(TableSearchTerm.Phrase(token))
+                    index += 1
+                }
+            }
         }
     }
-    return terms.all { term -> searchableText.contains(term, ignoreCase = true) }
+    return TableSearchQuery(
+        terms = terms.filter { term -> term.value.isNotBlank() },
+    )
+}
+
+private fun TableSearchTerm.matchesTableRow(
+    table: PageTable,
+    row: PageTableRow,
+    columns: List<PageTableColumn>,
+    rowValueText: String,
+    rowNotesText: String,
+    tableReferences: List<PageTableReference>,
+): Boolean = when (this) {
+    is TableSearchTerm.Phrase -> {
+        rowValueText.containsSearchText(value) || rowNotesText.containsSearchText(value)
+    }
+    is TableSearchTerm.Scoped -> {
+        if (scope.isRowNotesScope()) {
+            rowNotesText.containsSearchText(value)
+        } else {
+            columns
+                .filter { column -> column.matchesSearchScope(scope) }
+                .any { column -> column.matchesScopedSearchValue(row, table, value, tableReferences) }
+        }
+    }
+}
+
+private fun PageTableColumn.matchesScopedSearchValue(
+    row: PageTableRow,
+    table: PageTable,
+    value: String,
+    tableReferences: List<PageTableReference>,
+): Boolean {
+    val displayText = table.displayCellText(row, this, tableReferences)
+    return when (type) {
+        PageTableColumnType.Select,
+        PageTableColumnType.Status,
+        -> displayText.equals(value, ignoreCase = true)
+        PageTableColumnType.MultiSelect -> displayText
+            .selectedChoiceValues()
+            .any { selected -> selected.equals(value, ignoreCase = true) }
+        PageTableColumnType.Checkbox -> value.toSearchBooleanOrNull()
+            ?.let { expected -> row.checkboxSortValue(this) == expected }
+            ?: displayText.containsSearchText(value)
+        PageTableColumnType.Number -> {
+            val queryNumber = value.toTableNumberOrNull()
+            val rowNumber = displayText.toTableNumberOrNull()
+            if (queryNumber != null && rowNumber != null) {
+                rowNumber == queryNumber
+            } else {
+                displayText.containsSearchText(value)
+            }
+        }
+        PageTableColumnType.Date,
+        PageTableColumnType.Text,
+        PageTableColumnType.FilesMedia,
+        PageTableColumnType.Formula,
+        PageTableColumnType.Relation,
+        PageTableColumnType.Rollup,
+        -> displayText.containsSearchText(value)
+    }
+}
+
+private fun PageTable.searchableRowValueText(
+    row: PageTableRow,
+    columns: List<PageTableColumn>,
+    tableReferences: List<PageTableReference>,
+): String {
+    return columns.joinToString(separator = " ") { column ->
+        displayCellText(row, column, tableReferences)
+    }
+}
+
+private fun PageTableColumn.matchesSearchScope(scope: String): Boolean {
+    val normalizedScope = scope.searchKey()
+    if (normalizedScope.isBlank()) return false
+    val candidates = listOf(
+        id,
+        name,
+        type.name,
+        type.label,
+    ).map { value -> value.searchKey() }
+    return candidates.any { candidate ->
+        candidate == normalizedScope ||
+            (normalizedScope.length >= 3 && candidate.contains(normalizedScope))
+    }
+}
+
+private fun String.isRowNotesScope(): Boolean {
+    return searchKey() in setOf("note", "notes", "body", "content", "page")
+}
+
+private fun String.containsSearchText(query: String): Boolean {
+    return normalizedSearchText().contains(query.normalizedSearchText())
+}
+
+private fun String.normalizedSearchText(): String {
+    return trim()
+        .lowercase(Locale.US)
+        .replace(Regex("\\s+"), " ")
+}
+
+private fun String.searchKey(): String {
+    return normalizedSearchText().replace(Regex("[^a-z0-9]"), "")
+}
+
+private fun String.toSearchBooleanOrNull(): Boolean? {
+    return when (normalizedSearchText()) {
+        "true", "checked", "done", "yes", "y" -> true
+        "false", "unchecked", "empty", "no", "n" -> false
+        else -> null
+    }
 }
 
 internal fun PageBlock.searchText(): String {
@@ -1038,6 +1206,9 @@ internal fun PageTable.groupLabel(
     column: PageTableColumn,
     tableReferences: List<PageTableReference>,
 ): String {
+    if (column.type == PageTableColumnType.Checkbox) {
+        return if (row.checkboxSortValue(column)) "Checked" else "Unchecked"
+    }
     return displayCellText(row, column, tableReferences).ifBlank { "Empty" }
 }
 
@@ -1046,23 +1217,190 @@ internal fun PageTable.compareRowsByColumn(
     rightRow: PageTableRow,
     column: PageTableColumn,
     tableReferences: List<PageTableReference>,
+    direction: PageTableSortDirection = PageTableSortDirection.Ascending,
 ): Int {
-    val left = displayCellText(leftRow, column, tableReferences)
-    val right = displayCellText(rightRow, column, tableReferences)
+    val left = sortKeyForRow(leftRow, column, tableReferences)
+    val right = sortKeyForRow(rightRow, column, tableReferences)
+    return compareSortKeys(left, right, direction)
+}
+
+private data class TableSortKey(
+    val isEmpty: Boolean,
+    val number: Double? = null,
+    val date: LocalDate? = null,
+    val time: LocalTime? = null,
+    val boolean: Boolean? = null,
+    val optionIndex: Int? = null,
+    val text: String = "",
+)
+
+private fun PageTable.sortKeyForRow(
+    row: PageTableRow,
+    column: PageTableColumn,
+    tableReferences: List<PageTableReference>,
+): TableSortKey {
+    val rawText = row.cellText(column)
+    val displayText = displayCellText(row, column, tableReferences).trim()
     return when (column.type) {
-        PageTableColumnType.Number -> compareValues(left.toDoubleOrNull(), right.toDoubleOrNull())
-        PageTableColumnType.Checkbox -> compareValues(left == CheckboxValueChecked, right == CheckboxValueChecked)
-        PageTableColumnType.Date,
-        PageTableColumnType.Formula,
-        PageTableColumnType.Relation,
-        PageTableColumnType.Rollup,
+        PageTableColumnType.Number -> TableSortKey(
+            isEmpty = rawText.isBlank() && displayText.isBlank(),
+            number = rawText.toTableNumberOrNull() ?: displayText.toTableNumberOrNull(),
+            text = displayText.normalizedSortText(),
+        )
+        PageTableColumnType.Date -> row.dateSortKey(column, displayText)
+        PageTableColumnType.Checkbox -> TableSortKey(
+            isEmpty = false,
+            boolean = row.checkboxSortValue(column),
+            text = if (row.checkboxSortValue(column)) "checked" else "unchecked",
+        )
         PageTableColumnType.Select,
-        PageTableColumnType.MultiSelect,
         PageTableColumnType.Status,
+        PageTableColumnType.MultiSelect,
+        -> column.choiceSortKey(rawText.ifBlank { displayText })
+        PageTableColumnType.Formula,
+        PageTableColumnType.Rollup,
+        -> TableSortKey(
+            isEmpty = displayText.isBlank(),
+            number = displayText.toTableNumberOrNull(),
+            date = displayText.toLocalDateOrNull(),
+            text = displayText.normalizedSortText(),
+        )
         PageTableColumnType.Text,
+        PageTableColumnType.Relation,
         PageTableColumnType.FilesMedia,
-        -> left.lowercase().compareTo(right.lowercase())
+        -> TableSortKey(
+            isEmpty = displayText.isBlank(),
+            text = displayText.normalizedSortText(),
+        )
     }
+}
+
+private fun PageTableRow.dateSortKey(
+    column: PageTableColumn,
+    displayText: String,
+): TableSortKey {
+    val value = cellValues[column.id]?.date
+    val storageValue = cellText(column).toTableDateCellValue()
+    val startDate = value?.startDate?.toLocalDateOrNull()
+        ?: storageValue.startDate.toLocalDateOrNull()
+        ?: displayText.toLocalDateOrNull()
+    val startTime = value?.startTime?.toLocalTimeOrNull()
+        ?: storageValue.startTime.toLocalTimeOrNull()
+    return TableSortKey(
+        isEmpty = startDate == null && displayText.isBlank(),
+        date = startDate,
+        time = startTime,
+        text = displayText.normalizedSortText(),
+    )
+}
+
+private fun PageTableColumn.choiceSortKey(rawText: String): TableSortKey {
+    val values = rawText.selectedChoiceValues()
+    val firstValue = values.firstOrNull().orEmpty()
+    val optionIndex = choiceOptionNames.indexOfFirst { option ->
+        option.equals(firstValue, ignoreCase = true)
+    }.takeIf { index -> index >= 0 }
+    return TableSortKey(
+        isEmpty = firstValue.isBlank(),
+        optionIndex = optionIndex,
+        text = firstValue.normalizedSortText(),
+    )
+}
+
+private fun PageTableRow.checkboxSortValue(column: PageTableColumn): Boolean {
+    return cellValues[column.id]?.checked == true ||
+        cellText(column).equals(CheckboxValueChecked, ignoreCase = true) ||
+        cellText(column).equals("checked", ignoreCase = true)
+}
+
+private fun compareSortKeys(
+    left: TableSortKey,
+    right: TableSortKey,
+    direction: PageTableSortDirection,
+): Int {
+    if (left.isEmpty != right.isEmpty) return if (left.isEmpty) 1 else -1
+    val result = left.compareValueTo(right)
+    return if (direction == PageTableSortDirection.Descending) -result else result
+}
+
+private fun TableSortKey.compareValueTo(other: TableSortKey): Int {
+    compareNullable(number, other.number)?.let { result -> return result }
+    compareNullable(date, other.date)?.let { result ->
+        if (result != 0) return result
+        compareNullable(time, other.time)?.let { timeResult -> return timeResult }
+    }
+    compareNullable(boolean, other.boolean)?.let { result -> return result }
+    compareNullable(optionIndex, other.optionIndex)?.let { result ->
+        if (result != 0) return result
+    }
+    return text.compareTo(other.text)
+}
+
+private fun <T : Comparable<T>> compareNullable(left: T?, right: T?): Int? {
+    if (left == null && right == null) return null
+    if (left == null) return 1
+    if (right == null) return -1
+    return left.compareTo(right)
+}
+
+private fun compareGroupLabels(
+    left: String,
+    right: String,
+    column: PageTableColumn,
+): Int {
+    return compareSortKeys(
+        left.groupSortKey(column),
+        right.groupSortKey(column),
+        PageTableSortDirection.Ascending,
+    )
+}
+
+private fun String.groupSortKey(column: PageTableColumn): TableSortKey {
+    val label = trim()
+    if (label == "Empty") return TableSortKey(isEmpty = true)
+    return when (column.type) {
+        PageTableColumnType.Number,
+        PageTableColumnType.Formula,
+        PageTableColumnType.Rollup,
+        -> TableSortKey(
+            isEmpty = label.isBlank(),
+            number = label.toTableNumberOrNull(),
+            text = label.normalizedSortText(),
+        )
+        PageTableColumnType.Date -> TableSortKey(
+            isEmpty = label.isBlank(),
+            date = label.toLocalDateOrNull(),
+            text = label.normalizedSortText(),
+        )
+        PageTableColumnType.Checkbox -> TableSortKey(
+            isEmpty = false,
+            boolean = label.equals("Checked", ignoreCase = true),
+            text = label.normalizedSortText(),
+        )
+        PageTableColumnType.Select,
+        PageTableColumnType.Status,
+        PageTableColumnType.MultiSelect,
+        -> column.choiceSortKey(label)
+        PageTableColumnType.Text,
+        PageTableColumnType.Relation,
+        PageTableColumnType.FilesMedia,
+        -> TableSortKey(
+            isEmpty = label.isBlank(),
+            text = label.normalizedSortText(),
+        )
+    }
+}
+
+private fun String.toTableNumberOrNull(): Double? {
+    val normalized = trim()
+        .replace(",", "")
+        .replace(Regex("[^0-9+\\-.]"), "")
+    if (normalized.isBlank() || normalized == "-" || normalized == "." || normalized == "+") return null
+    return normalized.toDoubleOrNull()
+}
+
+private fun String.normalizedSortText(): String {
+    return trim().lowercase(Locale.US)
 }
 
 internal val PageTableSortDirection.arrowLabel: String

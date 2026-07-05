@@ -145,10 +145,10 @@ class TableMutationUseCase(
         direction: PageTableSortDirection,
     ): TableMutationResult = replaceTable(document, tableBlockId) { table ->
         table.copy(
-            sort = if (columnId.isBlank()) {
-                PageTableSort()
-            } else {
+            sort = if (columnId.isNotBlank() && table.columns.any { column -> column.id == columnId }) {
                 PageTableSort(columnId = columnId, direction = direction)
+            } else {
+                PageTableSort()
             },
         )
     }
@@ -186,7 +186,10 @@ class TableMutationUseCase(
         tableBlockId: String,
         columnId: String,
     ): TableMutationResult = replaceTable(document, tableBlockId) { table ->
-        table.copy(groupByColumnId = columnId)
+        val normalizedColumnId = columnId.takeIf { candidate ->
+            candidate.isNotBlank() && table.columns.any { column -> column.id == candidate }
+        }.orEmpty()
+        table.copy(groupByColumnId = normalizedColumnId)
     }
 
     fun updateColumnName(

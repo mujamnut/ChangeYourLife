@@ -289,6 +289,38 @@ class TableMutationUseCaseTest {
     }
 
     @Test
+    fun sortAndGroupRejectMissingColumns() {
+        val amountColumn = PageTableColumn(
+            id = "amount",
+            name = "Amount",
+            type = PageTableColumnType.Number,
+        )
+        val document = tableDocument(
+            table = PageTable(
+                title = "Budget",
+                columns = listOf(amountColumn),
+                sort = PageTableSort(columnId = "amount", direction = PageTableSortDirection.Descending),
+                groupByColumnId = "amount",
+            ),
+        )
+
+        val sortResult = useCase.updateSort(
+            document = document,
+            tableBlockId = "table-1",
+            columnId = "missing",
+            direction = PageTableSortDirection.Ascending,
+        )
+        val groupResult = useCase.updateGroup(
+            document = document,
+            tableBlockId = "table-1",
+            columnId = "missing",
+        )
+
+        assertEquals(PageTableSort(), sortResult.document.table.sort)
+        assertEquals("", groupResult.document.table.groupByColumnId)
+    }
+
+    @Test
     fun updateCellCoercesEditableTypesAndSkipsFormulaColumns() {
         val checkboxColumn = PageTableColumn(
             id = "done",

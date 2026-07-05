@@ -186,6 +186,8 @@ internal fun TableRowPageSheet(
     currentPageId: String,
     table: PageTable,
     row: PageTableRow,
+    syncState: PageSyncState,
+    isSaving: Boolean,
     tableReferences: List<PageTableReference>,
     searchTargetType: String = "",
     searchTargetId: String = "",
@@ -434,6 +436,11 @@ internal fun TableRowPageSheet(
                         }
                     },
                     modifier = Modifier.weight(1f),
+                )
+                DatabaseSyncStatusChip(
+                    syncState = syncState,
+                    isSaving = isSaving,
+                    showDetailOnClick = false,
                 )
                 IconButton(
                     onClick = {
