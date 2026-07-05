@@ -691,13 +691,10 @@ internal fun TableRowPageSheet(
                         .padding(bottom = if (isKeyboardVisible) 6.dp else 14.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    rowRichTextToolbarState
-                        ?.takeIf { state -> state.isValidForKeyboardToolbar() }
-                        ?.let { toolbarState -> PageKeyboardRichTextToolbar(toolbarState) }
-
                     PageKeyboardBlockToolbar(
                         activeBlockId = activeRowBlockId,
                         canUndoEditorChange = false,
+                        richTextToolbarState = rowRichTextToolbarState,
                         onAddBlock = ::addRowBlockAndFocus,
                         onChangeActiveBlockType = { type ->
                             activeRowBlockId?.let { blockId -> onBlockTypeChange(blockId, type) }

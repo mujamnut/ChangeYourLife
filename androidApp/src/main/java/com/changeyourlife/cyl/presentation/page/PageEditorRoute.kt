@@ -378,6 +378,9 @@ internal fun PageEditorScreen(
     var richTextToolbarState by remember { mutableStateOf<RichTextToolbarUiState?>(null) }
     var focusRequestSequence by rememberSaveable { mutableStateOf(0L) }
     var editorFocusRequest by remember { mutableStateOf<EditorBlockFocusRequest?>(null) }
+    val hasDatabaseBlock = remember(uiState.blocks) {
+        uiState.blocks.containsDatabaseTableBlock()
+    }
 
     fun requestEditorFocus(
         blockId: String?,
@@ -441,20 +444,23 @@ internal fun PageEditorScreen(
             PageEditorBottomBar(
                 activeBlockId = activeBlockId,
                 focusScope = editorFocusScope,
+                canAddDatabaseFromHeader = !hasDatabaseBlock,
                 canUndoEditorChange = uiState.canUndoEditorChange,
                 richTextToolbarState = richTextToolbarState,
                 onAddBlock = onAddBlock,
                 onAddDatabaseFromHeader = {
-                    val emptyBodyBlockId = uiState.blocks.firstOrNull { block ->
-                        block.type == PageBlockType.Text &&
-                            block.text.isBlank() &&
-                            block.richTextSpans.isEmpty() &&
-                            block.mediaAttachments.isEmpty() &&
-                            block.children.isEmpty()
-                    }?.id
-                    emptyBodyBlockId?.let { blockId ->
-                        onBlockTypeChange(blockId, PageBlockType.DatabaseTable)
-                    } ?: onAddBlock(PageBlockType.DatabaseTable)
+                    if (!hasDatabaseBlock) {
+                        val emptyBodyBlockId = uiState.blocks.firstOrNull { block ->
+                            block.type == PageBlockType.Text &&
+                                block.text.isBlank() &&
+                                block.richTextSpans.isEmpty() &&
+                                block.mediaAttachments.isEmpty() &&
+                                block.children.isEmpty()
+                        }?.id
+                        emptyBodyBlockId?.let { blockId ->
+                            onBlockTypeChange(blockId, PageBlockType.DatabaseTable)
+                        } ?: onAddBlock(PageBlockType.DatabaseTable)
+                    }
                 },
                 onChangeActiveBlockType = { type ->
                     activeBlockId?.let { blockId -> onBlockTypeChange(blockId, type) } ?: onAddBlock(type)
@@ -723,27 +729,29 @@ internal fun PageEditorScreen(
                         )
                     }
 
-                    item(key = "page-body-tap-target") {
-                        val bodyTapInteractionSource = remember { MutableInteractionSource() }
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(160.dp)
-                                .clickable(
-                                    interactionSource = bodyTapInteractionSource,
-                                    indication = null,
-                                ) {
-                                    richTextToolbarState = null
-                                    uiState.blocks.firstFocusableEditorBlockId()?.let { blockId ->
-                                        requestEditorFocus(blockId, PageEditorFocusScope.Body)
-                                    }
-                                        ?: run {
-                                            activeBlockId = null
-                                            editorFocusScope = PageEditorFocusScope.Body
-                                            onAddBlock(PageBlockType.Text)
+                    if (!hasDatabaseBlock) {
+                        item(key = "page-body-tap-target") {
+                            val bodyTapInteractionSource = remember { MutableInteractionSource() }
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(160.dp)
+                                    .clickable(
+                                        interactionSource = bodyTapInteractionSource,
+                                        indication = null,
+                                    ) {
+                                        richTextToolbarState = null
+                                        uiState.blocks.firstFocusableEditorBlockId()?.let { blockId ->
+                                            requestEditorFocus(blockId, PageEditorFocusScope.Body)
                                         }
-                                },
-                        )
+                                            ?: run {
+                                                activeBlockId = null
+                                                editorFocusScope = PageEditorFocusScope.Body
+                                                onAddBlock(PageBlockType.Text)
+                                            }
+                                    },
+                            )
+                        }
                     }
 
                 }

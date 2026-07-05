@@ -560,12 +560,6 @@ internal data class PageTableReference(
     val pageTitle: String = "",
 )
 
-internal enum class TableControlType {
-    Sort,
-    Filter,
-    Group,
-}
-
 internal data class TableRowSummary(
     val row: PageTableRow,
     val title: String,
@@ -1279,7 +1273,7 @@ internal fun PageTableColumn.configSummary(
         PageTableColumnType.Relation -> {
             val target = tableReferences.firstOrNull { reference -> reference.blockId == relationTargetTableId }
             when {
-                target != null -> target.title.ifBlank { "Untitled database" }
+                target != null -> target.title.databaseTitleOrPlaceholder()
                 relationTargetTableId.isBlank() -> "Set target"
                 else -> MissingSourceText
             }
@@ -1314,6 +1308,10 @@ internal fun PageTableColumn.configSummary(
         PageTableColumnType.FilesMedia,
         -> ""
     }
+}
+
+private fun String.databaseTitleOrPlaceholder(): String {
+    return takeUnless { title -> title.isBlank() || title == "Untitled database" } ?: "Table"
 }
 
 internal fun String.relatedRowIds(): Set<String> {

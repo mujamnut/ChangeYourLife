@@ -77,6 +77,7 @@ data class RichTextToolbarUiState(
     val onApplyLink: () -> Unit,
     val onApplyColor: (String) -> Unit,
     val onApplyHighlight: (String) -> Unit,
+    val onInsertMentionTrigger: () -> Unit = {},
 )
 
 @Composable
@@ -318,6 +319,22 @@ fun CylRichTextBlockEditor(
         isLinkEditorVisible = true
     }
 
+    fun insertMentionTrigger() {
+        val selection = fieldValue.selection
+        val oldText = fieldValue.text
+        val nextText = oldText.replaceRange(selection.min, selection.max, "@")
+        val nextSpans = RichTextSpanEngine.adjustForTextChange(
+            spans = currentSpans,
+            oldText = oldText,
+            newText = nextText,
+        )
+        dismissedSuggestionQuery = null
+        commitSpans(nextText, nextSpans, TextRange(selection.min + 1))
+        focusRequester.requestFocus()
+        keyboardController?.show()
+        onFocusBlock()
+    }
+
     fun applyLinkValue(url: String) {
         val nextState = RichTextController(
             RichTextEditorState(
@@ -432,6 +449,7 @@ fun CylRichTextBlockEditor(
         onApplyLink = ::showLinkEditor,
         onApplyColor = ::applyColor,
         onApplyHighlight = ::applyHighlight,
+        onInsertMentionTrigger = ::insertMentionTrigger,
     )
 
     LaunchedEffect(isFocused, fieldValue, currentSpans, typingFormats, typingLinkUrl, typingColor, typingHighlight) {

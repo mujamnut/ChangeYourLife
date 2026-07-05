@@ -23,6 +23,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.awaitLongPressOrCancellation
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -119,8 +120,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
@@ -138,6 +143,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
@@ -334,17 +340,13 @@ internal fun DatabaseTableBlockEditor(
             tableReferences = tableReferences,
             onTitleChange = onTitleChange,
             onViewChange = onViewChange,
+            onViewConfigChange = onViewConfigChange,
             onDataSourceChange = onDataSourceChange,
             onSortChange = onSortChange,
             onFilterChange = onFilterChange,
             onGroupChange = onGroupChange,
             searchQuery = tableSearchQuery,
             onSearchQueryChange = { tableSearchQuery = it },
-        )
-
-        TableViewConfigControls(
-            table = table,
-            onViewConfigChange = onViewConfigChange,
         )
 
         when (table.view) {
@@ -421,6 +423,7 @@ internal fun TableToolbar(
     tableReferences: List<PageTableReference>,
     onTitleChange: (String) -> Unit,
     onViewChange: (PageTableView) -> Unit,
+    onViewConfigChange: (PageTableViewConfig) -> Unit,
     onDataSourceChange: (PageTableReference?) -> Unit,
     onSortChange: (String, PageTableSortDirection) -> Unit,
     onFilterChange: (String, String) -> Unit,
@@ -440,44 +443,44 @@ internal fun TableToolbar(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            TableViewSelector(
-                tableBlockId = tableBlockId,
-                tableReferences = tableReferences,
-                tableTitle = table.title,
-                selectedView = table.view,
-                viewConfig = table.viewConfig,
-                onTitleChange = onTitleChange,
-                onViewChange = onViewChange,
-                onDataSourceChange = onDataSourceChange,
-            )
-            Spacer(modifier = Modifier.weight(1f))
-            TableControlIconButton(
-                icon = Icons.Rounded.Search,
-                selected = searchQuery.isNotBlank(),
-                contentDescription = "Search database",
-                onClick = { isSearchOpen = !isSearchOpen },
-            )
+            if (showSearch) {
+                TableSearchField(
+                    query = searchQuery,
+                    onQueryChange = onSearchQueryChange,
+                    onClose = {
+                        onSearchQueryChange("")
+                        isSearchOpen = false
+                    },
+                    onEmptyBlur = { isSearchOpen = false },
+                    modifier = Modifier.weight(1f),
+                )
+            } else {
+                TableViewSelector(
+                    tableBlockId = tableBlockId,
+                    tableReferences = tableReferences,
+                    tableTitle = table.title,
+                    selectedView = table.view,
+                    viewConfig = table.viewConfig,
+                    onTitleChange = onTitleChange,
+                    onViewChange = onViewChange,
+                    onDataSourceChange = onDataSourceChange,
+                )
+                Spacer(modifier = Modifier.weight(1f))
+                TableControlIconButton(
+                    icon = Icons.Rounded.Search,
+                    selected = searchQuery.isNotBlank(),
+                    contentDescription = "Search database",
+                    onClick = { isSearchOpen = true },
+                )
+            }
             TableControls(
                 table = table,
+                onViewConfigChange = onViewConfigChange,
                 onSortChange = onSortChange,
                 onFilterChange = onFilterChange,
                 onGroupChange = onGroupChange,
             )
         }
-        if (showSearch) {
-            TableSearchField(
-                query = searchQuery,
-                onQueryChange = onSearchQueryChange,
-                onClose = {
-                    onSearchQueryChange("")
-                    isSearchOpen = false
-                },
-            )
-        }
-        TableActiveControlsRow(
-            table = table,
-            searchQuery = searchQuery,
-        )
     }
 }
 
@@ -486,16 +489,41 @@ internal fun TableSearchField(
     query: String,
     onQueryChange: (String) -> Unit,
     onClose: () -> Unit,
+    onEmptyBlur: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
+    val focusRequester = remember { FocusRequester() }
+    var hasFocused by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        focusRequester.requestFocus()
+    }
+
     BasicTextField(
         value = query,
         onValueChange = onQueryChange,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier
+            .height(42.dp)
+            .focusRequester(focusRequester)
+            .onFocusChanged { focusState ->
+                if (focusState.isFocused) {
+                    hasFocused = true
+                } else if (hasFocused && query.isBlank()) {
+                    onEmptyBlur()
+                }
+            },
         singleLine = true,
         textStyle = MaterialTheme.typography.bodyMedium.copy(
             color = MaterialTheme.colorScheme.onSurface,
         ),
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+        keyboardActions = KeyboardActions(
+            onSearch = {
+                if (query.isBlank()) {
+                    onEmptyBlur()
+                }
+            },
+        ),
         decorationBox = { innerTextField ->
             Row(
                 modifier = Modifier
@@ -559,7 +587,7 @@ internal fun TableViewSelector(
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val selectedOption = TableViewOption.entries.firstOrNull { option -> option.view == selectedView }
         ?: TableViewOption.entries.first()
-    val displayTitle = tableTitle.ifBlank { "Untitled database" }
+    val displayTitle = tableTitle.databaseTitleOrPlaceholder()
 
     Row(
         modifier = Modifier
@@ -579,21 +607,10 @@ internal fun TableViewSelector(
         )
         Text(
             text = displayTitle,
-            modifier = Modifier.widthIn(max = 178.dp),
+            modifier = Modifier.widthIn(max = 196.dp),
             style = MaterialTheme.typography.labelLarge,
             fontWeight = FontWeight.SemiBold,
             color = MaterialTheme.colorScheme.onSurface,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        Text(
-            text = selectedOption.label,
-            modifier = Modifier
-                .clip(RoundedCornerShape(999.dp))
-                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.78f))
-                .padding(horizontal = 8.dp, vertical = 3.dp),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
@@ -676,8 +693,9 @@ internal fun DatabaseNameEditor(
     tableTitle: String,
     onTitleChange: (String) -> Unit,
 ) {
+    val editableTitle = tableTitle.databaseEditableTitle()
     BasicTextField(
-        value = tableTitle,
+        value = editableTitle,
         onValueChange = onTitleChange,
         modifier = Modifier.fillMaxWidth(),
         singleLine = true,
@@ -707,9 +725,9 @@ internal fun DatabaseNameEditor(
                     modifier = Modifier.weight(1f),
                     contentAlignment = Alignment.CenterStart,
                 ) {
-                    if (tableTitle.isBlank()) {
+                    if (editableTitle.isBlank()) {
                         Text(
-                            text = "Untitled database",
+                            text = DefaultDatabaseTitlePlaceholder,
                             style = MaterialTheme.typography.titleMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.66f),
                             maxLines = 1,
@@ -721,6 +739,17 @@ internal fun DatabaseNameEditor(
             }
         },
     )
+}
+
+private const val DefaultDatabaseTitlePlaceholder = "Table"
+private const val LegacyUntitledDatabaseTitle = "Untitled database"
+
+private fun String.databaseTitleOrPlaceholder(): String {
+    return databaseEditableTitle().ifBlank { DefaultDatabaseTitlePlaceholder }
+}
+
+private fun String.databaseEditableTitle(): String {
+    return takeUnless { title -> title.isBlank() || title == LegacyUntitledDatabaseTitle }.orEmpty()
 }
 
 @Composable
@@ -827,7 +856,7 @@ internal fun DatabaseDataSourceCard(
             .filter { reference -> reference.blockId != tableBlockId }
             .sortedWith(
                 compareBy<PageTableReference> { reference -> reference.pageTitle.ifBlank { "Current page" } }
-                    .thenBy { reference -> reference.title.ifBlank { "Untitled database" } },
+                    .thenBy { reference -> reference.title.databaseTitleOrPlaceholder() },
             )
     }
     val activeSource = sourceTables.firstOrNull { reference ->
@@ -953,7 +982,7 @@ internal fun DatabaseDataSourceRow(
         )
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = reference.title.ifBlank { "Untitled database" },
+                text = reference.title.databaseTitleOrPlaceholder(),
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.Medium,
                 color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
@@ -1102,57 +1131,57 @@ internal fun TableViewConfigControls(
         -> Unit
     }
 }
+
+private fun PageTable.hasViewSpecificConfig(): Boolean = when (view) {
+    PageTableView.Calendar,
+    PageTableView.Timeline,
+    -> dateCandidateColumns().isNotEmpty()
+    PageTableView.Dashboard -> columns.isNotEmpty()
+    PageTableView.Table,
+    PageTableView.List,
+    PageTableView.Board,
+    PageTableView.Gallery,
+    -> false
+}
+
 @Composable
 internal fun TableControls(
     table: PageTable,
+    onViewConfigChange: (PageTableViewConfig) -> Unit,
     onSortChange: (String, PageTableSortDirection) -> Unit,
     onFilterChange: (String, String) -> Unit,
     onGroupChange: (String) -> Unit,
 ) {
     if (table.columns.isEmpty()) return
 
-    var activeControl by remember { mutableStateOf<TableControlType?>(null) }
+    var isSheetOpen by remember { mutableStateOf(false) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val sortColumn = table.columns.firstOrNull { column -> column.id == table.sort.columnId }
     val filterColumn = table.columns.firstOrNull { column -> column.id == table.filter.columnId }
     val groupColumn = table.columns.firstOrNull { column -> column.id == table.groupByColumnId }
+    val hasActiveControls = sortColumn != null ||
+        (filterColumn != null && table.filter.query.isNotBlank()) ||
+        groupColumn != null
 
-    Row(
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        TableControlIconButton(
-            icon = Icons.AutoMirrored.Rounded.Sort,
-            selected = sortColumn != null,
-            contentDescription = "Sort table",
-            onClick = { activeControl = TableControlType.Sort },
-        )
-        TableControlIconButton(
-            icon = Icons.Rounded.FilterList,
-            selected = filterColumn != null && table.filter.query.isNotBlank(),
-            contentDescription = "Filter table",
-            onClick = { activeControl = TableControlType.Filter },
-        )
-        TableControlIconButton(
-            icon = Icons.Rounded.ViewColumn,
-            selected = groupColumn != null,
-            contentDescription = "Group table",
-            onClick = { activeControl = TableControlType.Group },
-        )
-    }
+    TableControlIconButton(
+        icon = Icons.Rounded.Tune,
+        selected = hasActiveControls,
+        showBadge = hasActiveControls,
+        contentDescription = "Database controls",
+        onClick = { isSheetOpen = true },
+    )
 
-    activeControl?.let { control ->
+    if (isSheetOpen) {
         ModalBottomSheet(
-            onDismissRequest = { activeControl = null },
+            onDismissRequest = { isSheetOpen = false },
             sheetState = sheetState,
         ) {
-            TableControlSheet(
-                control = control,
+            TableControlsSheet(
                 table = table,
+                onViewConfigChange = onViewConfigChange,
                 onSortChange = onSortChange,
                 onFilterChange = onFilterChange,
                 onGroupChange = onGroupChange,
-                onDismiss = { activeControl = null },
             )
         }
     }
@@ -1162,6 +1191,7 @@ internal fun TableControls(
 internal fun TableControlIconButton(
     icon: ImageVector,
     selected: Boolean,
+    showBadge: Boolean = false,
     contentDescription: String,
     onClick: () -> Unit,
 ) {
@@ -1188,6 +1218,203 @@ internal fun TableControlIconButton(
             } else {
                 MaterialTheme.colorScheme.onSurfaceVariant
             },
+        )
+        if (showBadge) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 7.dp, end = 7.dp)
+                    .size(6.dp)
+                    .clip(RoundedCornerShape(3.dp))
+                    .background(MaterialTheme.colorScheme.primary),
+            )
+        }
+    }
+}
+
+@Composable
+internal fun TableControlsSheet(
+    table: PageTable,
+    onViewConfigChange: (PageTableViewConfig) -> Unit,
+    onSortChange: (String, PageTableSortDirection) -> Unit,
+    onFilterChange: (String, String) -> Unit,
+    onGroupChange: (String) -> Unit,
+) {
+    val canClear = table.sort.columnId.isNotBlank() ||
+        table.filter.columnId.isNotBlank() ||
+        table.filter.query.isNotBlank() ||
+        table.groupByColumnId.isNotBlank()
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(18.dp),
+    ) {
+        TableControlSheetHeader(
+            title = "Database controls",
+            canClear = canClear,
+            onClear = {
+                onSortChange("", PageTableSortDirection.Ascending)
+                onFilterChange("", "")
+                onGroupChange("")
+            },
+        )
+
+        if (table.hasViewSpecificConfig()) {
+            TableControlSection(title = "View setup") {
+                TableViewConfigControls(
+                    table = table,
+                    onViewConfigChange = onViewConfigChange,
+                )
+            }
+        }
+
+        TableControlSection(title = "Sort") {
+            CompactTableSortControls(
+                table = table,
+                onSortChange = onSortChange,
+            )
+        }
+
+        TableControlSection(title = "Filter") {
+            CompactTableFilterControls(
+                table = table,
+                onFilterChange = onFilterChange,
+            )
+        }
+
+        TableControlSection(title = "Group") {
+            CompactTableGroupControls(
+                table = table,
+                onGroupChange = onGroupChange,
+            )
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+    }
+}
+
+@Composable
+private fun TableControlSection(
+    title: String,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        content()
+    }
+}
+
+@Composable
+private fun CompactTableSortControls(
+    table: PageTable,
+    onSortChange: (String, PageTableSortDirection) -> Unit,
+) {
+    val selectedColumnId = table.sort.columnId.ifBlank { table.columns.firstOrNull()?.id.orEmpty() }
+    val selectedDirection = table.sort.direction
+
+    TableColumnChoiceRow(
+        columns = table.columns,
+        selectedColumnId = selectedColumnId,
+        onSelect = { column -> onSortChange(column.id, selectedDirection) },
+    )
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FilterChip(
+            selected = table.sort.columnId.isNotBlank() &&
+                selectedDirection == PageTableSortDirection.Ascending,
+            onClick = { onSortChange(selectedColumnId, PageTableSortDirection.Ascending) },
+            label = { Text(text = "Asc") },
+        )
+        FilterChip(
+            selected = table.sort.columnId.isNotBlank() &&
+                selectedDirection == PageTableSortDirection.Descending,
+            onClick = { onSortChange(selectedColumnId, PageTableSortDirection.Descending) },
+            label = { Text(text = "Desc") },
+        )
+        if (table.sort.columnId.isNotBlank()) {
+            FilterChip(
+                selected = false,
+                onClick = { onSortChange("", PageTableSortDirection.Ascending) },
+                label = { Text(text = "Clear") },
+            )
+        }
+    }
+}
+
+@Composable
+private fun CompactTableFilterControls(
+    table: PageTable,
+    onFilterChange: (String, String) -> Unit,
+) {
+    val firstColumnId = table.columns.firstOrNull()?.id.orEmpty()
+    var selectedColumnId by remember(table.filter.columnId, table.columns) {
+        mutableStateOf(table.filter.columnId.ifBlank { firstColumnId })
+    }
+    var query by remember(table.filter.query) { mutableStateOf(table.filter.query) }
+
+    TableColumnChoiceRow(
+        columns = table.columns,
+        selectedColumnId = selectedColumnId,
+        onSelect = { column -> selectedColumnId = column.id },
+    )
+    OutlinedTextField(
+        value = query,
+        onValueChange = { nextQuery ->
+            query = nextQuery
+            if (nextQuery.isBlank()) {
+                onFilterChange("", "")
+            }
+        },
+        modifier = Modifier.fillMaxWidth(),
+        singleLine = true,
+        placeholder = { Text(text = "Contains") },
+        colors = blockTextFieldColors(),
+    )
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FilterChip(
+            selected = table.filter.columnId.isNotBlank() && table.filter.query.isNotBlank(),
+            enabled = selectedColumnId.isNotBlank() && query.isNotBlank(),
+            onClick = { onFilterChange(selectedColumnId, query) },
+            label = { Text(text = "Apply") },
+        )
+        if (table.filter.columnId.isNotBlank() || table.filter.query.isNotBlank()) {
+            FilterChip(
+                selected = false,
+                onClick = {
+                    query = ""
+                    selectedColumnId = firstColumnId
+                    onFilterChange("", "")
+                },
+                label = { Text(text = "Clear") },
+            )
+        }
+    }
+}
+
+@Composable
+private fun CompactTableGroupControls(
+    table: PageTable,
+    onGroupChange: (String) -> Unit,
+) {
+    TableColumnChoiceRow(
+        columns = table.columns,
+        selectedColumnId = table.groupByColumnId,
+        onSelect = { column -> onGroupChange(column.id) },
+    )
+    if (table.groupByColumnId.isNotBlank()) {
+        FilterChip(
+            selected = false,
+            onClick = { onGroupChange("") },
+            label = { Text(text = "Clear") },
         )
     }
 }
@@ -1231,154 +1458,6 @@ internal fun TableActiveControlsRow(
             )
         }
     }
-}
-
-@Composable
-internal fun TableControlSheet(
-    control: TableControlType,
-    table: PageTable,
-    onSortChange: (String, PageTableSortDirection) -> Unit,
-    onFilterChange: (String, String) -> Unit,
-    onGroupChange: (String) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 20.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
-    ) {
-        when (control) {
-            TableControlType.Sort -> TableSortSheet(
-                table = table,
-                onSortChange = onSortChange,
-            )
-            TableControlType.Filter -> TableFilterSheet(
-                table = table,
-                onFilterChange = onFilterChange,
-                onDismiss = onDismiss,
-            )
-            TableControlType.Group -> TableGroupSheet(
-                table = table,
-                onGroupChange = onGroupChange,
-                onDismiss = onDismiss,
-            )
-        }
-        Spacer(modifier = Modifier.height(12.dp))
-    }
-}
-
-@Composable
-internal fun TableSortSheet(
-    table: PageTable,
-    onSortChange: (String, PageTableSortDirection) -> Unit,
-) {
-    val selectedColumnId = table.sort.columnId.ifBlank { table.columns.firstOrNull()?.id.orEmpty() }
-    val selectedDirection = table.sort.direction
-
-    TableControlSheetHeader(
-        title = "Sort",
-        canClear = table.sort.columnId.isNotBlank(),
-        onClear = { onSortChange("", PageTableSortDirection.Ascending) },
-    )
-    Text(
-        text = "Column",
-        style = MaterialTheme.typography.labelLarge,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
-    TableColumnChoiceRow(
-        columns = table.columns,
-        selectedColumnId = selectedColumnId,
-        onSelect = { column -> onSortChange(column.id, selectedDirection) },
-    )
-    Text(
-        text = "Direction",
-        style = MaterialTheme.typography.labelLarge,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        FilterChip(
-            selected = selectedDirection == PageTableSortDirection.Ascending,
-            onClick = { onSortChange(selectedColumnId, PageTableSortDirection.Ascending) },
-            label = { Text(text = "Ascending") },
-        )
-        FilterChip(
-            selected = selectedDirection == PageTableSortDirection.Descending,
-            onClick = { onSortChange(selectedColumnId, PageTableSortDirection.Descending) },
-            label = { Text(text = "Descending") },
-        )
-    }
-}
-
-@Composable
-internal fun TableFilterSheet(
-    table: PageTable,
-    onFilterChange: (String, String) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    val firstColumnId = table.columns.firstOrNull()?.id.orEmpty()
-    var selectedColumnId by remember(table.filter.columnId, table.columns) {
-        mutableStateOf(table.filter.columnId.ifBlank { firstColumnId })
-    }
-    var query by remember(table.filter.query) { mutableStateOf(table.filter.query) }
-
-    TableControlSheetHeader(
-        title = "Filter",
-        canClear = table.filter.columnId.isNotBlank() || table.filter.query.isNotBlank(),
-        onClear = {
-            query = ""
-            selectedColumnId = firstColumnId
-            onFilterChange("", "")
-        },
-    )
-    Text(
-        text = "Column",
-        style = MaterialTheme.typography.labelLarge,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
-    TableColumnChoiceRow(
-        columns = table.columns,
-        selectedColumnId = selectedColumnId,
-        onSelect = { column -> selectedColumnId = column.id },
-    )
-    OutlinedTextField(
-        value = query,
-        onValueChange = { query = it },
-        modifier = Modifier.fillMaxWidth(),
-        singleLine = true,
-        placeholder = { Text(text = "Contains") },
-        colors = blockTextFieldColors(),
-    )
-    Button(
-        enabled = selectedColumnId.isNotBlank() && query.isNotBlank(),
-        onClick = {
-            onFilterChange(selectedColumnId, query)
-            onDismiss()
-        },
-    ) {
-        Text(text = "Apply")
-    }
-}
-
-@Composable
-internal fun TableGroupSheet(
-    table: PageTable,
-    onGroupChange: (String) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    TableControlSheetHeader(
-        title = "Group",
-        canClear = table.groupByColumnId.isNotBlank(),
-        onClear = { onGroupChange("") },
-    )
-    TableColumnChoiceRow(
-        columns = table.columns,
-        selectedColumnId = table.groupByColumnId,
-        onSelect = { column ->
-            onGroupChange(column.id)
-            onDismiss()
-        },
-    )
 }
 
 @Composable
@@ -1464,6 +1543,9 @@ internal fun TableGridEditor(
     pageId: String,
     pageUpdatedAt: Long,
 ) {
+    val columnWidths = remember(table.columns, table.rows, tableReferences) {
+        table.tableColumnWidths(tableReferences)
+    }
     val visibleRows = table.visibleRows(
         tableReferences = tableReferences,
         searchQuery = searchQuery,
@@ -1479,6 +1561,7 @@ internal fun TableGridEditor(
             tableBlockId = tableBlockId,
             table = table,
             columns = table.columns,
+            columnWidths = columnWidths,
             tableReferences = tableReferences,
             onSortChange = onSortChange,
             onFilterChange = onFilterChange,
@@ -1498,11 +1581,14 @@ internal fun TableGridEditor(
         HorizontalDivider()
         if (isStarterEmptyDatabase) {
             TableStarterEmptyState(
+                columns = table.columns,
+                columnWidths = columnWidths,
                 onAddRow = onAddRow,
             )
         } else if (visibleRows.isEmpty()) {
             TableAddRowRow(
                 columns = table.columns,
+                columnWidths = columnWidths,
                 onAddRow = onAddRow,
             )
         } else if (groupColumn != null) {
@@ -1519,6 +1605,7 @@ internal fun TableGridEditor(
                             pageUpdatedAt = pageUpdatedAt,
                             table = table,
                             columns = table.columns,
+                            columnWidths = columnWidths,
                             tableReferences = tableReferences,
                             onColumnDateSettingsChange = onColumnDateSettingsChange,
                             onCellChange = onCellChange,
@@ -1535,6 +1622,7 @@ internal fun TableGridEditor(
             }
             TableAddRowRow(
                 columns = table.columns,
+                columnWidths = columnWidths,
                 onAddRow = onAddRow,
             )
         } else {
@@ -1549,6 +1637,7 @@ internal fun TableGridEditor(
                         pageUpdatedAt = pageUpdatedAt,
                         table = table,
                         columns = table.columns,
+                        columnWidths = columnWidths,
                         tableReferences = tableReferences,
                         onColumnDateSettingsChange = onColumnDateSettingsChange,
                         onCellChange = onCellChange,
@@ -1564,6 +1653,7 @@ internal fun TableGridEditor(
             }
             TableAddRowRow(
                 columns = table.columns,
+                columnWidths = columnWidths,
                 onAddRow = onAddRow,
             )
         }
@@ -1575,6 +1665,7 @@ internal fun TableHeaderRow(
     tableBlockId: String,
     table: PageTable,
     columns: List<PageTableColumn>,
+    columnWidths: Map<String, Dp>,
     tableReferences: List<PageTableReference>,
     onSortChange: (String, PageTableSortDirection) -> Unit,
     onFilterChange: (String, String) -> Unit,
@@ -1602,6 +1693,7 @@ internal fun TableHeaderRow(
         var isColumnSheetOpen by remember(column.id) { mutableStateOf(false) }
         TableHeaderCell(
             column = column,
+            width = columnWidths[column.id] ?: TableCellWidth,
             onClick = { isColumnSheetOpen = true },
         )
         if (isColumnSheetOpen) {
@@ -1672,11 +1764,14 @@ internal fun TableHeaderRow(
 
 @Composable
 internal fun TableStarterEmptyState(
+    columns: List<PageTableColumn>,
+    columnWidths: Map<String, Dp>,
     onAddRow: () -> Unit,
 ) {
+    val firstColumnWidth = columns.firstOrNull()?.let { column -> columnWidths[column.id] } ?: TableCellWidth
     Row(
         modifier = Modifier
-            .width(TableCellWidth + TableAddColumnWidth)
+            .width(firstColumnWidth + TableAddColumnWidth)
             .height(96.dp)
             .background(MaterialTheme.colorScheme.surface),
         verticalAlignment = Alignment.CenterVertically,
@@ -1760,17 +1855,18 @@ private fun TableStarterAction(
 @Composable
 internal fun TableHeaderCell(
     column: PageTableColumn,
+    width: Dp,
     onClick: () -> Unit,
 ) {
     val tableColors = TableGridTokens.colors()
     Row(
         modifier = Modifier
-            .width(TableCellWidth)
+            .width(width)
             .height(TableHeaderHeight)
             .clickable(onClick = onClick)
             .background(tableColors.headerBackground)
-            .padding(horizontal = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
+            .padding(horizontal = 7.dp),
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
@@ -2969,7 +3065,7 @@ internal fun RelationColumnConfig(
             FilterChip(
                 selected = reference.blockId == column.relationTargetTableId,
                 onClick = { onRelationTargetChange(reference.blockId) },
-                label = { Text(text = reference.title.ifBlank { "Untitled database" }.compactControlLabel()) },
+                label = { Text(text = reference.title.databaseTitleOrPlaceholder().compactControlLabel()) },
             )
         }
     }
@@ -3144,6 +3240,75 @@ internal fun TableGroupHeader(
     }
 }
 
+private val TableInlineOpenWidth = 40.dp
+
+private fun PageTable.tableColumnWidths(
+    tableReferences: List<PageTableReference>,
+): Map<String, Dp> {
+    return columns.mapIndexed { index, column ->
+        column.id to tableColumnWidth(
+            column = column,
+            tableReferences = tableReferences,
+            includeInlineOpen = index == 0,
+        )
+    }.toMap()
+}
+
+private fun PageTable.tableColumnWidth(
+    column: PageTableColumn,
+    tableReferences: List<PageTableReference>,
+    includeInlineOpen: Boolean,
+): Dp {
+    val headerText = column.name.ifBlank { column.type.label }
+    val longestCellText = rows.asSequence()
+        .map { row -> displayCellText(row, column, tableReferences) }
+        .maxByOrNull { value -> value.length }
+        .orEmpty()
+    val textLength = maxOf(headerText.length, longestCellText.length)
+    val textBasedWidth = 56 + (textLength.coerceAtMost(24) * 7)
+    val baseMinWidth = when (column.type) {
+        PageTableColumnType.Checkbox -> 92
+        PageTableColumnType.Number -> 92
+        PageTableColumnType.Date -> 116
+        PageTableColumnType.Select,
+        PageTableColumnType.Status,
+        -> 112
+        PageTableColumnType.MultiSelect -> 128
+        PageTableColumnType.FilesMedia -> 112
+        PageTableColumnType.Formula,
+        PageTableColumnType.Rollup,
+        -> 112
+        PageTableColumnType.Relation -> 132
+        PageTableColumnType.Text -> 132
+    }
+    val baseMaxWidth = when (column.type) {
+        PageTableColumnType.Checkbox -> 112
+        PageTableColumnType.Number -> 132
+        PageTableColumnType.Date -> 172
+        PageTableColumnType.Select,
+        PageTableColumnType.Status,
+        -> 176
+        PageTableColumnType.MultiSelect -> 212
+        PageTableColumnType.FilesMedia -> 176
+        PageTableColumnType.Formula,
+        PageTableColumnType.Rollup,
+        -> 188
+        PageTableColumnType.Relation -> 224
+        PageTableColumnType.Text -> 260
+    }
+    val minWidth = if (includeInlineOpen) {
+        (baseMinWidth - 14).coerceAtLeast(96)
+    } else {
+        baseMinWidth
+    }
+    val maxWidth = if (includeInlineOpen) {
+        (baseMaxWidth - 28).coerceAtLeast(minWidth)
+    } else {
+        baseMaxWidth
+    }
+    return textBasedWidth.coerceIn(minWidth, maxWidth).dp
+}
+
 @Composable
 internal fun TableDataRow(
     row: PageTableRow,
@@ -3153,6 +3318,7 @@ internal fun TableDataRow(
     pageUpdatedAt: Long,
     table: PageTable,
     columns: List<PageTableColumn>,
+    columnWidths: Map<String, Dp>,
     tableReferences: List<PageTableReference>,
     onColumnDateSettingsChange: (
         String,
@@ -3172,6 +3338,7 @@ internal fun TableDataRow(
 ) {
     val primaryColumn = columns.firstOrNull()
     val remainingColumns = columns.drop(1)
+    val primaryColumnWidth = primaryColumn?.let { column -> columnWidths[column.id] } ?: TableCellWidth
     var isActionSheetOpen by remember(row.id) { mutableStateOf(false) }
     var isDragging by remember(row.id) { mutableStateOf(false) }
     val tableColors = TableGridTokens.colors()
@@ -3272,15 +3439,17 @@ internal fun TableDataRow(
                 onDateSettingsChange = { dateFormat, timeFormat, reminder, timezoneLabel ->
                     onColumnDateSettingsChange(primaryColumn.id, dateFormat, timeFormat, reminder, timezoneLabel)
                 },
+                width = primaryColumnWidth,
                 onOpenRow = { onOpenRow(row.id) },
             )
         } else {
             TableOpenRowCell(
-                modifier = Modifier.width(TableCellWidth),
+                modifier = Modifier.width(TableInlineOpenWidth),
                 onClick = { onOpenRow(row.id) },
             )
         }
         remainingColumns.forEach { column ->
+            val columnWidth = columnWidths[column.id] ?: TableCellWidth
             TableCellEditor(
                 column = column,
                 row = row,
@@ -3295,7 +3464,7 @@ internal fun TableDataRow(
                     onColumnDateSettingsChange(column.id, dateFormat, timeFormat, reminder, timezoneLabel)
                 },
                 modifier = Modifier
-                    .width(TableCellWidth)
+                    .width(columnWidth)
                     .background(tableColors.cellBackground),
             )
         }
@@ -3540,14 +3709,14 @@ internal fun PrimaryTableCellEditor(
         PageTableDateReminder,
         String,
     ) -> Unit,
+    width: Dp,
     onOpenRow: () -> Unit,
 ) {
-    Row(
+    Box(
         modifier = Modifier
-            .width(TableCellWidth)
+            .width(width)
             .height(TableRowHeight)
             .background(MaterialTheme.colorScheme.surface),
-        verticalAlignment = Alignment.CenterVertically,
     ) {
         TableCellEditor(
             column = column,
@@ -3560,10 +3729,14 @@ internal fun PrimaryTableCellEditor(
             currentPageId = currentPageId,
             onCreateTargetRow = onCreateTargetRow,
             onDateSettingsChange = onDateSettingsChange,
-            modifier = Modifier.weight(1f),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(end = TableInlineOpenWidth - 4.dp),
         )
         TableOpenRowCell(
-            modifier = Modifier.width(44.dp),
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .width(TableInlineOpenWidth),
             onClick = onOpenRow,
         )
     }
@@ -3577,19 +3750,22 @@ internal fun TableOpenRowCell(
     Box(
         modifier = modifier
             .height(TableRowHeight)
-            .background(MaterialTheme.colorScheme.surface)
-            .clickable(onClick = onClick),
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick,
+            ),
         contentAlignment = Alignment.Center,
     ) {
         Text(
             text = "OPEN",
             modifier = Modifier
-                .clip(RoundedCornerShape(8.dp))
-                .background(MaterialTheme.colorScheme.surfaceContainer)
-                .padding(horizontal = 6.dp, vertical = 4.dp),
+                .clip(RoundedCornerShape(7.dp))
+                .background(MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.82f))
+                .padding(horizontal = 5.dp, vertical = 3.dp),
             style = MaterialTheme.typography.labelSmall.copy(
-                fontSize = 8.sp,
-                lineHeight = 8.sp,
+                fontSize = 7.sp,
+                lineHeight = 7.sp,
                 letterSpacing = 0.sp,
             ),
             fontWeight = FontWeight.SemiBold,
@@ -3601,22 +3777,24 @@ internal fun TableOpenRowCell(
 @Composable
 internal fun TableAddRowRow(
     columns: List<PageTableColumn>,
+    columnWidths: Map<String, Dp>,
     onAddRow: () -> Unit,
 ) {
-    val remainingColumnCount = (columns.size - 1).coerceAtLeast(0)
+    val firstColumnWidth = columns.firstOrNull()?.let { column -> columnWidths[column.id] } ?: TableCellWidth
+    val remainingColumns = columns.drop(1)
 
     Row(
         horizontalArrangement = Arrangement.spacedBy(0.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         TableAddRowCell(
-            modifier = Modifier.width(TableCellWidth),
+            modifier = Modifier.width(firstColumnWidth),
             onAddRow = onAddRow,
         )
-        repeat(remainingColumnCount) {
+        remainingColumns.forEach { column ->
             Box(
                 modifier = Modifier
-                    .width(TableCellWidth)
+                    .width(columnWidths[column.id] ?: TableCellWidth)
                     .height(TableRowHeight)
                     .background(MaterialTheme.colorScheme.surface),
             )
@@ -3641,8 +3819,8 @@ internal fun TableAddRowCell(
             .height(TableRowHeight)
             .background(MaterialTheme.colorScheme.surface)
             .clickable(onClick = onAddRow)
-            .padding(horizontal = 10.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+            .padding(horizontal = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
@@ -3690,9 +3868,9 @@ internal fun TableDateCellEditor(
         modifier = modifier
             .height(TableRowHeight)
             .clickable { isSheetOpen = true }
-            .padding(horizontal = 10.dp),
+            .padding(horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Text(
             text = if (displayText.isBlank()) column.name.ifBlank { "Date" } else displayText,
@@ -4243,9 +4421,9 @@ internal fun TableCellEditor(
             Row(
                 modifier = modifier
                     .height(TableRowHeight)
-                    .padding(horizontal = 12.dp),
+                    .padding(horizontal = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 Checkbox(
                     checked = value == CheckboxValueChecked,
@@ -4288,41 +4466,69 @@ internal fun TableCellEditor(
         PageTableColumnType.Number,
         PageTableColumnType.Text,
         -> {
-            OutlinedTextField(
+            TablePlainTextCellEditor(
+                column = column,
                 value = value,
                 onValueChange = { nextValue ->
                     onValueChange(nextValue.toSingleLineTableCellValue())
                 },
-                modifier = modifier.height(TableRowHeight),
-                singleLine = true,
-                placeholder = {
-                    Text(
-                        text = when (column.type) {
-                            PageTableColumnType.Number -> "0"
-                            PageTableColumnType.Text -> column.name
-                            PageTableColumnType.Select,
-                            PageTableColumnType.MultiSelect,
-                            PageTableColumnType.Date,
-                            PageTableColumnType.Formula,
-                            PageTableColumnType.Relation,
-                            PageTableColumnType.Rollup,
-                            PageTableColumnType.Status,
-                            PageTableColumnType.Checkbox,
-                            PageTableColumnType.FilesMedia,
-                            -> ""
-                        },
-                    )
-                },
-                keyboardOptions = KeyboardOptions(
-                    keyboardType = when (column.type) {
-                        PageTableColumnType.Number -> KeyboardType.Number
-                        else -> KeyboardType.Text
-                    },
-                ),
-                colors = plainBlockTextFieldColors(),
+                modifier = modifier,
             )
         }
     }
+}
+
+@Composable
+private fun TablePlainTextCellEditor(
+    column: PageTableColumn,
+    value: String,
+    onValueChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val textStyle = MaterialTheme.typography.bodyMedium.copy(
+        color = MaterialTheme.colorScheme.onSurface,
+        lineHeight = 22.sp,
+    )
+    val placeholder = when (column.type) {
+        PageTableColumnType.Number -> "0"
+        else -> column.name
+    }
+
+    BasicTextField(
+        value = value,
+        onValueChange = onValueChange,
+        modifier = modifier.height(TableRowHeight),
+        singleLine = true,
+        textStyle = textStyle,
+        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+        keyboardOptions = KeyboardOptions(
+            keyboardType = when (column.type) {
+                PageTableColumnType.Number -> KeyboardType.Number
+                else -> KeyboardType.Text
+            },
+            imeAction = ImeAction.Done,
+        ),
+        decorationBox = { innerTextField ->
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(TableRowHeight)
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                if (value.isBlank()) {
+                    Text(
+                        text = placeholder,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        style = textStyle,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.58f),
+                    )
+                }
+                innerTextField()
+            }
+        },
+    )
 }
 
 internal fun String.toSingleLineTableCellValue(): String {
@@ -4353,8 +4559,8 @@ internal fun TableChoiceCellEditor(
                 .fillMaxWidth()
                 .height(TableRowHeight)
                 .clickable { isExpanded = true }
-                .padding(horizontal = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                .padding(horizontal = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
@@ -4468,7 +4674,7 @@ internal fun ReadOnlyComputedCell(
     Box(
         modifier = modifier
             .height(TableRowHeight)
-            .padding(horizontal = 14.dp),
+            .padding(horizontal = 8.dp),
         contentAlignment = Alignment.CenterStart,
     ) {
         Text(
@@ -4559,7 +4765,7 @@ internal fun TableMediaCellEditor(
         modifier = modifier
             .height(TableRowHeight)
             .clickable { isSheetOpen = true }
-            .padding(horizontal = 10.dp),
+            .padding(horizontal = 8.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -4632,8 +4838,8 @@ internal fun RelationCellEditor(
                 .fillMaxWidth()
                 .height(TableRowHeight)
                 .clickable(enabled = targetTable != null) { isPickerOpen = true }
-                .padding(horizontal = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                .padding(horizontal = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(

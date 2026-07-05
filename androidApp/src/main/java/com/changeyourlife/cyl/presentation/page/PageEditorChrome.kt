@@ -1,4 +1,4 @@
-@file:OptIn(ExperimentalMaterial3Api::class)
+@file:OptIn(ExperimentalComposeUiApi::class, ExperimentalMaterial3Api::class)
 
 package com.changeyourlife.cyl.presentation.page
 
@@ -37,7 +37,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -71,6 +70,7 @@ import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Notifications
+import androidx.compose.material.icons.rounded.Photo
 import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.SwapVert
@@ -113,6 +113,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
@@ -123,7 +124,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.TextStyle
@@ -166,6 +167,7 @@ import com.changeyourlife.cyl.domain.model.PageTableView
 import com.changeyourlife.cyl.domain.model.PageTableViewConfig
 import com.changeyourlife.cyl.domain.model.PageSyncState
 import com.changeyourlife.cyl.domain.model.PageTextSpan
+import com.changeyourlife.cyl.domain.model.RichTextFormat
 import com.changeyourlife.cyl.presentation.ai.AiChatMode
 import com.changeyourlife.cyl.presentation.ai.AiChatSheet
 import com.changeyourlife.cyl.presentation.ai.AiChatMessage
@@ -452,6 +454,7 @@ internal fun PageSyncConflictBanner(
 internal fun PageEditorBottomBar(
     activeBlockId: String?,
     focusScope: PageEditorFocusScope,
+    canAddDatabaseFromHeader: Boolean,
     canUndoEditorChange: Boolean,
     richTextToolbarState: RichTextToolbarUiState?,
     onAddBlock: (PageBlockType) -> Unit,
@@ -471,8 +474,8 @@ internal fun PageEditorBottomBar(
     onOpenAi: () -> Unit,
     onCreateBlock: () -> Unit,
 ) {
-    val density = LocalDensity.current
-    val isKeyboardVisible = WindowInsets.ime.getBottom(density) > 0
+    val canShowEditorToolbar = canAddDatabaseFromHeader &&
+        focusScope != PageEditorFocusScope.None
 
     Column(
         modifier = Modifier
@@ -480,7 +483,7 @@ internal fun PageEditorBottomBar(
             .imePadding(),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        if (isKeyboardVisible || focusScope != PageEditorFocusScope.None) {
+        if (canShowEditorToolbar) {
             when (focusScope) {
                 PageEditorFocusScope.Header -> {
                     PageKeyboardHeaderToolbar(
@@ -491,14 +494,11 @@ internal fun PageEditorBottomBar(
                 PageEditorFocusScope.Block,
                 PageEditorFocusScope.None,
                 -> {
-                    if (isKeyboardVisible) {
-                        richTextToolbarState
-                            ?.takeIf { state -> state.isValidForKeyboardToolbar() }
-                            ?.let { toolbarState -> PageKeyboardRichTextToolbar(toolbarState) }
-                    }
                     PageKeyboardBlockToolbar(
                         activeBlockId = activeBlockId,
                         canUndoEditorChange = canUndoEditorChange,
+                        richTextToolbarState = richTextToolbarState,
+                        onOpenAi = onOpenAi,
                         onAddBlock = onAddBlock,
                         onChangeActiveBlockType = onChangeActiveBlockType,
                         onAddChildToActiveBlock = onAddChildToActiveBlock,
@@ -516,35 +516,35 @@ internal fun PageEditorBottomBar(
                     )
                 }
             }
-        } else {
-            CylBottomCommandBar(
-                centerLabel = "Ask AI",
-                centerIcon = Icons.Rounded.AutoAwesome,
-                centerContentDescription = "Ask AI about this page",
-                onCenterClick = onOpenAi,
-                leadingActions = {
-                    if (canUndoEditorChange) {
-                        CylChromeIconButton(
-                            icon = Icons.AutoMirrored.Rounded.Undo,
-                            contentDescription = "Undo last edit",
-                            onClick = onUndoEditorChange,
-                        )
-                    }
-                    CylChromeIconButton(
-                        icon = Icons.Rounded.Search,
-                        contentDescription = "Search page",
-                        onClick = onSearch,
-                    )
-                },
-                trailingActions = {
-                    CylChromeIconButton(
-                        icon = Icons.Rounded.Add,
-                        contentDescription = "Add block",
-                        onClick = onCreateBlock,
-                    )
-                },
-            )
         }
+
+        CylBottomCommandBar(
+            centerLabel = "Ask AI",
+            centerIcon = Icons.Rounded.AutoAwesome,
+            centerContentDescription = "Ask AI about this page",
+            onCenterClick = onOpenAi,
+            leadingActions = {
+                if (canUndoEditorChange) {
+                    CylChromeIconButton(
+                        icon = Icons.AutoMirrored.Rounded.Undo,
+                        contentDescription = "Undo last edit",
+                        onClick = onUndoEditorChange,
+                    )
+                }
+                CylChromeIconButton(
+                    icon = Icons.Rounded.Search,
+                    contentDescription = "Search page",
+                    onClick = onSearch,
+                )
+            },
+            trailingActions = {
+                CylChromeIconButton(
+                    icon = Icons.Rounded.Add,
+                    contentDescription = "Add block",
+                    onClick = onCreateBlock,
+                )
+            },
+        )
     }
 }
 
@@ -604,6 +604,8 @@ internal fun PageKeyboardRichTextToolbar(
 internal fun PageKeyboardBlockToolbar(
     activeBlockId: String?,
     canUndoEditorChange: Boolean,
+    richTextToolbarState: RichTextToolbarUiState? = null,
+    onOpenAi: (() -> Unit)? = null,
     onAddBlock: (PageBlockType) -> Unit,
     onChangeActiveBlockType: (PageBlockType) -> Unit,
     onAddChildToActiveBlock: (PageBlockType) -> Unit,
@@ -618,114 +620,598 @@ internal fun PageKeyboardBlockToolbar(
     onUndoEditorChange: () -> Unit,
     showActiveBlockActions: Boolean,
 ) {
-    val blockTypeEntries = remember {
-        EditorCommandRegistry.changeTypeEntries()
-            .filter { entry -> entry.changeTypeOrNull() != PageBlockType.DatabaseTable }
-    }
+    val validRichTextToolbarState = richTextToolbarState
+        ?.takeIf { state -> state.isValidForKeyboardToolbar() }
     val hasActiveBlock = activeBlockId != null
-    CylFloatingChromeSurface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp),
-        shape = RoundedCornerShape(22.dp),
+    val keyboardController = LocalSoftwareKeyboardController.current
+    var selectedMode by rememberSaveable { mutableStateOf(PageKeyboardToolbarMode.None) }
+
+    LaunchedEffect(validRichTextToolbarState != null) {
+        if (validRichTextToolbarState == null && selectedMode == PageKeyboardToolbarMode.Format) {
+            selectedMode = PageKeyboardToolbarMode.None
+        }
+    }
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        LazyRow(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically,
+        if (selectedMode == PageKeyboardToolbarMode.Insert) {
+            PageKeyboardInsertPanel(
+                hasActiveBlock = hasActiveBlock,
+                onSelectItem = { item ->
+                    when (item.behavior) {
+                        PageKeyboardInsertBehavior.LinkedPage -> {
+                            if (hasActiveBlock) {
+                                onCreateLinkedPageFromActiveBlock()
+                            } else {
+                                onAddBlock(PageBlockType.Text)
+                            }
+                        }
+                        PageKeyboardInsertBehavior.ChildText -> {
+                            if (hasActiveBlock) {
+                                onAddChildToActiveBlock(PageBlockType.Text)
+                            } else {
+                                onAddBlock(PageBlockType.Text)
+                            }
+                        }
+                        PageKeyboardInsertBehavior.BlockType -> {
+                            val type = item.blockType
+                            if (hasActiveBlock) {
+                                onChangeActiveBlockType(type)
+                            } else {
+                                onAddBlock(type)
+                            }
+                        }
+                    }
+                    selectedMode = PageKeyboardToolbarMode.None
+                },
+            )
+        }
+
+        CylFloatingChromeSurface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp),
+            shape = RoundedCornerShape(22.dp),
         ) {
-            if (canUndoEditorChange) {
-                item {
-                    PageKeyboardIconButton(
-                        icon = Icons.AutoMirrored.Rounded.Undo,
-                        contentDescription = "Undo",
-                        onClick = onUndoEditorChange,
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 7.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (onOpenAi != null) {
+                    PageKeyboardModeButton(
+                        icon = Icons.Rounded.AutoAwesome,
+                        selected = false,
+                        contentDescription = "Ask AI",
+                        onClick = onOpenAi,
                     )
                 }
-            }
-            items(
-                items = blockTypeEntries,
-                key = { entry -> entry.command.paletteItemId() },
-            ) { entry ->
-                val type = entry.changeTypeOrNull() ?: return@items
-                PageKeyboardIconButton(
-                    icon = type.pageKeyboardIcon(),
-                    contentDescription = entry.command.label,
+                PageKeyboardModeButton(
+                    icon = Icons.Rounded.Add,
+                    selected = selectedMode == PageKeyboardToolbarMode.Insert,
+                    contentDescription = "Insert block",
                     onClick = {
-                        if (hasActiveBlock) {
-                            onChangeActiveBlockType(type)
+                        selectedMode = if (selectedMode == PageKeyboardToolbarMode.Insert) {
+                            PageKeyboardToolbarMode.None
                         } else {
-                            onAddBlock(type)
+                            keyboardController?.hide()
+                            PageKeyboardToolbarMode.Insert
                         }
                     },
                 )
-            }
-            if (showActiveBlockActions && hasActiveBlock) {
-                item {
-                    PageKeyboardIconButton(
-                        icon = Icons.Rounded.Add,
-                        contentDescription = "Insert text above",
-                        onClick = onInsertTextAboveActiveBlock,
+                PageKeyboardModeButton(
+                    label = "Aa",
+                    selected = selectedMode == PageKeyboardToolbarMode.Format,
+                    enabled = validRichTextToolbarState != null,
+                    contentDescription = "Text format",
+                    onClick = {
+                        selectedMode = if (selectedMode == PageKeyboardToolbarMode.Format) {
+                            PageKeyboardToolbarMode.None
+                        } else {
+                            PageKeyboardToolbarMode.Format
+                        }
+                    },
+                )
+
+                if (selectedMode == PageKeyboardToolbarMode.Format && validRichTextToolbarState != null) {
+                    PageKeyboardFormatActions(
+                        state = validRichTextToolbarState,
+                        modifier = Modifier.weight(1f),
                     )
-                }
-                item {
-                    PageKeyboardIconButton(
-                        icon = Icons.AutoMirrored.Rounded.ArrowForward,
-                        contentDescription = "Insert text below",
-                        onClick = onInsertTextBelowActiveBlock,
-                    )
-                }
-                item {
-                    PageKeyboardIconButton(
-                        icon = Icons.AutoMirrored.Rounded.Article,
-                        contentDescription = "Add child text block",
-                        onClick = { onAddChildToActiveBlock(PageBlockType.Text) },
-                    )
-                }
-                item {
-                    PageKeyboardIconButton(
-                        icon = Icons.AutoMirrored.Rounded.Article,
-                        contentDescription = "Create linked page",
-                        onClick = onCreateLinkedPageFromActiveBlock,
-                    )
-                }
-                item {
-                    PageKeyboardIconButton(
-                        icon = Icons.Rounded.KeyboardArrowUp,
-                        contentDescription = "Move block up",
-                        onClick = onMoveActiveBlockUp,
-                    )
-                }
-                item {
-                    PageKeyboardIconButton(
-                        icon = Icons.Rounded.KeyboardArrowDown,
-                        contentDescription = "Move block down",
-                        onClick = onMoveActiveBlockDown,
-                    )
-                }
-                item {
-                    PageKeyboardIconButton(
-                        icon = Icons.AutoMirrored.Rounded.ArrowForward,
-                        contentDescription = "Indent block",
-                        onClick = onIndentActiveBlock,
-                    )
-                }
-                item {
-                    PageKeyboardIconButton(
-                        icon = Icons.AutoMirrored.Rounded.ArrowBack,
-                        contentDescription = "Outdent block",
-                        onClick = onOutdentActiveBlock,
-                    )
-                }
-                item {
-                    PageKeyboardIconButton(
-                        icon = Icons.Rounded.Delete,
-                        contentDescription = "Delete block",
-                        isDestructive = true,
-                        onClick = onDeleteActiveBlock,
+                } else {
+                    PageKeyboardQuickActions(
+                        canUndoEditorChange = canUndoEditorChange,
+                        hasActiveBlock = hasActiveBlock,
+                        canUseActiveBlockActions = showActiveBlockActions && hasActiveBlock,
+                        canMention = validRichTextToolbarState != null,
+                        onAddImage = { onAddBlock(PageBlockType.MediaFile) },
+                        onOpenReplaceBlock = {
+                            if (hasActiveBlock) {
+                                keyboardController?.hide()
+                                selectedMode = if (selectedMode == PageKeyboardToolbarMode.Insert) {
+                                    PageKeyboardToolbarMode.None
+                                } else {
+                                    PageKeyboardToolbarMode.Insert
+                                }
+                            }
+                        },
+                        onUndoEditorChange = onUndoEditorChange,
+                        onInsertMention = { validRichTextToolbarState?.onInsertMentionTrigger?.invoke() },
+                        onDeleteActiveBlock = onDeleteActiveBlock,
+                        onMoveActiveBlockUp = onMoveActiveBlockUp,
+                        onMoveActiveBlockDown = onMoveActiveBlockDown,
+                        modifier = Modifier.weight(1f),
                     )
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun PageKeyboardQuickActions(
+    canUndoEditorChange: Boolean,
+    hasActiveBlock: Boolean,
+    canUseActiveBlockActions: Boolean,
+    canMention: Boolean,
+    onAddImage: () -> Unit,
+    onOpenReplaceBlock: () -> Unit,
+    onUndoEditorChange: () -> Unit,
+    onInsertMention: () -> Unit,
+    onDeleteActiveBlock: () -> Unit,
+    onMoveActiveBlockUp: () -> Unit,
+    onMoveActiveBlockDown: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier.horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        PageKeyboardIconButton(
+            icon = Icons.Rounded.Photo,
+            contentDescription = "Add image",
+            onClick = onAddImage,
+        )
+        PageKeyboardIconButton(
+            icon = Icons.Rounded.Tune,
+            contentDescription = "Replace block",
+            enabled = hasActiveBlock,
+            onClick = onOpenReplaceBlock,
+        )
+        PageKeyboardIconButton(
+            icon = Icons.AutoMirrored.Rounded.Undo,
+            contentDescription = "Undo",
+            enabled = canUndoEditorChange,
+            onClick = onUndoEditorChange,
+        )
+        PageKeyboardModeButton(
+            label = "@",
+            selected = false,
+            enabled = canMention,
+            contentDescription = "Mention page",
+            onClick = onInsertMention,
+        )
+        PageKeyboardIconButton(
+            icon = Icons.Rounded.Delete,
+            contentDescription = "Delete block",
+            enabled = canUseActiveBlockActions,
+            isDestructive = true,
+            onClick = onDeleteActiveBlock,
+        )
+        PageKeyboardIconButton(
+            icon = Icons.Rounded.KeyboardArrowUp,
+            contentDescription = "Move block up",
+            enabled = canUseActiveBlockActions,
+            onClick = onMoveActiveBlockUp,
+        )
+        PageKeyboardIconButton(
+            icon = Icons.Rounded.KeyboardArrowDown,
+            contentDescription = "Move block down",
+            enabled = canUseActiveBlockActions,
+            onClick = onMoveActiveBlockDown,
+        )
+    }
+}
+
+private enum class PageKeyboardInsertBehavior {
+    BlockType,
+    LinkedPage,
+    ChildText,
+}
+
+private data class PageKeyboardInsertItem(
+    val label: String,
+    val blockType: PageBlockType,
+    val icon: ImageVector? = null,
+    val iconLabel: String? = null,
+    val behavior: PageKeyboardInsertBehavior = PageKeyboardInsertBehavior.BlockType,
+)
+
+private data class PageKeyboardInsertSection(
+    val label: String,
+    val items: List<PageKeyboardInsertItem>,
+)
+
+@Composable
+private fun PageKeyboardInsertPanel(
+    hasActiveBlock: Boolean,
+    onSelectItem: (PageKeyboardInsertItem) -> Unit,
+) {
+    val sections = remember { pageKeyboardInsertSections() }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp)
+            .clip(RoundedCornerShape(24.dp))
+            .background(MaterialTheme.colorScheme.surface)
+            .heightIn(max = 340.dp)
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        sections.forEach { section ->
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = section.label,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                section.items.chunked(2).forEach { rowItems ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        rowItems.forEach { item ->
+                            PageKeyboardInsertCell(
+                                item = item,
+                                onClick = { onSelectItem(item) },
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                        if (rowItems.size == 1) {
+                            Spacer(modifier = Modifier.weight(1f))
+                        }
+                    }
+                }
+            }
+        }
+
+        if (hasActiveBlock) {
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                PageKeyboardInsertCell(
+                    item = PageKeyboardInsertItem(
+                        label = "Child text",
+                        blockType = PageBlockType.Text,
+                        icon = Icons.AutoMirrored.Rounded.Article,
+                        behavior = PageKeyboardInsertBehavior.ChildText,
+                    ),
+                    onClick = {
+                        onSelectItem(
+                            PageKeyboardInsertItem(
+                                label = "Child text",
+                                blockType = PageBlockType.Text,
+                                icon = Icons.AutoMirrored.Rounded.Article,
+                                behavior = PageKeyboardInsertBehavior.ChildText,
+                            ),
+                        )
+                    },
+                    modifier = Modifier.weight(1f),
+                )
+                Spacer(modifier = Modifier.weight(1f))
+            }
+        }
+    }
+}
+
+@Composable
+private fun PageKeyboardInsertCell(
+    item: PageKeyboardInsertItem,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .heightIn(min = 46.dp)
+            .clip(RoundedCornerShape(15.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.82f))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(30.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(MaterialTheme.colorScheme.surface),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (item.icon != null) {
+                Icon(
+                    imageVector = item.icon,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                Text(
+                    text = item.iconLabel.orEmpty(),
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                )
+            }
+        }
+        Text(
+            text = item.label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+private fun pageKeyboardInsertSections(): List<PageKeyboardInsertSection> {
+    return listOf(
+        PageKeyboardInsertSection(
+            label = "Basic block",
+            items = listOf(
+                PageKeyboardInsertItem(
+                    label = "Text",
+                    blockType = PageBlockType.Text,
+                    icon = Icons.AutoMirrored.Rounded.Article,
+                ),
+                PageKeyboardInsertItem(
+                    label = "Heading H1",
+                    blockType = PageBlockType.Heading,
+                    iconLabel = "H1",
+                ),
+                PageKeyboardInsertItem(
+                    label = "Heading H2",
+                    blockType = PageBlockType.Heading,
+                    iconLabel = "H2",
+                ),
+                PageKeyboardInsertItem(
+                    label = "Heading H3",
+                    blockType = PageBlockType.Heading,
+                    iconLabel = "H3",
+                ),
+                PageKeyboardInsertItem(
+                    label = "Heading H4",
+                    blockType = PageBlockType.Heading,
+                    iconLabel = "H4",
+                ),
+                PageKeyboardInsertItem(
+                    label = "Bullet list",
+                    blockType = PageBlockType.Bullet,
+                    icon = Icons.AutoMirrored.Rounded.Sort,
+                ),
+                PageKeyboardInsertItem(
+                    label = "Numbered list",
+                    blockType = PageBlockType.Numbered,
+                    icon = Icons.AutoMirrored.Rounded.Sort,
+                ),
+                PageKeyboardInsertItem(
+                    label = "Todo list",
+                    blockType = PageBlockType.Todo,
+                    icon = Icons.Rounded.TaskAlt,
+                ),
+                PageKeyboardInsertItem(
+                    label = "Toggle list",
+                    blockType = PageBlockType.Bullet,
+                    icon = Icons.Rounded.KeyboardArrowDown,
+                ),
+                PageKeyboardInsertItem(
+                    label = "Page",
+                    blockType = PageBlockType.Text,
+                    icon = Icons.AutoMirrored.Rounded.Article,
+                    behavior = PageKeyboardInsertBehavior.LinkedPage,
+                ),
+                PageKeyboardInsertItem(
+                    label = "Callout",
+                    blockType = PageBlockType.Quote,
+                    icon = Icons.Rounded.Info,
+                ),
+                PageKeyboardInsertItem(
+                    label = "Quote",
+                    blockType = PageBlockType.Quote,
+                    icon = Icons.AutoMirrored.Rounded.WrapText,
+                ),
+                PageKeyboardInsertItem(
+                    label = "Table",
+                    blockType = PageBlockType.Text,
+                    icon = Icons.Rounded.ViewColumn,
+                ),
+                PageKeyboardInsertItem(
+                    label = "Divider",
+                    blockType = PageBlockType.Divider,
+                    icon = Icons.Rounded.MoreVert,
+                ),
+            ),
+        ),
+        PageKeyboardInsertSection(
+            label = "Media",
+            items = listOf(
+                PageKeyboardInsertItem(
+                    label = "Image",
+                    blockType = PageBlockType.MediaFile,
+                    icon = Icons.AutoMirrored.Rounded.Article,
+                ),
+                PageKeyboardInsertItem(
+                    label = "Video",
+                    blockType = PageBlockType.MediaFile,
+                    icon = Icons.Rounded.Public,
+                ),
+                PageKeyboardInsertItem(
+                    label = "Audio",
+                    blockType = PageBlockType.MediaFile,
+                    icon = Icons.Rounded.AccessTime,
+                ),
+                PageKeyboardInsertItem(
+                    label = "Code",
+                    blockType = PageBlockType.Text,
+                    icon = Icons.Rounded.Functions,
+                ),
+                PageKeyboardInsertItem(
+                    label = "File",
+                    blockType = PageBlockType.MediaFile,
+                    icon = Icons.AutoMirrored.Rounded.Article,
+                ),
+                PageKeyboardInsertItem(
+                    label = "Web bookmark",
+                    blockType = PageBlockType.Text,
+                    icon = Icons.Rounded.Public,
+                ),
+            ),
+        ),
+    )
+}
+
+@Composable
+private fun PageKeyboardFormatActions(
+    state: RichTextToolbarUiState,
+    modifier: Modifier = Modifier,
+) {
+    val entries = remember {
+        EditorCommandRegistry.richTextToolbarEntries()
+            .filter { entry ->
+                entry.id in setOf(
+                    "format:Bold",
+                    "format:Italic",
+                    "format:Underline",
+                    "format:Strikethrough",
+                    "format:Code",
+                    "link",
+                )
+            }
+    }
+    Row(
+        modifier = modifier.horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        entries.forEach { entry ->
+            when (val action = entry.action) {
+                is RichTextToolbarRegistryAction.ToggleFormat -> {
+                    PageKeyboardFormatButton(
+                        label = if (action.format == RichTextFormat.Code) "fx" else entry.label,
+                        selected = action.format in state.activeFormats,
+                        onClick = { state.onToggle(action.format) },
+                    )
+                }
+                RichTextToolbarRegistryAction.Link -> {
+                    PageKeyboardFormatButton(
+                        label = "Link",
+                        selected = state.typingLinkUrl.isNotBlank(),
+                        onClick = state.onApplyLink,
+                    )
+                }
+                is RichTextToolbarRegistryAction.ApplyColor,
+                is RichTextToolbarRegistryAction.ApplyHighlight,
+                -> Unit
+            }
+        }
+    }
+}
+
+@Composable
+private fun PageKeyboardFormatButton(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    TextButton(
+        onClick = onClick,
+        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+        modifier = Modifier
+            .height(40.dp)
+            .widthIn(min = 40.dp)
+            .clip(RoundedCornerShape(13.dp))
+            .background(
+                if (selected) {
+                    MaterialTheme.colorScheme.primaryContainer
+                } else {
+                    MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.62f)
+                },
+            ),
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold,
+            color = if (selected) {
+                MaterialTheme.colorScheme.onPrimaryContainer
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            },
+            maxLines = 1,
+        )
+    }
+}
+
+private enum class PageKeyboardToolbarMode {
+    None,
+    Format,
+    Insert,
+}
+
+@Composable
+private fun PageKeyboardModeButton(
+    selected: Boolean,
+    contentDescription: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    icon: ImageVector? = null,
+    label: String? = null,
+) {
+    IconButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier
+            .size(40.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(
+                when {
+                    selected -> MaterialTheme.colorScheme.primaryContainer
+                    else -> MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.48f)
+                },
+            ),
+    ) {
+        if (icon != null) {
+            Icon(
+                imageVector = icon,
+                contentDescription = contentDescription,
+                modifier = Modifier.size(19.dp),
+                tint = when {
+                    !enabled -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.36f)
+                    selected -> MaterialTheme.colorScheme.onPrimaryContainer
+                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                },
+            )
+        } else {
+            Text(
+                text = label.orEmpty(),
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = when {
+                    !enabled -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.36f)
+                    selected -> MaterialTheme.colorScheme.onPrimaryContainer
+                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                },
+            )
         }
     }
 }

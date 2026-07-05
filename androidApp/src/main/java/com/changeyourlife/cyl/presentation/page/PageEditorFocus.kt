@@ -41,6 +41,12 @@ internal fun List<PageBlock>.firstFocusableEditorBlockId(): String? {
         ?.blockId
 }
 
+internal fun List<PageBlock>.containsDatabaseTableBlock(): Boolean {
+    return any { block ->
+        block.type == PageBlockType.DatabaseTable || block.children.containsDatabaseTableBlock()
+    }
+}
+
 private data class EditorFocusEntry(
     val blockId: String,
     val isFocusable: Boolean,
