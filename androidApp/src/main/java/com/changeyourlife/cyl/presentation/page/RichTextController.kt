@@ -597,6 +597,7 @@ object RichTextBlockInteractionParser {
         newValue: TextFieldValue,
         oldSpans: List<PageTextSpan>,
     ): List<RichTextPasteBlock> {
+        if (currentType == PageBlockType.Text) return emptyList()
         val inserted = insertedTextOrNull(oldValue.text, newValue.text) ?: return emptyList()
         if (inserted != "\n") return emptyList()
         val range = changedRange(oldValue.text, newValue.text).coerceInText(oldValue.text)

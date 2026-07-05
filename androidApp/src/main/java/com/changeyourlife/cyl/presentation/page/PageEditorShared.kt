@@ -552,6 +552,8 @@ internal data class PageTableReference(
     val blockId: String,
     val title: String,
     val table: PageTable,
+    val pageId: String = "",
+    val pageTitle: String = "",
 )
 
 internal enum class TableControlType {
@@ -1384,6 +1386,7 @@ internal fun PageEditorScreenPreview() {
             onMoveTableRowPageBlockDown = { _, _, _ -> },
             onIndentTableRowPageBlock = { _, _, _ -> },
             onOutdentTableRowPageBlock = { _, _, _ -> },
+            onTableDataSourceChange = { _, _ -> },
             onAddProperty = { _, _ -> },
             onPropertyNameChange = { _, _ -> },
             onPropertyValueChange = { _, _ -> },

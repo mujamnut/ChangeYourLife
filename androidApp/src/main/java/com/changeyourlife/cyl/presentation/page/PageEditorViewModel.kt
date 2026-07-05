@@ -679,14 +679,6 @@ class PageEditorViewModel @Inject constructor(
     }
 
     fun changeBlockType(blockId: String, type: PageBlockType) {
-        if (type == PageBlockType.DatabaseTable) {
-            insertBlockNear(
-                blockId = blockId,
-                type = type,
-                position = PageBlockInsertPosition.Below,
-            )
-            return
-        }
         val currentUiState = uiState.value
         if (currentUiState.page != null) {
             val document = currentDocument(currentUiState) ?: return
@@ -1002,6 +994,31 @@ class PageEditorViewModel @Inject constructor(
             if (!result.changed) return
             recordTableUndo(result)
             queueTablePatchPendingDocument(blockId, result.document)
+        }
+    }
+
+    internal fun updateTableDataSource(
+        blockId: String,
+        source: PageTableReference?,
+    ) {
+        val currentUiState = uiState.value
+        if (currentUiState.page != null) {
+            val document = currentDocument(currentUiState) ?: return
+            val result = if (source == null) {
+                tableMutationUseCase.clearDataSource(document, blockId)
+            } else {
+                tableMutationUseCase.attachDataSource(
+                    document = document,
+                    tableBlockId = blockId,
+                    sourcePageId = source.pageId,
+                    sourceTableBlockId = source.blockId,
+                    sourceTitle = source.title,
+                    sourceTable = source.table,
+                )
+            }
+            if (!result.changed) return
+            recordTableUndo(result)
+            queueDocumentUpdate(result.document)
         }
     }
 
@@ -1557,16 +1574,6 @@ class PageEditorViewModel @Inject constructor(
         rowBlockId: String,
         type: PageBlockType,
     ) {
-        if (type == PageBlockType.DatabaseTable) {
-            insertTableRowPageBlockNear(
-                tableBlockId = tableBlockId,
-                rowId = rowId,
-                rowBlockId = rowBlockId,
-                type = type,
-                position = PageBlockInsertPosition.Below,
-            )
-            return
-        }
         val currentUiState = uiState.value
         if (currentUiState.page != null) {
             val document = currentDocument(currentUiState) ?: return

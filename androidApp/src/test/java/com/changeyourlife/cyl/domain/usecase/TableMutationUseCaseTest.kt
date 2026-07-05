@@ -185,6 +185,38 @@ class TableMutationUseCaseTest {
     }
 
     @Test
+    fun insertingFirstRowBlockDoesNotCreateFallbackDuplicate() {
+        val document = tableDocument(
+            columns = listOf(PageTableColumn(id = "name", name = "Name")),
+            rows = listOf(
+                PageTableRow(
+                    id = "row-1",
+                    cells = mapOf("name" to "Food"),
+                    blocks = emptyList(),
+                ),
+            ),
+        )
+
+        val result = useCase.updateRowBlocks(
+            document = document,
+            tableBlockId = "table-1",
+            rowId = "row-1",
+        ) {
+            EditorCommand.InsertBlock(
+                block = PageBlock(
+                    id = "first-note",
+                    type = PageBlockType.Text,
+                    text = "",
+                ),
+            )
+        }
+
+        assertTrue(result.changed)
+        val rowBlocks = result.document.table.rows.single().blocks
+        assertEquals(listOf("first-note"), rowBlocks.map { block -> block.id })
+    }
+
+    @Test
     fun rowBlockNestingUsesEditorCommandPipelineAndSupportsUndo() {
         val document = tableDocument(
             columns = listOf(PageTableColumn(id = "name", name = "Name")),

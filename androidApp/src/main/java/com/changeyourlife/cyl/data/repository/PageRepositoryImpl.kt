@@ -962,6 +962,10 @@ class PageRepositoryImpl @Inject constructor(
         targetIndex: Int?,
         idSelector: (T) -> String,
     ): List<T> {
+        val elementId = idSelector(element)
+        if (elementId.isNotBlank() && any { item -> idSelector(item) == elementId }) {
+            return this
+        }
         val index = when {
             targetIndex != null -> targetIndex.coerceIn(0, size)
             afterElementId.isNotBlank() -> {

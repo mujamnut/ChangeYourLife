@@ -14,9 +14,7 @@ object EditorPlaceholderPolicy {
     fun placeholderFor(context: EditorPlaceholderContext): String {
         return when {
             context.isMediaCaption -> "Caption"
-            context.isTableRowPage && context.type == PageBlockType.Text -> {
-                "Add row notes"
-            }
+            context.isTableRowPage && context.type == PageBlockType.Text -> ""
             context.type == PageBlockType.Text -> {
                 ""
             }

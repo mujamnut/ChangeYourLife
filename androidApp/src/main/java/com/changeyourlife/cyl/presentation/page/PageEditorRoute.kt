@@ -147,6 +147,7 @@ import com.changeyourlife.cyl.domain.model.Page
 import com.changeyourlife.cyl.domain.model.PageBlock
 import com.changeyourlife.cyl.domain.model.PageBlockInsertPosition
 import com.changeyourlife.cyl.domain.model.PageBlockType
+import com.changeyourlife.cyl.domain.model.PageContentCodec
 import com.changeyourlife.cyl.domain.model.PageMediaAttachment
 import com.changeyourlife.cyl.domain.model.PageProperty
 import com.changeyourlife.cyl.domain.model.PagePropertyType
@@ -222,6 +223,7 @@ fun PageEditorRoute(
         onTableTitleChange = viewModel::updateTableTitle,
         onTableViewChange = viewModel::updateTableView,
         onTableViewConfigChange = viewModel::updateTableViewConfig,
+        onTableDataSourceChange = viewModel::updateTableDataSource,
         onTableSortChange = viewModel::updateTableSort,
         onTableFilterChange = viewModel::updateTableFilter,
         onTableGroupChange = viewModel::updateTableGroup,
@@ -306,6 +308,7 @@ internal fun PageEditorScreen(
     onTableTitleChange: (String, String) -> Unit,
     onTableViewChange: (String, PageTableView) -> Unit,
     onTableViewConfigChange: (String, PageTableViewConfig) -> Unit,
+    onTableDataSourceChange: (String, PageTableReference?) -> Unit,
     onTableSortChange: (String, String, PageTableSortDirection) -> Unit,
     onTableFilterChange: (String, String, String) -> Unit,
     onTableGroupChange: (String, String) -> Unit,
@@ -436,14 +439,20 @@ internal fun PageEditorScreen(
                 canUndoEditorChange = uiState.canUndoEditorChange,
                 richTextToolbarState = richTextToolbarState,
                 onAddBlock = onAddBlock,
+                onAddDatabaseFromHeader = {
+                    val emptyBodyBlockId = uiState.blocks.firstOrNull { block ->
+                        block.type == PageBlockType.Text &&
+                            block.text.isBlank() &&
+                            block.richTextSpans.isEmpty() &&
+                            block.mediaAttachments.isEmpty() &&
+                            block.children.isEmpty()
+                    }?.id
+                    emptyBodyBlockId?.let { blockId ->
+                        onBlockTypeChange(blockId, PageBlockType.DatabaseTable)
+                    } ?: onAddBlock(PageBlockType.DatabaseTable)
+                },
                 onChangeActiveBlockType = { type ->
-                    if (type == PageBlockType.DatabaseTable) {
-                        activeBlockId?.let { blockId ->
-                            onInsertBlockNear(blockId, type, PageBlockInsertPosition.Below)
-                        } ?: onAddBlock(type)
-                    } else {
-                        activeBlockId?.let { blockId -> onBlockTypeChange(blockId, type) } ?: onAddBlock(type)
-                    }
+                    activeBlockId?.let { blockId -> onBlockTypeChange(blockId, type) } ?: onAddBlock(type)
                 },
                 onAddChildToActiveBlock = { type ->
                     activeBlockId?.let { blockId -> onAddChildBlock(blockId, type) }
@@ -545,9 +554,28 @@ internal fun PageEditorScreen(
             }
 
             else -> {
-                val isSubpage = uiState.page.parentPageId != null
-                val tableReferences = remember(uiState.blocks) {
-                    uiState.blocks.tableReferences()
+                val currentPage = uiState.page
+                val isSubpage = currentPage.parentPageId != null
+                val tableReferences = remember(currentPage.id, uiState.title, uiState.blocks, homeAiState.allPages) {
+                    val currentPageId = currentPage.id
+                    val currentPageTitle = uiState.title.ifBlank { "Untitled page" }
+                    val currentPageTables = uiState.blocks.tableReferences().map { reference ->
+                        reference.copy(
+                            pageId = currentPageId,
+                            pageTitle = currentPageTitle,
+                        )
+                    }
+                    val otherPageTables = homeAiState.allPages
+                        .filter { page -> page.id != currentPageId && page.deletedAt == null }
+                        .flatMap { page ->
+                            PageContentCodec.decode(page.content).tableReferences().map { reference ->
+                                reference.copy(
+                                    pageId = page.id,
+                                    pageTitle = page.title.ifBlank { "Untitled page" },
+                                )
+                            }
+                        }
+                    (currentPageTables + otherPageTables).distinctBy { reference -> reference.blockId }
                 }
                 val listState = rememberLazyListState()
                 val searchTargetIndex = remember(
@@ -648,6 +676,7 @@ internal fun PageEditorScreen(
                             onTableTitleChange = onTableTitleChange,
                             onTableViewChange = onTableViewChange,
                             onTableViewConfigChange = onTableViewConfigChange,
+                            onTableDataSourceChange = onTableDataSourceChange,
                             onTableSortChange = onTableSortChange,
                             onTableFilterChange = onTableFilterChange,
                             onTableGroupChange = onTableGroupChange,

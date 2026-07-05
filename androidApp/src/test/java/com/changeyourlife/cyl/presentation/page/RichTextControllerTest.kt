@@ -251,7 +251,7 @@ class RichTextControllerTest {
     }
 
     @Test
-    fun enterSplitCreatesSiblingBlocksAndKeepsAfterTextSpans() {
+    fun enterInPlainTextStaysInsideCurrentBlock() {
         val blocks = RichTextBlockInteractionParser.splitEnterChange(
             currentType = PageBlockType.Text,
             currentIsChecked = false,
@@ -260,9 +260,26 @@ class RichTextControllerTest {
             oldSpans = listOf(PageTextSpan(start = 6, end = 11, italic = true)),
         )
 
+        assertEquals(emptyList<RichTextPasteBlock>(), blocks)
+    }
+
+    @Test
+    fun enterSplitCreatesSiblingBlocksForTodoAndKeepsAfterTextSpans() {
+        val blocks = RichTextBlockInteractionParser.splitEnterChange(
+            currentType = PageBlockType.Todo,
+            currentIsChecked = true,
+            oldValue = TextFieldValue("Hello world", selection = TextRange(5)),
+            newValue = TextFieldValue("Hello\n world", selection = TextRange(6)),
+            oldSpans = listOf(PageTextSpan(start = 6, end = 11, italic = true)),
+        )
+
         assertEquals(2, blocks.size)
+        assertEquals(PageBlockType.Todo, blocks[0].type)
         assertEquals("Hello", blocks[0].text)
+        assertEquals(true, blocks[0].isChecked)
+        assertEquals(PageBlockType.Todo, blocks[1].type)
         assertEquals(" world", blocks[1].text)
+        assertEquals(false, blocks[1].isChecked)
         assertEquals(listOf(PageTextSpan(start = 1, end = 6, italic = true)), blocks[1].spans)
     }
 

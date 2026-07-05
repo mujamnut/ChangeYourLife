@@ -126,6 +126,10 @@ Table:
 - The grid is moving in the right direction, but it still needs a dedicated table token system: row height, header height, border color, selected/hover/active state, property icon size.
 - Table should not inherit generic card/sheet spacing too often.
 - A true table search control is now present as transient table-local UI state.
+- Row reorder now supports long-press drag with stable row keys and visible drag feedback; keep manual move actions in the row sheet as backup.
+- Newly created databases now start with only the `Name` property and no fake blank row; the empty grid uses a compact starter state for first item/property actions.
+- Starter empty state now keeps property creation only at the right-side add-column control. The new-property sheet accepts optional names and falls back to the selected type label.
+- Edit-property sheet now uses a compact property header, inline name editor, type chip, custom 56dp action rows, and a disabled AI Autofill row until that feature is wired.
 
 Row page:
 
@@ -555,6 +559,17 @@ Current progress:
 - Done: page rows, chat history rows, and trash rows now share a 64dp list rhythm, 40dp icon frame, and 44dp action hit areas.
 - Done: chat history create action is icon-only like the Private section `+`, not a separate text button.
 - Done: Trash restore/delete actions are compact icon actions inside the row, no longer a separate card action band.
+- Done: database title/view dropdown now opens a full-height bottom sheet with a compact name editor, a single `New view` card containing all view choices, and a `New data source` section fed by database references from current/other loaded pages.
+- Done: selecting a data source imports its properties, rows, row-page content, view config, group field, and source metadata into the current database with cloned IDs so it remains safe to edit.
+- Done: open-row sheet now uses a full-height bottom sheet, scrollable content, fixed keyboard controller inside the sheet, and hides that controller whenever row editor focus is lost.
+- Done: empty row-page content now behaves like the main page body: it stays visually blank, tapping the blank area creates/focuses the first text block, and the extra visible add-block row has been removed so row pages feel like notes, not cards.
+- Done: plain text blocks now behave like a notepad in both pages and row sheets: pressing Enter inserts a new line inside the same text block instead of creating a separate block row, and text blocks use a one-line minimum height.
+- Done: adding the first content block inside an empty row sheet no longer creates two rows/blocks. The table mutation now skips the synthetic fallback block for first insert, and repository inserts are idempotent by ID.
+- Done: row sheet text fields no longer show `Add row notes`, and the bottom blank tap target that created another note block after content exists has been removed. Users continue downward with Enter inside the same note block.
+- Done: empty row sheet content now shows a one-time `Enter text` hint only before the user's first tap. The hint is dismissed on focus even if the user types nothing, and it does not come back after focus is lost.
+- Done: row sheet properties now render as a cleaner database-item list: each property uses a compact type icon, stable name column, plain inline value editor, subtle dividers, and quiet `Empty` states instead of noisy type labels and outlined fields.
+- Done: row sheet now supports direct row-name editing from the sheet header. The title writes into the table's title column, uses a plain inline editor, and shows a quiet `Untitled row` placeholder when empty.
+- Done: row sheet property labels/icons now open the same `Edit property` sheet as table headers, so users can rename, change type, configure date/formula/relation/rollup, duplicate, insert, delete, sort, filter, and group from inside the row sheet.
 
 ## Refactor After UX Direction
 

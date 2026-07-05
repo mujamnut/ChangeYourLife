@@ -455,6 +455,7 @@ internal fun PageEditorBottomBar(
     canUndoEditorChange: Boolean,
     richTextToolbarState: RichTextToolbarUiState?,
     onAddBlock: (PageBlockType) -> Unit,
+    onAddDatabaseFromHeader: () -> Unit,
     onChangeActiveBlockType: (PageBlockType) -> Unit,
     onAddChildToActiveBlock: (PageBlockType) -> Unit,
     onInsertTextAboveActiveBlock: () -> Unit,
@@ -483,7 +484,7 @@ internal fun PageEditorBottomBar(
             when (focusScope) {
                 PageEditorFocusScope.Header -> {
                     PageKeyboardHeaderToolbar(
-                        onAddDatabase = { onAddBlock(PageBlockType.DatabaseTable) },
+                        onAddDatabase = onAddDatabaseFromHeader,
                     )
                 }
                 PageEditorFocusScope.Body,

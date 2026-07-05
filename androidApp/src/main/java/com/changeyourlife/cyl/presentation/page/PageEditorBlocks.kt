@@ -207,6 +207,7 @@ internal fun PageEditorBlock(
     onTableTitleChange: (String, String) -> Unit,
     onTableViewChange: (String, PageTableView) -> Unit,
     onTableViewConfigChange: (String, PageTableViewConfig) -> Unit,
+    onTableDataSourceChange: (String, PageTableReference?) -> Unit,
     onTableSortChange: (String, String, PageTableSortDirection) -> Unit,
     onTableFilterChange: (String, String, String) -> Unit,
     onTableGroupChange: (String, String) -> Unit,
@@ -316,6 +317,7 @@ internal fun PageEditorBlock(
                     onTitleChange = { title -> onTableTitleChange(block.id, title) },
                     onViewChange = { view -> onTableViewChange(block.id, view) },
                     onViewConfigChange = { config -> onTableViewConfigChange(block.id, config) },
+                    onDataSourceChange = { source -> onTableDataSourceChange(block.id, source) },
                     onSortChange = { columnId, direction -> onTableSortChange(block.id, columnId, direction) },
                     onFilterChange = { columnId, query -> onTableFilterChange(block.id, columnId, query) },
                     onGroupChange = { columnId -> onTableGroupChange(block.id, columnId) },
@@ -535,6 +537,7 @@ internal fun PageEditorBlock(
                                 onTableTitleChange = onTableTitleChange,
                                 onTableViewChange = onTableViewChange,
                                 onTableViewConfigChange = onTableViewConfigChange,
+                                onTableDataSourceChange = onTableDataSourceChange,
                                 onTableSortChange = onTableSortChange,
                                 onTableFilterChange = onTableFilterChange,
                                 onTableGroupChange = onTableGroupChange,
@@ -687,7 +690,7 @@ internal fun TextBlockEditor(
         onOpenPropertySheetCommand = onOpenPropertySheetCommand,
         focusRequestToken = focusRequestToken,
         mentionPages = mentionPages,
-        minLines = if (block.type == PageBlockType.Heading) 1 else 2,
+        minLines = 1,
         textStyle = when (block.type) {
             PageBlockType.Heading -> MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.SemiBold)
             else -> MaterialTheme.typography.bodyLarge

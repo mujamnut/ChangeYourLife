@@ -82,10 +82,7 @@ object RichTextSlashCommandParser {
         RichTextSlashCommand(
             label = "Database",
             hint = "Structured database",
-            action = RichTextSlashAction.InsertBlock(
-                type = PageBlockType.DatabaseTable,
-                position = PageBlockInsertPosition.Below,
-            ),
+            action = RichTextSlashAction.ChangeType(PageBlockType.DatabaseTable),
             aliases = listOf("table", "database", "db"),
         ),
         RichTextSlashCommand(

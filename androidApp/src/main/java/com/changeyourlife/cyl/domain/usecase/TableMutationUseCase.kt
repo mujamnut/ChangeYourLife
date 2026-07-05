@@ -19,6 +19,7 @@ import com.changeyourlife.cyl.domain.model.PageTableSortDirection
 import com.changeyourlife.cyl.domain.model.PageTableTimeFormat
 import com.changeyourlife.cyl.domain.model.PageTableView
 import com.changeyourlife.cyl.domain.model.PageTableViewConfig
+import java.util.UUID
 
 class TableMutationUseCase(
     private val applyEditorCommandUseCase: ApplyEditorCommandUseCase,
@@ -58,6 +59,68 @@ class TableMutationUseCase(
         config: PageTableViewConfig,
     ): TableMutationResult = replaceTable(document, tableBlockId) { table ->
         table.copy(viewConfig = config)
+    }
+
+    fun attachDataSource(
+        document: PageBlockDocument,
+        tableBlockId: String,
+        sourcePageId: String,
+        sourceTableBlockId: String,
+        sourceTitle: String,
+        sourceTable: PageTable,
+    ): TableMutationResult = replaceTable(document, tableBlockId) { table ->
+        val columnIdMap = sourceTable.columns.associate { column -> column.id to UUID.randomUUID().toString() }
+        val sourceColumns = sourceTable.columns.map { column ->
+            column.copy(
+                id = columnIdMap.getValue(column.id),
+                rollupRelationColumnId = columnIdMap[column.rollupRelationColumnId].orEmpty(),
+                rollupTargetColumnId = columnIdMap[column.rollupTargetColumnId].orEmpty(),
+            )
+        }
+        val sourceRows = sourceTable.rows.map { row ->
+            row.copy(
+                id = UUID.randomUUID().toString(),
+                cells = row.cells.mapNotNull { (columnId, value) ->
+                    columnIdMap[columnId]?.let { nextColumnId -> nextColumnId to value }
+                }.toMap(),
+                blocks = row.blocks.map { block -> block.duplicatedForImportedTableRow() },
+            )
+        }
+        fun mappedColumnId(columnId: String): String = columnIdMap[columnId].orEmpty()
+        val sourceViewConfig = sourceTable.viewConfig
+        val nextViewConfig = table.viewConfig.copy(
+            calendarDateColumnId = mappedColumnId(sourceViewConfig.calendarDateColumnId),
+            timelineStartColumnId = mappedColumnId(sourceViewConfig.timelineStartColumnId),
+            timelineEndColumnId = mappedColumnId(sourceViewConfig.timelineEndColumnId),
+            dashboardMetricColumnId = mappedColumnId(sourceViewConfig.dashboardMetricColumnId),
+            dashboardGroupColumnId = mappedColumnId(sourceViewConfig.dashboardGroupColumnId),
+            dataSourcePageId = sourcePageId,
+            dataSourceTableBlockId = sourceTableBlockId,
+            dataSourceTitle = sourceTitle.ifBlank { sourceTable.title },
+        )
+        table.copy(
+            title = table.title.takeUnless { title -> title.isBlank() || title == "Untitled database" }
+                ?: sourceTitle.ifBlank { sourceTable.title.ifBlank { table.title } },
+            columns = sourceColumns,
+            rows = sourceRows,
+            sort = PageTableSort(),
+            filter = PageTableFilter(),
+            groupByColumnId = mappedColumnId(sourceTable.groupByColumnId),
+            viewConfig = nextViewConfig,
+        )
+    }
+
+    fun clearDataSource(
+        document: PageBlockDocument,
+        tableBlockId: String,
+    ): TableMutationResult = replaceTable(document, tableBlockId) { table ->
+        table.copy(
+            viewConfig = table.viewConfig.copy(
+                dataSourcePageId = "",
+                dataSourceTableBlockId = "",
+                dataSourceTitle = "",
+            ),
+        )
     }
 
     fun updateSort(
@@ -364,8 +427,14 @@ class TableMutationUseCase(
         var didChange = false
         val rows = tableBlock.table.rows.map { row ->
             if (row.id == rowId) {
-                val rowDocument = PageBlockDocument(blocks = row.blocks.normalizedRowBlocks())
-                val rowResult = applyEditorCommandUseCase(rowDocument, command(rowDocument)).result
+                val normalizedRowDocument = PageBlockDocument(blocks = row.blocks.normalizedRowBlocks())
+                val editorCommand = command(normalizedRowDocument)
+                val rowDocument = if (row.blocks.isEmpty() && editorCommand is EditorCommand.InsertBlock) {
+                    PageBlockDocument(blocks = emptyList())
+                } else {
+                    normalizedRowDocument
+                }
+                val rowResult = applyEditorCommandUseCase(rowDocument, editorCommand).result
                 didChange = didChange || rowResult.changed
                 row.copy(blocks = rowResult.document.blocks.normalizedRowBlocks())
             } else {
@@ -550,6 +619,13 @@ private fun PageBlockDocument.findTableBlock(tableBlockId: String): PageBlock? {
 
 private fun List<PageBlock>.normalizedRowBlocks(): List<PageBlock> {
     return ifEmpty { listOf(PageContentCodec.newBlock(PageBlockType.Text)) }
+}
+
+private fun PageBlock.duplicatedForImportedTableRow(): PageBlock {
+    return copy(
+        id = UUID.randomUUID().toString(),
+        children = children.map { child -> child.duplicatedForImportedTableRow() },
+    )
 }
 
 private fun PageTableColumn.withoutColumnReference(columnId: String): PageTableColumn {

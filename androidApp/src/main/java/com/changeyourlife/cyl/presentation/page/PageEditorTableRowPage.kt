@@ -14,8 +14,8 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -28,12 +28,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
@@ -111,14 +111,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.TextStyle
@@ -126,7 +129,6 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -178,13 +180,22 @@ import kotlinx.serialization.json.Json
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 internal fun TableRowPageSheet(
+    currentTableBlockId: String,
     table: PageTable,
     row: PageTableRow,
     tableReferences: List<PageTableReference>,
     searchTargetType: String = "",
     searchTargetId: String = "",
+    onSortChange: (String, PageTableSortDirection) -> Unit,
+    onFilterChange: (String, String) -> Unit,
+    onGroupChange: (String) -> Unit,
+    onColumnNameChange: (String, String) -> Unit,
+    onColumnTypeChange: (String, PageTableColumnType) -> Unit,
     onCellChange: (String, String, String) -> Unit,
     onAddColumn: (String, PageTableColumnType) -> Unit,
+    onInsertColumn: (String, TableColumnInsertSide) -> Unit,
+    onDuplicateColumn: (String) -> Unit,
+    onDeleteColumn: (String) -> Unit,
     onColumnDateSettingsChange: (
         String,
         PageTableDateFormat,
@@ -192,6 +203,9 @@ internal fun TableRowPageSheet(
         PageTableDateReminder,
         String,
     ) -> Unit,
+    onColumnFormulaChange: (String, String) -> Unit,
+    onColumnRelationTargetChange: (String, String) -> Unit,
+    onColumnRollupChange: (String, String, String, PageTableRollupAggregation) -> Unit,
     onAddRow: () -> Unit,
     onBlockTextChange: (String, String) -> Unit,
     onBlockRichTextChange: (String, String, List<PageTextSpan>) -> Unit,
@@ -211,10 +225,21 @@ internal fun TableRowPageSheet(
     mentionPages: List<Page> = emptyList(),
     onDismiss: () -> Unit,
 ) {
-    val title = row.cellText(table.titleColumn()).ifBlank { "Untitled row" }
+    val titleColumn = table.titleColumn()
+    val title = row.cellText(titleColumn)
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val density = LocalDensity.current
+    val isKeyboardVisible = WindowInsets.ime.getBottom(density) > 0
+    val focusManager = LocalFocusManager.current
     var isNewColumnSheetOpen by remember { mutableStateOf(false) }
+    var editingPropertyColumnId by rememberSaveable(row.id) { mutableStateOf<String?>(null) }
     var rowRichTextToolbarState by remember { mutableStateOf<RichTextToolbarUiState?>(null) }
     var activeRowBlockId by rememberSaveable(row.id) { mutableStateOf<String?>(null) }
+    var isRowBodyFocused by rememberSaveable(row.id) { mutableStateOf(false) }
+    var isRowStarterPlaceholderDismissed by rememberSaveable(row.id) {
+        mutableStateOf(row.blocks.isNotEmpty())
+    }
+    var pendingFocusBeforeAdd by remember(row.id) { mutableStateOf<Set<String>?>(null) }
     var rowFocusRequestSequence by remember(row.id) { mutableStateOf(0L) }
     var rowEditorFocusRequest by remember(row.id) { mutableStateOf<EditorBlockFocusRequest?>(null) }
 
@@ -227,9 +252,48 @@ internal fun TableRowPageSheet(
         )
     }
 
+    fun clearRowEditorFocus() {
+        activeRowBlockId = null
+        isRowBodyFocused = false
+        rowRichTextToolbarState = null
+        pendingFocusBeforeAdd = null
+        focusManager.clearFocus()
+    }
+
+    fun addRowBlockAndFocus(type: PageBlockType) {
+        isRowBodyFocused = true
+        isRowStarterPlaceholderDismissed = true
+        rowRichTextToolbarState = null
+        pendingFocusBeforeAdd = row.blocks.rowBlockIds()
+        onAddBlock(type)
+    }
+
+    fun focusOrCreateRowBodyTextBlock() {
+        isRowBodyFocused = true
+        isRowStarterPlaceholderDismissed = true
+        rowRichTextToolbarState = null
+        row.blocks.firstFocusableEditorBlockId()?.let { blockId ->
+            activeRowBlockId = blockId
+            requestRowEditorFocus(blockId)
+        } ?: addRowBlockAndFocus(PageBlockType.Text)
+    }
+
+    fun updateRowToolbarState(
+        blockId: String,
+        toolbarState: RichTextToolbarUiState?,
+    ) {
+        rowRichTextToolbarState = toolbarState
+        if (toolbarState == null && activeRowBlockId == blockId) {
+            activeRowBlockId = null
+            isRowBodyFocused = false
+        }
+    }
+
     fun deleteRowBlockAndFocusSibling(blockId: String) {
         val targetBlockId = row.blocks.editorFocusTargetAfterDeleting(blockId)
         activeRowBlockId = targetBlockId
+        isRowBodyFocused = targetBlockId == null
+        rowRichTextToolbarState = null
         onDeleteBlock(blockId)
         requestRowEditorFocus(targetBlockId)
     }
@@ -248,6 +312,27 @@ internal fun TableRowPageSheet(
         val currentActiveBlockId = activeRowBlockId
         if (currentActiveBlockId != null && !row.blocks.containsEditorBlock(currentActiveBlockId)) {
             activeRowBlockId = null
+            rowRichTextToolbarState = null
+        }
+    }
+
+    LaunchedEffect(row.blocks.isNotEmpty()) {
+        if (row.blocks.isNotEmpty()) {
+            isRowStarterPlaceholderDismissed = true
+        }
+    }
+
+    LaunchedEffect(row.blocks, pendingFocusBeforeAdd) {
+        val previousIds = pendingFocusBeforeAdd ?: return@LaunchedEffect
+        val targetBlockId = row.blocks.firstNewFocusableRowBlockId(previousIds)
+            ?: row.blocks.firstFocusableEditorBlockId()
+        if (targetBlockId != null) {
+            pendingFocusBeforeAdd = null
+            activeRowBlockId = targetBlockId
+            isRowBodyFocused = false
+            requestRowEditorFocus(targetBlockId)
+        } else if (row.blocks.rowBlockIds() != previousIds) {
+            pendingFocusBeforeAdd = null
         }
     }
 
@@ -260,12 +345,76 @@ internal fun TableRowPageSheet(
             onDismiss = { isNewColumnSheetOpen = false },
         )
     }
+    val editingPropertyColumn = editingPropertyColumnId?.let { columnId ->
+        table.columns.firstOrNull { column -> column.id == columnId }
+    }
+    if (editingPropertyColumn != null) {
+        TableColumnEditSheet(
+            currentTableBlockId = currentTableBlockId,
+            table = table,
+            column = editingPropertyColumn,
+            tableReferences = tableReferences,
+            onSort = {
+                onSortChange(
+                    editingPropertyColumn.id,
+                    if (table.sort.columnId == editingPropertyColumn.id &&
+                        table.sort.direction == PageTableSortDirection.Ascending
+                    ) {
+                        PageTableSortDirection.Descending
+                    } else {
+                        PageTableSortDirection.Ascending
+                    },
+                )
+            },
+            onFilter = { query -> onFilterChange(editingPropertyColumn.id, query) },
+            onGroup = { onGroupChange(editingPropertyColumn.id) },
+            onColumnNameChange = { name -> onColumnNameChange(editingPropertyColumn.id, name) },
+            onColumnTypeChange = { type -> onColumnTypeChange(editingPropertyColumn.id, type) },
+            onDateSettingsChange = { dateFormat, timeFormat, reminder, timezoneLabel ->
+                onColumnDateSettingsChange(editingPropertyColumn.id, dateFormat, timeFormat, reminder, timezoneLabel)
+            },
+            onFormulaChange = { formula -> onColumnFormulaChange(editingPropertyColumn.id, formula) },
+            onRelationTargetChange = { targetTableId ->
+                onColumnRelationTargetChange(editingPropertyColumn.id, targetTableId)
+            },
+            onRollupChange = { relationColumnId, targetColumnId, aggregation ->
+                onColumnRollupChange(editingPropertyColumn.id, relationColumnId, targetColumnId, aggregation)
+            },
+            onDelete = {
+                onDeleteColumn(editingPropertyColumn.id)
+                editingPropertyColumnId = null
+            },
+            onInsertLeft = {
+                onInsertColumn(editingPropertyColumn.id, TableColumnInsertSide.Left)
+                editingPropertyColumnId = null
+            },
+            onInsertRight = {
+                onInsertColumn(editingPropertyColumn.id, TableColumnInsertSide.Right)
+                editingPropertyColumnId = null
+            },
+            onDuplicate = {
+                onDuplicateColumn(editingPropertyColumn.id)
+                editingPropertyColumnId = null
+            },
+            onDismiss = { editingPropertyColumnId = null },
+        )
+    } else if (editingPropertyColumnId != null) {
+        editingPropertyColumnId = null
+    }
 
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(
+    val showRowController = activeRowBlockId != null || isRowBodyFocused
+    val rowContentBottomPadding = if (showRowController) 148.dp else 28.dp
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+    ) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 12.dp),
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(start = 20.dp, top = 12.dp, end = 20.dp, bottom = rowContentBottomPadding),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             Row(
@@ -273,12 +422,23 @@ internal fun TableRowPageSheet(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.SemiBold,
+                RowPageTitleEditor(
+                    title = title,
+                    enabled = titleColumn != null,
+                    onFocusTitle = ::clearRowEditorFocus,
+                    onTitleChange = { nextTitle ->
+                        titleColumn?.let { column ->
+                            onCellChange(row.id, column.id, nextTitle)
+                        }
+                    },
+                    modifier = Modifier.weight(1f),
                 )
-                IconButton(onClick = onDismiss) {
+                IconButton(
+                    onClick = {
+                        clearRowEditorFocus()
+                        onDismiss()
+                    },
+                ) {
                     Icon(
                         imageVector = Icons.Rounded.Close,
                         contentDescription = "Close row",
@@ -286,73 +446,35 @@ internal fun TableRowPageSheet(
                 }
             }
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = "Properties",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                IconButton(
-                    onClick = { isNewColumnSheetOpen = true },
-                    modifier = Modifier.size(40.dp),
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.Add,
-                        contentDescription = "Add property",
-                    )
-                }
-            }
-
-            table.columns.forEach { column ->
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(modifier = Modifier.widthIn(min = 96.dp).weight(0.42f)) {
-                        Text(
-                            text = column.name.ifBlank { "Untitled" },
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Text(
-                            text = column.type.name,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    TableCellEditor(
-                        column = column,
-                        row = row,
-                        table = table,
-                        tableReferences = tableReferences,
-                        value = row.cells[column.id].orEmpty(),
-                        onValueChange = { value -> onCellChange(row.id, column.id, value) },
-                        onDateSettingsChange = { dateFormat, timeFormat, reminder, timezoneLabel ->
-                            onColumnDateSettingsChange(column.id, dateFormat, timeFormat, reminder, timezoneLabel)
-                        },
-                        modifier = Modifier.weight(0.58f),
-                    )
-                }
-            }
+            RowPagePropertyList(
+                table = table,
+                row = row,
+                tableReferences = tableReferences,
+                onAddProperty = {
+                    clearRowEditorFocus()
+                    isNewColumnSheetOpen = true
+                },
+                onEditProperty = { column ->
+                    clearRowEditorFocus()
+                    editingPropertyColumnId = column.id
+                },
+                onCellChange = { columnId, value -> onCellChange(row.id, columnId, value) },
+                onColumnDateSettingsChange = onColumnDateSettingsChange,
+                onFocusProperties = ::clearRowEditorFocus,
+            )
 
             HorizontalDivider()
 
             if (row.blocks.isEmpty()) {
-                Text(
-                    text = "No row content yet.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                RowContentBodyTapTarget(
+                    height = 180.dp,
+                    showPlaceholder = !isRowStarterPlaceholderDismissed,
+                    onClick = ::focusOrCreateRowBodyTextBlock,
                 )
             } else {
                 row.blocks.forEach { block ->
                     val isSearchHighlighted = block.isDirectSearchTarget(searchTargetType, searchTargetId) ||
                         (searchTargetType == SearchTargetRowBlock && searchTargetId == block.id)
-                    val isActive = activeRowBlockId == block.id
                     val focusRequestToken = if (rowEditorFocusRequest?.blockId == block.id) {
                         rowEditorFocusRequest?.token ?: 0L
                     } else {
@@ -361,17 +483,12 @@ internal fun TableRowPageSheet(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(10.dp))
                             .background(
-                                when {
-                                    isSearchHighlighted -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.38f)
-                                    isActive -> MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.44f)
-                                    else -> Color.Transparent
+                                if (isSearchHighlighted) {
+                                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.26f)
+                                } else {
+                                    Color.Transparent
                                 },
-                            )
-                            .combinedClickable(
-                                onClick = { activeRowBlockId = block.id },
-                                onLongClick = { activeRowBlockId = block.id },
                             ),
                     ) {
                         when (block.type) {
@@ -392,9 +509,12 @@ internal fun TableRowPageSheet(
                                 onCreateLinkedPageCommand = { onCreateLinkedPage(block.id) },
                                 onOpenPropertySheetCommand = { isNewColumnSheetOpen = true },
                                 focusRequestToken = focusRequestToken,
-                                onFocusBlock = { activeRowBlockId = block.id },
+                                onFocusBlock = {
+                                    activeRowBlockId = block.id
+                                    isRowBodyFocused = false
+                                },
                                 onRichTextToolbarChange = { toolbarState ->
-                                    rowRichTextToolbarState = toolbarState
+                                    updateRowToolbarState(block.id, toolbarState)
                                 },
                                 showInlineRichTextToolbar = false,
                                 mentionPages = mentionPages,
@@ -407,7 +527,7 @@ internal fun TableRowPageSheet(
                                 onRichTextChange = { _, text, spans -> onBlockRichTextChange(block.id, text, spans) },
                                 onPasteBlocks = onBlockPasteBlocks,
                                 onRichTextToolbarChange = { toolbarState ->
-                                    rowRichTextToolbarState = toolbarState
+                                    updateRowToolbarState(block.id, toolbarState)
                                 },
                                 showInlineRichTextToolbar = false,
                                 onBlockTypeCommand = { _, type -> onBlockTypeChange(block.id, type) },
@@ -421,7 +541,10 @@ internal fun TableRowPageSheet(
                                 onOpenPropertySheetCommand = { isNewColumnSheetOpen = true },
                                 focusRequestToken = focusRequestToken,
                                 onToggleTodo = { onToggleTodo(block.id) },
-                                onFocusBlock = { activeRowBlockId = block.id },
+                                onFocusBlock = {
+                                    activeRowBlockId = block.id
+                                    isRowBodyFocused = false
+                                },
                                 mentionPages = mentionPages,
                                 isTableRowPage = true,
                             )
@@ -433,7 +556,7 @@ internal fun TableRowPageSheet(
                                 onRichTextChange = { _, text, spans -> onBlockRichTextChange(block.id, text, spans) },
                                 onPasteBlocks = onBlockPasteBlocks,
                                 onRichTextToolbarChange = { toolbarState ->
-                                    rowRichTextToolbarState = toolbarState
+                                    updateRowToolbarState(block.id, toolbarState)
                                 },
                                 showInlineRichTextToolbar = false,
                                 onBlockTypeCommand = { _, type -> onBlockTypeChange(block.id, type) },
@@ -446,7 +569,10 @@ internal fun TableRowPageSheet(
                                 onCreateLinkedPageCommand = { onCreateLinkedPage(block.id) },
                                 onOpenPropertySheetCommand = { isNewColumnSheetOpen = true },
                                 focusRequestToken = focusRequestToken,
-                                onFocusBlock = { activeRowBlockId = block.id },
+                                onFocusBlock = {
+                                    activeRowBlockId = block.id
+                                    isRowBodyFocused = false
+                                },
                                 mentionPages = mentionPages,
                                 isTableRowPage = true,
                             )
@@ -458,7 +584,7 @@ internal fun TableRowPageSheet(
                                 onRichTextChange = { _, text, spans -> onBlockRichTextChange(block.id, text, spans) },
                                 onPasteBlocks = onBlockPasteBlocks,
                                 onRichTextToolbarChange = { toolbarState ->
-                                    rowRichTextToolbarState = toolbarState
+                                    updateRowToolbarState(block.id, toolbarState)
                                 },
                                 showInlineRichTextToolbar = false,
                                 onBlockTypeCommand = { _, type -> onBlockTypeChange(block.id, type) },
@@ -471,7 +597,10 @@ internal fun TableRowPageSheet(
                                 onCreateLinkedPageCommand = { onCreateLinkedPage(block.id) },
                                 onOpenPropertySheetCommand = { isNewColumnSheetOpen = true },
                                 focusRequestToken = focusRequestToken,
-                                onFocusBlock = { activeRowBlockId = block.id },
+                                onFocusBlock = {
+                                    activeRowBlockId = block.id
+                                    isRowBodyFocused = false
+                                },
                                 mentionPages = mentionPages,
                                 isTableRowPage = true,
                             )
@@ -483,7 +612,7 @@ internal fun TableRowPageSheet(
                                 onRichTextChange = { _, text, spans -> onBlockRichTextChange(block.id, text, spans) },
                                 onPasteBlocks = onBlockPasteBlocks,
                                 onRichTextToolbarChange = { toolbarState ->
-                                    rowRichTextToolbarState = toolbarState
+                                    updateRowToolbarState(block.id, toolbarState)
                                 },
                                 showInlineRichTextToolbar = false,
                                 onBlockTypeCommand = { _, type -> onBlockTypeChange(block.id, type) },
@@ -497,7 +626,10 @@ internal fun TableRowPageSheet(
                                 onOpenPropertySheetCommand = { isNewColumnSheetOpen = true },
                                 focusRequestToken = focusRequestToken,
                                 fontStyle = FontStyle.Italic,
-                                onFocusBlock = { activeRowBlockId = block.id },
+                                onFocusBlock = {
+                                    activeRowBlockId = block.id
+                                    isRowBodyFocused = false
+                                },
                                 mentionPages = mentionPages,
                                 isTableRowPage = true,
                             )
@@ -511,7 +643,7 @@ internal fun TableRowPageSheet(
                                 onRichTextChange = { _, text, spans -> onBlockRichTextChange(block.id, text, spans) },
                                 onPasteBlocks = onBlockPasteBlocks,
                                 onRichTextToolbarChange = { toolbarState ->
-                                    rowRichTextToolbarState = toolbarState
+                                    updateRowToolbarState(block.id, toolbarState)
                                 },
                                 showInlineRichTextToolbar = false,
                                 onBlockTypeCommand = { _, type -> onBlockTypeChange(block.id, type) },
@@ -524,7 +656,10 @@ internal fun TableRowPageSheet(
                                 onCreateLinkedPageCommand = { onCreateLinkedPage(block.id) },
                                 onOpenPropertySheetCommand = { isNewColumnSheetOpen = true },
                                 focusRequestToken = focusRequestToken,
-                                onFocusBlock = { activeRowBlockId = block.id },
+                                onFocusBlock = {
+                                    activeRowBlockId = block.id
+                                    isRowBodyFocused = false
+                                },
                                 mentionPages = mentionPages,
                                 isTableRowPage = true,
                             )
@@ -533,62 +668,635 @@ internal fun TableRowPageSheet(
                 }
             }
 
-            rowRichTextToolbarState?.takeIf { state -> state.isValidForKeyboardToolbar() }?.let { toolbarState ->
-                PageKeyboardRichTextToolbar(toolbarState)
+            Spacer(modifier = Modifier.height(4.dp))
+        }
+
+            if (showRowController) {
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .imePadding()
+                        .padding(bottom = if (isKeyboardVisible) 6.dp else 14.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    rowRichTextToolbarState
+                        ?.takeIf { state -> state.isValidForKeyboardToolbar() }
+                        ?.let { toolbarState -> PageKeyboardRichTextToolbar(toolbarState) }
+
+                    PageKeyboardBlockToolbar(
+                        activeBlockId = activeRowBlockId,
+                        canUndoEditorChange = false,
+                        onAddBlock = ::addRowBlockAndFocus,
+                        onChangeActiveBlockType = { type ->
+                            activeRowBlockId?.let { blockId -> onBlockTypeChange(blockId, type) }
+                                ?: addRowBlockAndFocus(type)
+                        },
+                        onAddChildToActiveBlock = { type ->
+                            activeRowBlockId?.let { blockId ->
+                                onInsertBlockNear(blockId, type, PageBlockInsertPosition.Below)
+                            } ?: addRowBlockAndFocus(type)
+                        },
+                        onInsertTextAboveActiveBlock = {
+                            activeRowBlockId?.let { blockId ->
+                                onInsertBlockNear(blockId, PageBlockType.Text, PageBlockInsertPosition.Above)
+                            }
+                        },
+                        onInsertTextBelowActiveBlock = {
+                            activeRowBlockId?.let { blockId ->
+                                onInsertBlockNear(blockId, PageBlockType.Text, PageBlockInsertPosition.Below)
+                            }
+                        },
+                        onMoveActiveBlockUp = {
+                            activeRowBlockId?.let(onMoveBlockUp)
+                        },
+                        onMoveActiveBlockDown = {
+                            activeRowBlockId?.let(onMoveBlockDown)
+                        },
+                        onIndentActiveBlock = {
+                            activeRowBlockId?.let(onIndentBlock)
+                        },
+                        onOutdentActiveBlock = {
+                            activeRowBlockId?.let(onOutdentBlock)
+                        },
+                        onCreateLinkedPageFromActiveBlock = {
+                            activeRowBlockId?.let(onCreateLinkedPage)
+                        },
+                        onDeleteActiveBlock = {
+                            activeRowBlockId?.let(::deleteRowBlockAndFocusSibling)
+                        },
+                        onUndoEditorChange = {},
+                        showActiveBlockActions = true,
+                    )
+                }
             }
-
-            PageKeyboardBlockToolbar(
-                activeBlockId = activeRowBlockId,
-                canUndoEditorChange = false,
-                onAddBlock = onAddBlock,
-                onChangeActiveBlockType = { type ->
-                    if (type == PageBlockType.DatabaseTable) {
-                        activeRowBlockId?.let { blockId ->
-                            onInsertBlockNear(blockId, type, PageBlockInsertPosition.Below)
-                        } ?: onAddBlock(type)
-                    } else {
-                        activeRowBlockId?.let { blockId -> onBlockTypeChange(blockId, type) } ?: onAddBlock(type)
-                    }
-                },
-                onAddChildToActiveBlock = { type ->
-                    activeRowBlockId?.let { blockId ->
-                        onInsertBlockNear(blockId, type, PageBlockInsertPosition.Below)
-                    } ?: onAddBlock(type)
-                },
-                onInsertTextAboveActiveBlock = {
-                    activeRowBlockId?.let { blockId ->
-                        onInsertBlockNear(blockId, PageBlockType.Text, PageBlockInsertPosition.Above)
-                    }
-                },
-                onInsertTextBelowActiveBlock = {
-                    activeRowBlockId?.let { blockId ->
-                        onInsertBlockNear(blockId, PageBlockType.Text, PageBlockInsertPosition.Below)
-                    }
-                },
-                onMoveActiveBlockUp = {
-                    activeRowBlockId?.let(onMoveBlockUp)
-                },
-                onMoveActiveBlockDown = {
-                    activeRowBlockId?.let(onMoveBlockDown)
-                },
-                onIndentActiveBlock = {
-                    activeRowBlockId?.let(onIndentBlock)
-                },
-                onOutdentActiveBlock = {
-                    activeRowBlockId?.let(onOutdentBlock)
-                },
-                onCreateLinkedPageFromActiveBlock = {
-                    activeRowBlockId?.let(onCreateLinkedPage)
-                },
-                onDeleteActiveBlock = {
-                    activeRowBlockId?.let(::deleteRowBlockAndFocusSibling)
-                },
-                onUndoEditorChange = {},
-                showActiveBlockActions = activeRowBlockId != null,
-            )
-
-            Spacer(modifier = Modifier.height(12.dp))
         }
     }
 }
+
+@Composable
+private fun RowPageTitleEditor(
+    title: String,
+    enabled: Boolean,
+    onFocusTitle: () -> Unit,
+    onTitleChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val textColor = MaterialTheme.colorScheme.onSurface
+    BasicTextField(
+        value = title,
+        onValueChange = { nextTitle -> onTitleChange(nextTitle.toSingleLineTableCellValue()) },
+        enabled = enabled,
+        singleLine = true,
+        modifier = modifier
+            .heightIn(min = 50.dp)
+            .padding(end = 10.dp)
+            .onFocusChanged { focusState ->
+                if (focusState.isFocused) onFocusTitle()
+            },
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+        textStyle = MaterialTheme.typography.titleLarge.copy(
+            color = textColor,
+            fontWeight = FontWeight.SemiBold,
+        ),
+        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+        decorationBox = { innerTextField ->
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                if (title.isBlank()) {
+                    Text(
+                        text = "Untitled row",
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.48f),
+                    )
+                }
+                innerTextField()
+            }
+        },
+    )
+}
+
+@Composable
+private fun RowContentBodyTapTarget(
+    height: androidx.compose.ui.unit.Dp,
+    showPlaceholder: Boolean,
+    onClick: () -> Unit,
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(height)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick,
+            ),
+        contentAlignment = Alignment.TopStart,
+    ) {
+        if (showPlaceholder) {
+            Text(
+                text = "Enter text",
+                modifier = Modifier.padding(top = 2.dp),
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.52f),
+            )
+        }
+    }
+}
+
+private fun List<PageBlock>.rowBlockIds(): Set<String> {
+    return buildSet {
+        fun walk(blocks: List<PageBlock>) {
+            blocks.forEach { block ->
+                add(block.id)
+                walk(block.children)
+            }
+        }
+        walk(this@rowBlockIds)
+    }
+}
+
+@Composable
+private fun RowPagePropertyList(
+    table: PageTable,
+    row: PageTableRow,
+    tableReferences: List<PageTableReference>,
+    onAddProperty: () -> Unit,
+    onEditProperty: (PageTableColumn) -> Unit,
+    onCellChange: (String, String) -> Unit,
+    onColumnDateSettingsChange: (
+        String,
+        PageTableDateFormat,
+        PageTableTimeFormat,
+        PageTableDateReminder,
+        String,
+    ) -> Unit,
+    onFocusProperties: () -> Unit,
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(40.dp)
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onFocusProperties,
+                ),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "Properties",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            IconButton(
+                onClick = onAddProperty,
+                modifier = Modifier.size(40.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Add,
+                    contentDescription = "Add property",
+                    modifier = Modifier.size(20.dp),
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+            }
+        }
+
+        if (table.columns.isEmpty()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp)
+                    .clickable(onClick = onAddProperty),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Add,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+                Text(
+                    text = "Add property",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            return
+        }
+
+        Column(modifier = Modifier.fillMaxWidth()) {
+            table.columns.forEachIndexed { index, column ->
+                RowPagePropertyItem(
+                    table = table,
+                    row = row,
+                    column = column,
+                    tableReferences = tableReferences,
+                    onValueChange = { value -> onCellChange(column.id, value) },
+                    onDateSettingsChange = { dateFormat, timeFormat, reminder, timezoneLabel ->
+                        onColumnDateSettingsChange(column.id, dateFormat, timeFormat, reminder, timezoneLabel)
+                    },
+                    onEditProperty = { onEditProperty(column) },
+                    onFocusProperties = onFocusProperties,
+                )
+                if (index < table.columns.lastIndex) {
+                    HorizontalDivider(
+                        modifier = Modifier.padding(start = 32.dp),
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.48f),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RowPagePropertyItem(
+    table: PageTable,
+    row: PageTableRow,
+    column: PageTableColumn,
+    tableReferences: List<PageTableReference>,
+    onValueChange: (String) -> Unit,
+    onDateSettingsChange: (
+        PageTableDateFormat,
+        PageTableTimeFormat,
+        PageTableDateReminder,
+        String,
+    ) -> Unit,
+    onEditProperty: () -> Unit,
+    onFocusProperties: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 56.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Row(
+            modifier = Modifier
+                .width(143.dp)
+                .height(52.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .clickable(onClick = onEditProperty)
+                .padding(end = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                imageVector = column.type.icon,
+                contentDescription = column.type.label,
+                modifier = Modifier.size(19.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.76f),
+            )
+            Text(
+                text = column.name.ifBlank { column.type.label },
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        RowPagePropertyValueEditor(
+            table = table,
+            row = row,
+            column = column,
+            tableReferences = tableReferences,
+            value = row.cells[column.id].orEmpty(),
+            onValueChange = onValueChange,
+            onDateSettingsChange = onDateSettingsChange,
+            onFocusProperties = onFocusProperties,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun RowPagePropertyValueEditor(
+    table: PageTable,
+    row: PageTableRow,
+    column: PageTableColumn,
+    tableReferences: List<PageTableReference>,
+    value: String,
+    onValueChange: (String) -> Unit,
+    onDateSettingsChange: (
+        PageTableDateFormat,
+        PageTableTimeFormat,
+        PageTableDateReminder,
+        String,
+    ) -> Unit,
+    onFocusProperties: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    when (column.type) {
+        PageTableColumnType.Formula,
+        PageTableColumnType.Rollup,
+        -> RowPageReadOnlyPropertyValue(
+            value = table.displayCellText(row, column, tableReferences),
+            modifier = modifier,
+        )
+        PageTableColumnType.Relation -> RelationCellEditor(
+            column = column,
+            value = value,
+            tableReferences = tableReferences,
+            onValueChange = onValueChange,
+            modifier = modifier,
+        )
+        PageTableColumnType.Checkbox -> RowPageCheckboxPropertyValue(
+            value = value,
+            onValueChange = onValueChange,
+            modifier = modifier,
+        )
+        PageTableColumnType.Date -> RowPageDatePropertyValue(
+            column = column,
+            value = value,
+            onValueChange = onValueChange,
+            onDateSettingsChange = onDateSettingsChange,
+            onFocusProperties = onFocusProperties,
+            modifier = modifier,
+        )
+        PageTableColumnType.Status -> RowPageStatusPropertyValue(
+            value = value,
+            onValueChange = onValueChange,
+            onFocusProperties = onFocusProperties,
+            modifier = modifier,
+        )
+        PageTableColumnType.FilesMedia -> TableMediaCellEditor(
+            value = value,
+            onValueChange = onValueChange,
+            modifier = modifier,
+        )
+        PageTableColumnType.Number,
+        PageTableColumnType.Text,
+        -> RowPagePlainPropertyValue(
+            column = column,
+            value = value,
+            onValueChange = onValueChange,
+            onFocusProperties = onFocusProperties,
+            modifier = modifier,
+        )
+    }
+}
+
+@Composable
+private fun RowPagePlainPropertyValue(
+    column: PageTableColumn,
+    value: String,
+    onValueChange: (String) -> Unit,
+    onFocusProperties: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val textColor = MaterialTheme.colorScheme.onSurface
+    BasicTextField(
+        value = value,
+        onValueChange = { nextValue ->
+            onFocusProperties()
+            onValueChange(nextValue.toSingleLineTableCellValue())
+        },
+        modifier = modifier.height(52.dp),
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(
+            keyboardType = when (column.type) {
+                PageTableColumnType.Number -> KeyboardType.Number
+                else -> KeyboardType.Text
+            },
+        ),
+        textStyle = MaterialTheme.typography.bodyMedium.copy(color = textColor),
+        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+        decorationBox = { innerTextField ->
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                if (value.isBlank()) {
+                    Text(
+                        text = when (column.type) {
+                            PageTableColumnType.Number -> "0"
+                            else -> "Empty"
+                        },
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.58f),
+                    )
+                }
+                innerTextField()
+            }
+        },
+    )
+}
+
+@Composable
+private fun RowPageReadOnlyPropertyValue(
+    value: String,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier.height(52.dp),
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        Text(
+            text = value.ifBlank { "Empty" },
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            style = MaterialTheme.typography.bodyMedium,
+            color = if (value.isBlank()) {
+                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.58f)
+            } else {
+                MaterialTheme.colorScheme.onSurface
+            },
+        )
+    }
+}
+
+@Composable
+private fun RowPageCheckboxPropertyValue(
+    value: String,
+    onValueChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .height(52.dp)
+            .clickable {
+                onValueChange(if (value == CheckboxValueChecked) "" else CheckboxValueChecked)
+            },
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Checkbox(
+            checked = value == CheckboxValueChecked,
+            onCheckedChange = { checked -> onValueChange(if (checked) CheckboxValueChecked else "") },
+        )
+        Text(
+            text = if (value == CheckboxValueChecked) "Checked" else "Empty",
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            style = MaterialTheme.typography.bodyMedium,
+            color = if (value == CheckboxValueChecked) {
+                MaterialTheme.colorScheme.onSurface
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.58f)
+            },
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun RowPageDatePropertyValue(
+    column: PageTableColumn,
+    value: String,
+    onValueChange: (String) -> Unit,
+    onDateSettingsChange: (
+        PageTableDateFormat,
+        PageTableTimeFormat,
+        PageTableDateReminder,
+        String,
+    ) -> Unit,
+    onFocusProperties: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var isSheetOpen by remember { mutableStateOf(false) }
+    val displayText = column.displayDateCellValue(value)
+
+    if (isSheetOpen) {
+        TableDateEditorSheet(
+            column = column,
+            value = value,
+            onValueChange = onValueChange,
+            onDateSettingsChange = onDateSettingsChange,
+            onDismiss = { isSheetOpen = false },
+        )
+    }
+
+    RowPageClickablePropertyValue(
+        text = displayText.ifBlank { "Empty" },
+        isEmpty = displayText.isBlank(),
+        modifier = modifier,
+        onClick = {
+            onFocusProperties()
+            isSheetOpen = true
+        },
+    )
+}
+
+@Composable
+private fun RowPageStatusPropertyValue(
+    value: String,
+    onValueChange: (String) -> Unit,
+    onFocusProperties: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var isExpanded by remember { mutableStateOf(false) }
+    Box(modifier = modifier) {
+        RowPageClickablePropertyValue(
+            text = value.ifBlank { "Empty" },
+            isEmpty = value.isBlank(),
+            modifier = Modifier.fillMaxWidth(),
+            onClick = {
+                onFocusProperties()
+                isExpanded = true
+            },
+        )
+        DropdownMenu(
+            expanded = isExpanded,
+            onDismissRequest = { isExpanded = false },
+        ) {
+            DropdownMenuItem(
+                text = { Text(text = "Clear") },
+                onClick = {
+                    isExpanded = false
+                    onValueChange("")
+                },
+            )
+            TableStatusOptions.forEach { status ->
+                DropdownMenuItem(
+                    text = { Text(text = status) },
+                    onClick = {
+                        isExpanded = false
+                        onValueChange(status)
+                    },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun RowPageClickablePropertyValue(
+    text: String,
+    isEmpty: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = modifier
+            .height(52.dp)
+            .clickable(onClick = onClick),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = text,
+            modifier = Modifier.weight(1f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            style = MaterialTheme.typography.bodyMedium,
+            color = if (isEmpty) {
+                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.58f)
+            } else {
+                MaterialTheme.colorScheme.onSurface
+            },
+        )
+        Icon(
+            imageVector = Icons.Rounded.KeyboardArrowDown,
+            contentDescription = null,
+            modifier = Modifier.size(18.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+        )
+    }
+}
+
+private fun List<PageBlock>.firstNewFocusableRowBlockId(previousIds: Set<String>): String? {
+    forEach { block ->
+        if (block.id !in previousIds && block.type.isRowContentFocusable) {
+            return block.id
+        }
+        block.children.firstNewFocusableRowBlockId(previousIds)?.let { childBlockId ->
+            return childBlockId
+        }
+    }
+    return null
+}
+
+private val PageBlockType.isRowContentFocusable: Boolean
+    get() = when (this) {
+        PageBlockType.Text,
+        PageBlockType.Heading,
+        PageBlockType.Todo,
+        PageBlockType.Bullet,
+        PageBlockType.Numbered,
+        PageBlockType.Quote,
+        PageBlockType.MediaFile,
+        -> true
+        PageBlockType.Divider,
+        PageBlockType.DatabaseTable,
+        -> false
+    }
 

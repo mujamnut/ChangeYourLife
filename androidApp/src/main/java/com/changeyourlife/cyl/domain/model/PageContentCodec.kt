@@ -93,7 +93,7 @@ object PageContentCodec {
         return PageTable(
             title = "Untitled database",
             columns = columns,
-            rows = listOf(newTableRow(columns)),
+            rows = emptyList(),
         )
     }
 

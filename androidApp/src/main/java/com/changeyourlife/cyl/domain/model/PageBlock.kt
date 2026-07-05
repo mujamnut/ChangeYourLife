@@ -118,6 +118,9 @@ data class PageTableViewConfig(
     val timelineEndColumnId: String = "",
     val dashboardMetricColumnId: String = "",
     val dashboardGroupColumnId: String = "",
+    val dataSourcePageId: String = "",
+    val dataSourceTableBlockId: String = "",
+    val dataSourceTitle: String = "",
 )
 
 @Serializable
