@@ -10,6 +10,10 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationCompat.CATEGORY_REMINDER
+import androidx.core.app.NotificationCompat.DEFAULT_ALL
+import androidx.core.app.NotificationCompat.PRIORITY_HIGH
+import androidx.core.app.NotificationCompat.VISIBILITY_PUBLIC
 import androidx.core.app.NotificationManagerCompat
 import com.changeyourlife.cyl.presentation.MainActivity
 
@@ -40,9 +44,13 @@ class ReminderReceiver : BroadcastReceiver() {
             .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setContentTitle("ChangeYourLife")
             .setContentText(title)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(title))
             .setContentIntent(contentIntent)
             .setAutoCancel(true)
-            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setCategory(CATEGORY_REMINDER)
+            .setDefaults(DEFAULT_ALL)
+            .setPriority(PRIORITY_HIGH)
+            .setVisibility(VISIBILITY_PUBLIC)
             .build()
 
         NotificationManagerCompat.from(context).notify(reminderId.hashCode(), notification)
@@ -54,8 +62,9 @@ class ReminderReceiver : BroadcastReceiver() {
         val channel = NotificationChannel(
             ReminderNotificationConstants.ChannelId,
             ReminderNotificationConstants.ChannelName,
-            NotificationManager.IMPORTANCE_DEFAULT,
+            NotificationManager.IMPORTANCE_HIGH,
         )
+        channel.description = "Date reminders from CYL databases"
         context.getSystemService(NotificationManager::class.java)
             .createNotificationChannel(channel)
     }

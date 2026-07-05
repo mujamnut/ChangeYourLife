@@ -4,6 +4,7 @@ import android.app.AlarmManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import com.changeyourlife.cyl.domain.model.Reminder
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
@@ -21,14 +22,23 @@ class ReminderScheduler @Inject constructor(
             return
         }
 
-        alarmManager.set(
-            AlarmManager.RTC_WAKEUP,
-            reminder.remindAt,
-            pendingIntent(
-                reminderId = reminder.id,
-                title = reminder.title,
-            ),
+        val intent = pendingIntent(
+            reminderId = reminder.id,
+            title = reminder.title,
         )
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S || alarmManager.canScheduleExactAlarms()) {
+            alarmManager.setExactAndAllowWhileIdle(
+                AlarmManager.RTC_WAKEUP,
+                reminder.remindAt,
+                intent,
+            )
+        } else {
+            alarmManager.setAndAllowWhileIdle(
+                AlarmManager.RTC_WAKEUP,
+                reminder.remindAt,
+                intent,
+            )
+        }
     }
 
     fun cancel(reminderId: String) {

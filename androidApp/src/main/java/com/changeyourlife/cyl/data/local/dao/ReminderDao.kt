@@ -42,6 +42,15 @@ interface ReminderDao {
     @Query("SELECT COUNT(*) FROM reminders WHERE workspaceId = :workspaceId AND deletedAt IS NULL AND isDone = 0")
     fun observePendingReminderCount(workspaceId: String): Flow<Int>
 
+    @Query(
+        """
+        SELECT * FROM reminders
+        WHERE deletedAt IS NULL AND isDone = 0 AND remindAt > :now
+        ORDER BY remindAt ASC
+        """,
+    )
+    suspend fun getPendingRemindersAfter(now: Long): List<ReminderEntity>
+
     @Upsert
     suspend fun upsertReminder(reminder: ReminderEntity)
 }

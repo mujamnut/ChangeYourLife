@@ -87,6 +87,7 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.changeyourlife.cyl.domain.model.ChatSession
 import com.changeyourlife.cyl.domain.model.Page
+import com.changeyourlife.cyl.domain.model.Reminder
 import com.changeyourlife.cyl.domain.model.SyncOverview
 import com.changeyourlife.cyl.presentation.ai.AiChatMode
 import com.changeyourlife.cyl.presentation.ai.AiChatSheet
@@ -441,9 +442,22 @@ private fun HomeScreen(
                     item {
                         HomeSectionHeader(text = "Mentions & Activity")
                         Spacer(modifier = Modifier.height(8.dp))
-                        EmptyHomeTabCard(
-                            title = "No mentions or activity yet",
-                            icon = Icons.Rounded.Notifications,
+                        if (uiState.reminders.isEmpty()) {
+                            EmptyHomeTabCard(
+                                title = "No mentions or activity yet",
+                                icon = Icons.Rounded.Notifications,
+                            )
+                        }
+                    }
+
+                    items(
+                        items = uiState.reminders,
+                        key = { reminder -> reminder.id },
+                    ) { reminder ->
+                        HomeReminderActivityRow(
+                            reminder = reminder,
+                            page = uiState.allPages.firstOrNull { page -> page.id == reminder.pageId },
+                            onOpenPage = onOpenPage,
                         )
                     }
                 }
@@ -1369,6 +1383,69 @@ private fun HomePageRow(
     }
 }
 
+@Composable
+private fun HomeReminderActivityRow(
+    reminder: Reminder,
+    page: Page?,
+    onOpenPage: (String) -> Unit,
+) {
+    val pageId = reminder.pageId
+    val isOverdue = reminder.remindAt <= System.currentTimeMillis()
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(72.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .clickable(enabled = pageId != null) {
+                pageId?.let(onOpenPage)
+            }
+            .padding(horizontal = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        HomeRowIconFrame(
+            imageVector = Icons.Rounded.Notifications,
+            tint = if (isOverdue) {
+                MaterialTheme.colorScheme.error
+            } else {
+                MaterialTheme.colorScheme.primary
+            },
+        )
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(3.dp),
+        ) {
+            Text(
+                text = reminder.title.ifBlank { "Reminder" },
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = page?.title
+                    ?.ifBlank { "Untitled page" }
+                    ?: pageId?.let { "Linked page" }
+                    ?: "No linked page",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Text(
+            text = reminder.remindAt.toReminderActivityLabel(),
+            style = MaterialTheme.typography.labelMedium,
+            color = if (isOverdue) {
+                MaterialTheme.colorScheme.error
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            },
+            maxLines = 1,
+        )
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun HomePageActionSheet(
@@ -1751,6 +1828,22 @@ private fun Long.toDisplayDateTime(): String {
     return Instant.ofEpochMilli(this)
         .atZone(ZoneId.systemDefault())
         .format(DateTimeFormatter.ofPattern("MMM d, h:mm a"))
+}
+
+private fun Long.toReminderActivityLabel(now: Long = System.currentTimeMillis()): String {
+    val diff = this - now
+    val minute = 60_000L
+    val hour = 60 * minute
+    val day = 24 * hour
+    return when {
+        diff <= -minute -> "Overdue"
+        diff <= 0L -> "Due now"
+        diff < hour -> "In ${(diff / minute).coerceAtLeast(1)}m"
+        diff < day -> Instant.ofEpochMilli(this)
+            .atZone(ZoneId.systemDefault())
+            .format(DateTimeFormatter.ofPattern("h:mm a"))
+        else -> toDisplayDateTime()
+    }
 }
 
 @Preview(showBackground = true)

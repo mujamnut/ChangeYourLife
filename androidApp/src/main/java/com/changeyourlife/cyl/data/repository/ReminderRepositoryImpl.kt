@@ -42,6 +42,12 @@ class ReminderRepositoryImpl @Inject constructor(
         reminderScheduler.schedule(reminder)
     }
 
+    override suspend fun reschedulePendingReminders() {
+        reminderDao.getPendingRemindersAfter(System.currentTimeMillis())
+            .map { reminder -> reminder.toDomain() }
+            .forEach { reminder -> reminderScheduler.schedule(reminder) }
+    }
+
     override suspend fun createReminder(
         workspaceId: String,
         title: String,

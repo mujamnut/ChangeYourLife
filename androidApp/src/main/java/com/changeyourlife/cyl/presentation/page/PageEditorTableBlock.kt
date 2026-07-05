@@ -105,9 +105,11 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextFieldDefaults
+import androidx.compose.material3.TimePicker
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberDatePickerState
+import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -3873,7 +3875,7 @@ internal fun TableDateCellEditor(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Text(
-            text = if (displayText.isBlank()) column.name.ifBlank { "Date" } else displayText,
+            text = displayText.ifBlank { "Empty" },
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             style = MaterialTheme.typography.bodyMedium,
@@ -3884,6 +3886,16 @@ internal fun TableDateCellEditor(
             },
         )
     }
+}
+
+private enum class DateEditorTarget {
+    Start,
+    End,
+}
+
+private enum class TimeEditorTarget {
+    Start,
+    End,
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -3904,6 +3916,11 @@ internal fun TableDateEditorSheet(
     var selectedDate by remember(value) {
         mutableStateOf(cellValue.startDate.toLocalDateOrNull() ?: LocalDate.now())
     }
+    var endDate by remember(value) {
+        mutableStateOf(cellValue.endDate.toLocalDateOrNull() ?: selectedDate)
+    }
+    var activeTarget by remember(value) { mutableStateOf(DateEditorTarget.Start) }
+    var activeTimeTarget by remember { mutableStateOf<TimeEditorTarget?>(null) }
     var visibleMonth by remember(value) { mutableStateOf(YearMonth.from(selectedDate)) }
     var includeEndDate by remember(value) { mutableStateOf(cellValue.includeEndDate) }
     var includeTime by remember(value, column.timeFormat) {
@@ -3912,27 +3929,64 @@ internal fun TableDateEditorSheet(
     var selectedTime by remember(value) {
         mutableStateOf(cellValue.startTime.toLocalTimeOrNull() ?: LocalTime.of(10, 0))
     }
+    var selectedEndTime by remember(value) {
+        mutableStateOf(cellValue.endTime.toLocalTimeOrNull() ?: selectedTime)
+    }
     var dateFormat by remember(column.dateFormat) { mutableStateOf(column.dateFormat) }
     var timeFormat by remember(column.timeFormat) { mutableStateOf(column.timeFormat) }
-    var reminder by remember(column.dateReminder) { mutableStateOf(column.dateReminder) }
-    var timezoneLabel by remember(column.timezoneLabel) { mutableStateOf(column.timezoneLabel) }
-
-    fun saveCell(next: TableDateCellValue) {
-        cellValue = next
-        onValueChange(next.toTableDateCellStorageValue())
+    val hasCellDateMetadata = remember(value) { value.trim().startsWith("{") }
+    var reminder by remember(value, column.dateReminder) {
+        mutableStateOf(if (hasCellDateMetadata) cellValue.reminder else column.dateReminder)
+    }
+    var timezoneLabel by remember(value, column.timezoneLabel) {
+        mutableStateOf(if (hasCellDateMetadata) cellValue.timezoneLabel else column.timezoneLabel)
     }
 
-    fun saveSettings(
+    fun saveCell(next: TableDateCellValue) {
+        val normalized = next.copy(
+            timezoneLabel = timezoneLabel,
+            reminder = reminder,
+        )
+        cellValue = normalized
+        onValueChange(normalized.toTableDateCellStorageValue())
+    }
+
+    fun normalizedEndDate(start: LocalDate, end: LocalDate): LocalDate {
+        return if (end.isBefore(start)) start else end
+    }
+
+    fun saveStartTime(time: LocalTime) {
+        selectedTime = time
+        saveCell(
+            cellValue.copy(
+                startDate = selectedDate.format(DateTimeFormatter.ISO_LOCAL_DATE),
+                startTime = time.format(DateTimeFormatter.ISO_LOCAL_TIME),
+                includeTime = true,
+                timezoneLabel = timezoneLabel,
+            ),
+        )
+    }
+
+    fun saveEndTime(time: LocalTime) {
+        selectedEndTime = time
+        saveCell(
+            cellValue.copy(
+                endDate = endDate.format(DateTimeFormatter.ISO_LOCAL_DATE),
+                endTime = time.format(DateTimeFormatter.ISO_LOCAL_TIME),
+                includeEndDate = true,
+                includeTime = true,
+                timezoneLabel = timezoneLabel,
+            ),
+        )
+    }
+
+    fun saveColumnSettings(
         nextDateFormat: PageTableDateFormat = dateFormat,
         nextTimeFormat: PageTableTimeFormat = timeFormat,
-        nextReminder: PageTableDateReminder = reminder,
-        nextTimezoneLabel: String = timezoneLabel,
     ) {
         dateFormat = nextDateFormat
         timeFormat = nextTimeFormat
-        reminder = nextReminder
-        timezoneLabel = nextTimezoneLabel
-        onDateSettingsChange(nextDateFormat, nextTimeFormat, nextReminder, nextTimezoneLabel)
+        onDateSettingsChange(nextDateFormat, nextTimeFormat, column.dateReminder, column.timezoneLabel)
     }
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
@@ -3947,15 +4001,18 @@ internal fun TableDateEditorSheet(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    text = "?",
+                IconButton(
+                    onClick = onDismiss,
                     modifier = Modifier.width(48.dp),
-                    textAlign = TextAlign.Center,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontWeight = FontWeight.Bold,
-                )
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Close,
+                        contentDescription = "Close date editor",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 Text(
-                    text = "Date",
+                    text = column.name.ifBlank { "Date" },
                     modifier = Modifier.weight(1f),
                     textAlign = TextAlign.Center,
                     style = MaterialTheme.typography.titleLarge,
@@ -3964,54 +4021,130 @@ internal fun TableDateEditorSheet(
                 Spacer(modifier = Modifier.width(48.dp))
             }
 
-            Row(
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(16.dp))
                     .background(MaterialTheme.colorScheme.surface)
                     .padding(12.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                DateEditorValueBox(
-                    text = selectedDate.formatForColumn(dateFormat),
-                    modifier = Modifier.weight(1f),
-                    onClick = { visibleMonth = YearMonth.from(selectedDate) },
-                )
-                if (includeTime) {
-                    DateTimeChoiceBox(
-                        selectedTime = selectedTime,
-                        timeFormat = timeFormat.visibleOrDefault(),
-                        onSelect = { time ->
-                            selectedTime = time
-                            saveCell(
-                                cellValue.copy(
-                                    startDate = selectedDate.format(DateTimeFormatter.ISO_LOCAL_DATE),
-                                    startTime = time.format(DateTimeFormatter.ISO_LOCAL_TIME),
-                                    includeTime = true,
-                                    timezoneLabel = timezoneLabel,
-                                ),
-                            )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    DateEditorValueBox(
+                        label = "Start",
+                        text = selectedDate.formatForColumn(dateFormat),
+                        isSelected = activeTarget == DateEditorTarget.Start,
+                        modifier = Modifier.weight(1f),
+                        onClick = {
+                            activeTarget = DateEditorTarget.Start
+                            visibleMonth = YearMonth.from(selectedDate)
                         },
                     )
+                    if (includeTime) {
+                        DateTimeChoiceBox(
+                            selectedTime = selectedTime,
+                            timeFormat = timeFormat.visibleOrDefault(),
+                            isSelected = activeTimeTarget == TimeEditorTarget.Start,
+                            onClick = {
+                                activeTarget = DateEditorTarget.Start
+                                activeTimeTarget = if (activeTimeTarget == TimeEditorTarget.Start) {
+                                    null
+                                } else {
+                                    TimeEditorTarget.Start
+                                }
+                            },
+                        )
+                    }
                 }
+                if (includeEndDate) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        DateEditorValueBox(
+                            label = "End",
+                            text = endDate.formatForColumn(dateFormat),
+                            isSelected = activeTarget == DateEditorTarget.End,
+                            modifier = Modifier.weight(1f),
+                            onClick = {
+                                activeTarget = DateEditorTarget.End
+                                visibleMonth = YearMonth.from(endDate)
+                            },
+                        )
+                        if (includeTime) {
+                            DateTimeChoiceBox(
+                                selectedTime = selectedEndTime,
+                                timeFormat = timeFormat.visibleOrDefault(),
+                                isSelected = activeTimeTarget == TimeEditorTarget.End,
+                                onClick = {
+                                    activeTarget = DateEditorTarget.End
+                                    activeTimeTarget = if (activeTimeTarget == TimeEditorTarget.End) {
+                                        null
+                                    } else {
+                                        TimeEditorTarget.End
+                                    }
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+
+            if (includeTime && activeTimeTarget != null) {
+                TimeEditorPanel(
+                    title = if (activeTimeTarget == TimeEditorTarget.End) "End time" else "Start time",
+                    selectedTime = if (activeTimeTarget == TimeEditorTarget.End) selectedEndTime else selectedTime,
+                    timeFormat = timeFormat.visibleOrDefault(),
+                    onTimeChange = { time ->
+                        if (activeTimeTarget == TimeEditorTarget.End) {
+                            saveEndTime(time)
+                        } else {
+                            saveStartTime(time)
+                        }
+                    },
+                    onDone = { activeTimeTarget = null },
+                )
             }
 
             TableDateCalendar(
                 visibleMonth = visibleMonth,
-                selectedDate = selectedDate,
+                selectedDate = if (activeTarget == DateEditorTarget.Start) selectedDate else endDate,
+                rangeStartDate = selectedDate.takeIf { includeEndDate },
+                rangeEndDate = endDate.takeIf { includeEndDate },
                 onPreviousMonth = { visibleMonth = visibleMonth.minusMonths(1) },
                 onNextMonth = { visibleMonth = visibleMonth.plusMonths(1) },
                 onSelectDate = { date ->
-                    selectedDate = date
+                    val nextStart = if (activeTarget == DateEditorTarget.Start) date else selectedDate
+                    val nextEnd = if (activeTarget == DateEditorTarget.End) {
+                        normalizedEndDate(selectedDate, date)
+                    } else {
+                        normalizedEndDate(date, endDate)
+                    }
+                    selectedDate = nextStart
+                    endDate = nextEnd
                     visibleMonth = YearMonth.from(date)
                     saveCell(
                         cellValue.copy(
-                            startDate = date.format(DateTimeFormatter.ISO_LOCAL_DATE),
+                            startDate = nextStart.format(DateTimeFormatter.ISO_LOCAL_DATE),
                             startTime = if (includeTime) {
                                 selectedTime.format(DateTimeFormatter.ISO_LOCAL_TIME)
                             } else {
                                 ""
                             },
+                            endDate = if (includeEndDate) {
+                                nextEnd.format(DateTimeFormatter.ISO_LOCAL_DATE)
+                            } else {
+                                ""
+                            },
+                            endTime = if (includeEndDate && includeTime) {
+                                selectedEndTime.format(DateTimeFormatter.ISO_LOCAL_TIME)
+                            } else {
+                                ""
+                            },
+                            includeEndDate = includeEndDate,
                             includeTime = includeTime,
                             timezoneLabel = timezoneLabel,
                         ),
@@ -4030,13 +4163,18 @@ internal fun TableDateEditorSheet(
                     checked = includeEndDate,
                     onCheckedChange = { checked ->
                         includeEndDate = checked
+                        activeTarget = if (checked) DateEditorTarget.End else DateEditorTarget.Start
+                        endDate = normalizedEndDate(selectedDate, endDate)
                         saveCell(
                             cellValue.copy(
                                 includeEndDate = checked,
                                 endDate = if (checked) {
-                                    cellValue.endDate.ifBlank {
-                                        selectedDate.format(DateTimeFormatter.ISO_LOCAL_DATE)
-                                    }
+                                    endDate.format(DateTimeFormatter.ISO_LOCAL_DATE)
+                                } else {
+                                    ""
+                                },
+                                endTime = if (checked && includeTime) {
+                                    selectedEndTime.format(DateTimeFormatter.ISO_LOCAL_TIME)
                                 } else {
                                     ""
                                 },
@@ -4050,23 +4188,29 @@ internal fun TableDateEditorSheet(
                     selectedLabel = dateFormat.label,
                     items = PageTableDateFormat.entries,
                     itemLabel = { format -> format.label },
-                    onSelect = { format -> saveSettings(nextDateFormat = format) },
+                    onSelect = { format -> saveColumnSettings(nextDateFormat = format) },
                 )
                 DateToggleRow(
                     label = "Include time",
                     checked = includeTime,
                     onCheckedChange = { checked ->
                         includeTime = checked
+                        activeTimeTarget = if (checked) TimeEditorTarget.Start else null
                         val nextTimeFormat = if (checked) {
                             timeFormat.visibleOrDefault()
                         } else {
                             PageTableTimeFormat.Hidden
                         }
-                        saveSettings(nextTimeFormat = nextTimeFormat)
+                        saveColumnSettings(nextTimeFormat = nextTimeFormat)
                         saveCell(
                             cellValue.copy(
                                 startTime = if (checked) {
                                     selectedTime.format(DateTimeFormatter.ISO_LOCAL_TIME)
+                                } else {
+                                    ""
+                                },
+                                endTime = if (checked && includeEndDate) {
+                                    selectedEndTime.format(DateTimeFormatter.ISO_LOCAL_TIME)
                                 } else {
                                     ""
                                 },
@@ -4075,27 +4219,30 @@ internal fun TableDateEditorSheet(
                         )
                     },
                 )
-                DateChoiceRow(
-                    icon = Icons.Rounded.AccessTime,
-                    label = "Time format",
-                    selectedLabel = timeFormat.label,
-                    items = PageTableTimeFormat.entries,
-                    itemLabel = { format -> format.label },
-                    onSelect = { format ->
-                        includeTime = format != PageTableTimeFormat.Hidden
-                        saveSettings(nextTimeFormat = format)
-                        saveCell(
-                            cellValue.copy(
-                                startTime = if (format == PageTableTimeFormat.Hidden) {
-                                    ""
-                                } else {
-                                    selectedTime.format(DateTimeFormatter.ISO_LOCAL_TIME)
-                                },
-                                includeTime = format != PageTableTimeFormat.Hidden,
-                            ),
-                        )
-                    },
-                )
+                if (includeTime) {
+                    DateChoiceRow(
+                        icon = Icons.Rounded.AccessTime,
+                        label = "Time format",
+                        selectedLabel = timeFormat.visibleOrDefault().label,
+                        items = listOf(PageTableTimeFormat.TwelveHour, PageTableTimeFormat.TwentyFourHour),
+                        itemLabel = { format -> format.label },
+                        onSelect = { format ->
+                            includeTime = true
+                            saveColumnSettings(nextTimeFormat = format)
+                            saveCell(
+                                cellValue.copy(
+                                    startTime = selectedTime.format(DateTimeFormatter.ISO_LOCAL_TIME),
+                                    endTime = if (includeEndDate) {
+                                        selectedEndTime.format(DateTimeFormatter.ISO_LOCAL_TIME)
+                                    } else {
+                                        ""
+                                    },
+                                    includeTime = true,
+                                ),
+                            )
+                        },
+                    )
+                }
                 DateChoiceRow(
                     icon = Icons.Rounded.Public,
                     label = "Timezone",
@@ -4103,7 +4250,7 @@ internal fun TableDateEditorSheet(
                     items = TableTimezoneOptions,
                     itemLabel = { timezone -> timezone },
                     onSelect = { timezone ->
-                        saveSettings(nextTimezoneLabel = timezone)
+                        timezoneLabel = timezone
                         saveCell(cellValue.copy(timezoneLabel = timezone))
                     },
                 )
@@ -4113,7 +4260,10 @@ internal fun TableDateEditorSheet(
                     selectedLabel = reminder.label,
                     items = PageTableDateReminder.entries,
                     itemLabel = { reminder -> reminder.label },
-                    onSelect = { nextReminder -> saveSettings(nextReminder = nextReminder) },
+                    onSelect = { nextReminder ->
+                        reminder = nextReminder
+                        saveCell(cellValue.copy(reminder = nextReminder))
+                    },
                 )
             }
 
@@ -4129,6 +4279,8 @@ internal fun TableDateEditorSheet(
                         cellValue = TableDateCellValue()
                         includeEndDate = false
                         includeTime = timeFormat != PageTableTimeFormat.Hidden
+                        activeTarget = DateEditorTarget.Start
+                        activeTimeTarget = null
                         onValueChange("")
                     },
                 )
@@ -4141,30 +4293,54 @@ internal fun TableDateEditorSheet(
 
 @Composable
 internal fun DateEditorValueBox(
+    label: String = "",
     text: String,
+    isSelected: Boolean = false,
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
-    Row(
+    Column(
         modifier = modifier
-            .height(46.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainer)
+            .height(52.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(
+                if (isSelected) {
+                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+                } else {
+                    MaterialTheme.colorScheme.surfaceContainer
+                },
+            )
             .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        verticalArrangement = Arrangement.Center,
     ) {
-        Text(
-            text = text,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            style = MaterialTheme.typography.bodyLarge,
-        )
-        Icon(
-            imageVector = Icons.Rounded.KeyboardArrowDown,
-            contentDescription = null,
-        )
+        if (label.isNotBlank()) {
+            Text(
+                text = label,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = text,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Icon(
+                imageVector = Icons.Rounded.KeyboardArrowDown,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 
@@ -4172,24 +4348,115 @@ internal fun DateEditorValueBox(
 internal fun DateTimeChoiceBox(
     selectedTime: LocalTime,
     timeFormat: PageTableTimeFormat,
-    onSelect: (LocalTime) -> Unit,
+    isSelected: Boolean = false,
+    onClick: () -> Unit,
 ) {
-    var expanded by remember { mutableStateOf(false) }
-    Box(modifier = Modifier.width(150.dp)) {
+    Box(modifier = Modifier.width(132.dp)) {
         DateEditorValueBox(
+            label = "Time",
             text = selectedTime.formatForColumn(timeFormat),
-            onClick = { expanded = true },
+            isSelected = isSelected,
+            onClick = onClick,
         )
-        DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false },
+    }
+}
+
+@Composable
+internal fun TimeEditorPanel(
+    title: String,
+    selectedTime: LocalTime,
+    timeFormat: PageTableTimeFormat,
+    onTimeChange: (LocalTime) -> Unit,
+    onDone: () -> Unit,
+) {
+    val visibleFormat = timeFormat.visibleOrDefault()
+    val use24Hour = visibleFormat == PageTableTimeFormat.TwentyFourHour
+    val pickerState = rememberTimePickerState(
+        initialHour = selectedTime.hour,
+        initialMinute = selectedTime.minute,
+        is24Hour = use24Hour,
+    )
+    LaunchedEffect(selectedTime.hour, selectedTime.minute) {
+        if (pickerState.hour != selectedTime.hour) {
+            pickerState.hour = selectedTime.hour
+        }
+        if (pickerState.minute != selectedTime.minute) {
+            pickerState.minute = selectedTime.minute
+        }
+    }
+    LaunchedEffect(pickerState.hour, pickerState.minute) {
+        val updatedTime = selectedTime
+            .withHour(pickerState.hour)
+            .withMinute(pickerState.minute)
+        if (updatedTime != selectedTime) {
+            onTimeChange(updatedTime)
+        }
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .background(MaterialTheme.colorScheme.surface)
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            TableTimeOptions.forEach { time ->
-                DropdownMenuItem(
-                    text = { Text(text = time.formatForColumn(timeFormat)) },
-                    onClick = {
-                        expanded = false
-                        onSelect(time)
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            TextButton(onClick = onDone) {
+                Text(text = "Done")
+            }
+        }
+
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.36f))
+                .padding(vertical = 14.dp, horizontal = 16.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = selectedTime.formatForColumn(visibleFormat),
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+                textAlign = TextAlign.Center,
+            )
+        }
+
+        Box(
+            modifier = Modifier.fillMaxWidth(),
+            contentAlignment = Alignment.Center,
+        ) {
+            TimePicker(state = pickerState)
+        }
+
+        Text(
+            text = "Quick time",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            contentPadding = PaddingValues(horizontal = 0.dp),
+        ) {
+            items(TableQuickTimeOptions) { time ->
+                FilterChip(
+                    selected = selectedTime.hour == time.hour && selectedTime.minute == time.minute,
+                    onClick = { onTimeChange(time) },
+                    label = {
+                        Text(
+                            text = time.formatForColumn(visibleFormat),
+                            maxLines = 1,
+                        )
                     },
                 )
             }
@@ -4201,16 +4468,24 @@ internal fun DateTimeChoiceBox(
 internal fun TableDateCalendar(
     visibleMonth: YearMonth,
     selectedDate: LocalDate,
+    rangeStartDate: LocalDate? = null,
+    rangeEndDate: LocalDate? = null,
     onPreviousMonth: () -> Unit,
     onNextMonth: () -> Unit,
     onSelectDate: (LocalDate) -> Unit,
 ) {
     val firstDay = visibleMonth.atDay(1)
     val firstGridDay = firstDay.minusDays((firstDay.dayOfWeek.value % 7).toLong())
+    val normalizedRangeStart = rangeStartDate?.let { start ->
+        rangeEndDate?.let { end -> if (start.isAfter(end)) end else start }
+    }
+    val normalizedRangeEnd = rangeEndDate?.let { end ->
+        rangeStartDate?.let { start -> if (end.isBefore(start)) start else end }
+    }
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
+            .clip(RoundedCornerShape(18.dp))
             .background(MaterialTheme.colorScheme.surface)
             .padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -4257,6 +4532,10 @@ internal fun TableDateCalendar(
                     val date = firstGridDay.plusDays((rowIndex * 7 + columnIndex).toLong())
                     val isSelected = date == selectedDate
                     val isCurrentMonth = date.month == visibleMonth.month
+                    val isInRange = normalizedRangeStart != null &&
+                        normalizedRangeEnd != null &&
+                        !date.isBefore(normalizedRangeStart) &&
+                        !date.isAfter(normalizedRangeEnd)
                     Box(
                         modifier = Modifier
                             .weight(1f)
@@ -4266,12 +4545,12 @@ internal fun TableDateCalendar(
                         Box(
                             modifier = Modifier
                                 .size(38.dp)
-                                .clip(RoundedCornerShape(8.dp))
+                                .clip(RoundedCornerShape(10.dp))
                                 .background(
-                                    if (isSelected) {
-                                        MaterialTheme.colorScheme.primary
-                                    } else {
-                                        Color.Transparent
+                                    when {
+                                        isSelected -> MaterialTheme.colorScheme.primary
+                                        isInRange -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.48f)
+                                        else -> Color.Transparent
                                     },
                                 )
                                 .clickable { onSelectDate(date) },
@@ -4326,13 +4605,6 @@ internal fun <T> DateChoiceRow(
     Box {
         ListItem(
             headlineContent = { Text(text = label) },
-            supportingContent = {
-                Text(
-                    text = selectedLabel,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            },
             leadingContent = {
                 Box(
                     modifier = Modifier.width(34.dp),
@@ -4347,14 +4619,26 @@ internal fun <T> DateChoiceRow(
                 }
             },
             trailingContent = {
-                Icon(
-                    imageVector = Icons.Rounded.KeyboardArrowDown,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier
-                        .size(20.dp)
-                        .graphicsLayer(rotationZ = -90f),
-                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = selectedLabel,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Icon(
+                        imageVector = Icons.Rounded.KeyboardArrowDown,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .size(20.dp)
+                            .graphicsLayer(rotationZ = -90f),
+                    )
+                }
             },
             modifier = Modifier.clickable { expanded = true },
         )

@@ -4,13 +4,21 @@ import android.app.Application
 import android.app.Activity
 import android.os.Bundle
 import com.changeyourlife.cyl.data.sync.BackgroundSyncQueue
+import com.changeyourlife.cyl.domain.repository.ReminderRepository
 import dagger.hilt.android.HiltAndroidApp
 import javax.inject.Inject
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 @HiltAndroidApp
 class ChangeYourLifeApplication : Application() {
     @Inject
     lateinit var backgroundSyncQueue: BackgroundSyncQueue
+    @Inject
+    lateinit var reminderRepository: ReminderRepository
+    private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var startedActivityCount = 0
 
     override fun onCreate() {
@@ -18,6 +26,9 @@ class ChangeYourLifeApplication : Application() {
         registerActivityLifecycleCallbacks(ForegroundSyncLifecycleCallbacks())
         backgroundSyncQueue.ensurePeriodicPullScheduled()
         backgroundSyncQueue.syncSessionSoon()
+        applicationScope.launch {
+            reminderRepository.reschedulePendingReminders()
+        }
     }
 
     private inner class ForegroundSyncLifecycleCallbacks : ActivityLifecycleCallbacks {

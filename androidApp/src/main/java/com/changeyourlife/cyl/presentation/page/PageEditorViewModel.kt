@@ -35,6 +35,7 @@ import com.changeyourlife.cyl.domain.usecase.AppliedEditorCommand
 import com.changeyourlife.cyl.domain.usecase.ApplyEditorCommandUseCase
 import com.changeyourlife.cyl.domain.usecase.EditorCommandHistory
 import com.changeyourlife.cyl.domain.usecase.PageMutationUseCase
+import com.changeyourlife.cyl.domain.usecase.ScheduleTableDateReminderUseCase
 import com.changeyourlife.cyl.domain.usecase.TableMutationResult
 import com.changeyourlife.cyl.domain.usecase.TableMutationUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -65,6 +66,7 @@ class PageEditorViewModel @Inject constructor(
     private val applyEditorCommandUseCase: ApplyEditorCommandUseCase,
     private val pageMutationUseCase: PageMutationUseCase,
     private val tableMutationUseCase: TableMutationUseCase,
+    private val scheduleTableDateReminderUseCase: ScheduleTableDateReminderUseCase,
 ) : ViewModel() {
     private val pageId: String = checkNotNull(savedStateHandle["pageId"])
 
@@ -72,6 +74,7 @@ class PageEditorViewModel @Inject constructor(
     private val _pendingGranularDocumentSave = MutableStateFlow<PendingGranularDocumentSave?>(null)
     private val _pendingTitle = MutableStateFlow<String?>(null)
     private val _canUndoEditorChange = MutableStateFlow(false)
+    private val reminderSyncedPageIds = mutableSetOf<String>()
     private val editorUndoSnapshots = ArrayDeque<PageBlockDocument>()
     private val editorCommandHistory = EditorCommandHistory(
         applyEditorCommandUseCase = applyEditorCommandUseCase,
@@ -131,6 +134,7 @@ class PageEditorViewModel @Inject constructor(
     init {
         setupPendingChangesCollection()
         setupPendingTitleCollection()
+        setupLoadedPageReminderSync()
     }
 
     @OptIn(kotlinx.coroutines.FlowPreview::class)
@@ -155,6 +159,19 @@ class PageEditorViewModel @Inject constructor(
                     if (pendingTitle != null) {
                         savePendingTitle(pendingTitle)
                     }
+                }
+        }
+    }
+
+    private fun setupLoadedPageReminderSync() {
+        viewModelScope.launch {
+            pageRepository.observePage(pageId)
+                .collect { page ->
+                    if (page == null || !reminderSyncedPageIds.add(page.id)) return@collect
+                    syncDateRemindersForDocument(
+                        page = page,
+                        document = PageBlockCodec.decodeDocument(page.content).normalizedForEditor(),
+                    )
                 }
         }
     }
@@ -261,6 +278,19 @@ class PageEditorViewModel @Inject constructor(
             }
         }
         if (!saved) return false
+
+        if (pendingSave is PendingGranularDocumentSave.TableCellValue) {
+            runCatching {
+                scheduleTableDateReminderUseCase(
+                    page = page,
+                    document = pendingSave.document,
+                    tableBlockId = pendingSave.tableBlockId,
+                    rowId = pendingSave.rowId,
+                    columnId = pendingSave.columnId,
+                    value = pendingSave.value,
+                )
+            }
+        }
 
         if (_pendingGranularDocumentSave.value == pendingSave) {
             _pendingGranularDocumentSave.value = null
@@ -507,6 +537,129 @@ class PageEditorViewModel @Inject constructor(
             row = row,
         )
         _pendingChanges.value = normalized
+    }
+
+    private fun syncDateRemindersForColumn(
+        page: Page,
+        document: PageBlockDocument,
+        tableBlockId: String,
+        columnId: String,
+    ) {
+        val table = document.findTableBlock(tableBlockId)?.table ?: return
+        viewModelScope.launch {
+            table.rows.forEach { row ->
+                runCatching {
+                    scheduleTableDateReminderUseCase(
+                        page = page,
+                        document = document,
+                        tableBlockId = tableBlockId,
+                        rowId = row.id,
+                        columnId = columnId,
+                        value = row.cells[columnId].orEmpty(),
+                    )
+                }
+            }
+        }
+    }
+
+    private fun syncDateRemindersForDocument(
+        page: Page,
+        document: PageBlockDocument,
+    ) {
+        viewModelScope.launch {
+            data class DateReminderTarget(
+                val tableBlockId: String,
+                val rowId: String,
+                val columnId: String,
+                val value: String,
+            )
+
+            val targets = mutableListOf<DateReminderTarget>()
+            document.blocks.forEachTableBlock { tableBlock ->
+                tableBlock.table.columns
+                    .filter { column -> column.type == PageTableColumnType.Date }
+                    .forEach { column ->
+                        tableBlock.table.rows.forEach { row ->
+                            targets += DateReminderTarget(
+                                tableBlockId = tableBlock.id,
+                                rowId = row.id,
+                                columnId = column.id,
+                                value = row.cells[column.id].orEmpty(),
+                            )
+                        }
+                    }
+            }
+            targets.forEach { target ->
+                runCatching {
+                    scheduleTableDateReminderUseCase(
+                        page = page,
+                        document = document,
+                        tableBlockId = target.tableBlockId,
+                        rowId = target.rowId,
+                        columnId = target.columnId,
+                        value = target.value,
+                    )
+                }
+            }
+        }
+    }
+
+    private fun syncDateReminderForCell(
+        page: Page,
+        document: PageBlockDocument,
+        tableBlockId: String,
+        rowId: String,
+        columnId: String,
+        value: String,
+    ) {
+        viewModelScope.launch {
+            runCatching {
+                scheduleTableDateReminderUseCase(
+                    page = page,
+                    document = document,
+                    tableBlockId = tableBlockId,
+                    rowId = rowId,
+                    columnId = columnId,
+                    value = value,
+                )
+            }
+        }
+    }
+
+    private fun cancelDateRemindersForColumn(
+        page: Page,
+        table: PageTable,
+        tableBlockId: String,
+        columnId: String,
+    ) {
+        viewModelScope.launch {
+            runCatching {
+                scheduleTableDateReminderUseCase.cancelColumn(
+                    page = page,
+                    table = table,
+                    tableBlockId = tableBlockId,
+                    columnId = columnId,
+                )
+            }
+        }
+    }
+
+    private fun cancelDateRemindersForRow(
+        page: Page,
+        table: PageTable,
+        tableBlockId: String,
+        rowId: String,
+    ) {
+        viewModelScope.launch {
+            runCatching {
+                scheduleTableDateReminderUseCase.cancelRow(
+                    page = page,
+                    table = table,
+                    tableBlockId = tableBlockId,
+                    rowId = rowId,
+                )
+            }
+        }
     }
 
     private fun PageBlockDocument.replaceTableWithCommand(
@@ -1114,6 +1267,12 @@ class PageEditorViewModel @Inject constructor(
                 columnId = columnId,
                 updated = result.document,
             )
+            syncDateRemindersForColumn(
+                page = currentUiState.page,
+                document = result.document,
+                tableBlockId = blockId,
+                columnId = columnId,
+            )
         }
     }
 
@@ -1143,6 +1302,12 @@ class PageEditorViewModel @Inject constructor(
                 tableBlockId = blockId,
                 columnId = columnId,
                 updated = result.document,
+            )
+            syncDateRemindersForColumn(
+                page = currentUiState.page,
+                document = result.document,
+                tableBlockId = blockId,
+                columnId = columnId,
             )
         }
     }
@@ -1214,9 +1379,18 @@ class PageEditorViewModel @Inject constructor(
             result.coercedValue?.let { nextValue ->
                 if (!result.changed) return
                 recordTableUndo(result.mutation)
+                syncDateReminderForCell(
+                    page = currentUiState.page,
+                    document = result.document,
+                    tableBlockId = blockId,
+                    rowId = rowId,
+                    columnId = columnId,
+                    value = nextValue,
+                )
                 queueGranularPendingDocument(result.document) { normalized ->
                     PendingGranularDocumentSave.TableCellValue(
                         document = normalized,
+                        tableBlockId = blockId,
                         rowId = rowId,
                         columnId = columnId,
                         value = nextValue,
@@ -1248,6 +1422,7 @@ class PageEditorViewModel @Inject constructor(
                 queueGranularPendingDocument(result.document) { normalized ->
                     PendingGranularDocumentSave.TableCellValue(
                         document = normalized,
+                        tableBlockId = blockId,
                         rowId = rowId,
                         columnId = columnId,
                         value = nextValue,
@@ -1392,6 +1567,7 @@ class PageEditorViewModel @Inject constructor(
             val document = currentDocument(currentUiState) ?: return
             val tableBlock = document.findTableBlock(blockId) ?: return
             if (tableBlock.table.columns.size <= 1) return
+            val deletedColumn = tableBlock.table.columns.firstOrNull { column -> column.id == columnId }
             val result = tableMutationUseCase.deleteColumn(document, blockId, columnId)
             if (!result.changed) return
             recordTableUndo(result)
@@ -1402,6 +1578,14 @@ class PageEditorViewModel @Inject constructor(
             ) {
                 pageRepository.deleteTableColumn(
                     pageId = pageId,
+                    tableBlockId = blockId,
+                    columnId = columnId,
+                )
+            }
+            if (deletedColumn?.type == PageTableColumnType.Date) {
+                cancelDateRemindersForColumn(
+                    page = currentUiState.page,
+                    table = tableBlock.table,
                     tableBlockId = blockId,
                     columnId = columnId,
                 )
@@ -1439,6 +1623,7 @@ class PageEditorViewModel @Inject constructor(
         val currentUiState = uiState.value
         if (currentUiState.page != null) {
             val document = currentDocument(currentUiState) ?: return
+            val tableBlock = document.findTableBlock(blockId) ?: return
             val result = tableMutationUseCase.deleteRow(document, blockId, rowId)
             if (!result.changed) return
             recordTableUndo(result)
@@ -1453,6 +1638,12 @@ class PageEditorViewModel @Inject constructor(
                     rowId = rowId,
                 )
             }
+            cancelDateRemindersForRow(
+                page = currentUiState.page,
+                table = tableBlock.table,
+                tableBlockId = blockId,
+                rowId = rowId,
+            )
         }
     }
 
@@ -2086,6 +2277,15 @@ class PageEditorViewModel @Inject constructor(
         }
     }
 
+    private fun List<PageBlock>.forEachTableBlock(action: (PageBlock) -> Unit) {
+        forEach { block ->
+            if (block.type == PageBlockType.DatabaseTable || block.type == PageBlockType.Table) {
+                action(block)
+            }
+            block.children.forEachTableBlock(action)
+        }
+    }
+
     private fun PageBlockDocument.noOpRowBlockCommand(blockId: String): EditorCommand {
         val block = findBlock(blockId)
         return EditorCommand.UpdateBlockText(
@@ -2125,6 +2325,7 @@ private sealed interface PendingGranularDocumentSave {
 
     data class TableCellValue(
         override val document: PageBlockDocument,
+        val tableBlockId: String,
         val rowId: String,
         val columnId: String,
         val value: String,

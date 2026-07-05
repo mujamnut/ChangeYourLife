@@ -16,6 +16,8 @@ interface ReminderRepository {
 
     suspend fun upsertReminder(reminder: Reminder)
 
+    suspend fun reschedulePendingReminders()
+
     suspend fun createReminder(
         workspaceId: String,
         title: String,

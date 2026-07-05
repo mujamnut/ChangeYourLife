@@ -593,6 +593,15 @@ internal val PropertySymbolWidth = TableGridTokens.dimensions.propertySymbolWidt
 internal val TableStatusOptions = listOf("Not started", "In progress", "Done", "Blocked")
 internal val TableWeekdayLabels = listOf("Su", "Mo", "Tu", "We", "Th", "Fr", "Sa")
 internal val TableTimeOptions = List(48) { index -> LocalTime.MIDNIGHT.plusMinutes(index * 30L) }
+internal val TableQuickTimeOptions = listOf(
+    LocalTime.of(8, 0),
+    LocalTime.of(9, 0),
+    LocalTime.of(10, 0),
+    LocalTime.of(12, 0),
+    LocalTime.of(14, 0),
+    LocalTime.of(18, 0),
+    LocalTime.of(20, 0),
+)
 internal val TableTimezoneOptions = listOf("Local", "GMT+0", "GMT+2", "GMT+8")
 internal const val NoStatusLabel = "No status"
 internal const val NoDateLabel = "No date"
@@ -640,6 +649,7 @@ internal data class TableDateCellValue(
     val includeEndDate: Boolean = false,
     val includeTime: Boolean = false,
     val timezoneLabel: String = "Local",
+    val reminder: PageTableDateReminder = PageTableDateReminder.OnDayOfEvent,
 )
 
 internal val TableDateCellJson = Json {
@@ -669,7 +679,8 @@ internal fun TableDateCellValue.toTableDateCellStorageValue(): String {
         !includeEndDate &&
         startTime.isBlank() &&
         endDate.isBlank() &&
-        timezoneLabel == "Local"
+        timezoneLabel == "Local" &&
+        reminder == PageTableDateReminder.OnDayOfEvent
     return if (isPlainDate) {
         startDate
     } else {
@@ -680,14 +691,25 @@ internal fun TableDateCellValue.toTableDateCellStorageValue(): String {
 internal fun PageTableColumn.displayDateCellValue(rawValue: String): String {
     val value = rawValue.toTableDateCellValue()
     val date = value.startDate.toLocalDateOrNull() ?: return value.startDate
-    val parts = mutableListOf(date.formatForColumn(dateFormat))
+    val startParts = mutableListOf(date.formatForColumn(dateFormat))
     if (value.includeTime && timeFormat != PageTableTimeFormat.Hidden) {
         val time = value.startTime.toLocalTimeOrNull()
         if (time != null) {
-            parts += time.formatForColumn(timeFormat.visibleOrDefault())
+            startParts += time.formatForColumn(timeFormat.visibleOrDefault())
         }
     }
-    return parts.joinToString(" ")
+    val startText = startParts.joinToString(" ")
+    if (!value.includeEndDate) return startText
+
+    val endDate = value.endDate.toLocalDateOrNull() ?: return startText
+    val endParts = mutableListOf(endDate.formatForColumn(dateFormat))
+    if (value.includeTime && timeFormat != PageTableTimeFormat.Hidden) {
+        val endTime = value.endTime.toLocalTimeOrNull()
+        if (endTime != null) {
+            endParts += endTime.formatForColumn(timeFormat.visibleOrDefault())
+        }
+    }
+    return "$startText - ${endParts.joinToString(" ")}"
 }
 
 internal fun LocalDate.formatForColumn(format: PageTableDateFormat): String {
