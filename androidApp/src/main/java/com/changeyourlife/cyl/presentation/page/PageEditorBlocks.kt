@@ -127,6 +127,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -257,6 +258,7 @@ internal fun PageEditorBlock(
 ) {
     val isTextLikeBlock = block.type.isTextLikeEditorBlock
     val isFlushBlock = isTextLikeBlock ||
+        block.type == PageBlockType.Table ||
         block.type == PageBlockType.DatabaseTable ||
         block.type == PageBlockType.Divider
     val isSearchHighlighted = block.isDirectSearchTarget(searchTargetType, searchTargetId)
@@ -265,6 +267,7 @@ internal fun PageEditorBlock(
     } else {
         0L
     }
+    var isToggleExpanded by rememberSaveable(block.id) { mutableStateOf(true) }
 
     val blockModifier = Modifier
         .fillMaxWidth()
@@ -408,6 +411,13 @@ internal fun PageEditorBlock(
                     searchTargetType = searchTargetType,
                     searchTargetId = searchTargetId,
                 )
+                PageBlockType.Table -> PlainTableBlockEditor(
+                    table = block.table,
+                    onColumnNameChange = { columnId, name -> onTableColumnNameChange(block.id, columnId, name) },
+                    onCellChange = { rowId, columnId, value -> onTableCellChange(block.id, rowId, columnId, value) },
+                    onAddColumn = { onAddTableColumn(block.id, "Column", PageTableColumnType.Text) },
+                    onAddRow = { onAddTableRow(block.id) },
+                )
                 PageBlockType.Todo -> TodoBlockEditor(
                     blockId = block.id,
                     block = block,
@@ -468,6 +478,27 @@ internal fun PageEditorBlock(
                     mentionPages = mentionPages,
                     isFirstBlock = isFirstBlock,
                 )
+                PageBlockType.Toggle -> LeadingTextBlockEditor(
+                    blockId = block.id,
+                    leadingText = if (isToggleExpanded) "v" else ">",
+                    block = block,
+                    onTextChange = onTextChange,
+                    onRichTextChange = onRichTextChange,
+                    onPasteBlocks = onPasteBlocks,
+                    onRichTextToolbarChange = onRichTextToolbarChange,
+                    showInlineRichTextToolbar = false,
+                    onBlockTypeCommand = onBlockTypeChange,
+                    onInsertBlockCommand = onInsertBlockNear,
+                    onDeleteEmptyBlockCommand = onDelete,
+                    onIndentBlockCommand = onIndentBlock,
+                    onOutdentBlockCommand = onOutdentBlock,
+                    onCreateLinkedPageCommand = onCreateLinkedChildPageFromBlock,
+                    focusRequestToken = focusRequestToken,
+                    onFocusBlock = { onBlockFocused(block.id) },
+                    mentionPages = mentionPages,
+                    isFirstBlock = isFirstBlock,
+                    onLeadingClick = { isToggleExpanded = !isToggleExpanded },
+                )
                 PageBlockType.Quote -> LeadingTextBlockEditor(
                     blockId = block.id,
                     leadingText = "|",
@@ -489,7 +520,48 @@ internal fun PageEditorBlock(
                     mentionPages = mentionPages,
                     isFirstBlock = isFirstBlock,
                 )
+                PageBlockType.Callout -> LeadingTextBlockEditor(
+                    blockId = block.id,
+                    leadingText = "!",
+                    block = block,
+                    onTextChange = onTextChange,
+                    onRichTextChange = onRichTextChange,
+                    onPasteBlocks = onPasteBlocks,
+                    onRichTextToolbarChange = onRichTextToolbarChange,
+                    showInlineRichTextToolbar = false,
+                    onBlockTypeCommand = onBlockTypeChange,
+                    onInsertBlockCommand = onInsertBlockNear,
+                    onDeleteEmptyBlockCommand = onDelete,
+                    onIndentBlockCommand = onIndentBlock,
+                    onOutdentBlockCommand = onOutdentBlock,
+                    onCreateLinkedPageCommand = onCreateLinkedChildPageFromBlock,
+                    focusRequestToken = focusRequestToken,
+                    onFocusBlock = { onBlockFocused(block.id) },
+                    mentionPages = mentionPages,
+                    isFirstBlock = isFirstBlock,
+                )
+                PageBlockType.WebBookmark -> LeadingTextBlockEditor(
+                    blockId = block.id,
+                    leadingText = "@",
+                    block = block,
+                    onTextChange = onTextChange,
+                    onRichTextChange = onRichTextChange,
+                    onPasteBlocks = onPasteBlocks,
+                    onRichTextToolbarChange = onRichTextToolbarChange,
+                    showInlineRichTextToolbar = false,
+                    onBlockTypeCommand = onBlockTypeChange,
+                    onInsertBlockCommand = onInsertBlockNear,
+                    onDeleteEmptyBlockCommand = onDelete,
+                    onIndentBlockCommand = onIndentBlock,
+                    onOutdentBlockCommand = onOutdentBlock,
+                    onCreateLinkedPageCommand = onCreateLinkedChildPageFromBlock,
+                    focusRequestToken = focusRequestToken,
+                    onFocusBlock = { onBlockFocused(block.id) },
+                    mentionPages = mentionPages,
+                    isFirstBlock = isFirstBlock,
+                )
                 PageBlockType.Heading,
+                PageBlockType.Code,
                 PageBlockType.Text,
                 -> TextBlockEditor(
                     blockId = block.id,
@@ -512,7 +584,7 @@ internal fun PageEditorBlock(
                 )
             }
 
-            if (block.children.isNotEmpty()) {
+            if (block.children.isNotEmpty() && (block.type != PageBlockType.Toggle || isToggleExpanded)) {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     block.children.forEach { child ->
                         key(child.id) {
@@ -660,6 +732,111 @@ internal fun StructuredBlockContainer(
 }
 
 @Composable
+private fun PlainTableBlockEditor(
+    table: PageTable,
+    onColumnNameChange: (String, String) -> Unit,
+    onCellChange: (String, String, String) -> Unit,
+    onAddColumn: () -> Unit,
+    onAddRow: () -> Unit,
+) {
+    val columns = table.columns
+    val rows = table.rows
+    val scrollState = rememberScrollState()
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(scrollState),
+    ) {
+        Row {
+            columns.forEach { column ->
+                PlainTableCell(
+                    value = column.name,
+                    placeholder = "Column",
+                    isHeader = true,
+                    onValueChange = { value -> onColumnNameChange(column.id, value) },
+                )
+            }
+            PlainTableAddCell(label = "+", onClick = onAddColumn)
+        }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.48f))
+        rows.forEach { row ->
+            Row {
+                columns.forEach { column ->
+                    PlainTableCell(
+                        value = row.cells[column.id].orEmpty(),
+                        placeholder = "",
+                        isHeader = false,
+                        onValueChange = { value -> onCellChange(row.id, column.id, value) },
+                    )
+                }
+                Spacer(modifier = Modifier.width(40.dp))
+            }
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.32f))
+        }
+        Row {
+            PlainTableAddCell(label = "+ Row", onClick = onAddRow)
+        }
+    }
+}
+
+@Composable
+private fun PlainTableCell(
+    value: String,
+    placeholder: String,
+    isHeader: Boolean,
+    onValueChange: (String) -> Unit,
+) {
+    BasicTextField(
+        value = value,
+        onValueChange = onValueChange,
+        singleLine = false,
+        textStyle = if (isHeader) {
+            MaterialTheme.typography.bodyMedium.copy(
+                color = MaterialTheme.colorScheme.onSurface,
+                fontWeight = FontWeight.SemiBold,
+            )
+        } else {
+            MaterialTheme.typography.bodyMedium.copy(
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+        },
+        modifier = Modifier
+            .widthIn(min = 96.dp, max = 180.dp)
+            .padding(horizontal = 10.dp, vertical = 9.dp),
+        decorationBox = { innerTextField ->
+            Box(modifier = Modifier.fillMaxWidth()) {
+                if (value.isBlank() && placeholder.isNotBlank()) {
+                    Text(
+                        text = placeholder,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.48f),
+                    )
+                }
+                innerTextField()
+            }
+        },
+    )
+}
+
+@Composable
+private fun PlainTableAddCell(
+    label: String,
+    onClick: () -> Unit,
+) {
+    TextButton(
+        onClick = onClick,
+        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+        modifier = Modifier.widthIn(min = 56.dp),
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+        )
+    }
+}
+
+@Composable
 internal fun TextBlockEditor(
     blockId: String,
     block: PageBlock,
@@ -703,6 +880,7 @@ internal fun TextBlockEditor(
         minLines = 1,
         textStyle = when (block.type) {
             PageBlockType.Heading -> MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.SemiBold)
+            PageBlockType.Code -> MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace)
             else -> MaterialTheme.typography.bodyLarge
         },
         placeholder = block.type.placeholder,
@@ -736,6 +914,7 @@ internal fun TodoBlockEditor(
     mentionPages: List<Page> = emptyList(),
     isFirstBlock: Boolean = false,
     isTableRowPage: Boolean = false,
+    onLeadingClick: (() -> Unit)? = null,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -798,6 +977,7 @@ internal fun LeadingTextBlockEditor(
     mentionPages: List<Page> = emptyList(),
     isFirstBlock: Boolean = false,
     isTableRowPage: Boolean = false,
+    onLeadingClick: (() -> Unit)? = null,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -807,6 +987,13 @@ internal fun LeadingTextBlockEditor(
             text = leadingText,
             modifier = Modifier
                 .width(28.dp)
+                .then(
+                    if (onLeadingClick != null) {
+                        Modifier.clickable(onClick = onLeadingClick)
+                    } else {
+                        Modifier
+                    },
+                )
                 .padding(top = 18.dp),
             style = MaterialTheme.typography.titleMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,

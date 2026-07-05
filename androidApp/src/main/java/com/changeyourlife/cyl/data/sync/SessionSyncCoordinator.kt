@@ -1200,6 +1200,7 @@ class SessionSyncCoordinator @Inject constructor(
 
     private fun PageBlock.canUseGranularCreate(): Boolean {
         return type != PageBlockType.DatabaseTable &&
+            type != PageBlockType.Table &&
             richTextSpans.isEmpty() &&
             mediaAttachments.isEmpty() &&
             children.isEmpty() &&
@@ -1254,7 +1255,7 @@ class SessionSyncCoordinator @Inject constructor(
             .blocks
             .asSequence()
             .flatMap { block -> block.flattenBlocks().asSequence() }
-            .filter { block -> block.type == PageBlockType.DatabaseTable }
+            .filter { block -> block.type == PageBlockType.DatabaseTable || block.type == PageBlockType.Table }
             .flatMap { block -> block.table.rows.asSequence() }
             .firstOrNull { row -> row.id == rowId }
             ?.cellValues

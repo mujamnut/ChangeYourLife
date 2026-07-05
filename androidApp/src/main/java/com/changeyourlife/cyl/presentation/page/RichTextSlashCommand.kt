@@ -62,10 +62,40 @@ object RichTextSlashCommandParser {
             aliases = listOf("numbered", "number", "ordered", "ol", "numberedlist"),
         ),
         RichTextSlashCommand(
+            label = "Toggle",
+            hint = "Collapsible list item",
+            action = RichTextSlashAction.ChangeType(PageBlockType.Toggle),
+            aliases = listOf("toggle", "togglelist", "collapse"),
+        ),
+        RichTextSlashCommand(
             label = "Quote",
             hint = "Callout text",
             action = RichTextSlashAction.ChangeType(PageBlockType.Quote),
             aliases = listOf("quote", "blockquote"),
+        ),
+        RichTextSlashCommand(
+            label = "Callout",
+            hint = "Highlighted note",
+            action = RichTextSlashAction.ChangeType(PageBlockType.Callout),
+            aliases = listOf("callout", "notice", "info"),
+        ),
+        RichTextSlashCommand(
+            label = "Code",
+            hint = "Code block",
+            action = RichTextSlashAction.ChangeType(PageBlockType.Code),
+            aliases = listOf("code", "pre", "snippet"),
+        ),
+        RichTextSlashCommand(
+            label = "Table",
+            hint = "Simple table",
+            action = RichTextSlashAction.ChangeType(PageBlockType.Table),
+            aliases = listOf("table", "grid", "plain-table"),
+        ),
+        RichTextSlashCommand(
+            label = "Bookmark",
+            hint = "Web link preview",
+            action = RichTextSlashAction.ChangeType(PageBlockType.WebBookmark),
+            aliases = listOf("bookmark", "web", "url", "linkpreview"),
         ),
         RichTextSlashCommand(
             label = "Divider",
@@ -83,7 +113,7 @@ object RichTextSlashCommandParser {
             label = "Database",
             hint = "Structured database",
             action = RichTextSlashAction.ChangeType(PageBlockType.DatabaseTable),
-            aliases = listOf("table", "database", "db"),
+            aliases = listOf("database", "db", "data", "datasource"),
         ),
         RichTextSlashCommand(
             label = "Page",

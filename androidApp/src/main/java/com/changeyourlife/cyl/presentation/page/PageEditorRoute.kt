@@ -501,6 +501,11 @@ internal fun PageEditorScreen(
                     isAiChatSheetOpen = true
                 },
                 onCreateBlock = { isBlockPickerSheetOpen = true },
+                onClearEditorFocus = {
+                    activeBlockId = null
+                    richTextToolbarState = null
+                    editorFocusScope = PageEditorFocusScope.None
+                },
             )
         },
     ) { innerPadding ->

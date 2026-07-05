@@ -615,6 +615,34 @@ internal fun TableRowPageSheet(
                                 mentionPages = mentionPages,
                                 isTableRowPage = true,
                             )
+                            PageBlockType.Toggle -> LeadingTextBlockEditor(
+                                blockId = block.id,
+                                leadingText = ">",
+                                block = block,
+                                onTextChange = { _, text -> onBlockTextChange(block.id, text) },
+                                onRichTextChange = { _, text, spans -> onBlockRichTextChange(block.id, text, spans) },
+                                onPasteBlocks = onBlockPasteBlocks,
+                                onRichTextToolbarChange = { toolbarState ->
+                                    updateRowToolbarState(block.id, toolbarState)
+                                },
+                                showInlineRichTextToolbar = false,
+                                onBlockTypeCommand = { _, type -> onBlockTypeChange(block.id, type) },
+                                onInsertBlockCommand = { _, type, position ->
+                                    onInsertBlockNear(block.id, type, position)
+                                },
+                                onDeleteEmptyBlockCommand = { deleteRowBlockAndFocusSibling(block.id) },
+                                onIndentBlockCommand = { onIndentBlock(block.id) },
+                                onOutdentBlockCommand = { onOutdentBlock(block.id) },
+                                onCreateLinkedPageCommand = { onCreateLinkedPage(block.id) },
+                                onOpenPropertySheetCommand = { isNewColumnSheetOpen = true },
+                                focusRequestToken = focusRequestToken,
+                                onFocusBlock = {
+                                    activeRowBlockId = block.id
+                                    isRowBodyFocused = false
+                                },
+                                mentionPages = mentionPages,
+                                isTableRowPage = true,
+                            )
                             PageBlockType.Quote -> LeadingTextBlockEditor(
                                 blockId = block.id,
                                 leadingText = "|",
@@ -644,7 +672,65 @@ internal fun TableRowPageSheet(
                                 mentionPages = mentionPages,
                                 isTableRowPage = true,
                             )
+                            PageBlockType.Callout -> LeadingTextBlockEditor(
+                                blockId = block.id,
+                                leadingText = "!",
+                                block = block,
+                                onTextChange = { _, text -> onBlockTextChange(block.id, text) },
+                                onRichTextChange = { _, text, spans -> onBlockRichTextChange(block.id, text, spans) },
+                                onPasteBlocks = onBlockPasteBlocks,
+                                onRichTextToolbarChange = { toolbarState ->
+                                    updateRowToolbarState(block.id, toolbarState)
+                                },
+                                showInlineRichTextToolbar = false,
+                                onBlockTypeCommand = { _, type -> onBlockTypeChange(block.id, type) },
+                                onInsertBlockCommand = { _, type, position ->
+                                    onInsertBlockNear(block.id, type, position)
+                                },
+                                onDeleteEmptyBlockCommand = { deleteRowBlockAndFocusSibling(block.id) },
+                                onIndentBlockCommand = { onIndentBlock(block.id) },
+                                onOutdentBlockCommand = { onOutdentBlock(block.id) },
+                                onCreateLinkedPageCommand = { onCreateLinkedPage(block.id) },
+                                onOpenPropertySheetCommand = { isNewColumnSheetOpen = true },
+                                focusRequestToken = focusRequestToken,
+                                onFocusBlock = {
+                                    activeRowBlockId = block.id
+                                    isRowBodyFocused = false
+                                },
+                                mentionPages = mentionPages,
+                                isTableRowPage = true,
+                            )
+                            PageBlockType.WebBookmark -> LeadingTextBlockEditor(
+                                blockId = block.id,
+                                leadingText = "@",
+                                block = block,
+                                onTextChange = { _, text -> onBlockTextChange(block.id, text) },
+                                onRichTextChange = { _, text, spans -> onBlockRichTextChange(block.id, text, spans) },
+                                onPasteBlocks = onBlockPasteBlocks,
+                                onRichTextToolbarChange = { toolbarState ->
+                                    updateRowToolbarState(block.id, toolbarState)
+                                },
+                                showInlineRichTextToolbar = false,
+                                onBlockTypeCommand = { _, type -> onBlockTypeChange(block.id, type) },
+                                onInsertBlockCommand = { _, type, position ->
+                                    onInsertBlockNear(block.id, type, position)
+                                },
+                                onDeleteEmptyBlockCommand = { deleteRowBlockAndFocusSibling(block.id) },
+                                onIndentBlockCommand = { onIndentBlock(block.id) },
+                                onOutdentBlockCommand = { onOutdentBlock(block.id) },
+                                onCreateLinkedPageCommand = { onCreateLinkedPage(block.id) },
+                                onOpenPropertySheetCommand = { isNewColumnSheetOpen = true },
+                                focusRequestToken = focusRequestToken,
+                                onFocusBlock = {
+                                    activeRowBlockId = block.id
+                                    isRowBodyFocused = false
+                                },
+                                mentionPages = mentionPages,
+                                isTableRowPage = true,
+                            )
                             PageBlockType.DatabaseTable,
+                            PageBlockType.Table,
+                            PageBlockType.Code,
                             PageBlockType.Heading,
                             PageBlockType.Text,
                             -> TextBlockEditor(
@@ -695,6 +781,7 @@ internal fun TableRowPageSheet(
                         activeBlockId = activeRowBlockId,
                         canUndoEditorChange = false,
                         richTextToolbarState = rowRichTextToolbarState,
+                        allowPlainTable = false,
                         onAddBlock = ::addRowBlockAndFocus,
                         onChangeActiveBlockType = { type ->
                             activeRowBlockId?.let { blockId -> onBlockTypeChange(blockId, type) }
@@ -802,10 +889,15 @@ private val PageBlockType.isRowContentFocusable: Boolean
         PageBlockType.Todo,
         PageBlockType.Bullet,
         PageBlockType.Numbered,
+        PageBlockType.Toggle,
         PageBlockType.Quote,
+        PageBlockType.Callout,
+        PageBlockType.Code,
+        PageBlockType.WebBookmark,
         PageBlockType.MediaFile,
         -> true
         PageBlockType.Divider,
+        PageBlockType.Table,
         PageBlockType.DatabaseTable,
         -> false
     }

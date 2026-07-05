@@ -909,7 +909,9 @@ private fun String.toAutoBlockTypeOrNull(): PageBlockType? {
         "1. " -> PageBlockType.Numbered
         "[] ", "[ ] " -> PageBlockType.Todo
         "# " -> PageBlockType.Heading
+        ">> " -> PageBlockType.Toggle
         "> " -> PageBlockType.Quote
+        "``` " -> PageBlockType.Code
         else -> null
     }
 }

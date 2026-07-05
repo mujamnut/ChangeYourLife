@@ -44,6 +44,11 @@ private val pageRepositoryJson = Json {
     encodeDefaults = true
 }
 
+private enum class PageRemoteSyncPolicy {
+    Immediate,
+    DebouncedPendingPush,
+}
+
 class PageRepositoryImpl @Inject constructor(
     private val pageDao: PageDao,
     private val pageContentDao: PageContentDao,
@@ -131,7 +136,7 @@ class PageRepositoryImpl @Inject constructor(
     override suspend fun upsertPage(page: Page) {
         val entity = page.toEntity().copy(syncStatus = SyncStatus.PendingPush)
         persistPage(entity)
-        backgroundSyncQueue.enqueue("pushPage:${entity.id}") { pushPage(entity) }
+        backgroundSyncQueue.enqueuePendingPushDebounced()
     }
 
     override suspend fun updateBlockText(
@@ -254,6 +259,7 @@ class PageRepositoryImpl @Inject constructor(
         if (tableBlockId.isBlank()) return false
         return mutateDocumentPage(
             pageId = pageId,
+            remoteSyncPolicy = PageRemoteSyncPolicy.DebouncedPendingPush,
             remoteSync = { page ->
                 sessionSyncCoordinator.pushPageTablePatch(
                     page = page,
@@ -285,6 +291,7 @@ class PageRepositoryImpl @Inject constructor(
         if (tableBlockId.isBlank() || column.id.isBlank()) return false
         return mutateDocumentPage(
             pageId = pageId,
+            remoteSyncPolicy = PageRemoteSyncPolicy.DebouncedPendingPush,
             remoteSync = { page ->
                 sessionSyncCoordinator.pushPageTableColumnPatch(
                     page = page,
@@ -575,6 +582,7 @@ class PageRepositoryImpl @Inject constructor(
         if (tableBlockId.isBlank() || row.id.isBlank()) return false
         return mutateDocumentPage(
             pageId = pageId,
+            remoteSyncPolicy = PageRemoteSyncPolicy.DebouncedPendingPush,
             remoteSync = { page ->
                 sessionSyncCoordinator.pushPageTableRowPatch(
                     page = page,
@@ -733,6 +741,7 @@ class PageRepositoryImpl @Inject constructor(
 
     private suspend fun mutateProjectedPage(
         pageId: String,
+        remoteSyncPolicy: PageRemoteSyncPolicy = PageRemoteSyncPolicy.DebouncedPendingPush,
         remoteSync: suspend (PageEntity) -> Unit,
         mutation: suspend (updatedAt: Long) -> Boolean,
     ): Boolean {
@@ -749,14 +758,18 @@ class PageRepositoryImpl @Inject constructor(
             syncStatus = SyncStatus.PendingPush,
         )
         persistPage(updatedPage)
-        backgroundSyncQueue.enqueue("mutateProjectedPage:$pageId") {
-            remoteSync(updatedPage)
-        }
+        enqueueRemotePageMutation(
+            name = "mutateProjectedPage:$pageId",
+            policy = remoteSyncPolicy,
+            updatedPage = updatedPage,
+            remoteSync = remoteSync,
+        )
         return true
     }
 
     private suspend fun mutateDocumentPage(
         pageId: String,
+        remoteSyncPolicy: PageRemoteSyncPolicy = PageRemoteSyncPolicy.DebouncedPendingPush,
         remoteSync: suspend (PageEntity) -> Unit,
         mutation: (PageBlockDocument) -> PageBlockDocument?,
     ): Boolean {
@@ -770,10 +783,27 @@ class PageRepositoryImpl @Inject constructor(
             syncStatus = SyncStatus.PendingPush,
         )
         persistPage(updatedPage)
-        backgroundSyncQueue.enqueue("mutateDocumentPage:$pageId") {
-            remoteSync(updatedPage)
-        }
+        enqueueRemotePageMutation(
+            name = "mutateDocumentPage:$pageId",
+            policy = remoteSyncPolicy,
+            updatedPage = updatedPage,
+            remoteSync = remoteSync,
+        )
         return true
+    }
+
+    private fun enqueueRemotePageMutation(
+        name: String,
+        policy: PageRemoteSyncPolicy,
+        updatedPage: PageEntity,
+        remoteSync: suspend (PageEntity) -> Unit,
+    ) {
+        when (policy) {
+            PageRemoteSyncPolicy.Immediate -> backgroundSyncQueue.enqueue(name) {
+                remoteSync(updatedPage)
+            }
+            PageRemoteSyncPolicy.DebouncedPendingPush -> backgroundSyncQueue.enqueuePendingPushDebounced()
+        }
     }
 
     private suspend fun ensureProjectionForPage(page: PageEntity) {
@@ -900,7 +930,10 @@ class PageRepositoryImpl @Inject constructor(
     ): BlockListMutation {
         var changed = false
         val updatedBlocks = map { block ->
-            if (block.id == tableBlockId && block.type == PageBlockType.DatabaseTable) {
+            if (
+                block.id == tableBlockId &&
+                (block.type == PageBlockType.DatabaseTable || block.type == PageBlockType.Table)
+            ) {
                 val updated = transform(block)
                 if (updated != null) {
                     changed = true

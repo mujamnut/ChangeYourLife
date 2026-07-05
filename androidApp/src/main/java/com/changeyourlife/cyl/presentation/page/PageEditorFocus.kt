@@ -68,10 +68,15 @@ private val PageBlockType.isTextEditorFocusable: Boolean
         PageBlockType.Todo,
         PageBlockType.Bullet,
         PageBlockType.Numbered,
+        PageBlockType.Toggle,
         PageBlockType.Quote,
+        PageBlockType.Callout,
+        PageBlockType.Code,
+        PageBlockType.WebBookmark,
         PageBlockType.MediaFile,
         -> true
         PageBlockType.Divider,
+        PageBlockType.Table,
         PageBlockType.DatabaseTable,
         -> false
     }

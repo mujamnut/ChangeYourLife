@@ -666,9 +666,15 @@ class HomeViewModel @Inject constructor(
             "todo" -> PageBlockType.Todo
             "bullet" -> PageBlockType.Bullet
             "numbered", "number", "ordered", "numberedlist", "orderedlist" -> PageBlockType.Numbered
+            "toggle", "togglelist", "collapse" -> PageBlockType.Toggle
             "quote" -> PageBlockType.Quote
+            "callout", "notice", "info" -> PageBlockType.Callout
+            "code", "snippet", "pre" -> PageBlockType.Code
+            "table", "grid", "plaintable" -> PageBlockType.Table
+            "bookmark", "webbookmark", "web", "urlpreview" -> PageBlockType.WebBookmark
             "divider" -> PageBlockType.Divider
             "media", "file", "image", "video", "attachment" -> PageBlockType.MediaFile
+            "database", "db", "databasetable" -> PageBlockType.DatabaseTable
             else -> PageBlockType.Text
         }
     }
@@ -1575,7 +1581,9 @@ private fun Page.searchCandidates(): List<PageSearchCandidate> {
 
 private fun PageBlock.searchCandidates(): List<PageSearchCandidate> {
     val selfCandidates = when (type) {
-        PageBlockType.DatabaseTable -> table.searchCandidates(tableBlockId = id)
+        PageBlockType.DatabaseTable,
+        PageBlockType.Table,
+        -> table.searchCandidates(tableBlockId = id)
         PageBlockType.MediaFile -> mediaAttachments.map { attachment ->
             PageSearchCandidate(
                 text = "File ${attachment.name} ${attachment.mimeType}",
@@ -1793,7 +1801,9 @@ private fun String.searchScore(terms: List<String>): Int {
 
 private fun PageBlock.searchLines(): List<String> {
     val selfLines = when (type) {
-        PageBlockType.DatabaseTable -> table.searchLines()
+        PageBlockType.DatabaseTable,
+        PageBlockType.Table,
+        -> table.searchLines()
         PageBlockType.MediaFile -> mediaAttachments.map { attachment ->
             "File ${attachment.name} ${attachment.mimeType}"
         }.ifEmpty { listOf("Media file") }

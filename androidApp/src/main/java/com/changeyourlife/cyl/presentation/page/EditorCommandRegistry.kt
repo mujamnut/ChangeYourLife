@@ -138,8 +138,8 @@ private fun List<EditorCommandRegistryEntry>.enabledIn(
 private fun RichTextSlashCommand.defaultGroup(): EditorCommandGroup {
     return when (action) {
         is RichTextSlashAction.ChangeType -> when (label) {
-            "Bullet", "Numbered", "Todo" -> EditorCommandGroup.Lists
-            "Media" -> EditorCommandGroup.Media
+            "Bullet", "Numbered", "Todo", "Toggle" -> EditorCommandGroup.Lists
+            "Media", "Bookmark" -> EditorCommandGroup.Media
             "Database" -> EditorCommandGroup.Database
             else -> EditorCommandGroup.Basic
         }

@@ -474,7 +474,7 @@ class AiService(
               "blocks": [
                 {
                   "id": "uuid-string",
-                  "type": "Text|Heading|Todo|Bullet|Quote|Divider|DatabaseTable",
+                  "type": "Text|Heading|Todo|Bullet|Numbered|Toggle|Quote|Callout|Code|Table|WebBookmark|Divider|MediaFile|DatabaseTable",
                   "text": "text-content",
                   "isChecked": false,
                   "table": {
@@ -490,7 +490,8 @@ class AiService(
 
             Rules:
             - Generate unique UUID strings for all id fields.
-            - Block types: Text, Heading, Todo, Bullet, Quote, Divider, DatabaseTable.
+            - Block types: Text, Heading, Todo, Bullet, Numbered, Toggle, Quote, Callout, Code, Table, WebBookmark, Divider, MediaFile, DatabaseTable.
+            - Use Table only for a simple visual table block. Use DatabaseTable for structured databases with properties, views, rows, relation, rollup, or AI-editable records.
             - Property types: Text, Checkbox, Date, Status.
             - If DatabaseTable: include at least 2 columns, 2 rows, and cells map to column IDs.
             - Output MUST be valid JSON only.

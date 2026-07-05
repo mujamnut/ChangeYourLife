@@ -24,12 +24,17 @@ private fun PageBlock.toMarkdownLines(depth: Int, siblingIndex: Int): List<Strin
         PageBlockType.Todo -> listOf("$indent- [${if (isChecked) "x" else " "}] $content")
         PageBlockType.Bullet -> listOf("$indent- $content")
         PageBlockType.Numbered -> listOf("$indent${siblingIndex + 1}. $content")
+        PageBlockType.Toggle -> listOf("$indent<details><summary>$content</summary></details>")
         PageBlockType.Quote -> listOf("$indent> $content")
+        PageBlockType.Callout -> listOf("$indent> [!NOTE] $content")
+        PageBlockType.Code -> listOf("$indent```", "$indent$content", "$indent```")
+        PageBlockType.Table -> table.toMarkdownLines(indent, includeTitle = false)
+        PageBlockType.WebBookmark -> listOf("$indent[$content]($content)")
         PageBlockType.Divider -> listOf("$indent---")
         PageBlockType.MediaFile -> mediaAttachments
             .map { attachment -> "$indent[${attachment.name.escapeMarkdown()}](${attachment.uri})" }
             .ifEmpty { listOf("$indent$content") }
-        PageBlockType.DatabaseTable -> table.toMarkdownLines(indent)
+        PageBlockType.DatabaseTable -> table.toMarkdownLines(indent, includeTitle = true)
     }.filter { line -> line.isNotBlank() }
 
     val childLines = children.flatMapIndexed { index, child ->
@@ -38,8 +43,10 @@ private fun PageBlock.toMarkdownLines(depth: Int, siblingIndex: Int): List<Strin
     return ownLines + childLines
 }
 
-private fun PageTable.toMarkdownLines(indent: String): List<String> {
-    if (columns.isEmpty()) return listOf("$indent### ${title.escapeMarkdown()}")
+private fun PageTable.toMarkdownLines(indent: String, includeTitle: Boolean): List<String> {
+    if (columns.isEmpty()) {
+        return if (includeTitle) listOf("$indent### ${title.escapeMarkdown()}") else emptyList()
+    }
     val header = columns.joinToString(" | ") { column -> column.name.escapeMarkdown() }
     val separator = columns.joinToString(" | ") { "---" }
     val rowLines = rows.map { row ->
@@ -47,8 +54,8 @@ private fun PageTable.toMarkdownLines(indent: String): List<String> {
             row.cells[column.id].orEmpty().escapeMarkdownTableCell()
         }
     }
-    return listOf(
-        "$indent### ${title.escapeMarkdown()}",
+    val titleLines = if (includeTitle) listOf("$indent### ${title.escapeMarkdown()}") else emptyList()
+    return titleLines + listOf(
         "$indent| $header |",
         "$indent| $separator |",
     ) + rowLines.map { line -> "$indent| $line |" }
@@ -76,21 +83,26 @@ private fun PageBlock.toHtml(depth: Int): String {
         PageBlockType.Todo -> "<label><input type=\"checkbox\"${if (isChecked) " checked" else ""}> $content</label>"
         PageBlockType.Bullet -> "<ul><li>$content</li></ul>"
         PageBlockType.Numbered -> "<ol><li>$content</li></ol>"
+        PageBlockType.Toggle -> "<details><summary>$content</summary></details>"
         PageBlockType.Quote -> "<blockquote>$content</blockquote>"
+        PageBlockType.Callout -> "<aside>$content</aside>"
+        PageBlockType.Code -> "<pre><code>$content</code></pre>"
+        PageBlockType.Table -> table.toHtml(includeTitle = false)
+        PageBlockType.WebBookmark -> "<p><a href=\"${text.escapeHtmlAttribute()}\">$content</a></p>"
         PageBlockType.Divider -> "<hr>"
         PageBlockType.MediaFile -> mediaAttachments
             .joinToString("") { attachment ->
                 "<p><a href=\"${attachment.uri.escapeHtmlAttribute()}\">${attachment.name.escapeHtml()}</a></p>"
             }
             .ifBlank { "<p>$content</p>" }
-        PageBlockType.DatabaseTable -> table.toHtml()
+        PageBlockType.DatabaseTable -> table.toHtml(includeTitle = true)
     }
     if (children.isEmpty()) return own
     val nested = children.joinToString("\n") { child -> child.toHtml(depth = depth + 1) }
     return "$own\n<div class=\"cyl-children\" data-depth=\"$depth\">\n$nested\n</div>"
 }
 
-private fun PageTable.toHtml(): String {
+private fun PageTable.toHtml(includeTitle: Boolean): String {
     val header = columns.joinToString("") { column -> "<th>${column.name.escapeHtml()}</th>" }
     val body = rows.joinToString("") { row ->
         val cells = columns.joinToString("") { column ->
@@ -98,7 +110,8 @@ private fun PageTable.toHtml(): String {
         }
         "<tr>$cells</tr>"
     }
-    return "<figure><figcaption>${title.escapeHtml()}</figcaption><table><thead><tr>$header</tr></thead><tbody>$body</tbody></table></figure>"
+    val caption = if (includeTitle) "<figcaption>${title.escapeHtml()}</figcaption>" else ""
+    return "<figure>$caption<table><thead><tr>$header</tr></thead><tbody>$body</tbody></table></figure>"
 }
 
 private fun String.toHtmlInline(spans: List<PageTextSpan>): String {

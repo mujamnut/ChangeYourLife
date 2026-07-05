@@ -1965,14 +1965,19 @@ private fun PageBlock.matchesBlockAction(action: ChatAction): Boolean {
 private fun PageBlock.withActionUpdate(action: ChatAction): PageBlock {
     val targetType = action.blockType.toPageBlockTypeOrNull() ?: type
     val nextText = action.content.ifBlank { action.value }.ifBlank { text }
-    return if (targetType == PageBlockType.DatabaseTable) {
-        copy(
+    return when (targetType) {
+        PageBlockType.DatabaseTable -> copy(
             type = targetType,
             table = table.copy(title = nextText.ifBlank { table.title }),
             isChecked = action.isChecked ?: isChecked,
         )
-    } else {
-        copy(
+        PageBlockType.Table -> copy(
+            type = targetType,
+            table = table.takeIf { currentTable -> currentTable.columns.isNotEmpty() }
+                ?: PageBlockCodec.newBlock(PageBlockType.Table).table,
+            isChecked = action.isChecked ?: isChecked,
+        )
+        else -> copy(
             type = targetType,
             text = nextText,
             isChecked = action.isChecked ?: isChecked,
@@ -1981,7 +1986,11 @@ private fun PageBlock.withActionUpdate(action: ChatAction): PageBlock {
 }
 
 private fun PageBlock.blockLabel(): String {
-    return if (type == PageBlockType.DatabaseTable) table.title.ifBlank { "database table" } else text.ifBlank { type.name }
+    return when (type) {
+        PageBlockType.DatabaseTable -> table.title.ifBlank { "database table" }
+        PageBlockType.Table -> "table"
+        else -> text.ifBlank { type.name }
+    }
 }
 
 private fun List<PageBlock>.countNestedBlocks(): Int {
@@ -2407,10 +2416,15 @@ private fun String.toPageBlockType(): PageBlockType {
         "todo", "task", "checkbox", "checklist" -> PageBlockType.Todo
         "bullet", "list", "bulletedlist" -> PageBlockType.Bullet
         "numbered", "number", "ordered", "orderedlist", "numberedlist", "ol" -> PageBlockType.Numbered
+        "toggle", "togglelist", "collapse" -> PageBlockType.Toggle
         "quote" -> PageBlockType.Quote
+        "callout", "notice", "info" -> PageBlockType.Callout
+        "code", "snippet", "pre" -> PageBlockType.Code
+        "table", "grid", "plaintable" -> PageBlockType.Table
+        "bookmark", "webbookmark", "web", "urlpreview" -> PageBlockType.WebBookmark
         "divider", "line" -> PageBlockType.Divider
         "media", "file", "files", "image", "photo", "video", "attachment", "attachments", "mediafile" -> PageBlockType.MediaFile
-        "database", "table", "databasetable" -> PageBlockType.DatabaseTable
+        "database", "db", "databasetable" -> PageBlockType.DatabaseTable
         else -> PageBlockType.Text
     }
 }
@@ -2423,10 +2437,15 @@ private fun String.toPageBlockTypeOrNull(): PageBlockType? {
         "todo", "task", "checkbox", "checklist" -> PageBlockType.Todo
         "bullet", "list", "bulletedlist" -> PageBlockType.Bullet
         "numbered", "number", "ordered", "orderedlist", "numberedlist", "ol" -> PageBlockType.Numbered
+        "toggle", "togglelist", "collapse" -> PageBlockType.Toggle
         "quote" -> PageBlockType.Quote
+        "callout", "notice", "info" -> PageBlockType.Callout
+        "code", "snippet", "pre" -> PageBlockType.Code
+        "table", "grid", "plaintable" -> PageBlockType.Table
+        "bookmark", "webbookmark", "web", "urlpreview" -> PageBlockType.WebBookmark
         "divider", "line" -> PageBlockType.Divider
         "media", "file", "files", "image", "photo", "video", "attachment", "attachments", "mediafile" -> PageBlockType.MediaFile
-        "database", "table", "databasetable" -> PageBlockType.DatabaseTable
+        "database", "db", "databasetable" -> PageBlockType.DatabaseTable
         else -> null
     }
 }

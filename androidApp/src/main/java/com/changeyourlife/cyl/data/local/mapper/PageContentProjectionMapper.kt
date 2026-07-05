@@ -307,7 +307,7 @@ private class PageContentProjectionCollector(
             deletedAt = deletedAt,
         )
 
-        if (block.type == PageBlockType.DatabaseTable) {
+        if (block.type == PageBlockType.DatabaseTable || block.type == PageBlockType.Table) {
             collectTable(
                 blockId = block.id,
                 table = block.table,

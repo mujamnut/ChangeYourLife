@@ -732,7 +732,7 @@ private fun PageBlockDocument.findTableBlock(tableBlockId: String): PageBlock? {
     if (tableBlockId.isBlank()) return null
     fun walk(blocks: List<PageBlock>): PageBlock? {
         blocks.forEach { block ->
-            if (block.id == tableBlockId && block.type == PageBlockType.DatabaseTable) {
+            if (block.id == tableBlockId && block.isTableLikeBlock()) {
                 return block
             }
             walk(block.children)?.let { return it }
@@ -741,6 +741,9 @@ private fun PageBlockDocument.findTableBlock(tableBlockId: String): PageBlock? {
     }
     return walk(blocks)
 }
+
+private fun PageBlock.isTableLikeBlock(): Boolean =
+    type == PageBlockType.DatabaseTable || type == PageBlockType.Table
 
 private fun List<PageBlock>.normalizedRowBlocks(): List<PageBlock> {
     return ifEmpty { listOf(PageContentCodec.newBlock(PageBlockType.Text)) }

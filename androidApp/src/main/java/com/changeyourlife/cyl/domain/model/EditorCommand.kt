@@ -280,7 +280,7 @@ object EditorCommandExecutor {
     ): EditorCommandResult {
         val existing = blocks.findBlock(command.blockId)?.block
             ?: return unchanged()
-        if (existing.type != PageBlockType.DatabaseTable) return unchanged()
+        if (existing.type != PageBlockType.DatabaseTable && existing.type != PageBlockType.Table) return unchanged()
         if (existing.table == command.table) return unchanged()
 
         val updated = copy(

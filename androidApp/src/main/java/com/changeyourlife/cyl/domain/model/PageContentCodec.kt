@@ -50,10 +50,10 @@ object PageContentCodec {
             id = UUID.randomUUID().toString(),
             type = type,
         )
-        return if (type == PageBlockType.DatabaseTable) {
-            block.copy(table = newTable())
-        } else {
-            block
+        return when (type) {
+            PageBlockType.DatabaseTable -> block.copy(table = newDatabaseTable())
+            PageBlockType.Table -> block.copy(table = newPlainTable())
+            else -> block
         }
     }
 
@@ -88,7 +88,7 @@ object PageContentCodec {
         )
     }
 
-    private fun newTable(): PageTable {
+    private fun newDatabaseTable(): PageTable {
         val columns = listOf(
             newTableColumn("Name"),
         )
@@ -96,6 +96,18 @@ object PageContentCodec {
             title = "",
             columns = columns,
             rows = emptyList(),
+        )
+    }
+
+    private fun newPlainTable(): PageTable {
+        val columns = listOf(
+            newTableColumn("Column 1"),
+            newTableColumn("Column 2"),
+        )
+        return PageTable(
+            title = "",
+            columns = columns,
+            rows = List(2) { newTableRow(columns) },
         )
     }
 
@@ -117,7 +129,7 @@ object PageContentCodec {
 
     private fun PageBlock.normalizedBlock(usedRowIds: MutableSet<String>): PageBlock {
         val normalizedChildren = children.normalizedChildBlocks(usedRowIds)
-        return if (type == PageBlockType.DatabaseTable) {
+        return if (type == PageBlockType.DatabaseTable || type == PageBlockType.Table) {
             copy(
                 table = table.normalizedTable(usedRowIds),
                 children = normalizedChildren,

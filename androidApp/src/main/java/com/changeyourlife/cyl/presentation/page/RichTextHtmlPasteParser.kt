@@ -61,7 +61,7 @@ private class HtmlPasteParser {
             tag.name == "li" -> startBlock(listStack.lastOrNull() ?: PageBlockType.Bullet)
             tag.name == "pre" -> {
                 preDepth += 1
-                startBlock(PageBlockType.Text)
+                startBlock(PageBlockType.Code)
                 pushStyle { copy(code = true) }
             }
             tag.name == "tr" -> startBlock(PageBlockType.Text)

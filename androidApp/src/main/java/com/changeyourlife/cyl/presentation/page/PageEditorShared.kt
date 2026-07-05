@@ -263,7 +263,8 @@ internal fun PageBlock.containsSearchTarget(
     targetId: String,
 ): Boolean {
     return isDirectSearchTarget(targetType, targetId) ||
-        (type == PageBlockType.DatabaseTable && table.highlightedRowId(targetType, targetId) != null) ||
+        ((type == PageBlockType.DatabaseTable || type == PageBlockType.Table) &&
+            table.highlightedRowId(targetType, targetId) != null) ||
         children.any { child -> child.containsSearchTarget(targetType, targetId) }
 }
 
@@ -912,7 +913,7 @@ internal fun PageBlock.searchText(): String {
             append(attachment.name)
             append(' ')
         }
-        if (type == PageBlockType.DatabaseTable) {
+        if (type == PageBlockType.DatabaseTable || type == PageBlockType.Table) {
             append(table.title)
             append(' ')
             table.columns.forEach { column ->

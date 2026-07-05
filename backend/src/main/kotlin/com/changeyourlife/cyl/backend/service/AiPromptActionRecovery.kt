@@ -1069,8 +1069,14 @@ class AiPromptActionRecovery(
     private fun String.inferBlockType(): String {
         val value = lowercase()
         return when {
-            value.contains("database") || value.contains("table") -> "DatabaseTable"
+            value.contains("plain table") || value.contains("table biasa") || value.contains("jadual biasa") -> "Table"
+            value.contains("database") || value.contains("table") || value.contains("jadual") -> "DatabaseTable"
             value.contains("heading") || value.contains("tajuk") -> "Heading"
+            value.contains("numbered") || value.contains("ordered") -> "Numbered"
+            value.contains("toggle") -> "Toggle"
+            value.contains("callout") -> "Callout"
+            value.contains("code") || value.contains("kod") -> "Code"
+            value.contains("bookmark") -> "WebBookmark"
             value.contains("bullet") || value.contains("list") || value.contains("senarai") -> "Bullet"
             value.contains("quote") || value.contains("petikan") -> "Quote"
             value.contains("todo") || value.contains("checklist") -> "Todo"

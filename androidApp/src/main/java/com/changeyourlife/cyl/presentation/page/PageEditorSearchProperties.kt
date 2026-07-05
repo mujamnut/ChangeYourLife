@@ -299,7 +299,9 @@ internal fun pageLocalSearchResults(
 
 internal fun PageBlock.localSearchResults(path: String): List<PageLocalSearchResult> {
     val self = when (type) {
-        PageBlockType.DatabaseTable -> table.localSearchResults(blockId = id, path = path)
+        PageBlockType.DatabaseTable,
+        PageBlockType.Table,
+        -> table.localSearchResults(blockId = id, path = path)
         PageBlockType.MediaFile -> listOf(
             PageLocalSearchResult(
                 key = id,

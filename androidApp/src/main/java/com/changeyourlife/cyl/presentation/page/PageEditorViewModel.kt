@@ -2037,7 +2037,7 @@ class PageEditorViewModel @Inject constructor(
                 columnId = columnId,
                 value = value,
             )
-            if (block.type == PageBlockType.DatabaseTable) {
+            if (block.type == PageBlockType.DatabaseTable || block.type == PageBlockType.Table) {
                 val column = block.table.columns.firstOrNull { tableColumn -> tableColumn.id == columnId }
                 block.copy(
                     table = block.table.copy(
@@ -2069,7 +2069,7 @@ class PageEditorViewModel @Inject constructor(
             blocks.forEach { block ->
                 if (block.id == blockId) return block
                 walk(block.children)?.let { return it }
-                if (block.type == PageBlockType.DatabaseTable) {
+                if (block.type == PageBlockType.DatabaseTable || block.type == PageBlockType.Table) {
                     block.table.rows.forEach { row ->
                         walk(row.blocks)?.let { return it }
                     }
@@ -2081,7 +2081,9 @@ class PageEditorViewModel @Inject constructor(
     }
 
     private fun PageBlockDocument.findTableBlock(blockId: String): PageBlock? {
-        return findBlock(blockId)?.takeIf { block -> block.type == PageBlockType.DatabaseTable }
+        return findBlock(blockId)?.takeIf { block ->
+            block.type == PageBlockType.DatabaseTable || block.type == PageBlockType.Table
+        }
     }
 
     private fun PageBlockDocument.noOpRowBlockCommand(blockId: String): EditorCommand {
