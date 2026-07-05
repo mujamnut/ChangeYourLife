@@ -144,6 +144,7 @@ data class PageTablePatchRequest(
 data class PageTableColumnPatchRequest(
     val name: String? = null,
     val type: String? = null,
+    val config: JsonObject? = null,
     val dateFormat: String? = null,
     val timeFormat: String? = null,
     val dateReminder: String? = null,
@@ -184,6 +185,7 @@ data class PageTableColumnCreateRequest(
     val columnId: String = "",
     val name: String,
     val type: String = "Text",
+    val config: JsonObject? = null,
     val cellValues: Map<String, String> = emptyMap(),
     val targetIndex: Int? = null,
 )

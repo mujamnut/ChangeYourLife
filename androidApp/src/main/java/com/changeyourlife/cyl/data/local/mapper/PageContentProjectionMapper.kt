@@ -25,6 +25,7 @@ import com.changeyourlife.cyl.domain.model.PageTableView
 import com.changeyourlife.cyl.domain.model.PageTableViewConfig
 import com.changeyourlife.cyl.domain.model.PageTextSpan
 import com.changeyourlife.cyl.domain.model.displayValue
+import com.changeyourlife.cyl.domain.model.normalizedForType
 import com.changeyourlife.cyl.domain.model.toTypedCellValue
 import com.changeyourlife.cyl.domain.model.withColumnType
 import kotlinx.serialization.SerializationException
@@ -225,6 +226,7 @@ private fun PageTableColumnEntity.toDomain(): PageTableColumn {
         id = id,
         name = name,
         type = type.enumValueOrDefault(decoded.type),
+        config = decoded.config.normalizedForType(type.enumValueOrDefault(decoded.type)),
     )
 }
 

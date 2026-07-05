@@ -55,10 +55,8 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.automirrored.rounded.Sort
 import androidx.compose.material.icons.automirrored.rounded.Undo
-import androidx.compose.material.icons.automirrored.rounded.WrapText
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.AccessTime
-import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Calculate
 import androidx.compose.material.icons.rounded.CalendarMonth
 import androidx.compose.material.icons.rounded.CheckCircle
@@ -80,7 +78,6 @@ import androidx.compose.material.icons.rounded.SwapVert
 import androidx.compose.material.icons.rounded.TaskAlt
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.ViewColumn
-import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
@@ -90,6 +87,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -162,12 +160,15 @@ import com.changeyourlife.cyl.domain.model.PageProperty
 import com.changeyourlife.cyl.domain.model.PagePropertyType
 import com.changeyourlife.cyl.domain.model.PageTable
 import com.changeyourlife.cyl.domain.model.PageTableColumn
+import com.changeyourlife.cyl.domain.model.PageTableColumnConfig
 import com.changeyourlife.cyl.domain.model.PageTableColumnType
 import com.changeyourlife.cyl.domain.model.PageTableDateFormat
 import com.changeyourlife.cyl.domain.model.PageTableDateReminder
 import com.changeyourlife.cyl.domain.model.PageTableTimeFormat
+import com.changeyourlife.cyl.domain.model.PageTableOptionColor
 import com.changeyourlife.cyl.domain.model.PageTableRow
 import com.changeyourlife.cyl.domain.model.PageTableRollupAggregation
+import com.changeyourlife.cyl.domain.model.PageTableSelectOption
 import com.changeyourlife.cyl.domain.model.PageTableSortDirection
 import com.changeyourlife.cyl.domain.model.PageTableView
 import com.changeyourlife.cyl.domain.model.PageTableViewConfig
@@ -203,6 +204,7 @@ internal fun DatabaseTableBlockEditor(
     onGroupChange: (String) -> Unit,
     onColumnNameChange: (String, String) -> Unit,
     onColumnTypeChange: (String, PageTableColumnType) -> Unit,
+    onColumnConfigChange: (String, PageTableColumnConfig) -> Unit,
     onColumnDateSettingsChange: (
         String,
         PageTableDateFormat,
@@ -275,6 +277,7 @@ internal fun DatabaseTableBlockEditor(
             onGroupChange = onGroupChange,
             onColumnNameChange = onColumnNameChange,
             onColumnTypeChange = onColumnTypeChange,
+            onColumnConfigChange = onColumnConfigChange,
             onCellChange = onCellChange,
             onAddColumn = onAddColumn,
             onInsertColumn = onInsertColumn,
@@ -348,6 +351,7 @@ internal fun DatabaseTableBlockEditor(
                 onGroupChange = onGroupChange,
                 onColumnNameChange = onColumnNameChange,
                 onColumnTypeChange = onColumnTypeChange,
+                onColumnConfigChange = onColumnConfigChange,
                 onColumnDateSettingsChange = onColumnDateSettingsChange,
                 onColumnFormulaChange = onColumnFormulaChange,
                 onColumnRelationTargetChange = onColumnRelationTargetChange,
@@ -1423,6 +1427,7 @@ internal fun TableGridEditor(
     onGroupChange: (String) -> Unit,
     onColumnNameChange: (String, String) -> Unit,
     onColumnTypeChange: (String, PageTableColumnType) -> Unit,
+    onColumnConfigChange: (String, PageTableColumnConfig) -> Unit,
     onColumnDateSettingsChange: (
         String,
         PageTableDateFormat,
@@ -1469,6 +1474,7 @@ internal fun TableGridEditor(
             onGroupChange = onGroupChange,
             onColumnNameChange = onColumnNameChange,
             onColumnTypeChange = onColumnTypeChange,
+            onColumnConfigChange = onColumnConfigChange,
             onColumnDateSettingsChange = onColumnDateSettingsChange,
             onColumnFormulaChange = onColumnFormulaChange,
             onColumnRelationTargetChange = onColumnRelationTargetChange,
@@ -1560,6 +1566,7 @@ internal fun TableHeaderRow(
     onGroupChange: (String) -> Unit,
     onColumnNameChange: (String, String) -> Unit,
     onColumnTypeChange: (String, PageTableColumnType) -> Unit,
+    onColumnConfigChange: (String, PageTableColumnConfig) -> Unit,
     onColumnDateSettingsChange: (
         String,
         PageTableDateFormat,
@@ -1604,6 +1611,7 @@ internal fun TableHeaderRow(
                 onGroup = { onGroupChange(column.id) },
                 onColumnNameChange = { name -> onColumnNameChange(column.id, name) },
                 onColumnTypeChange = { type -> onColumnTypeChange(column.id, type) },
+                onColumnConfigChange = { config -> onColumnConfigChange(column.id, config) },
                 onDateSettingsChange = { dateFormat, timeFormat, reminder, timezoneLabel ->
                     onColumnDateSettingsChange(column.id, dateFormat, timeFormat, reminder, timezoneLabel)
                 },
@@ -1928,6 +1936,7 @@ internal fun TableColumnEditSheet(
     onGroup: () -> Unit,
     onColumnNameChange: (String) -> Unit,
     onColumnTypeChange: (PageTableColumnType) -> Unit,
+    onColumnConfigChange: (PageTableColumnConfig) -> Unit,
     onDateSettingsChange: (
         PageTableDateFormat,
         PageTableTimeFormat,
@@ -1944,8 +1953,43 @@ internal fun TableColumnEditSheet(
     onDismiss: () -> Unit,
 ) {
     var detail by remember { mutableStateOf<PropertySheetDetail?>(null) }
+    var isDeleteConfirmOpen by remember { mutableStateOf(false) }
     var filterQuery by remember(table.filter.query, table.filter.columnId, column.id) {
         mutableStateOf(if (table.filter.columnId == column.id) table.filter.query else "")
+    }
+    val hasColumnValues = remember(table.rows, column.id) {
+        table.rows.any { row -> row.cellText(column).isNotBlank() }
+    }
+
+    if (isDeleteConfirmOpen) {
+        AlertDialog(
+            onDismissRequest = { isDeleteConfirmOpen = false },
+            title = { Text(text = "Delete property?") },
+            text = {
+                Text(
+                    text = if (hasColumnValues) {
+                        "This property has values. Deleting it will remove those values from every row."
+                    } else {
+                        "This property will be removed from the database."
+                    },
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        isDeleteConfirmOpen = false
+                        onDelete()
+                    },
+                ) {
+                    Text(text = "Delete", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { isDeleteConfirmOpen = false }) {
+                    Text(text = "Cancel")
+                }
+            },
+        )
     }
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
@@ -1965,33 +2009,49 @@ internal fun TableColumnEditSheet(
 
                     PropertyMenuGroup {
                         PropertyMenuRow(
-                            icon = Icons.Rounded.Tune,
-                            label = "Edit property",
-                            value = if (column.type == PageTableColumnType.Date) {
-                                column.dateFormat.label
-                            } else {
-                                column.configSummary(table, tableReferences)
+                            icon = Icons.Rounded.Info,
+                            label = "Details",
+                            value = column.config.description.ifBlank {
+                                column.config.defaultValue.ifBlank { "" }
                             },
-                            onClick = {
-                                detail = if (column.type == PageTableColumnType.Date) {
-                                    PropertySheetDetail.DateSettings
-                                } else {
-                                    PropertySheetDetail.Calculate
-                                }
-                            },
+                            onClick = { detail = PropertySheetDetail.General },
                         )
+                        when (column.type) {
+                            PageTableColumnType.Date -> PropertyMenuRow(
+                                icon = Icons.Rounded.CalendarMonth,
+                                label = "Date settings",
+                                value = column.dateFormat.label,
+                                onClick = { detail = PropertySheetDetail.DateSettings },
+                            )
+                            PageTableColumnType.Select,
+                            PageTableColumnType.MultiSelect,
+                            PageTableColumnType.Status,
+                            -> PropertyMenuRow(
+                                icon = Icons.Rounded.TaskAlt,
+                                label = "Options",
+                                value = "${column.choiceOptions.size}",
+                                onClick = { detail = PropertySheetDetail.StatusOptions },
+                            )
+                            PageTableColumnType.Formula,
+                            PageTableColumnType.Relation,
+                            PageTableColumnType.Rollup,
+                            -> PropertyMenuRow(
+                                icon = Icons.Rounded.Tune,
+                                label = column.type.label,
+                                value = column.configSummary(table, tableReferences),
+                                onClick = { detail = PropertySheetDetail.Calculate },
+                            )
+                            PageTableColumnType.Text,
+                            PageTableColumnType.Number,
+                            PageTableColumnType.Checkbox,
+                            PageTableColumnType.FilesMedia,
+                            -> Unit
+                        }
                         PropertyMenuRow(
                             icon = Icons.Rounded.SwapVert,
                             label = "Change type",
                             value = column.type.label,
                             onClick = { detail = PropertySheetDetail.ChangeType },
-                        )
-                        PropertyMenuRow(
-                            icon = Icons.Rounded.AutoAwesome,
-                            label = "AI Autofill",
-                            value = "Now with agents",
-                            enabled = false,
-                            onClick = {},
                         )
                     }
 
@@ -2017,24 +2077,6 @@ internal fun TableColumnEditSheet(
                                 onDismiss()
                             },
                         )
-                        PropertyMenuRow(
-                            icon = Icons.Rounded.Functions,
-                            label = "Calculate",
-                            value = column.configSummary(table, tableReferences),
-                            onClick = { detail = PropertySheetDetail.Calculate },
-                        )
-                        PropertyMenuRow(
-                            icon = Icons.Rounded.VisibilityOff,
-                            label = "Hide",
-                            value = "",
-                            onClick = onDismiss,
-                        )
-                        PropertyMenuRow(
-                            icon = Icons.AutoMirrored.Rounded.WrapText,
-                            label = "Unwrap content",
-                            value = "",
-                            onClick = onDismiss,
-                        )
                     }
 
                     PropertyMenuGroup {
@@ -2045,10 +2087,22 @@ internal fun TableColumnEditSheet(
                             icon = Icons.Rounded.Delete,
                             label = "Delete property",
                             color = MaterialTheme.colorScheme.error,
-                            onClick = onDelete,
+                            enabled = table.columns.size > 1,
+                            onClick = {
+                                if (hasColumnValues) {
+                                    isDeleteConfirmOpen = true
+                                } else {
+                                    onDelete()
+                                }
+                            },
                         )
                     }
                 }
+                PropertySheetDetail.General -> PropertyGeneralSettingsSheet(
+                    column = column,
+                    onColumnConfigChange = onColumnConfigChange,
+                    onBack = { detail = null },
+                )
                 PropertySheetDetail.ChangeType -> ChangePropertyTypeSheet(
                     selectedType = column.type,
                     onTypeChange = { type ->
@@ -2060,6 +2114,11 @@ internal fun TableColumnEditSheet(
                 PropertySheetDetail.DateSettings -> TableDatePropertySettingsSheet(
                     column = column,
                     onDateSettingsChange = onDateSettingsChange,
+                    onBack = { detail = null },
+                )
+                PropertySheetDetail.StatusOptions -> ChoicePropertyOptionsSheet(
+                    column = column,
+                    onColumnConfigChange = onColumnConfigChange,
                     onBack = { detail = null },
                 )
                 PropertySheetDetail.Filter -> ColumnFilterSheet(
@@ -2103,8 +2162,10 @@ internal fun TableColumnEditSheet(
 }
 
 internal enum class PropertySheetDetail {
+    General,
     ChangeType,
     DateSettings,
+    StatusOptions,
     Filter,
     Sort,
     Calculate,
@@ -2307,6 +2368,100 @@ internal fun PropertyDetailHeader(
 }
 
 @Composable
+internal fun PropertyGeneralSettingsSheet(
+    column: PageTableColumn,
+    onColumnConfigChange: (PageTableColumnConfig) -> Unit,
+    onBack: () -> Unit,
+) {
+    var description by remember(column.config.description) {
+        mutableStateOf(column.config.description)
+    }
+    var defaultValue by remember(column.config.defaultValue) {
+        mutableStateOf(column.config.defaultValue)
+    }
+    val canEditDefault = column.type != PageTableColumnType.Formula &&
+        column.type != PageTableColumnType.Rollup &&
+        column.type != PageTableColumnType.Relation &&
+        column.type != PageTableColumnType.FilesMedia
+
+    fun save() {
+        onColumnConfigChange(
+            column.config.copy(
+                description = description.trim(),
+                defaultValue = if (canEditDefault) {
+                    defaultValue.toSingleLineTableCellValue().trim()
+                } else {
+                    ""
+                },
+            ),
+        )
+        onBack()
+    }
+
+    PropertyDetailHeader(title = "Details", onBack = onBack)
+    OutlinedTextField(
+        value = description,
+        onValueChange = { description = it },
+        modifier = Modifier.fillMaxWidth(),
+        minLines = 2,
+        maxLines = 4,
+        label = { Text(text = "Description") },
+        placeholder = { Text(text = "What this property is for") },
+        colors = blockTextFieldColors(),
+    )
+    OutlinedTextField(
+        value = defaultValue,
+        onValueChange = { defaultValue = it.toSingleLineTableCellValue() },
+        modifier = Modifier.fillMaxWidth(),
+        enabled = canEditDefault,
+        singleLine = true,
+        label = { Text(text = "Default value") },
+        placeholder = {
+            Text(
+                text = when (column.type) {
+                    PageTableColumnType.Number -> "0"
+                    PageTableColumnType.Checkbox -> "true"
+                    PageTableColumnType.Date -> "YYYY-MM-DD"
+                    PageTableColumnType.Select,
+                    PageTableColumnType.MultiSelect,
+                    PageTableColumnType.Status,
+                    -> column.choiceOptionNames.firstOrNull().orEmpty()
+                    PageTableColumnType.Text -> "Empty"
+                    PageTableColumnType.Formula,
+                    PageTableColumnType.Relation,
+                    PageTableColumnType.Rollup,
+                    PageTableColumnType.FilesMedia,
+                    -> "Not available"
+                },
+            )
+        },
+        keyboardOptions = KeyboardOptions(
+            keyboardType = when (column.type) {
+                PageTableColumnType.Number -> KeyboardType.Number
+                else -> KeyboardType.Text
+            },
+            imeAction = ImeAction.Done,
+        ),
+        colors = blockTextFieldColors(),
+        supportingText = if (canEditDefault) {
+            {
+                Text(text = "Used when new rows are created.")
+            }
+        } else {
+            {
+                Text(text = "This property type is computed or attachment-based.")
+            }
+        },
+    )
+    Button(
+        modifier = Modifier.fillMaxWidth(),
+        onClick = ::save,
+    ) {
+        Text(text = "Save details")
+    }
+}
+
+@Composable
 internal fun ChangePropertyTypeSheet(
     selectedType: PageTableColumnType,
     onTypeChange: (PageTableColumnType) -> Unit,
@@ -2322,6 +2477,125 @@ internal fun ChangePropertyTypeSheet(
                 onClick = { onTypeChange(type) },
             )
         }
+    }
+}
+
+@Composable
+internal fun ChoicePropertyOptionsSheet(
+    column: PageTableColumn,
+    onColumnConfigChange: (PageTableColumnConfig) -> Unit,
+    onBack: () -> Unit,
+) {
+    var options by remember(column.config.options) {
+        mutableStateOf(column.choiceOptions)
+    }
+
+    fun updateOptionName(optionId: String, name: String) {
+        options = options.map { option ->
+            if (option.id == optionId) option.copy(name = name.toSingleLineTableCellValue()) else option
+        }
+    }
+
+    fun cycleOptionColor(optionId: String) {
+        options = options.map { option ->
+            if (option.id != optionId) {
+                option
+            } else {
+                val colors = PageTableOptionColor.entries
+                val nextIndex = (colors.indexOf(option.color).coerceAtLeast(0) + 1) % colors.size
+                option.copy(color = colors[nextIndex])
+            }
+        }
+    }
+
+    fun saveOptions() {
+        onColumnConfigChange(
+            column.config.copy(
+                options = options
+                    .map { option -> option.copy(name = option.name.trim()) }
+                    .filter { option -> option.name.isNotBlank() },
+            ),
+        )
+        onBack()
+    }
+
+    PropertyDetailHeader(title = "Options", onBack = onBack)
+    PropertyMenuGroup {
+        options.forEach { option ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp)
+                    .padding(start = 10.dp, end = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(18.dp)
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(option.color.toChoiceColor())
+                        .clickable { cycleOptionColor(option.id) },
+                )
+                BasicTextField(
+                    value = option.name,
+                    onValueChange = { name -> updateOptionName(option.id, name) },
+                    modifier = Modifier.weight(1f),
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.bodyLarge.copy(
+                        color = MaterialTheme.colorScheme.onSurface,
+                        fontWeight = FontWeight.Medium,
+                    ),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    decorationBox = { innerTextField ->
+                        Box(contentAlignment = Alignment.CenterStart) {
+                            if (option.name.isBlank()) {
+                                Text(
+                                    text = "Option",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.58f),
+                                )
+                            }
+                            innerTextField()
+                        }
+                    },
+                )
+                IconButton(
+                    onClick = { options = options.filterNot { item -> item.id == option.id } },
+                    enabled = options.size > 1,
+                    modifier = Modifier.size(44.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Delete,
+                        contentDescription = "Delete option",
+                        modifier = Modifier.size(18.dp),
+                        tint = if (options.size > 1) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+                        },
+                    )
+                }
+            }
+            HorizontalDivider(modifier = Modifier.padding(start = 38.dp))
+        }
+        PropertyMenuRow(
+            icon = Icons.Rounded.Add,
+            label = "Add option",
+            onClick = {
+                options = options + PageTableSelectOption(
+                    id = UUID.randomUUID().toString(),
+                    name = "Option ${options.size + 1}",
+                )
+            },
+        )
+    }
+    Button(
+        modifier = Modifier.fillMaxWidth(),
+        enabled = options.any { option -> option.name.isNotBlank() },
+        onClick = ::saveOptions,
+    ) {
+        Text(text = "Save options")
     }
 }
 
@@ -2515,6 +2789,8 @@ internal fun ColumnCalculateSheet(
         )
         PageTableColumnType.Number,
         PageTableColumnType.Checkbox,
+        PageTableColumnType.Select,
+        PageTableColumnType.MultiSelect,
         PageTableColumnType.Status,
         PageTableColumnType.Date,
         PageTableColumnType.Text,
@@ -2577,6 +2853,8 @@ internal fun TableColumnConfigSheet(
                 )
                 PageTableColumnType.Text,
                 PageTableColumnType.Number,
+                PageTableColumnType.Select,
+                PageTableColumnType.MultiSelect,
                 PageTableColumnType.Status,
                 PageTableColumnType.Date,
                 PageTableColumnType.Checkbox,
@@ -2596,6 +2874,15 @@ internal fun FormulaColumnConfig(
     onFormulaChange: (String) -> Unit,
 ) {
     var formula by remember(column.formula) { mutableStateOf(column.formula) }
+    val unknownReferences = remember(formula, sourceColumns) {
+        val validNames = sourceColumns.map { source -> source.name.trim().lowercase() }.toSet()
+        Regex("\\{([^}]+)}")
+            .findAll(formula)
+            .map { match -> match.groupValues.getOrNull(1).orEmpty().trim() }
+            .filter { name -> name.isNotBlank() && name.lowercase() !in validNames }
+            .distinct()
+            .toList()
+    }
 
     OutlinedTextField(
         value = formula,
@@ -2603,6 +2890,14 @@ internal fun FormulaColumnConfig(
         modifier = Modifier.fillMaxWidth(),
         minLines = 2,
         placeholder = { Text(text = "{Price} * {Qty}") },
+        supportingText = {
+            if (unknownReferences.isNotEmpty()) {
+                Text(text = "Unknown property: ${unknownReferences.joinToString()}")
+            } else {
+                Text(text = "Use property names in braces, for example {Price} * {Qty}.")
+            }
+        },
+        isError = unknownReferences.isNotEmpty(),
         colors = blockTextFieldColors(),
     )
     if (sourceColumns.isNotEmpty()) {
@@ -2618,6 +2913,7 @@ internal fun FormulaColumnConfig(
     }
     Button(
         modifier = Modifier.fillMaxWidth(),
+        enabled = unknownReferences.isEmpty(),
         onClick = { onFormulaChange(formula) },
     ) {
         Text(text = "Save formula")
@@ -2883,7 +3179,7 @@ internal fun TableDataRow(
                 row = row,
                 table = table,
                 tableReferences = tableReferences,
-                value = row.cells[primaryColumn.id].orEmpty(),
+                value = row.cellText(primaryColumn),
                 onValueChange = { value -> onCellChange(row.id, primaryColumn.id, value) },
                 onDateSettingsChange = { dateFormat, timeFormat, reminder, timezoneLabel ->
                     onColumnDateSettingsChange(primaryColumn.id, dateFormat, timeFormat, reminder, timezoneLabel)
@@ -2902,7 +3198,7 @@ internal fun TableDataRow(
                 row = row,
                 table = table,
                 tableReferences = tableReferences,
-                value = row.cells[column.id].orEmpty(),
+                value = row.cellText(column),
                 onValueChange = { value -> onCellChange(row.id, column.id, value) },
                 onDateSettingsChange = { dateFormat, timeFormat, reminder, timezoneLabel ->
                     onColumnDateSettingsChange(column.id, dateFormat, timeFormat, reminder, timezoneLabel)
@@ -3870,53 +4166,15 @@ internal fun TableCellEditor(
                 modifier = modifier,
             )
         }
-        PageTableColumnType.Status -> {
-            var isStatusMenuExpanded by remember { mutableStateOf(false) }
-            Box(modifier = modifier) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(TableRowHeight)
-                        .clickable { isStatusMenuExpanded = true }
-                        .padding(horizontal = 10.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = value.ifBlank { "Select status" },
-                        modifier = Modifier.weight(1f),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = if (value.isBlank()) {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        } else {
-                            MaterialTheme.colorScheme.onSurface
-                        },
-                    )
-                    Icon(
-                        imageVector = Icons.Rounded.KeyboardArrowDown,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                DropdownMenu(
-                    expanded = isStatusMenuExpanded,
-                    onDismissRequest = { isStatusMenuExpanded = false },
-                ) {
-                    TableStatusOptions.forEach { status ->
-                        DropdownMenuItem(
-                            text = { Text(text = status) },
-                            onClick = {
-                                isStatusMenuExpanded = false
-                                onValueChange(status)
-                            },
-                        )
-                    }
-                }
-            }
-        }
+        PageTableColumnType.Select,
+        PageTableColumnType.MultiSelect,
+        PageTableColumnType.Status,
+        -> TableChoiceCellEditor(
+            column = column,
+            value = value,
+            onValueChange = onValueChange,
+            modifier = modifier,
+        )
         PageTableColumnType.FilesMedia -> {
             TableMediaCellEditor(
                 value = value,
@@ -3939,6 +4197,8 @@ internal fun TableCellEditor(
                         text = when (column.type) {
                             PageTableColumnType.Number -> "0"
                             PageTableColumnType.Text -> column.name
+                            PageTableColumnType.Select,
+                            PageTableColumnType.MultiSelect,
                             PageTableColumnType.Date,
                             PageTableColumnType.Formula,
                             PageTableColumnType.Relation,
@@ -3966,6 +4226,135 @@ internal fun String.toSingleLineTableCellValue(): String {
     return replace("\r\n", " ")
         .replace('\n', ' ')
         .replace('\r', ' ')
+}
+
+@Composable
+internal fun TableChoiceCellEditor(
+    column: PageTableColumn,
+    value: String,
+    onValueChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var isExpanded by remember { mutableStateOf(false) }
+    val selectedValues = remember(value) { value.selectedChoiceValues() }
+    val options = column.choiceOptions
+    val placeholder = when (column.type) {
+        PageTableColumnType.Status -> "Select status"
+        PageTableColumnType.MultiSelect -> "Select options"
+        else -> "Select option"
+    }
+
+    Box(modifier = modifier) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(TableRowHeight)
+                .clickable { isExpanded = true }
+                .padding(horizontal = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = value.ifBlank { placeholder },
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (value.isBlank()) {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                } else {
+                    MaterialTheme.colorScheme.onSurface
+                },
+            )
+            Icon(
+                imageVector = Icons.Rounded.KeyboardArrowDown,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        DropdownMenu(
+            expanded = isExpanded,
+            onDismissRequest = { isExpanded = false },
+        ) {
+            DropdownMenuItem(
+                text = { Text(text = "Clear") },
+                onClick = {
+                    isExpanded = false
+                    onValueChange("")
+                },
+            )
+            if (options.isEmpty()) {
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            text = "No options yet",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    },
+                    onClick = {},
+                    enabled = false,
+                )
+            }
+            options.forEach { option ->
+                val selected = option.name in selectedValues
+                DropdownMenuItem(
+                    text = {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(12.dp)
+                                    .clip(RoundedCornerShape(999.dp))
+                                    .background(option.color.toChoiceColor()),
+                            )
+                            Text(text = option.name)
+                        }
+                    },
+                    trailingIcon = if (column.type == PageTableColumnType.MultiSelect && selected) {
+                        {
+                            Icon(
+                                imageVector = Icons.Rounded.CheckCircle,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp),
+                                tint = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                    } else {
+                        null
+                    },
+                    onClick = {
+                        if (column.type == PageTableColumnType.MultiSelect) {
+                            val nextValues = if (selected) {
+                                selectedValues.filterNot { selectedValue -> selectedValue == option.name }
+                            } else {
+                                selectedValues + option.name
+                            }
+                            onValueChange(nextValues.toChoiceCellValue())
+                        } else {
+                            isExpanded = false
+                            onValueChange(option.name)
+                        }
+                    },
+                )
+            }
+        }
+    }
+}
+
+private fun PageTableOptionColor.toChoiceColor(): Color {
+    return when (this) {
+        PageTableOptionColor.Gray -> Color(0xFF8A8F98)
+        PageTableOptionColor.Red -> Color(0xFFE25555)
+        PageTableOptionColor.Orange -> Color(0xFFE58A2A)
+        PageTableOptionColor.Yellow -> Color(0xFFD3A322)
+        PageTableOptionColor.Green -> Color(0xFF36A269)
+        PageTableOptionColor.Blue -> Color(0xFF3182CE)
+        PageTableOptionColor.Purple -> Color(0xFF805AD5)
+        PageTableOptionColor.Pink -> Color(0xFFD53F8C)
+    }
 }
 
 @Composable

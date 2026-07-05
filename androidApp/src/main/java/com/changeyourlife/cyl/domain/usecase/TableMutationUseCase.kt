@@ -8,6 +8,7 @@ import com.changeyourlife.cyl.domain.model.PageBlockDocument
 import com.changeyourlife.cyl.domain.model.PageBlockType
 import com.changeyourlife.cyl.domain.model.PageTable
 import com.changeyourlife.cyl.domain.model.PageTableColumn
+import com.changeyourlife.cyl.domain.model.PageTableColumnConfig
 import com.changeyourlife.cyl.domain.model.PageTableColumnType
 import com.changeyourlife.cyl.domain.model.PageTableDateFormat
 import com.changeyourlife.cyl.domain.model.PageTableDateReminder
@@ -19,6 +20,7 @@ import com.changeyourlife.cyl.domain.model.PageTableSortDirection
 import com.changeyourlife.cyl.domain.model.PageTableTimeFormat
 import com.changeyourlife.cyl.domain.model.PageTableView
 import com.changeyourlife.cyl.domain.model.PageTableViewConfig
+import com.changeyourlife.cyl.domain.model.normalizedForType
 import com.changeyourlife.cyl.domain.model.toTypedCellValue
 import com.changeyourlife.cyl.domain.model.withColumnType
 import java.util.UUID
@@ -195,6 +197,7 @@ class TableMutationUseCase(
                 if (column.id == columnId) {
                     column.copy(
                         type = type,
+                        config = column.config.normalizedForType(type),
                         formula = if (type == PageTableColumnType.Formula) column.formula else "",
                         relationTargetTableId = if (type == PageTableColumnType.Relation) {
                             column.relationTargetTableId
@@ -227,6 +230,23 @@ class TableMutationUseCase(
                             )
                         ),
                 )
+            },
+        )
+    }
+
+    fun updateColumnConfig(
+        document: PageBlockDocument,
+        tableBlockId: String,
+        columnId: String,
+        config: PageTableColumnConfig,
+    ): TableMutationResult = replaceTable(document, tableBlockId) { table ->
+        table.copy(
+            columns = table.columns.map { column ->
+                if (column.id == columnId) {
+                    column.copy(config = config.normalizedForType(column.type))
+                } else {
+                    column
+                }
             },
         )
     }
@@ -350,9 +370,10 @@ class TableMutationUseCase(
         table.copy(
             columns = table.columns.toMutableList().apply { add(index, column) },
             rows = table.rows.map { row ->
+                val defaultValue = column.config.defaultValue.coerceManualCellValueFor(column.type)
                 row.copy(
-                    cells = row.cells + (column.id to ""),
-                    cellValues = row.cellValues + (column.id to column.toTypedCellValue("")),
+                    cells = row.cells + (column.id to defaultValue),
+                    cellValues = row.cellValues + (column.id to column.toTypedCellValue(defaultValue)),
                 )
             },
         )
@@ -429,7 +450,7 @@ class TableMutationUseCase(
         val insertIndex = targetIndex?.coerceIn(0, table.rows.size) ?: table.rows.size
         table.copy(
             rows = table.rows.toMutableList().apply {
-                add(insertIndex, row)
+                add(insertIndex, row.withColumnDefaults(table.columns))
             },
         )
     }
@@ -683,8 +704,11 @@ private fun PageTableColumnType.coerceManualCellValue(value: String): String {
         -> ""
         PageTableColumnType.Checkbox -> value.toTableCheckboxValue()
         PageTableColumnType.Date -> value.toTableDateCellStorageValue(allowPartial = true)
-        PageTableColumnType.Relation,
+        PageTableColumnType.Select,
         PageTableColumnType.Status,
+        -> value.trim()
+        PageTableColumnType.MultiSelect -> value.toTableChoiceListValue()
+        PageTableColumnType.Relation,
         PageTableColumnType.Text,
         PageTableColumnType.Number,
         PageTableColumnType.FilesMedia,
@@ -696,6 +720,8 @@ private fun PageTableColumnType.coerceExistingCellValue(value: String): String {
     return when (this) {
         PageTableColumnType.Text -> value
         PageTableColumnType.Number -> value.toTableNumberValue()
+        PageTableColumnType.Select -> value.trim()
+        PageTableColumnType.MultiSelect -> value.toTableChoiceListValue()
         PageTableColumnType.Status -> value.trim()
         PageTableColumnType.Date -> value.toTableDateCellStorageValue(allowPartial = false)
         PageTableColumnType.Checkbox -> value.toTableCheckboxValue()
@@ -705,6 +731,36 @@ private fun PageTableColumnType.coerceExistingCellValue(value: String): String {
         PageTableColumnType.Rollup,
         -> ""
     }
+}
+
+private fun PageTableRow.withColumnDefaults(columns: List<PageTableColumn>): PageTableRow {
+    val nextCells = columns.associate { column ->
+        val existingValue = cells[column.id]
+        val defaultValue = column.config.defaultValue.coerceManualCellValueFor(column.type)
+        column.id to (existingValue ?: defaultValue)
+    }
+    return copy(
+        cells = nextCells,
+        cellValues = columns.associate { column ->
+            val displayValue = nextCells[column.id].orEmpty()
+            val typedValue = cellValues[column.id]
+                ?.withColumnType(column.type, displayValue)
+                ?: column.toTypedCellValue(displayValue)
+            column.id to typedValue
+        },
+    )
+}
+
+private fun String.coerceManualCellValueFor(type: PageTableColumnType): String {
+    return if (isBlank()) "" else type.coerceManualCellValue(this)
+}
+
+private fun String.toTableChoiceListValue(): String {
+    return split(",")
+        .map { value -> value.trim() }
+        .filter { value -> value.isNotBlank() }
+        .distinctBy { value -> value.lowercase() }
+        .joinToString(", ")
 }
 
 private fun String.toTableCheckboxValue(): String {

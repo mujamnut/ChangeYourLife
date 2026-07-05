@@ -289,6 +289,133 @@ Decision:
 - Header tap opens property sheet. Header should show icon + name only; dropdown indicator can be subtle or hidden.
 - Row page sheet should look like a page: title, properties, then content. Remove permanent "Row" and "Property" buttons from the top; move them into contextual plus/menu.
 
+### Database Property Deep Audit
+
+Files:
+
+- `androidApp/src/main/java/com/changeyourlife/cyl/domain/model/PageBlock.kt`
+- `androidApp/src/main/java/com/changeyourlife/cyl/domain/usecase/TableMutationUseCase.kt`
+- `androidApp/src/main/java/com/changeyourlife/cyl/presentation/page/PageEditorTableBlock.kt`
+- `androidApp/src/main/java/com/changeyourlife/cyl/presentation/page/PageEditorTableRowProperties.kt`
+- `androidApp/src/main/java/com/changeyourlife/cyl/presentation/page/PageEditorViewModel.kt`
+- `androidApp/src/main/java/com/changeyourlife/cyl/data/repository/PageRepositoryImpl.kt`
+- `androidApp/src/main/java/com/changeyourlife/cyl/data/sync/SessionSyncCoordinator.kt`
+- `backend/src/main/kotlin/com/changeyourlife/cyl/backend/routes/ContentRoutes.kt`
+
+Scope:
+
+- In CYL, Notion-style database properties are `PageTableColumn`.
+- Legacy/page-level properties are `PageProperty`. These should not drive the database UI.
+- Row values are still stored in two layers:
+  - `PageTableRow.cells: Map<String, String>` for display/backward compatibility.
+  - `PageTableRow.cellValues: Map<String, PageTableCellValue>` for typed data.
+
+What is already solid:
+
+- Add property sheet exists and the property name is optional. If user selects a type without typing a name, the selected type label becomes the default name.
+- Rename, change type, date settings, formula config, relation target, rollup config, duplicate, insert, delete, sort, filter, and group are wired through `PageEditorViewModel` into `TableMutationUseCase`.
+- Column changes sync through `PageRepositoryImpl.updateTableColumn`, `SessionSyncCoordinator.pushPageTableColumnPatch`, and backend `ContentRoutes`.
+- Type changes coerce existing cell values and update `cellValues`.
+- Deleting a column removes the cell values, clears sort/filter/group references, and removes rollup references to that column.
+- Row sheet property labels now open the same edit-property sheet as table headers.
+- Done: `PageTableColumnConfig` now exists as the canonical per-property config container.
+- Done: Status properties now keep their options in column config instead of relying only on a hardcoded UI list.
+- Done: Status options can be edited from the property sheet and sync through the granular table-column create/patch API.
+- Done: unsupported property sheet actions like hidden AI Autofill, Hide, and Unwrap have been removed from the main sheet until they have real behavior.
+- Done: table and row-sheet property values now read from typed `PageTableRow.cellValues` first, with `cells` as backward-compatible fallback.
+- Done: Files/media typed values now populate `PageTableCellValue.files` from stored attachment JSON.
+- Done: delete-property now asks for confirmation when the property contains values, and delete is disabled for the last remaining property.
+- Done: formula configuration now validates `{Property}` references and blocks save when a referenced property does not exist.
+- Done: Select and Multi-select are now first-class `PageTableColumnType` values instead of falling back to Text/Status.
+- Done: Select, Multi-select, and Status share one option model with order and color, and the option sheet can edit names and cycle colors.
+- Done: table cells and row-sheet properties now use choice dropdowns for Select/Multi-select/Status instead of raw text input.
+- Done: AI/table type inference now recognizes select, multi-select, tags, labels, options, and choices.
+- Done: edit-property `Details` sheet now exposes description and default value.
+- Done: new rows and newly added properties apply typed default values from property config.
+- Done: added unit coverage for status config normalization, select config normalization, files/media typed value round-trip, and multi-select normalization.
+- Verification note: Android/backend compile passes. Focused unit test execution was attempted, but the Gradle wrapper tried to download its distribution and sandbox network blocked it; escalated retry could not run because the approval auth token is revoked.
+
+Core gaps:
+
+- Property configuration still lacks persisted hidden state, wrap state, column width, and required field.
+- `PageTableColumnType` still lacks several property types already expected from the Notion-like flow: Person, URL, Email, Phone, Button, Place, Created time/by, Last edited time/by, and ID.
+- Row property editors still mostly write string values through `onCellChange`. Typed `cellValues` now exist, but the UI is not fully typed-first yet.
+- Formula, relation, and rollup are configured, but they are not yet a mature database engine. They need stronger evaluation rules, error states, dependency tracking, and clear display formatting.
+- Status uses a fixed `TableStatusOptions` UI list, not per-property custom options.
+- Files/media is still stored/displayed as a string-like cell in some places; it should be a typed list of attachments end to end.
+- Hide and unwrap content appear in the property sheet, but they currently dismiss the sheet without persistent behavior.
+- AI Autofill appears as disabled UI. It should stay hidden or become a real property action later.
+
+Add property flow audit:
+
+- Current flow is close: header add-cell opens `NewTableColumnSheet`, user can type name, then tap type.
+- Good behavior: empty name falls back to selected type label.
+- Weakness: every type is shown in one long list. This will get noisy once more property types are added.
+- Needed: searchable grouped type picker:
+  - Basic: Text, Number, Date, Checkbox, URL, Email, Phone
+  - Choice: Select, Multi-select, Status
+  - Advanced: Formula, Relation, Rollup, Button
+  - Metadata: Created time/by, Last edited time/by, ID
+  - Media/Location: Files & media, Place
+- Needed: if user creates a config-heavy property like Select, Status, Formula, Relation, or Rollup, immediately open the config detail after creation.
+
+Edit property flow audit:
+
+- Current sheet has the right direction, but too many actions are always visible.
+- Rename and type should stay at the top.
+- Type-specific settings should be visible only when useful:
+  - Date: date format, time format, timezone, reminder, clear behavior.
+  - Select/Multi-select/Status: options, colors, default.
+  - Formula: formula editor, preview, validation error.
+  - Relation: target database, limit/sync direction.
+  - Rollup: relation, target property, aggregation, empty/error state.
+  - Files/media: allowed media type and attachment behavior.
+- View controls should be separate from property settings:
+  - Filter, Sort, Group, Calculate belong to the current view, not the property itself.
+- Unsupported actions should not be visible. Hide, unwrap, and AI Autofill should either be implemented or removed until ready.
+- Delete property needs a confirmation if the column contains values.
+
+Row sheet property flow audit:
+
+- Row sheet now feels closer to a database item, but the property editor should become typed-first.
+- Text/Number should validate immediately and keep cursor/input behavior stable.
+- Date tap already opens a date editor. It needs typed storage as the source of truth, not string storage first.
+- Checkbox is usable, but should show a compact checkbox-only control instead of repeating `Checked`/`Empty` text if the row is dense.
+- Relation should open a row picker from the target database, not accept/display raw row IDs.
+- Rollup and Formula should be read-only with a clear computed/error state.
+- Add property in row sheet should reuse the same new-property sheet and return focus to the new property value.
+
+Backend/data audit:
+
+- Column patch API already carries the core fields: name, type, date settings, formula, relation, rollup.
+- Database projection tables now support typed cell values and row metadata, which is the correct base for future property work.
+- Missing backend-level shape: a single serialized `configJson`/column config object for property-specific settings. Adding fields one by one to `PageTableColumn` will become brittle.
+- Missing validation: backend should reject invalid property config combinations, for example Rollup without a valid Relation column.
+- Missing query layer: relation/rollup/search over typed values should eventually use the projection tables, not only parse page JSON.
+
+UI/UX decisions:
+
+- Property sheet should be a focused decision surface, not a feature list.
+- The first row should be icon + editable property name + type chip.
+- The next section should be type-specific settings only.
+- View actions should be grouped separately and only shown when they affect the current database view.
+- Destructive actions stay at the bottom.
+- Every row stays 48-56dp with a 44dp touch target.
+- Avoid nested cards inside sheets. Use grouped plain surfaces with dividers.
+
+Recommended implementation order:
+
+1. Done: add `PageTableColumnConfig` as one typed config object for option sets, description, default value, and future property settings.
+2. Done: make the edit-property sheet capability-aware enough to hide unsupported actions and show type-specific settings.
+3. Done: add proper Select, Multi-select, and Status option models with color and order.
+4. Done: convert table/row property editors to typed-first reads with backward-compatible string fallback.
+5. Build relation row picker and make relation display labels, not IDs.
+6. Done: build formula validation and computed/error display.
+7. Build rollup evaluation with relation dependency checks.
+8. Add delete-property confirmation when data exists.
+9. Add tests for property mutation, type conversion, relation config, rollup config, and typed value mapping.
+10. Only after that, add advanced property types like Person, Button, Place, created/edited metadata, and ID.
+
 ### AI Chat
 
 Files:

@@ -152,6 +152,7 @@ import com.changeyourlife.cyl.domain.model.PageProperty
 import com.changeyourlife.cyl.domain.model.PagePropertyType
 import com.changeyourlife.cyl.domain.model.PageTable
 import com.changeyourlife.cyl.domain.model.PageTableColumn
+import com.changeyourlife.cyl.domain.model.PageTableColumnConfig
 import com.changeyourlife.cyl.domain.model.PageTableColumnType
 import com.changeyourlife.cyl.domain.model.PageTableDateFormat
 import com.changeyourlife.cyl.domain.model.PageTableDateReminder
@@ -191,6 +192,7 @@ internal fun TableRowPageSheet(
     onGroupChange: (String) -> Unit,
     onColumnNameChange: (String, String) -> Unit,
     onColumnTypeChange: (String, PageTableColumnType) -> Unit,
+    onColumnConfigChange: (String, PageTableColumnConfig) -> Unit,
     onCellChange: (String, String, String) -> Unit,
     onAddColumn: (String, PageTableColumnType) -> Unit,
     onInsertColumn: (String, TableColumnInsertSide) -> Unit,
@@ -370,6 +372,7 @@ internal fun TableRowPageSheet(
             onGroup = { onGroupChange(editingPropertyColumn.id) },
             onColumnNameChange = { name -> onColumnNameChange(editingPropertyColumn.id, name) },
             onColumnTypeChange = { type -> onColumnTypeChange(editingPropertyColumn.id, type) },
+            onColumnConfigChange = { config -> onColumnConfigChange(editingPropertyColumn.id, config) },
             onDateSettingsChange = { dateFormat, timeFormat, reminder, timezoneLabel ->
                 onColumnDateSettingsChange(editingPropertyColumn.id, dateFormat, timeFormat, reminder, timezoneLabel)
             },

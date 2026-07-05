@@ -76,6 +76,7 @@ object PageContentCodec {
             id = UUID.randomUUID().toString(),
             name = name,
             type = type,
+            config = type.defaultConfig(),
         )
     }
 

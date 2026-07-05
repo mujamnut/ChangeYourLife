@@ -2434,6 +2434,8 @@ private fun String.toPageBlockTypeOrNull(): PageBlockType? {
 private fun String.toPageTableColumnType(): PageTableColumnType {
     return when (normalizedAiKey()) {
         "number", "count", "amount", "price", "cost", "total" -> PageTableColumnType.Number
+        "select", "option", "choice" -> PageTableColumnType.Select
+        "multiselect", "multi select", "multi-select", "tags", "tag", "labels", "label" -> PageTableColumnType.MultiSelect
         "status", "stage", "state", "phase" -> PageTableColumnType.Status
         "date", "day", "deadline", "due", "time", "calendar" -> PageTableColumnType.Date
         "file", "files", "media", "attachment", "attachments", "image", "photo", "video", "filesmedia", "filemedia" -> PageTableColumnType.FilesMedia

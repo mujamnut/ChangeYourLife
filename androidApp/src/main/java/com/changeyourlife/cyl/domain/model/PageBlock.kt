@@ -146,6 +146,7 @@ data class PageTableColumn(
     val id: String,
     val name: String,
     val type: PageTableColumnType = PageTableColumnType.Text,
+    val config: PageTableColumnConfig = PageTableColumnConfig(),
     val dateFormat: PageTableDateFormat = PageTableDateFormat.DayMonthYear,
     val timeFormat: PageTableTimeFormat = PageTableTimeFormat.Hidden,
     val dateReminder: PageTableDateReminder = PageTableDateReminder.OnDayOfEvent,
@@ -156,6 +157,77 @@ data class PageTableColumn(
     val rollupTargetColumnId: String = "",
     val rollupAggregation: PageTableRollupAggregation = PageTableRollupAggregation.Count,
 )
+
+@Serializable
+data class PageTableColumnConfig(
+    val options: List<PageTableSelectOption> = emptyList(),
+    val isHidden: Boolean = false,
+    val wrapContent: Boolean = false,
+    val widthDp: Int = 0,
+    val defaultValue: String = "",
+    val description: String = "",
+)
+
+@Serializable
+data class PageTableSelectOption(
+    val id: String,
+    val name: String,
+    val color: PageTableOptionColor = PageTableOptionColor.Gray,
+)
+
+@Serializable
+enum class PageTableOptionColor {
+    Gray,
+    Red,
+    Orange,
+    Yellow,
+    Green,
+    Blue,
+    Purple,
+    Pink,
+}
+
+val DefaultPageTableStatusOptions = listOf(
+    PageTableSelectOption(id = "not-started", name = "Not started", color = PageTableOptionColor.Gray),
+    PageTableSelectOption(id = "in-progress", name = "In progress", color = PageTableOptionColor.Blue),
+    PageTableSelectOption(id = "done", name = "Done", color = PageTableOptionColor.Green),
+    PageTableSelectOption(id = "blocked", name = "Blocked", color = PageTableOptionColor.Red),
+)
+
+fun PageTableColumnType.defaultConfig(): PageTableColumnConfig {
+    return when (this) {
+        PageTableColumnType.Status -> PageTableColumnConfig(options = DefaultPageTableStatusOptions)
+        PageTableColumnType.Select,
+        PageTableColumnType.MultiSelect,
+        -> PageTableColumnConfig(options = emptyList())
+        else -> PageTableColumnConfig()
+    }
+}
+
+fun PageTableColumnConfig.normalizedForType(type: PageTableColumnType): PageTableColumnConfig {
+    return when (type) {
+        PageTableColumnType.Select,
+        PageTableColumnType.MultiSelect,
+        PageTableColumnType.Status,
+        -> {
+            val normalizedOptions = options
+                .mapNotNull { option ->
+                    option
+                        .copy(name = option.name.trim())
+                        .takeIf { it.name.isNotBlank() }
+                }
+                .distinctBy { option -> option.name.lowercase() }
+            copy(
+                options = if (type == PageTableColumnType.Status) {
+                    normalizedOptions.ifEmpty { DefaultPageTableStatusOptions }
+                } else {
+                    normalizedOptions
+                },
+            )
+        }
+        else -> copy(options = emptyList())
+    }
+}
 
 @Serializable
 enum class PageTableDateFormat {
@@ -234,6 +306,8 @@ data class PageTableDateCellValue(
 enum class PageTableColumnType {
     Text,
     Number,
+    Select,
+    MultiSelect,
     Status,
     Date,
     FilesMedia,

@@ -152,6 +152,7 @@ import com.changeyourlife.cyl.domain.model.PageProperty
 import com.changeyourlife.cyl.domain.model.PagePropertyType
 import com.changeyourlife.cyl.domain.model.PageTable
 import com.changeyourlife.cyl.domain.model.PageTableColumn
+import com.changeyourlife.cyl.domain.model.PageTableColumnConfig
 import com.changeyourlife.cyl.domain.model.PageTableColumnType
 import com.changeyourlife.cyl.domain.model.PageTableDateFormat
 import com.changeyourlife.cyl.domain.model.PageTableDateReminder
@@ -213,6 +214,7 @@ internal fun PageEditorBlock(
     onTableGroupChange: (String, String) -> Unit,
     onTableColumnNameChange: (String, String, String) -> Unit,
     onTableColumnTypeChange: (String, String, PageTableColumnType) -> Unit,
+    onTableColumnConfigChange: (String, String, PageTableColumnConfig) -> Unit,
     onTableColumnDateSettingsChange: (
         String,
         String,
@@ -323,6 +325,7 @@ internal fun PageEditorBlock(
                     onGroupChange = { columnId -> onTableGroupChange(block.id, columnId) },
                     onColumnNameChange = { columnId, name -> onTableColumnNameChange(block.id, columnId, name) },
                     onColumnTypeChange = { columnId, type -> onTableColumnTypeChange(block.id, columnId, type) },
+                    onColumnConfigChange = { columnId, config -> onTableColumnConfigChange(block.id, columnId, config) },
                     onColumnDateSettingsChange = { columnId, dateFormat, timeFormat, reminder, timezoneLabel ->
                         onTableColumnDateSettingsChange(
                             block.id,
@@ -543,6 +546,7 @@ internal fun PageEditorBlock(
                                 onTableGroupChange = onTableGroupChange,
                                 onTableColumnNameChange = onTableColumnNameChange,
                                 onTableColumnTypeChange = onTableColumnTypeChange,
+                                onTableColumnConfigChange = onTableColumnConfigChange,
                                 onTableColumnDateSettingsChange = onTableColumnDateSettingsChange,
                                 onTableColumnFormulaChange = onTableColumnFormulaChange,
                                 onTableColumnRelationTargetChange = onTableColumnRelationTargetChange,

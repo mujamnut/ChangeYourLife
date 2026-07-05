@@ -242,6 +242,8 @@ private fun PageTableRow.cellText(column: PageTableColumn?): String {
 private fun String.toPageTableColumnTypeFromAi(): PageTableColumnType {
     return when (trim().lowercase()) {
         "number", "count", "amount", "price", "cost", "total" -> PageTableColumnType.Number
+        "select", "option", "choice" -> PageTableColumnType.Select
+        "multiselect", "multi select", "multi-select", "tags", "tag", "labels", "label" -> PageTableColumnType.MultiSelect
         "status", "stage", "state", "phase" -> PageTableColumnType.Status
         "date", "day", "deadline", "due", "time", "calendar", "reminder" -> PageTableColumnType.Date
         "checkbox", "check", "done", "complete", "completed", "boolean" -> PageTableColumnType.Checkbox

@@ -18,9 +18,15 @@ fun String.toTypedCellValue(type: PageTableColumnType): PageTableCellValue {
     return when (type) {
         PageTableColumnType.Text -> PageTableCellValue(type = type, text = this)
         PageTableColumnType.Number -> PageTableCellValue(type = type, number = normalized)
+        PageTableColumnType.Select -> PageTableCellValue(type = type, text = normalized)
+        PageTableColumnType.MultiSelect -> PageTableCellValue(type = type, text = normalized.toPageTableChoiceListValue())
         PageTableColumnType.Status -> PageTableCellValue(type = type, text = normalized)
         PageTableColumnType.Date -> PageTableCellValue(type = type, date = normalized.toPageTableDateCellValue())
-        PageTableColumnType.FilesMedia -> PageTableCellValue(type = type, text = normalized)
+        PageTableColumnType.FilesMedia -> PageTableCellValue(
+            type = type,
+            text = normalized,
+            files = normalized.toPageTableFilesCellValue(),
+        )
         PageTableColumnType.Checkbox -> PageTableCellValue(
             type = type,
             checked = normalized.equals("true", ignoreCase = true),
@@ -42,9 +48,15 @@ fun PageTableCellValue.displayValue(fallback: String = ""): String {
     return when (type) {
         PageTableColumnType.Text -> text
         PageTableColumnType.Number -> number
+        PageTableColumnType.Select -> text
+        PageTableColumnType.MultiSelect -> text
         PageTableColumnType.Status -> text
         PageTableColumnType.Date -> date.toStorageValue()
-        PageTableColumnType.FilesMedia -> text
+        PageTableColumnType.FilesMedia -> if (files.isNotEmpty()) {
+            pageTableCellValueJson.encodeToString(files)
+        } else {
+            text
+        }
         PageTableColumnType.Checkbox -> if (checked) "true" else ""
         PageTableColumnType.Relation -> relationRowIds.joinToString(",")
         PageTableColumnType.Formula,
@@ -65,6 +77,21 @@ private fun String.toPageTableDateCellValue(): PageTableDateCellValue {
         }.getOrDefault(PageTableDateCellValue(startDate = this))
     }
     return PageTableDateCellValue(startDate = this)
+}
+
+private fun String.toPageTableFilesCellValue(): List<PageMediaAttachment> {
+    if (isBlank()) return emptyList()
+    return runCatching {
+        pageTableCellValueJson.decodeFromString<List<PageMediaAttachment>>(this)
+    }.getOrDefault(emptyList())
+}
+
+private fun String.toPageTableChoiceListValue(): String {
+    return split(",")
+        .map { value -> value.trim() }
+        .filter { value -> value.isNotBlank() }
+        .distinctBy { value -> value.lowercase() }
+        .joinToString(", ")
 }
 
 private fun PageTableDateCellValue.toStorageValue(): String {

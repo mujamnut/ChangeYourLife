@@ -18,6 +18,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
@@ -254,7 +255,7 @@ private fun RowPagePropertyItem(
             row = row,
             column = column,
             tableReferences = tableReferences,
-            value = row.cells[column.id].orEmpty(),
+            value = row.cellText(column),
             onValueChange = onValueChange,
             onDateSettingsChange = onDateSettingsChange,
             onFocusProperties = onFocusProperties,
@@ -308,7 +309,11 @@ private fun RowPagePropertyValueEditor(
             onFocusProperties = onFocusProperties,
             modifier = modifier,
         )
-        PageTableColumnType.Status -> RowPageStatusPropertyValue(
+        PageTableColumnType.Select,
+        PageTableColumnType.MultiSelect,
+        PageTableColumnType.Status,
+        -> RowPageChoicePropertyValue(
+            column = column,
             value = value,
             onValueChange = onValueChange,
             onFocusProperties = onFocusProperties,
@@ -366,6 +371,10 @@ private fun RowPagePlainPropertyValue(
                     Text(
                         text = when (column.type) {
                             PageTableColumnType.Number -> "0"
+                            PageTableColumnType.Select,
+                            PageTableColumnType.MultiSelect,
+                            PageTableColumnType.Status,
+                            -> "Empty"
                             else -> "Empty"
                         },
                         maxLines = 1,
@@ -474,13 +483,15 @@ private fun RowPageDatePropertyValue(
 }
 
 @Composable
-private fun RowPageStatusPropertyValue(
+private fun RowPageChoicePropertyValue(
+    column: PageTableColumn,
     value: String,
     onValueChange: (String) -> Unit,
     onFocusProperties: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var isExpanded by remember { mutableStateOf(false) }
+    val selectedValues = remember(value) { value.selectedChoiceValues() }
     Box(modifier = modifier) {
         RowPageClickablePropertyValue(
             text = value.ifBlank { "Empty" },
@@ -502,12 +513,46 @@ private fun RowPageStatusPropertyValue(
                     onValueChange("")
                 },
             )
-            TableStatusOptions.forEach { status ->
+            if (column.choiceOptions.isEmpty()) {
                 DropdownMenuItem(
-                    text = { Text(text = status) },
+                    text = {
+                        Text(
+                            text = "No options yet",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    },
+                    onClick = {},
+                    enabled = false,
+                )
+            }
+            column.choiceOptions.forEach { option ->
+                val selected = option.name in selectedValues
+                DropdownMenuItem(
+                    text = { Text(text = option.name) },
+                    trailingIcon = if (column.type == PageTableColumnType.MultiSelect && selected) {
+                        {
+                            Icon(
+                                imageVector = Icons.Rounded.CheckCircle,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp),
+                                tint = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                    } else {
+                        null
+                    },
                     onClick = {
-                        isExpanded = false
-                        onValueChange(status)
+                        if (column.type == PageTableColumnType.MultiSelect) {
+                            val nextValues = if (selected) {
+                                selectedValues.filterNot { selectedValue -> selectedValue == option.name }
+                            } else {
+                                selectedValues + option.name
+                            }
+                            onValueChange(nextValues.toChoiceCellValue())
+                        } else {
+                            isExpanded = false
+                            onValueChange(option.name)
+                        }
                     },
                 )
             }

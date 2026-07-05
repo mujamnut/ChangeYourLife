@@ -6,9 +6,11 @@ import com.changeyourlife.cyl.domain.model.PageBlockType
 import com.changeyourlife.cyl.domain.model.EditorCommand
 import com.changeyourlife.cyl.domain.model.PageTable
 import com.changeyourlife.cyl.domain.model.PageTableColumn
+import com.changeyourlife.cyl.domain.model.PageTableColumnConfig
 import com.changeyourlife.cyl.domain.model.PageTableColumnType
 import com.changeyourlife.cyl.domain.model.PageTableFilter
 import com.changeyourlife.cyl.domain.model.PageTableRow
+import com.changeyourlife.cyl.domain.model.PageTableSelectOption
 import com.changeyourlife.cyl.domain.model.PageTableSort
 import com.changeyourlife.cyl.domain.model.PageTableSortDirection
 import org.junit.Assert.assertEquals
@@ -46,6 +48,128 @@ class TableMutationUseCaseTest {
         assertEquals("1488", rows[0].cells["amount"])
         assertEquals("", rows[1].cells["amount"])
         assertEquals(PageTableColumnType.Number, result.document.table.columns.single().type)
+    }
+
+    @Test
+    fun changingColumnTypeToStatusCreatesDefaultOptionsAndTypedCellValues() {
+        val column = PageTableColumn(
+            id = "state",
+            name = "State",
+            type = PageTableColumnType.Text,
+        )
+        val document = tableDocument(
+            columns = listOf(column),
+            rows = listOf(PageTableRow(id = "row-1", cells = mapOf("state" to "Done"))),
+        )
+
+        val result = useCase.updateColumnType(
+            document = document,
+            tableBlockId = "table-1",
+            columnId = "state",
+            type = PageTableColumnType.Status,
+        )
+
+        val updatedColumn = result.document.table.columns.single()
+        val updatedRow = result.document.table.rows.single()
+        assertTrue(result.changed)
+        assertEquals(PageTableColumnType.Status, updatedColumn.type)
+        assertEquals(listOf("Not started", "In progress", "Done", "Blocked"), updatedColumn.config.options.map { it.name })
+        assertEquals(PageTableColumnType.Status, updatedRow.cellValues.getValue("state").type)
+        assertEquals("Done", updatedRow.cellValues.getValue("state").text)
+    }
+
+    @Test
+    fun updateColumnConfigNormalizesStatusOptions() {
+        val statusColumn = PageTableColumn(
+            id = "status",
+            name = "Status",
+            type = PageTableColumnType.Status,
+        )
+        val document = tableDocument(
+            columns = listOf(statusColumn),
+            rows = listOf(PageTableRow(id = "row-1", cells = mapOf("status" to ""))),
+        )
+
+        val result = useCase.updateColumnConfig(
+            document = document,
+            tableBlockId = "table-1",
+            columnId = "status",
+            config = PageTableColumnConfig(
+                options = listOf(
+                    PageTableSelectOption(id = "todo", name = " Todo "),
+                    PageTableSelectOption(id = "todo-duplicate", name = "todo"),
+                    PageTableSelectOption(id = "blank", name = " "),
+                    PageTableSelectOption(id = "done", name = "Done"),
+                ),
+            ),
+        )
+
+        val options = result.document.table.columns.single().config.options
+        assertTrue(result.changed)
+        assertEquals(listOf("Todo", "Done"), options.map { it.name })
+    }
+
+    @Test
+    fun updateColumnConfigKeepsSelectOptionsWithoutStatusDefaults() {
+        val selectColumn = PageTableColumn(
+            id = "category",
+            name = "Category",
+            type = PageTableColumnType.Select,
+        )
+        val document = tableDocument(
+            columns = listOf(selectColumn),
+            rows = listOf(PageTableRow(id = "row-1", cells = mapOf("category" to "Food"))),
+        )
+
+        val result = useCase.updateColumnConfig(
+            document = document,
+            tableBlockId = "table-1",
+            columnId = "category",
+            config = PageTableColumnConfig(
+                options = listOf(
+                    PageTableSelectOption(id = "food", name = "Food"),
+                    PageTableSelectOption(id = "food-duplicate", name = " food "),
+                    PageTableSelectOption(id = "fuel", name = "Fuel"),
+                ),
+            ),
+        )
+
+        val options = result.document.table.columns.single().config.options
+        assertTrue(result.changed)
+        assertEquals(listOf("Food", "Fuel"), options.map { it.name })
+    }
+
+    @Test
+    fun addRowAppliesColumnDefaultValues() {
+        val statusColumn = PageTableColumn(
+            id = "status",
+            name = "Status",
+            type = PageTableColumnType.Status,
+            config = PageTableColumnConfig(defaultValue = "Todo"),
+        )
+        val amountColumn = PageTableColumn(
+            id = "amount",
+            name = "Amount",
+            type = PageTableColumnType.Number,
+            config = PageTableColumnConfig(defaultValue = " 12.50 "),
+        )
+        val document = tableDocument(
+            columns = listOf(statusColumn, amountColumn),
+            rows = emptyList(),
+        )
+
+        val result = useCase.addRow(
+            document = document,
+            tableBlockId = "table-1",
+            row = PageTableRow(id = "row-1"),
+        )
+
+        val row = result.document.table.rows.single()
+        assertTrue(result.changed)
+        assertEquals("Todo", row.cells.getValue("status"))
+        assertEquals("12.50", row.cells.getValue("amount"))
+        assertEquals(PageTableColumnType.Status, row.cellValues.getValue("status").type)
+        assertEquals(PageTableColumnType.Number, row.cellValues.getValue("amount").type)
     }
 
     @Test

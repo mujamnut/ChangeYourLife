@@ -188,6 +188,7 @@ object PageContentJsonMutator {
         columnId: String,
         name: String?,
         type: String?,
+        config: JsonObject?,
         dateFormat: String?,
         timeFormat: String?,
         dateReminder: String?,
@@ -208,6 +209,7 @@ object PageContentJsonMutator {
                 var updatedColumn = column
                 name?.let { updatedColumn = updatedColumn.withString("name", it) }
                 type?.let { updatedColumn = updatedColumn.withString("type", it) }
+                config?.let { updatedColumn = updatedColumn.withElement("config", it) }
                 dateFormat?.let { updatedColumn = updatedColumn.withString("dateFormat", it) }
                 timeFormat?.let { updatedColumn = updatedColumn.withString("timeFormat", it) }
                 dateReminder?.let { updatedColumn = updatedColumn.withString("dateReminder", it) }
@@ -341,6 +343,7 @@ object PageContentJsonMutator {
         columnId: String,
         name: String,
         type: String,
+        config: JsonObject?,
         cellValues: Map<String, String>,
         targetIndex: Int?,
     ): String? {
@@ -348,11 +351,12 @@ object PageContentJsonMutator {
         return mutateTable(content, tableBlockId) { table ->
             val newColumnId = columnId.ifBlank { UUID.randomUUID().toString() }
             val column = JsonObject(
-                mapOf(
-                    "id" to JsonPrimitive(newColumnId),
-                    "name" to JsonPrimitive(name),
-                    "type" to JsonPrimitive(type.ifBlank { "Text" }),
-                ),
+                buildMap {
+                    put("id", JsonPrimitive(newColumnId))
+                    put("name", JsonPrimitive(name))
+                    put("type", JsonPrimitive(type.ifBlank { "Text" }))
+                    config?.let { put("config", it) }
+                },
             )
             val columns = table["columns"] as? JsonArray ?: JsonArray(emptyList())
             val rows = table["rows"] as? JsonArray ?: JsonArray(emptyList())

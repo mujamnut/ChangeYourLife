@@ -619,6 +619,7 @@ class SessionSyncCoordinator @Inject constructor(
                     columnId = column.id,
                     name = column.name,
                     type = column.type.name,
+                    config = column.config,
                     cellValues = cellValues,
                     targetIndex = targetIndex,
                 ),
@@ -1210,6 +1211,7 @@ class SessionSyncCoordinator @Inject constructor(
             id = id,
             name = name,
             type = type,
+            config = config,
         )
     }
 
@@ -1234,6 +1236,7 @@ class SessionSyncCoordinator @Inject constructor(
         return PageTableColumnPatchRequestDto(
             name = name,
             type = type.name,
+            config = config,
             dateFormat = dateFormat.name,
             timeFormat = timeFormat.name,
             dateReminder = dateReminder.name,

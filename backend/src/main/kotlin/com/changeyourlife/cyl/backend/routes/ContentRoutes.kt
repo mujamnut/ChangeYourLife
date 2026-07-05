@@ -427,6 +427,7 @@ fun Route.contentRoutes(contentRepository: ContentRepository) {
                             columnId = request.columnId,
                             name = request.name.trim(),
                             type = request.type,
+                            config = request.config,
                             cellValues = request.cellValues,
                             targetIndex = request.targetIndex,
                         )
@@ -460,6 +461,7 @@ fun Route.contentRoutes(contentRepository: ContentRepository) {
                             columnId = columnId,
                             name = request.name,
                             type = request.type,
+                            config = request.config,
                             dateFormat = request.dateFormat,
                             timeFormat = request.timeFormat,
                             dateReminder = request.dateReminder,

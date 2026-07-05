@@ -3,6 +3,7 @@ package com.changeyourlife.cyl.data.remote.sync
 import com.changeyourlife.cyl.domain.model.Page
 import com.changeyourlife.cyl.domain.model.PageBlock
 import com.changeyourlife.cyl.domain.model.PageTableCellValue
+import com.changeyourlife.cyl.domain.model.PageTableColumnConfig
 import com.changeyourlife.cyl.domain.model.PageTableRowMetadata
 import com.changeyourlife.cyl.domain.model.PageMediaAttachment
 import com.changeyourlife.cyl.domain.model.PageTextSpan
@@ -150,6 +151,7 @@ data class PageTablePatchRequestDto(
 data class PageTableColumnPatchRequestDto(
     val name: String? = null,
     val type: String? = null,
+    val config: PageTableColumnConfig? = null,
     val dateFormat: String? = null,
     val timeFormat: String? = null,
     val dateReminder: String? = null,
@@ -190,6 +192,7 @@ data class PageTableColumnCreateRequestDto(
     val columnId: String = "",
     val name: String,
     val type: String = "Text",
+    val config: PageTableColumnConfig? = null,
     val cellValues: Map<String, String> = emptyMap(),
     val targetIndex: Int? = null,
 )

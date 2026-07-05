@@ -149,6 +149,7 @@ import com.changeyourlife.cyl.domain.model.PageBlockType
 import com.changeyourlife.cyl.domain.model.PageMediaAttachment
 import com.changeyourlife.cyl.domain.model.PageProperty
 import com.changeyourlife.cyl.domain.model.PagePropertyType
+import com.changeyourlife.cyl.domain.model.DefaultPageTableStatusOptions
 import com.changeyourlife.cyl.domain.model.PageTable
 import com.changeyourlife.cyl.domain.model.PageTableColumn
 import com.changeyourlife.cyl.domain.model.PageTableColumnType
@@ -157,11 +158,14 @@ import com.changeyourlife.cyl.domain.model.PageTableDateReminder
 import com.changeyourlife.cyl.domain.model.PageTableTimeFormat
 import com.changeyourlife.cyl.domain.model.PageTableRow
 import com.changeyourlife.cyl.domain.model.PageTableRollupAggregation
+import com.changeyourlife.cyl.domain.model.PageTableSelectOption
 import com.changeyourlife.cyl.domain.model.PageTableSortDirection
 import com.changeyourlife.cyl.domain.model.PageTableView
 import com.changeyourlife.cyl.domain.model.PageTableViewConfig
 import com.changeyourlife.cyl.domain.model.PageSyncState
 import com.changeyourlife.cyl.domain.model.PageTextSpan
+import com.changeyourlife.cyl.domain.model.displayValue
+import com.changeyourlife.cyl.domain.model.withColumnType
 import com.changeyourlife.cyl.presentation.ai.AiChatMode
 import com.changeyourlife.cyl.presentation.ai.AiChatSheet
 import com.changeyourlife.cyl.presentation.ai.AiChatMessage
@@ -599,6 +603,39 @@ internal const val NoStatusLabel = "No status"
 internal const val NoDateLabel = "No date"
 internal const val CheckboxValueChecked = "true"
 
+internal val PageTableColumn.statusOptions: List<String>
+    get() = choiceOptions.map { option -> option.name }
+
+internal val PageTableColumn.choiceOptions: List<PageTableSelectOption>
+    get() = config.options
+        .mapNotNull { option ->
+            option
+                .copy(name = option.name.trim())
+                .takeIf { it.name.isNotBlank() }
+        }
+        .distinctBy { option -> option.name.lowercase() }
+        .ifEmpty {
+            if (type == PageTableColumnType.Status) DefaultPageTableStatusOptions else emptyList()
+        }
+
+internal val PageTableColumn.choiceOptionNames: List<String>
+    get() = choiceOptions
+        .map { option -> option.name.trim() }
+        .filter { name -> name.isNotBlank() }
+
+internal fun String.selectedChoiceValues(): List<String> {
+    return split(",")
+        .map { value -> value.trim() }
+        .filter { value -> value.isNotBlank() }
+        .distinctBy { value -> value.lowercase() }
+}
+
+internal fun List<String>.toChoiceCellValue(): String {
+    return filter { value -> value.isNotBlank() }
+        .distinctBy { value -> value.lowercase() }
+        .joinToString(", ")
+}
+
 @Serializable
 internal data class TableDateCellValue(
     val startDate: String = "",
@@ -919,6 +956,8 @@ internal fun PageTable.compareRowsByColumn(
         PageTableColumnType.Formula,
         PageTableColumnType.Relation,
         PageTableColumnType.Rollup,
+        PageTableColumnType.Select,
+        PageTableColumnType.MultiSelect,
         PageTableColumnType.Status,
         PageTableColumnType.Text,
         PageTableColumnType.FilesMedia,
@@ -1019,6 +1058,8 @@ internal fun PageTable.displayCellText(
         PageTableColumnType.FilesMedia -> rawValue.toTableMediaAttachments()
             .joinToString(separator = ", ") { attachment -> attachment.name }
         PageTableColumnType.Date -> column.displayDateCellValue(rawValue)
+        PageTableColumnType.Select,
+        PageTableColumnType.MultiSelect,
         PageTableColumnType.Text,
         PageTableColumnType.Number,
         PageTableColumnType.Status,
@@ -1095,8 +1136,12 @@ internal fun PageTable.rollupDisplayText(
 }
 
 internal fun PageTableRow.cellText(column: PageTableColumn?): String {
-    return column?.let { tableColumn -> cells[tableColumn.id] }
-        .orEmpty()
+    if (column == null) return ""
+    val fallback = cells[column.id].orEmpty()
+    return (cellValues[column.id]
+        ?.withColumnType(column.type, fallback)
+        ?.displayValue(fallback)
+        ?: fallback)
         .trim()
 }
 
@@ -1105,7 +1150,10 @@ internal fun PageTable.rowTitle(row: PageTableRow): String {
 }
 
 internal val PageTableColumnType.needsColumnConfig: Boolean
-    get() = this == PageTableColumnType.Formula ||
+    get() = this == PageTableColumnType.Select ||
+        this == PageTableColumnType.MultiSelect ||
+        this == PageTableColumnType.Status ||
+        this == PageTableColumnType.Formula ||
         this == PageTableColumnType.Relation ||
         this == PageTableColumnType.Rollup
 
@@ -1113,6 +1161,8 @@ internal val PageTableColumnType.label: String
     get() = when (this) {
         PageTableColumnType.Text -> "Text"
         PageTableColumnType.Number -> "Number"
+        PageTableColumnType.Select -> "Select"
+        PageTableColumnType.MultiSelect -> "Multi-select"
         PageTableColumnType.Status -> "Status"
         PageTableColumnType.Date -> "Date"
         PageTableColumnType.FilesMedia -> "Files & media"
@@ -1126,6 +1176,8 @@ internal val PageTableColumnType.shortLabel: String
     get() = when (this) {
         PageTableColumnType.Text -> "Aa"
         PageTableColumnType.Number -> "#"
+        PageTableColumnType.Select -> "Sel"
+        PageTableColumnType.MultiSelect -> "Multi"
         PageTableColumnType.Status -> "St"
         PageTableColumnType.Date -> "Cal"
         PageTableColumnType.FilesMedia -> "F"
@@ -1139,6 +1191,8 @@ internal val PageTableColumnType.icon: ImageVector
     get() = when (this) {
         PageTableColumnType.Text -> Icons.Rounded.Edit
         PageTableColumnType.Number -> Icons.Rounded.Calculate
+        PageTableColumnType.Select -> Icons.Rounded.KeyboardArrowDown
+        PageTableColumnType.MultiSelect -> Icons.Rounded.ViewColumn
         PageTableColumnType.Status -> Icons.Rounded.TaskAlt
         PageTableColumnType.Date -> Icons.Rounded.CalendarMonth
         PageTableColumnType.FilesMedia -> Icons.AutoMirrored.Rounded.Article
@@ -1172,9 +1226,12 @@ internal fun PageTableColumn.configSummary(
                 rollupAggregation.name,
             ).joinToString(" • ").ifBlank { "Set rollup" }
         }
+        PageTableColumnType.Select,
+        PageTableColumnType.MultiSelect,
+        PageTableColumnType.Status,
+        -> "${choiceOptions.size} options"
         PageTableColumnType.Text,
         PageTableColumnType.Number,
-        PageTableColumnType.Status,
         PageTableColumnType.Date,
         PageTableColumnType.Checkbox,
         PageTableColumnType.FilesMedia,
@@ -1359,6 +1416,7 @@ internal fun PageEditorScreenPreview() {
             onTableGroupChange = { _, _ -> },
             onTableColumnNameChange = { _, _, _ -> },
             onTableColumnTypeChange = { _, _, _ -> },
+            onTableColumnConfigChange = { _, _, _ -> },
             onTableColumnDateSettingsChange = { _, _, _, _, _, _ -> },
             onTableColumnFormulaChange = { _, _, _ -> },
             onTableColumnRelationTargetChange = { _, _, _ -> },

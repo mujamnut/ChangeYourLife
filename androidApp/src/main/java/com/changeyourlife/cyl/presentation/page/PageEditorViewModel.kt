@@ -15,6 +15,7 @@ import com.changeyourlife.cyl.domain.model.PageProperty
 import com.changeyourlife.cyl.domain.model.PagePropertyType
 import com.changeyourlife.cyl.domain.model.PageTable
 import com.changeyourlife.cyl.domain.model.PageTableColumn
+import com.changeyourlife.cyl.domain.model.PageTableColumnConfig
 import com.changeyourlife.cyl.domain.model.PageTableColumnType
 import com.changeyourlife.cyl.domain.model.PageTableDateFormat
 import com.changeyourlife.cyl.domain.model.PageTableDateReminder
@@ -1090,6 +1091,25 @@ class PageEditorViewModel @Inject constructor(
         if (currentUiState.page != null) {
             val document = currentDocument(currentUiState) ?: return
             val result = tableMutationUseCase.updateColumnType(document, blockId, columnId, type)
+            if (!result.changed) return
+            recordTableUndo(result)
+            queueTableColumnPatchPendingDocument(
+                tableBlockId = blockId,
+                columnId = columnId,
+                updated = result.document,
+            )
+        }
+    }
+
+    fun updateTableColumnConfig(
+        blockId: String,
+        columnId: String,
+        config: PageTableColumnConfig,
+    ) {
+        val currentUiState = uiState.value
+        if (currentUiState.page != null) {
+            val document = currentDocument(currentUiState) ?: return
+            val result = tableMutationUseCase.updateColumnConfig(document, blockId, columnId, config)
             if (!result.changed) return
             recordTableUndo(result)
             queueTableColumnPatchPendingDocument(
