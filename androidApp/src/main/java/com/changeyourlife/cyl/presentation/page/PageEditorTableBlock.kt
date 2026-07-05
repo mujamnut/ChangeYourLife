@@ -363,6 +363,7 @@ internal fun DatabaseTableBlockEditor(
             onViewChange = onViewChange,
             onViewConfigChange = onViewConfigChange,
             onDataSourceChange = onDataSourceChange,
+            onColumnConfigChange = onColumnConfigChange,
             onSortChange = onSortChange,
             onFilterChange = onFilterChange,
             onGroupChange = onGroupChange,
@@ -466,6 +467,7 @@ internal fun TableToolbar(
     onViewChange: (PageTableView) -> Unit,
     onViewConfigChange: (PageTableViewConfig) -> Unit,
     onDataSourceChange: (PageTableReference?) -> Unit,
+    onColumnConfigChange: (String, PageTableColumnConfig) -> Unit,
     onSortChange: (String, PageTableSortDirection) -> Unit,
     onFilterChange: (PageTableFilter) -> Unit,
     onGroupChange: (String) -> Unit,
@@ -520,6 +522,7 @@ internal fun TableToolbar(
             TableControls(
                 table = table,
                 onViewConfigChange = onViewConfigChange,
+                onColumnConfigChange = onColumnConfigChange,
                 onSortChange = onSortChange,
                 onFilterChange = onFilterChange,
                 onGroupChange = onGroupChange,
@@ -1466,6 +1469,7 @@ private fun PageTable.hasViewSpecificConfig(): Boolean = when (view) {
 internal fun TableControls(
     table: PageTable,
     onViewConfigChange: (PageTableViewConfig) -> Unit,
+    onColumnConfigChange: (String, PageTableColumnConfig) -> Unit,
     onSortChange: (String, PageTableSortDirection) -> Unit,
     onFilterChange: (PageTableFilter) -> Unit,
     onGroupChange: (String) -> Unit,
@@ -1497,6 +1501,7 @@ internal fun TableControls(
             TableControlsSheet(
                 table = table,
                 onViewConfigChange = onViewConfigChange,
+                onColumnConfigChange = onColumnConfigChange,
                 onSortChange = onSortChange,
                 onFilterChange = onFilterChange,
                 onGroupChange = onGroupChange,
@@ -1554,6 +1559,7 @@ internal fun TableControlIconButton(
 internal fun TableControlsSheet(
     table: PageTable,
     onViewConfigChange: (PageTableViewConfig) -> Unit,
+    onColumnConfigChange: (String, PageTableColumnConfig) -> Unit,
     onSortChange: (String, PageTableSortDirection) -> Unit,
     onFilterChange: (PageTableFilter) -> Unit,
     onGroupChange: (String) -> Unit,
@@ -1584,6 +1590,23 @@ internal fun TableControlsSheet(
                     table = table,
                     onViewConfigChange = onViewConfigChange,
                 )
+            }
+        }
+
+        val hiddenColumns = table.columns.filter { column -> column.config.isHidden }
+        if (hiddenColumns.isNotEmpty()) {
+            TableControlSection(title = "Hidden properties") {
+                hiddenColumns.forEach { column ->
+                    HiddenPropertyControlRow(
+                        column = column,
+                        onUnhide = {
+                            onColumnConfigChange(
+                                column.id,
+                                column.config.copy(isHidden = false),
+                            )
+                        },
+                    )
+                }
             }
         }
 
@@ -1628,6 +1651,41 @@ private fun TableControlSection(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         content()
+    }
+}
+
+@Composable
+private fun HiddenPropertyControlRow(
+    column: PageTableColumn,
+    onUnhide: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(44.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.72f))
+            .padding(start = 10.dp, end = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = column.type.icon,
+            contentDescription = null,
+            modifier = Modifier.size(18.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            text = column.name.ifBlank { column.type.label },
+            modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        TextButton(onClick = onUnhide) {
+            Text(text = "Show")
+        }
     }
 }
 
@@ -2098,6 +2156,9 @@ internal fun TableGridEditor(
     pageId: String,
     pageUpdatedAt: Long,
 ) {
+    val visibleColumns = remember(table.columns) {
+        table.columns.filterNot { column -> column.config.isHidden }
+    }
     val columnWidths = remember(table.columns, table.rows.size, tableReferences) {
         table.tableColumnWidths(
             tableReferences = tableReferences,
@@ -2133,7 +2194,7 @@ internal fun TableGridEditor(
         TableHeaderRow(
             tableBlockId = tableBlockId,
             table = table,
-            columns = table.columns,
+            columns = visibleColumns,
             columnWidths = columnWidths,
             tableReferences = tableReferences,
             onSortChange = onSortChange,
@@ -2154,13 +2215,13 @@ internal fun TableGridEditor(
         HorizontalDivider()
         if (isStarterEmptyDatabase) {
             TableStarterEmptyState(
-                columns = table.columns,
+                columns = visibleColumns,
                 columnWidths = columnWidths,
                 onAddRow = onAddRow,
             )
         } else if (visibleRows.isEmpty()) {
             TableAddRowRow(
-                columns = table.columns,
+                columns = visibleColumns,
                 columnWidths = columnWidths,
                 onAddRow = onAddRow,
             )
@@ -2188,7 +2249,7 @@ internal fun TableGridEditor(
                                 pageId = pageId,
                                 pageUpdatedAt = pageUpdatedAt,
                                 table = table,
-                                columns = table.columns,
+                                columns = visibleColumns,
                                 columnWidths = columnWidths,
                                 tableReferences = tableReferences,
                                 onColumnDateSettingsChange = onColumnDateSettingsChange,
@@ -2208,7 +2269,7 @@ internal fun TableGridEditor(
                         contentType = "table-add-row",
                     ) {
                         TableAddRowRow(
-                            columns = table.columns,
+                            columns = visibleColumns,
                             columnWidths = columnWidths,
                             onAddRow = onAddRow,
                         )
@@ -2226,7 +2287,7 @@ internal fun TableGridEditor(
                                 pageId = pageId,
                                 pageUpdatedAt = pageUpdatedAt,
                                 table = table,
-                                columns = table.columns,
+                                columns = visibleColumns,
                                 columnWidths = columnWidths,
                                 tableReferences = tableReferences,
                                 onColumnDateSettingsChange = onColumnDateSettingsChange,
@@ -2243,7 +2304,7 @@ internal fun TableGridEditor(
                     }
                 }
                 TableAddRowRow(
-                    columns = table.columns,
+                    columns = visibleColumns,
                     columnWidths = columnWidths,
                     onAddRow = onAddRow,
                 )
@@ -2265,7 +2326,7 @@ internal fun TableGridEditor(
                             pageId = pageId,
                             pageUpdatedAt = pageUpdatedAt,
                             table = table,
-                            columns = table.columns,
+                            columns = visibleColumns,
                             columnWidths = columnWidths,
                             tableReferences = tableReferences,
                             onColumnDateSettingsChange = onColumnDateSettingsChange,
@@ -2284,7 +2345,7 @@ internal fun TableGridEditor(
                         contentType = "table-add-row",
                     ) {
                         TableAddRowRow(
-                            columns = table.columns,
+                            columns = visibleColumns,
                             columnWidths = columnWidths,
                             onAddRow = onAddRow,
                         )
@@ -2300,7 +2361,7 @@ internal fun TableGridEditor(
                             pageId = pageId,
                             pageUpdatedAt = pageUpdatedAt,
                             table = table,
-                            columns = table.columns,
+                            columns = visibleColumns,
                             columnWidths = columnWidths,
                             tableReferences = tableReferences,
                             onColumnDateSettingsChange = onColumnDateSettingsChange,
@@ -2316,7 +2377,7 @@ internal fun TableGridEditor(
                     }
                 }
                 TableAddRowRow(
-                    columns = table.columns,
+                    columns = visibleColumns,
                     columnWidths = columnWidths,
                     onAddRow = onAddRow,
                 )
@@ -2553,6 +2614,15 @@ internal fun TableHeaderCell(
             fontWeight = FontWeight.Medium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        if (column.config.isRequired) {
+            Text(
+                text = "*",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.error,
+                maxLines = 1,
+            )
+        }
         if (hasActiveViewRule) {
             Box(
                 modifier = Modifier
@@ -2810,7 +2880,9 @@ internal fun TableColumnEditSheet(
                             icon = Icons.Rounded.Info,
                             label = "Details",
                             value = column.config.description.ifBlank {
-                                column.config.defaultValue.ifBlank { "" }
+                                column.config.databaseLayoutSummary().ifBlank {
+                                    column.config.defaultValue.ifBlank { "" }
+                                }
                             },
                             onClick = { detail = PropertySheetDetail.General },
                         )
@@ -3095,7 +3167,8 @@ internal fun PropertyTypeSummary(column: PageTableColumn) {
 }
 
 private fun PageTableColumn.configSummaryForHeader(): String {
-    return when (type) {
+    val layoutSummary = config.databaseLayoutSummary()
+    val typeSummary = when (type) {
         PageTableColumnType.Date -> "${dateFormat.label} · ${timeFormat.label} · ${dateReminder.label}"
         PageTableColumnType.Select,
         PageTableColumnType.MultiSelect,
@@ -3110,6 +3183,18 @@ private fun PageTableColumn.configSummaryForHeader(): String {
         PageTableColumnType.FilesMedia,
         -> config.description
     }
+    return listOf(typeSummary, layoutSummary)
+        .filter { summary -> summary.isNotBlank() }
+        .joinToString(" · ")
+}
+
+private fun PageTableColumnConfig.databaseLayoutSummary(): String {
+    return buildList {
+        if (isRequired) add("Required")
+        if (isHidden) add("Hidden")
+        if (wrapContent) add("Wrap")
+        if (widthDp > 0) add("${widthDp}dp")
+    }.joinToString(" · ")
 }
 
 @Composable
@@ -3235,6 +3320,18 @@ internal fun PropertyGeneralSettingsSheet(
     var defaultValue by remember(column.config.defaultValue) {
         mutableStateOf(column.config.defaultValue)
     }
+    var isHidden by remember(column.config.isHidden) {
+        mutableStateOf(column.config.isHidden)
+    }
+    var isRequired by remember(column.config.isRequired) {
+        mutableStateOf(column.config.isRequired)
+    }
+    var wrapContent by remember(column.config.wrapContent) {
+        mutableStateOf(column.config.wrapContent)
+    }
+    var widthText by remember(column.config.widthDp) {
+        mutableStateOf(column.config.widthDp.takeIf { width -> width > 0 }?.toString().orEmpty())
+    }
     val canEditDefault = column.type != PageTableColumnType.Formula &&
         column.type != PageTableColumnType.Rollup &&
         column.type != PageTableColumnType.Relation &&
@@ -3244,6 +3341,12 @@ internal fun PropertyGeneralSettingsSheet(
         onColumnConfigChange(
             column.config.copy(
                 description = description.trim(),
+                isHidden = isHidden,
+                isRequired = isRequired,
+                wrapContent = wrapContent,
+                widthDp = widthText.toIntOrNull()
+                    ?.coerceIn(TableColumnMinWidthDp, TableColumnMaxWidthDp)
+                    ?: 0,
                 defaultValue = if (canEditDefault) {
                     defaultValue.toSingleLineTableCellValue().trim()
                 } else {
@@ -3309,11 +3412,85 @@ internal fun PropertyGeneralSettingsSheet(
             }
         },
     )
+    PropertyMenuGroup {
+        PropertyToggleSettingRow(
+            label = "Required",
+            description = "Mark empty values clearly without blocking autosave.",
+            checked = isRequired,
+            onCheckedChange = { isRequired = it },
+        )
+        PropertyToggleSettingRow(
+            label = "Hide in table",
+            description = "Keep this property available in row pages, but hide it from the grid.",
+            checked = isHidden,
+            onCheckedChange = { isHidden = it },
+        )
+        PropertyToggleSettingRow(
+            label = "Wrap content",
+            description = "Allow long values to wrap instead of clipping in the grid.",
+            checked = wrapContent,
+            onCheckedChange = { wrapContent = it },
+        )
+    }
+    OutlinedTextField(
+        value = widthText,
+        onValueChange = { text ->
+            widthText = text.filter { char -> char.isDigit() }.take(3)
+        },
+        modifier = Modifier.fillMaxWidth(),
+        singleLine = true,
+        label = { Text(text = "Column width") },
+        placeholder = { Text(text = "Auto") },
+        suffix = { Text(text = "dp") },
+        supportingText = {
+            Text(text = "Leave empty for auto width. Range: ${TableColumnMinWidthDp}-${TableColumnMaxWidthDp}dp.")
+        },
+        keyboardOptions = KeyboardOptions(
+            keyboardType = KeyboardType.Number,
+            imeAction = ImeAction.Done,
+        ),
+        colors = blockTextFieldColors(),
+    )
     Button(
         modifier = Modifier.fillMaxWidth(),
         onClick = ::save,
     ) {
         Text(text = "Save details")
+    }
+}
+
+@Composable
+private fun PropertyToggleSettingRow(
+    label: String,
+    description: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onCheckedChange(!checked) }
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                text = description,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+        )
     }
 }
 
@@ -4019,6 +4196,8 @@ private val TableInlineOpenWidth = 40.dp
 private val TableCellHorizontalPadding = 8.dp
 private const val TableLargeDatasetRowThreshold = 40
 private const val TableWidthMeasurementRowLimit = 80
+private const val TableColumnMinWidthDp = 72
+private const val TableColumnMaxWidthDp = 360
 private val TableLargeDatasetBodyMaxHeight = 560.dp
 
 private fun PageTable.tableColumnWidths(
@@ -4041,6 +4220,11 @@ private fun PageTable.tableColumnWidth(
     includeInlineOpen: Boolean,
     rowSampleLimit: Int,
 ): Dp {
+    if (column.config.widthDp > 0) {
+        return column.config.widthDp
+            .coerceIn(TableColumnMinWidthDp, TableColumnMaxWidthDp)
+            .dp
+    }
     val headerText = column.name.ifBlank { column.type.label }
     val longestCellText = rows.asSequence()
         .take(rowSampleLimit.coerceAtLeast(0))
@@ -4663,16 +4847,12 @@ internal fun TableDateCellEditor(
             )
         }
         Text(
-            text = displayText.ifBlank { "Empty" },
+            text = displayText,
             modifier = Modifier.weight(1f),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             style = MaterialTheme.typography.bodyMedium,
-            color = if (displayText.isBlank()) {
-                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.62f)
-            } else {
-                MaterialTheme.colorScheme.onSurface
-            },
+            color = MaterialTheme.colorScheme.onSurface,
         )
     }
 }
@@ -5508,17 +5688,15 @@ internal fun TableCellEditor(
                         onValueChange(if (isChecked) CheckboxValueChecked else "")
                     },
                 )
-                Text(
-                    text = if (isChecked) "Done" else "Empty",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = if (isChecked) {
-                        MaterialTheme.colorScheme.onSurface
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.62f)
-                    },
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                if (isChecked) {
+                    Text(
+                        text = "Done",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
         }
         PageTableColumnType.Date -> {
@@ -5541,6 +5719,7 @@ internal fun TableCellEditor(
         )
         PageTableColumnType.FilesMedia -> {
             TableMediaCellEditor(
+                column = column,
                 value = value,
                 onValueChange = onValueChange,
                 modifier = modifier,
@@ -5574,16 +5753,18 @@ private fun TablePlainTextCellEditor(
         fontFamily = if (column.type == PageTableColumnType.Number) FontFamily.Monospace else FontFamily.Default,
         textAlign = if (column.type == PageTableColumnType.Number) TextAlign.End else TextAlign.Start,
     )
-    val placeholder = when (column.type) {
-        PageTableColumnType.Number -> "0"
-        else -> column.name
+    val cellHeightModifier = if (column.config.wrapContent) {
+        Modifier.heightIn(min = TableRowHeight, max = 112.dp)
+    } else {
+        Modifier.height(TableRowHeight)
     }
 
     BasicTextField(
         value = value,
         onValueChange = onValueChange,
-        modifier = modifier.height(TableRowHeight),
-        singleLine = true,
+        modifier = modifier.then(cellHeightModifier),
+        singleLine = !column.config.wrapContent,
+        maxLines = if (column.config.wrapContent) 4 else 1,
         textStyle = textStyle,
         cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
         keyboardOptions = KeyboardOptions(
@@ -5597,20 +5778,10 @@ private fun TablePlainTextCellEditor(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(TableRowHeight)
+                    .then(cellHeightModifier)
                     .padding(horizontal = TableCellHorizontalPadding, vertical = 4.dp),
                 contentAlignment = Alignment.CenterStart,
             ) {
-                if (value.isBlank()) {
-                    Text(
-                        text = placeholder,
-                        modifier = Modifier.fillMaxWidth(),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        style = textStyle,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.58f),
-                    )
-                }
                 innerTextField()
             }
         },
@@ -5633,11 +5804,6 @@ internal fun TableChoiceCellEditor(
     var isExpanded by remember { mutableStateOf(false) }
     val selectedValues = remember(value) { value.selectedChoiceValues() }
     val options = column.choiceOptions
-    val placeholder = when (column.type) {
-        PageTableColumnType.Status -> "Select status"
-        PageTableColumnType.MultiSelect -> "Select options"
-        else -> "Select option"
-    }
 
     Box(modifier = modifier) {
         Row(
@@ -5650,14 +5816,7 @@ internal fun TableChoiceCellEditor(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (selectedValues.isEmpty()) {
-                Text(
-                    text = placeholder,
-                    modifier = Modifier.weight(1f),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.62f),
-                )
+                Spacer(modifier = Modifier.weight(1f))
             } else {
                 Row(
                     modifier = Modifier.weight(1f),
@@ -5817,14 +5976,10 @@ internal fun ReadOnlyComputedCell(
         contentAlignment = Alignment.CenterStart,
     ) {
         Text(
-            text = value.ifBlank { "Empty" },
+            text = value,
             modifier = Modifier.fillMaxWidth(),
             style = MaterialTheme.typography.bodyMedium,
-            color = if (value.isBlank()) {
-                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.62f)
-            } else {
-                MaterialTheme.colorScheme.onSurface
-            },
+            color = MaterialTheme.colorScheme.onSurface,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
@@ -5834,6 +5989,7 @@ internal fun ReadOnlyComputedCell(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun TableMediaCellEditor(
+    column: PageTableColumn,
     value: String,
     onValueChange: (String) -> Unit,
     modifier: Modifier = Modifier,
@@ -5923,11 +6079,7 @@ internal fun TableMediaCellEditor(
             text = attachments.toTableMediaSummary(),
             modifier = Modifier.weight(1f),
             style = MaterialTheme.typography.bodyMedium,
-            color = if (attachments.isEmpty()) {
-                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.62f)
-            } else {
-                MaterialTheme.colorScheme.onSurface
-            },
+            color = MaterialTheme.colorScheme.onSurface,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
@@ -5964,7 +6116,7 @@ internal fun RelationCellEditor(
         targetTable == null && column.relationTargetTableId.isBlank() -> "Set target"
         targetTable == null -> "Missing source"
         selectedTitles.isNotEmpty() -> selectedTitles.joinToString()
-        else -> "Select row"
+        else -> ""
     }
 
     if (isPickerOpen && targetTable != null) {
@@ -6006,10 +6158,10 @@ internal fun RelationCellEditor(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 style = MaterialTheme.typography.bodyMedium,
-                color = if (targetTable == null || selectedTitles.isEmpty()) {
-                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.62f)
-                } else {
-                    MaterialTheme.colorScheme.onSurface
+                color = when {
+                    targetTable == null || selectedTitles.isEmpty() ->
+                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.62f)
+                    else -> MaterialTheme.colorScheme.onSurface
                 },
             )
             Icon(

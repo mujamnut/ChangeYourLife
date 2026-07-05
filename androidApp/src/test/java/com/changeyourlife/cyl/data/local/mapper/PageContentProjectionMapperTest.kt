@@ -1,10 +1,12 @@
 package com.changeyourlife.cyl.data.local.mapper
 
+import com.changeyourlife.cyl.data.local.entity.PageBlockEntity
 import com.changeyourlife.cyl.data.local.entity.PageEntity
 import com.changeyourlife.cyl.data.local.model.PageContentSnapshot
 import com.changeyourlife.cyl.domain.model.PageBlock
 import com.changeyourlife.cyl.domain.model.PageBlockDocument
 import com.changeyourlife.cyl.domain.model.PageBlockType
+import com.changeyourlife.cyl.domain.model.PageContentCodec
 import com.changeyourlife.cyl.domain.model.PageProperty
 import com.changeyourlife.cyl.domain.model.PagePropertyType
 import com.changeyourlife.cyl.domain.model.PageTable
@@ -99,6 +101,35 @@ class PageContentProjectionMapperTest {
         assertEquals("line one", projection.blocks[0].text)
         assertEquals("page-1:legacy-block:1", projection.blocks[1].id)
         assertEquals("line two", projection.blocks[1].text)
+    }
+
+    @Test
+    fun snapshotWithDatabaseBlockWithoutTableProjectionNormalizesToUsableDatabase() {
+        val document = PageContentSnapshot(
+            blocks = listOf(
+                PageBlockEntity(
+                    id = "block-db",
+                    pageId = "page-1",
+                    parentBlockId = null,
+                    type = PageBlockType.DatabaseTable.name,
+                    sortOrder = 0,
+                    createdAt = 1000,
+                    updatedAt = 2000,
+                    deletedAt = null,
+                ),
+            ),
+            properties = emptyList(),
+            tables = emptyList(),
+            columns = emptyList(),
+            rows = emptyList(),
+            cells = emptyList(),
+        ).toDocument()
+
+        val normalized = PageContentCodec.decodeDocument(PageContentCodec.encodeDocument(document))
+
+        val block = normalized.blocks.single()
+        assertEquals(PageBlockType.DatabaseTable, block.type)
+        assertEquals(listOf("Name"), block.table.columns.map { column -> column.name })
     }
 
     private fun pageEntity(content: String): PageEntity {

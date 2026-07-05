@@ -103,6 +103,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -379,6 +380,15 @@ internal fun PageEditorScreen(
     var richTextToolbarState by remember { mutableStateOf<RichTextToolbarUiState?>(null) }
     var focusRequestSequence by rememberSaveable { mutableStateOf(0L) }
     var editorFocusRequest by remember { mutableStateOf<EditorBlockFocusRequest?>(null) }
+    val pageListState = rememberLazyListState()
+    val density = LocalDensity.current
+    val collapsedTitleThresholdPx = with(density) { 56.dp.toPx().toInt() }
+    val showTopBarTitle by remember(pageListState, collapsedTitleThresholdPx) {
+        derivedStateOf {
+            pageListState.firstVisibleItemIndex > 0 ||
+                pageListState.firstVisibleItemScrollOffset > collapsedTitleThresholdPx
+        }
+    }
     val hasDatabaseBlock = remember(uiState.blocks) {
         uiState.blocks.containsDatabaseTableBlock()
     }
@@ -434,7 +444,7 @@ internal fun PageEditorScreen(
         containerColor = MaterialTheme.colorScheme.surface,
         topBar = {
             PageEditorTopBar(
-                pageTitle = uiState.title,
+                pageTitle = if (showTopBarTitle) uiState.title else "",
                 isSaving = uiState.isSaving,
                 isAiGenerating = homeAiState.isAiGeneratingChat,
                 syncState = uiState.syncState,
@@ -594,7 +604,6 @@ internal fun PageEditorScreen(
                         }
                     (currentPageTables + otherPageTables).distinctBy { reference -> reference.blockId }
                 }
-                val listState = rememberLazyListState()
                 val searchTargetIndex = remember(
                     uiState.blocks,
                     initialSearchTargetType,
@@ -613,24 +622,24 @@ internal fun PageEditorScreen(
                     initialSearchTargetId,
                 ) {
                     if (!uiState.isLoading && initialSearchTargetType == SearchTargetPageTitle) {
-                        listState.animateScrollToItem(0)
+                        pageListState.animateScrollToItem(0)
                     } else if (!uiState.isLoading && searchTargetIndex >= 0) {
-                        listState.animateScrollToItem(searchTargetIndex + 1)
+                        pageListState.animateScrollToItem(searchTargetIndex + 1)
                     }
                 }
 
                 androidx.compose.foundation.lazy.LazyColumn(
-                    state = listState,
+                    state = pageListState,
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(innerPadding),
                     contentPadding = PaddingValues(
                         start = 22.dp,
-                        top = 14.dp,
+                        top = 8.dp,
                         end = 22.dp,
                         bottom = 18.dp,
                     ),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalArrangement = Arrangement.spacedBy(0.dp),
                 ) {
                     item {
                         PageTitleEditor(

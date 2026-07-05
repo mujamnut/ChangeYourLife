@@ -190,6 +190,7 @@ data class PageTableColumn(
 data class PageTableColumnConfig(
     val options: List<PageTableSelectOption> = emptyList(),
     val isHidden: Boolean = false,
+    val isRequired: Boolean = false,
     val wrapContent: Boolean = false,
     val widthDp: Int = 0,
     val defaultValue: String = "",
@@ -251,9 +252,20 @@ fun PageTableColumnConfig.normalizedForType(type: PageTableColumnType): PageTabl
                 } else {
                     normalizedOptions
                 },
+                widthDp = widthDp.normalizedTableColumnWidthDp(),
             )
         }
-        else -> copy(options = emptyList())
+        else -> copy(
+            options = emptyList(),
+            widthDp = widthDp.normalizedTableColumnWidthDp(),
+        )
+    }
+}
+
+fun Int.normalizedTableColumnWidthDp(): Int {
+    return when {
+        this <= 0 -> 0
+        else -> coerceIn(72, 360)
     }
 }
 

@@ -343,13 +343,14 @@ What is already solid:
 - Done: Relation/Rollup UI now distinguishes unconfigured targets from missing cross-page/source databases with `Missing source` / `Missing property` states without destructively clearing cross-page references during sync delay.
 - Done: page content normalization now repairs duplicate/blank table row IDs across the whole document, which protects relation picker keys and the projected row/cell tables.
 - Done: backend table JSON mutation now rejects invalid Formula/Relation/Rollup patch combinations, clears stale relation cells when a target changes, and generates a new row ID if a duplicate row create request reaches the server.
+- Done: database property config now persists and renders `hidden`, `required`, `wrap content`, and `column width`. Hidden properties are excluded from the grid/search surface but can be restored from database controls, required properties show clear empty-state markers, wrap content allows taller text cells, and width overrides are normalized to a safe range.
 - Done: added unit coverage for status config normalization, select config normalization, files/media typed value round-trip, and multi-select normalization.
 - Done: added regression coverage for formula circular dependency detection, missing rollup source states, typed relation writes, stale relation cleanup, duplicate row ID repair, and backend property validation.
 - Verification note: Android/backend compile passes. Focused Android unit tests for table mutation/content codec and focused backend mutator tests pass.
 
 Core gaps:
 
-- Property configuration still lacks persisted hidden state, wrap state, column width, and required field.
+- Property configuration now covers hidden, required, wrap, and width for MVP. Later work can add per-view visibility/width overrides instead of one global column setting.
 - `PageTableColumnType` still lacks several property types already expected from the Notion-like flow: Person, URL, Email, Phone, Button, Place, Created time/by, Last edited time/by, and ID.
 - Row property editors now use typed relation writes, but several other property types still write through string-first paths.
 - Formula is still a basic arithmetic engine. It still needs richer functions, type-aware errors, and preview per row.

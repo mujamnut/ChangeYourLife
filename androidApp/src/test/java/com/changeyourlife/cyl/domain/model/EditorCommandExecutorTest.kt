@@ -54,6 +54,44 @@ class EditorCommandExecutorTest {
     }
 
     @Test
+    fun changeBlockTypeToDatabaseInitializesTable() {
+        val document = PageBlockDocument(
+            blocks = listOf(PageBlock(id = "block-1", type = PageBlockType.Text)),
+        )
+
+        val result = EditorCommandExecutor.apply(
+            document = document,
+            command = EditorCommand.ChangeBlockType("block-1", PageBlockType.DatabaseTable),
+        )
+
+        val block = result.document.blocks.first()
+        assertEquals(PageBlockType.DatabaseTable, block.type)
+        assertEquals(listOf("Name"), block.table.columns.map { column -> column.name })
+    }
+
+    @Test
+    fun changeBlockTypeKeepsExistingTableForUndoSafety() {
+        val table = PageTable(
+            title = "Budget",
+            columns = listOf(PageTableColumn(id = "name", name = "Name")),
+        )
+        val document = PageBlockDocument(
+            blocks = listOf(
+                PageBlock(id = "block-1", type = PageBlockType.DatabaseTable, table = table),
+            ),
+        )
+
+        val result = EditorCommandExecutor.apply(
+            document = document,
+            command = EditorCommand.ChangeBlockType("block-1", PageBlockType.Text),
+        )
+        val undoResult = EditorCommandExecutor.apply(result.document, result.undoCommand!!)
+
+        assertEquals(table, result.document.blocks.first().table)
+        assertEquals(document, undoResult.document)
+    }
+
+    @Test
     fun insertBlockSupportsNestedParentAndDeleteUndo() {
         val document = PageBlockDocument(
             blocks = listOf(

@@ -377,7 +377,7 @@ internal fun PageTitleEditor(
         onValueChange = onTitleChange,
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(min = 86.dp)
+            .heightIn(min = 58.dp)
             .onFocusChanged { focusState -> onFocusChanged(focusState.isFocused) },
         singleLine = false,
         textStyle = MaterialTheme.typography.headlineMedium.copy(
@@ -388,7 +388,7 @@ internal fun PageTitleEditor(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(top = 10.dp, bottom = 16.dp),
+                    .padding(top = 6.dp, bottom = 6.dp),
             ) {
                 innerTextField()
             }

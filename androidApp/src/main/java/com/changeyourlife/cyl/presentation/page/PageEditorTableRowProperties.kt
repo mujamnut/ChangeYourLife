@@ -263,6 +263,15 @@ private fun RowPagePropertyItem(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            if (column.config.isRequired) {
+                Text(
+                    text = "*",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.error,
+                    maxLines = 1,
+                )
+            }
         }
         RowPagePropertyValueEditor(
             table = table,
@@ -320,6 +329,7 @@ private fun RowPagePropertyValueEditor(
             modifier = modifier,
         )
         PageTableColumnType.Checkbox -> RowPageCheckboxPropertyValue(
+            column = column,
             value = value,
             onValueChange = onValueChange,
             modifier = modifier,
@@ -343,6 +353,7 @@ private fun RowPagePropertyValueEditor(
             modifier = modifier,
         )
         PageTableColumnType.FilesMedia -> TableMediaCellEditor(
+            column = column,
             value = value,
             onValueChange = onValueChange,
             modifier = modifier,
@@ -369,6 +380,7 @@ private fun RowPagePlainPropertyValue(
 ) {
     val tableColors = TableGridTokens.colors()
     val textColor = MaterialTheme.colorScheme.onSurface
+    val isRequiredEmpty = column.config.isRequired && value.isBlank()
     BasicTextField(
         value = value,
         onValueChange = { nextValue ->
@@ -392,7 +404,9 @@ private fun RowPagePlainPropertyValue(
             ) {
                 if (value.isBlank()) {
                     Text(
-                        text = when (column.type) {
+                        text = if (isRequiredEmpty) {
+                            "Required"
+                        } else when (column.type) {
                             PageTableColumnType.Number -> "0"
                             PageTableColumnType.Select,
                             PageTableColumnType.MultiSelect,
@@ -403,7 +417,11 @@ private fun RowPagePlainPropertyValue(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         style = MaterialTheme.typography.bodyMedium,
-                        color = tableColors.emptyValue,
+                        color = if (isRequiredEmpty) {
+                            MaterialTheme.colorScheme.error.copy(alpha = 0.82f)
+                        } else {
+                            tableColors.emptyValue
+                        },
                     )
                 }
                 innerTextField()
@@ -434,11 +452,13 @@ private fun RowPageReadOnlyPropertyValue(
 
 @Composable
 private fun RowPageCheckboxPropertyValue(
+    column: PageTableColumn,
     value: String,
     onValueChange: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val tableColors = TableGridTokens.colors()
+    val isRequiredEmpty = column.config.isRequired && value != CheckboxValueChecked
     Row(
         modifier = modifier
             .height(TableGridTokens.dimensions.propertyValueHeight)
@@ -453,14 +473,14 @@ private fun RowPageCheckboxPropertyValue(
             onCheckedChange = { checked -> onValueChange(if (checked) CheckboxValueChecked else "") },
         )
         Text(
-            text = if (value == CheckboxValueChecked) "Done" else "Empty",
+            text = if (value == CheckboxValueChecked) "Done" else if (isRequiredEmpty) "Required" else "Empty",
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             style = MaterialTheme.typography.bodyMedium,
-            color = if (value == CheckboxValueChecked) {
-                MaterialTheme.colorScheme.onSurface
-            } else {
-                tableColors.emptyValue
+            color = when {
+                value == CheckboxValueChecked -> MaterialTheme.colorScheme.onSurface
+                isRequiredEmpty -> MaterialTheme.colorScheme.error.copy(alpha = 0.82f)
+                else -> tableColors.emptyValue
             },
         )
     }
@@ -483,6 +503,7 @@ private fun RowPageDatePropertyValue(
 ) {
     var isSheetOpen by remember { mutableStateOf(false) }
     val displayText = column.displayDateCellValue(value)
+    val isRequiredEmpty = column.config.isRequired && displayText.isBlank()
 
     if (isSheetOpen) {
         TableDateEditorSheet(
@@ -495,8 +516,9 @@ private fun RowPageDatePropertyValue(
     }
 
     RowPageClickablePropertyValue(
-        text = displayText.ifBlank { "Empty" },
+        text = displayText.ifBlank { if (isRequiredEmpty) "Required" else "Empty" },
         isEmpty = displayText.isBlank(),
+        isRequiredEmpty = isRequiredEmpty,
         modifier = modifier,
         onClick = {
             onFocusProperties()
@@ -516,10 +538,12 @@ private fun RowPageChoicePropertyValue(
     var isExpanded by remember { mutableStateOf(false) }
     val selectedValues = remember(value) { value.selectedChoiceValues() }
     val displayValue = remember(selectedValues) { selectedValues.joinToString(", ") }
+    val isRequiredEmpty = column.config.isRequired && displayValue.isBlank()
     Box(modifier = modifier) {
         RowPageClickablePropertyValue(
-            text = displayValue.ifBlank { "Empty" },
+            text = displayValue.ifBlank { if (isRequiredEmpty) "Required" else "Empty" },
             isEmpty = displayValue.isBlank(),
+            isRequiredEmpty = isRequiredEmpty,
             modifier = Modifier.fillMaxWidth(),
             onClick = {
                 onFocusProperties()
@@ -588,6 +612,7 @@ private fun RowPageChoicePropertyValue(
 private fun RowPageClickablePropertyValue(
     text: String,
     isEmpty: Boolean,
+    isRequiredEmpty: Boolean = false,
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
@@ -605,7 +630,11 @@ private fun RowPageClickablePropertyValue(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             style = MaterialTheme.typography.bodyMedium,
-            color = if (isEmpty) tableColors.emptyValue else MaterialTheme.colorScheme.onSurface,
+            color = when {
+                isRequiredEmpty -> MaterialTheme.colorScheme.error.copy(alpha = 0.82f)
+                isEmpty -> tableColors.emptyValue
+                else -> MaterialTheme.colorScheme.onSurface
+            },
         )
         Icon(
             imageVector = Icons.Rounded.KeyboardArrowDown,

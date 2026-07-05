@@ -180,6 +180,7 @@ class PageRepositoryImpl @Inject constructor(
             pageContentDao.updateBlockContent(
                 pageId = pageId,
                 blockId = block.id,
+                type = block.type.name,
                 text = block.text,
                 richTextJson = pageRepositoryJson.encodeToString(block.richTextSpans),
                 mediaJson = pageRepositoryJson.encodeToString(block.mediaAttachments),

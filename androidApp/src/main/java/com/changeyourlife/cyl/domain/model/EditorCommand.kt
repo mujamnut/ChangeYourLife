@@ -121,10 +121,19 @@ object EditorCommandExecutor {
         val existing = blocks.findBlock(command.blockId)?.block
             ?: return unchanged()
         if (existing.type == command.type) return unchanged()
+        val targetIsTable = command.type == PageBlockType.DatabaseTable || command.type == PageBlockType.Table
+        val nextTable = if (targetIsTable && existing.table.columns.isEmpty()) {
+            PageContentCodec.newBlock(command.type).table
+        } else {
+            existing.table
+        }
 
         val updated = copy(
             blocks = blocks.updateBlock(command.blockId) {
-                it.copy(type = command.type)
+                it.copy(
+                    type = command.type,
+                    table = nextTable,
+                )
             },
         )
         return EditorCommandResult(

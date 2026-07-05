@@ -141,6 +141,40 @@ class TableMutationUseCaseTest {
     }
 
     @Test
+    fun updateColumnConfigPersistsDatabaseLayoutSettings() {
+        val textColumn = PageTableColumn(
+            id = "notes",
+            name = "Notes",
+            type = PageTableColumnType.Text,
+        )
+        val document = tableDocument(
+            columns = listOf(textColumn),
+            rows = listOf(PageTableRow(id = "row-1", cells = mapOf("notes" to ""))),
+        )
+
+        val result = useCase.updateColumnConfig(
+            document = document,
+            tableBlockId = "table-1",
+            columnId = "notes",
+            config = PageTableColumnConfig(
+                isHidden = true,
+                isRequired = true,
+                wrapContent = true,
+                widthDp = 999,
+                description = "Long notes",
+            ),
+        )
+
+        val config = result.document.table.columns.single().config
+        assertTrue(result.changed)
+        assertTrue(config.isHidden)
+        assertTrue(config.isRequired)
+        assertTrue(config.wrapContent)
+        assertEquals(360, config.widthDp)
+        assertEquals("Long notes", config.description)
+    }
+
+    @Test
     fun addRowAppliesColumnDefaultValues() {
         val statusColumn = PageTableColumn(
             id = "status",

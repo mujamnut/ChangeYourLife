@@ -70,7 +70,8 @@ interface PageContentDao {
     @Query(
         """
         UPDATE page_blocks
-        SET text = :text,
+        SET type = :type,
+            text = :text,
             richTextJson = :richTextJson,
             mediaJson = :mediaJson,
             isChecked = :isChecked,
@@ -82,6 +83,7 @@ interface PageContentDao {
     suspend fun updateBlockContent(
         pageId: String,
         blockId: String,
+        type: String,
         text: String,
         richTextJson: String,
         mediaJson: String,
