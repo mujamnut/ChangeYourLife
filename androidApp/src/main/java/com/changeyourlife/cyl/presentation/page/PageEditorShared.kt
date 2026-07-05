@@ -577,20 +577,20 @@ internal data class DashboardStat(
     val value: String,
 )
 
-internal val TableCellWidth = 180.dp
-internal val TableActionWidth = 48.dp
-internal val TableAddColumnWidth = 64.dp
-internal val TableHeaderHeight = 44.dp
-internal val TableRowHeight = 50.dp
-internal val TableGroupHeaderWidth = 280.dp
-internal val BoardColumnWidth = 220.dp
-internal val CalendarDayWidth = 240.dp
-internal val GalleryItemWidth = 220.dp
-internal val TimelineDateWidth = 92.dp
-internal val DashboardStatWidth = 120.dp
-internal val DashboardLabelWidth = 96.dp
-internal val DashboardCountWidth = 32.dp
-internal val PropertySymbolWidth = 44.dp
+internal val TableCellWidth = TableGridTokens.dimensions.cellWidth
+internal val TableActionWidth = TableGridTokens.dimensions.actionWidth
+internal val TableAddColumnWidth = TableGridTokens.dimensions.addColumnWidth
+internal val TableHeaderHeight = TableGridTokens.dimensions.headerHeight
+internal val TableRowHeight = TableGridTokens.dimensions.rowHeight
+internal val TableGroupHeaderWidth = TableGridTokens.dimensions.groupHeaderWidth
+internal val BoardColumnWidth = TableGridTokens.dimensions.boardColumnWidth
+internal val CalendarDayWidth = TableGridTokens.dimensions.calendarDayWidth
+internal val GalleryItemWidth = TableGridTokens.dimensions.galleryItemWidth
+internal val TimelineDateWidth = TableGridTokens.dimensions.timelineDateWidth
+internal val DashboardStatWidth = TableGridTokens.dimensions.dashboardStatWidth
+internal val DashboardLabelWidth = TableGridTokens.dimensions.dashboardLabelWidth
+internal val DashboardCountWidth = TableGridTokens.dimensions.dashboardCountWidth
+internal val PropertySymbolWidth = TableGridTokens.dimensions.propertySymbolWidth
 internal val TableStatusOptions = listOf("Not started", "In progress", "Done", "Blocked")
 internal val TableWeekdayLabels = listOf("Su", "Mo", "Tu", "We", "Th", "Fr", "Sa")
 internal val TableTimeOptions = List(48) { index -> LocalTime.MIDNIGHT.plusMinutes(index * 30L) }

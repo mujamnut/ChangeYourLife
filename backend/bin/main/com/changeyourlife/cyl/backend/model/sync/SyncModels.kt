@@ -2,6 +2,7 @@ package com.changeyourlife.cyl.backend.model.sync
 
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
 
 @Serializable
 data class WorkspaceSyncDto(
@@ -120,6 +121,7 @@ data class PageTableCellValuePatchRequest(
     val rowId: String,
     val columnId: String,
     val value: String,
+    val valueJson: JsonObject? = null,
 )
 
 @Serializable
@@ -190,10 +192,13 @@ data class PageTableColumnCreateRequest(
 data class PageTableRowCreateRequest(
     val rowId: String = "",
     val cells: Map<String, String> = emptyMap(),
+    val cellValues: Map<String, JsonObject> = emptyMap(),
+    val metadata: JsonObject = JsonObject(emptyMap()),
     val targetIndex: Int? = null,
 )
 
 @Serializable
 data class PageTableRowPatchRequest(
     val blocks: JsonArray? = null,
+    val metadata: JsonObject? = null,
 )

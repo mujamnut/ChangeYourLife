@@ -111,7 +111,11 @@ interface PageContentDao {
     @Query(
         """
         UPDATE page_table_cells
-        SET value = :value, valueJson = '{}', updatedAt = :updatedAt, deletedAt = NULL
+        SET value = :value,
+            valueType = :valueType,
+            valueJson = :valueJson,
+            updatedAt = :updatedAt,
+            deletedAt = NULL
         WHERE rowId = :rowId AND columnId = :columnId
         """,
     )
@@ -119,6 +123,8 @@ interface PageContentDao {
         rowId: String,
         columnId: String,
         value: String,
+        valueType: String,
+        valueJson: String,
         updatedAt: Long,
     ): Int
 

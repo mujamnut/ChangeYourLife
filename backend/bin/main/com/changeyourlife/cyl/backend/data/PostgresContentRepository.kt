@@ -268,6 +268,7 @@ class PostgresContentRepository(
         rowId: String,
         columnId: String,
         value: String,
+        valueJson: kotlinx.serialization.json.JsonObject?,
         updatedAt: Long,
     ): PageRecord? = updatePageContent(userId, pageId, updatedAt) { content ->
         PageContentJsonMutator.updateTableCellValue(
@@ -275,6 +276,7 @@ class PostgresContentRepository(
             rowId = rowId,
             columnId = columnId,
             value = value,
+            valueJson = valueJson,
         )
     }
 

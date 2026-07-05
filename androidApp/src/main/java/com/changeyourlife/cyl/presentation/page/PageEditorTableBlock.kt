@@ -1739,12 +1739,13 @@ internal fun TableHeaderCell(
     column: PageTableColumn,
     onClick: () -> Unit,
 ) {
+    val tableColors = TableGridTokens.colors()
     Row(
         modifier = Modifier
             .width(TableCellWidth)
             .height(TableHeaderHeight)
             .clickable(onClick = onClick)
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .background(tableColors.headerBackground)
             .padding(horizontal = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -1778,6 +1779,7 @@ internal fun TableAddColumnCell(
     onAddColumn: (String, PageTableColumnType) -> Unit,
 ) {
     var isNewColumnSheetOpen by remember { mutableStateOf(false) }
+    val tableColors = TableGridTokens.colors()
     if (isNewColumnSheetOpen) {
         NewTableColumnSheet(
             onCreateColumn = { name, type ->
@@ -1792,7 +1794,7 @@ internal fun TableAddColumnCell(
             .width(TableAddColumnWidth)
             .height(TableHeaderHeight)
             .clickable { isNewColumnSheetOpen = true }
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .background(tableColors.headerBackground)
             .padding(horizontal = 10.dp),
         contentAlignment = Alignment.Center,
     ) {
@@ -2791,6 +2793,7 @@ internal fun TableDataRow(
     val remainingColumns = columns.drop(1)
     var isActionSheetOpen by remember(row.id) { mutableStateOf(false) }
     var isDragging by remember(row.id) { mutableStateOf(false) }
+    val tableColors = TableGridTokens.colors()
     val context = LocalContext.current
     val latestRowIndex by rememberUpdatedState(rowIndex)
     val dragScale by animateFloatAsState(
@@ -2809,9 +2812,9 @@ internal fun TableDataRow(
         label = "table-row-drag-shadow",
     )
     val rowBackground = when {
-        isDragging -> MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.92f)
-        isHighlighted -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
-        else -> MaterialTheme.colorScheme.surface
+        isDragging -> tableColors.draggedRowBackground
+        isHighlighted -> tableColors.highlightedRowBackground
+        else -> tableColors.cellBackground
     }
 
     if (isActionSheetOpen) {
@@ -2906,17 +2909,17 @@ internal fun TableDataRow(
                 },
                 modifier = Modifier
                     .width(TableCellWidth)
-                    .background(MaterialTheme.colorScheme.surface),
+                    .background(tableColors.cellBackground),
             )
         }
         Box(
             modifier = Modifier
                 .width(TableAddColumnWidth)
                 .height(TableRowHeight)
-                .background(MaterialTheme.colorScheme.surface),
+                .background(tableColors.cellBackground),
         )
     }
-    HorizontalDivider()
+    HorizontalDivider(color = tableColors.divider)
 }
 
 private fun Modifier.tableRowHoldGesture(

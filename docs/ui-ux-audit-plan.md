@@ -570,6 +570,8 @@ Current progress:
 - Done: row sheet properties now render as a cleaner database-item list: each property uses a compact type icon, stable name column, plain inline value editor, subtle dividers, and quiet `Empty` states instead of noisy type labels and outlined fields.
 - Done: row sheet now supports direct row-name editing from the sheet header. The title writes into the table's title column, uses a plain inline editor, and shows a quiet `Untitled row` placeholder when empty.
 - Done: row sheet property labels/icons now open the same `Edit property` sheet as table headers, so users can rename, change type, configure date/formula/relation/rollup, duplicate, insert, delete, sort, filter, and group from inside the row sheet.
+- Done: table dimensions and key state colors now have a dedicated `TableGridTokens` source, covering grid widths/heights, row/header colors, dragged/highlighted row backgrounds, dividers, and row-property dimensions.
+- Done: row sheet title/property UI has been extracted into `PageEditorTableRowProperties.kt`, leaving `PageEditorTableRowPage.kt` closer to sheet orchestration and row content editing.
 
 ## Refactor After UX Direction
 

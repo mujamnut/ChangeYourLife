@@ -42,6 +42,7 @@ object DatabaseModule {
             .addMigrations(MIGRATION_9_10)
             .addMigrations(MIGRATION_10_11)
             .addMigrations(MIGRATION_11_12)
+            .addMigrations(MIGRATION_12_13)
             .build()
     }
 
@@ -485,6 +486,21 @@ object DatabaseModule {
                 """
                 CREATE INDEX IF NOT EXISTS `index_chat_messages_syncStatus`
                 ON `chat_messages` (`syncStatus`)
+                """.trimIndent(),
+            )
+        }
+    }
+
+    val MIGRATION_12_13 = object : Migration(12, 13) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE `page_table_rows` ADD COLUMN `icon` TEXT NOT NULL DEFAULT ''")
+            db.execSQL("ALTER TABLE `page_table_rows` ADD COLUMN `isFavorite` INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE `page_table_rows` ADD COLUMN `metadataJson` TEXT NOT NULL DEFAULT '{}'")
+            db.execSQL("ALTER TABLE `page_table_cells` ADD COLUMN `valueType` TEXT NOT NULL DEFAULT 'Text'")
+            db.execSQL(
+                """
+                CREATE INDEX IF NOT EXISTS `index_page_table_rows_tableId_isFavorite`
+                ON `page_table_rows` (`tableId`, `isFavorite`)
                 """.trimIndent(),
             )
         }

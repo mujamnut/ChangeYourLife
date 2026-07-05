@@ -19,6 +19,8 @@ import com.changeyourlife.cyl.domain.model.PageTableSortDirection
 import com.changeyourlife.cyl.domain.model.PageTableTimeFormat
 import com.changeyourlife.cyl.domain.model.PageTableView
 import com.changeyourlife.cyl.domain.model.PageTableViewConfig
+import com.changeyourlife.cyl.domain.model.toTypedCellValue
+import com.changeyourlife.cyl.domain.model.withColumnType
 import java.util.UUID
 
 class TableMutationUseCase(
@@ -82,6 +84,14 @@ class TableMutationUseCase(
                 id = UUID.randomUUID().toString(),
                 cells = row.cells.mapNotNull { (columnId, value) ->
                     columnIdMap[columnId]?.let { nextColumnId -> nextColumnId to value }
+                }.toMap(),
+                cellValues = row.cellValues.mapNotNull { (columnId, value) ->
+                    columnIdMap[columnId]?.let { nextColumnId ->
+                        val sourceColumn = sourceTable.columns.firstOrNull { column -> column.id == columnId }
+                        val nextColumn = sourceColumns.firstOrNull { column -> column.id == nextColumnId }
+                        val displayValue = row.cells[columnId].orEmpty()
+                        nextColumnId to value.withColumnType(nextColumn?.type ?: sourceColumn?.type ?: value.type, displayValue)
+                    }
                 }.toMap(),
                 blocks = row.blocks.map { block -> block.duplicatedForImportedTableRow() },
             )
@@ -207,7 +217,16 @@ class TableMutationUseCase(
                 }
             },
             rows = table.rows.map { row ->
-                row.copy(cells = row.cells + (columnId to type.coerceExistingCellValue(row.cells[columnId].orEmpty())))
+                val nextValue = type.coerceExistingCellValue(row.cells[columnId].orEmpty())
+                row.copy(
+                    cells = row.cells + (columnId to nextValue),
+                    cellValues = row.cellValues + (
+                        columnId to (
+                            row.cellValues[columnId]?.withColumnType(type, nextValue)
+                                ?: nextValue.toTypedCellValue(type)
+                            )
+                        ),
+                )
             },
         )
     }
@@ -304,7 +323,14 @@ class TableMutationUseCase(
             coercedValue = nextValue
             table.copy(
                 rows = table.rows.map { row ->
-                    if (row.id == rowId) row.copy(cells = row.cells + (columnId to nextValue)) else row
+                    if (row.id == rowId) {
+                        row.copy(
+                            cells = row.cells + (columnId to nextValue),
+                            cellValues = row.cellValues + (columnId to column.toTypedCellValue(nextValue)),
+                        )
+                    } else {
+                        row
+                    }
                 },
             )
         }
@@ -324,7 +350,10 @@ class TableMutationUseCase(
         table.copy(
             columns = table.columns.toMutableList().apply { add(index, column) },
             rows = table.rows.map { row ->
-                row.copy(cells = row.cells + (column.id to ""))
+                row.copy(
+                    cells = row.cells + (column.id to ""),
+                    cellValues = row.cellValues + (column.id to column.toTypedCellValue("")),
+                )
             },
         )
     }
@@ -347,7 +376,14 @@ class TableMutationUseCase(
                     add(sourceIndex + 1, duplicatedColumn)
                 },
                 rows = table.rows.map { row ->
-                    row.copy(cells = row.cells + (duplicatedColumn.id to row.cells[sourceColumnId].orEmpty()))
+                    val copiedValue = row.cells[sourceColumnId].orEmpty()
+                    val copiedTypedValue = row.cellValues[sourceColumnId]
+                        ?.withColumnType(duplicatedColumn.type, copiedValue)
+                        ?: duplicatedColumn.toTypedCellValue(copiedValue)
+                    row.copy(
+                        cells = row.cells + (duplicatedColumn.id to copiedValue),
+                        cellValues = row.cellValues + (duplicatedColumn.id to copiedTypedValue),
+                    )
                 },
             )
         }
@@ -371,7 +407,12 @@ class TableMutationUseCase(
                 columns = table.columns
                     .filterNot { column -> column.id == columnId }
                     .map { column -> column.withoutColumnReference(columnId) },
-                rows = table.rows.map { row -> row.copy(cells = row.cells - columnId) },
+                rows = table.rows.map { row ->
+                    row.copy(
+                        cells = row.cells - columnId,
+                        cellValues = row.cellValues - columnId,
+                    )
+                },
                 sort = if (table.sort.columnId == columnId) PageTableSort() else table.sort,
                 filter = if (table.filter.columnId == columnId) PageTableFilter() else table.filter,
                 groupByColumnId = if (table.groupByColumnId == columnId) "" else table.groupByColumnId,

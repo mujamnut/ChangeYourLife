@@ -2,6 +2,8 @@ package com.changeyourlife.cyl.data.remote.sync
 
 import com.changeyourlife.cyl.domain.model.Page
 import com.changeyourlife.cyl.domain.model.PageBlock
+import com.changeyourlife.cyl.domain.model.PageTableCellValue
+import com.changeyourlife.cyl.domain.model.PageTableRowMetadata
 import com.changeyourlife.cyl.domain.model.PageMediaAttachment
 import com.changeyourlife.cyl.domain.model.PageTextSpan
 import com.changeyourlife.cyl.domain.model.Workspace
@@ -125,6 +127,7 @@ data class PageTableCellValuePatchRequestDto(
     val rowId: String,
     val columnId: String,
     val value: String,
+    val valueJson: PageTableCellValue? = null,
 )
 
 @Serializable
@@ -195,12 +198,15 @@ data class PageTableColumnCreateRequestDto(
 data class PageTableRowCreateRequestDto(
     val rowId: String = "",
     val cells: Map<String, String> = emptyMap(),
+    val cellValues: Map<String, PageTableCellValue> = emptyMap(),
+    val metadata: PageTableRowMetadata = PageTableRowMetadata(),
     val targetIndex: Int? = null,
 )
 
 @Serializable
 data class PageTableRowPatchRequestDto(
     val blocks: List<PageBlock>? = null,
+    val metadata: PageTableRowMetadata? = null,
 )
 
 fun Workspace.toSyncDto(): WorkspaceSyncDto {

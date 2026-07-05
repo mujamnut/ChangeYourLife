@@ -87,6 +87,7 @@ object PageContentJsonMutator {
         rowId: String,
         columnId: String,
         value: String,
+        valueJson: JsonObject?,
     ): String? {
         if (rowId.isBlank() || columnId.isBlank()) return null
         val root = content.toJsonObjectOrNull() ?: return null
@@ -104,8 +105,14 @@ object PageContentJsonMutator {
                 val row = element as? JsonObject ?: return@map element
                 if (row.stringValue("id") != rowId) return@map row
                 val cells = row["cells"] as? JsonObject ?: JsonObject(emptyMap())
+                val cellValues = row["cellValues"] as? JsonObject ?: JsonObject(emptyMap())
                 changed = true
-                row.withElement("cells", cells.withString(columnId, value))
+                val rowWithCell = row.withElement("cells", cells.withString(columnId, value))
+                if (valueJson == null) {
+                    rowWithCell
+                } else {
+                    rowWithCell.withElement("cellValues", cellValues.withElement(columnId, valueJson))
+                }
             }
             if (!changed) return@updateBlocks Mutation(block)
 
@@ -353,7 +360,10 @@ object PageContentJsonMutator {
                 val row = element as? JsonObject ?: return@map element
                 val rowId = row.stringValue("id")
                 val cells = row["cells"] as? JsonObject ?: JsonObject(emptyMap())
-                row.withElement("cells", cells.withString(newColumnId, cellValues[rowId].orEmpty()))
+                val typedValues = row["cellValues"] as? JsonObject ?: JsonObject(emptyMap())
+                row
+                    .withElement("cells", cells.withString(newColumnId, cellValues[rowId].orEmpty()))
+                    .withElement("cellValues", typedValues.withElement(newColumnId, JsonObject(emptyMap())))
             }
             table
                 .withElement("columns", columns.insertElement(column, afterBlockId = "", targetIndex = targetIndex))
@@ -373,7 +383,10 @@ object PageContentJsonMutator {
             val updatedRows = rows.map { element ->
                 val row = element as? JsonObject ?: return@map element
                 val cells = row["cells"] as? JsonObject ?: JsonObject(emptyMap())
-                row.withElement("cells", cells.withoutKey(columnId))
+                val typedValues = row["cellValues"] as? JsonObject ?: JsonObject(emptyMap())
+                row
+                    .withElement("cells", cells.withoutKey(columnId))
+                    .withElement("cellValues", typedValues.withoutKey(columnId))
             }
             table
                 .withElement("columns", JsonArray(updatedColumns))
@@ -398,6 +411,8 @@ object PageContentJsonMutator {
         tableBlockId: String,
         rowId: String,
         cells: Map<String, String>,
+        cellValues: Map<String, JsonObject>,
+        metadata: JsonObject,
         targetIndex: Int?,
     ): String? {
         if (tableBlockId.isBlank()) return null
@@ -408,10 +423,17 @@ object PageContentJsonMutator {
                 val id = column?.stringValue("id").orEmpty()
                 id to JsonPrimitive(cells[id].orEmpty())
             }.filterKeys { id -> id.isNotBlank() }
+            val normalizedCellValues = columns.associate { element ->
+                val column = element as? JsonObject
+                val id = column?.stringValue("id").orEmpty()
+                id to (cellValues[id] ?: JsonObject(emptyMap()))
+            }.filterKeys { id -> id.isNotBlank() }
             val row = JsonObject(
                 mapOf(
                     "id" to JsonPrimitive(rowId.ifBlank { UUID.randomUUID().toString() }),
                     "cells" to JsonObject(normalizedCells),
+                    "cellValues" to JsonObject(normalizedCellValues),
+                    "metadata" to metadata,
                     "blocks" to JsonArray(emptyList()),
                 ),
             )
@@ -425,16 +447,20 @@ object PageContentJsonMutator {
         tableBlockId: String,
         rowId: String,
         blocks: JsonArray?,
+        metadata: JsonObject?,
     ): String? {
-        if (tableBlockId.isBlank() || rowId.isBlank() || blocks == null) return null
+        if (tableBlockId.isBlank() || rowId.isBlank() || (blocks == null && metadata == null)) return null
         return mutateTable(content, tableBlockId) { table ->
             val rows = table["rows"] as? JsonArray ?: JsonArray(emptyList())
             var changed = false
             val updatedRows = rows.map { element ->
                 val row = element as? JsonObject ?: return@map element
                 if (row.stringValue("id") == rowId) {
+                    var updatedRow = row
+                    blocks?.let { updatedRow = updatedRow.withElement("blocks", it) }
+                    metadata?.let { updatedRow = updatedRow.withElement("metadata", it) }
                     changed = true
-                    row.withElement("blocks", blocks)
+                    updatedRow
                 } else {
                     row
                 }

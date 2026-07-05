@@ -141,6 +141,7 @@ data class PageTableColumnEntity(
     ],
     indices = [
         Index(value = ["tableId", "sortOrder"]),
+        Index(value = ["tableId", "isFavorite"]),
     ],
 )
 data class PageTableRowEntity(
@@ -148,6 +149,9 @@ data class PageTableRowEntity(
     val tableId: String,
     val sortOrder: Int = 0,
     val contentJson: String = "[]",
+    val icon: String = "",
+    val isFavorite: Boolean = false,
+    val metadataJson: String = "{}",
     val createdAt: Long,
     val updatedAt: Long,
     val deletedAt: Long?,
@@ -178,6 +182,7 @@ data class PageTableCellEntity(
     val rowId: String,
     val columnId: String,
     val value: String = "",
+    val valueType: String = "Text",
     val valueJson: String = "{}",
     val createdAt: Long,
     val updatedAt: Long,

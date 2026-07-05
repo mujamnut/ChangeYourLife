@@ -553,6 +553,8 @@ fun Route.contentRoutes(contentRepository: ContentRepository) {
                             tableBlockId = tableBlockId,
                             rowId = request.rowId,
                             cells = request.cells,
+                            cellValues = request.cellValues,
+                            metadata = request.metadata,
                             targetIndex = request.targetIndex,
                         )
                     }
@@ -584,6 +586,7 @@ fun Route.contentRoutes(contentRepository: ContentRepository) {
                             tableBlockId = tableBlockId,
                             rowId = rowId,
                             blocks = request.blocks,
+                            metadata = request.metadata,
                         )
                     }
                 }
@@ -663,6 +666,7 @@ fun Route.contentRoutes(contentRepository: ContentRepository) {
                         rowId = request.rowId,
                         columnId = request.columnId,
                         value = request.value,
+                        valueJson = request.valueJson,
                         updatedAt = System.currentTimeMillis(),
                     )
                     if (saved == null) {

@@ -1,5 +1,7 @@
 package com.changeyourlife.cyl.backend.domain
 
+import kotlinx.serialization.json.JsonObject
+
 data class WorkspaceRecord(
     val id: String,
     val userId: String,
@@ -61,6 +63,7 @@ interface ContentRepository {
         rowId: String,
         columnId: String,
         value: String,
+        valueJson: JsonObject?,
         updatedAt: Long,
     ): PageRecord?
 

@@ -23,10 +23,13 @@ import com.changeyourlife.cyl.domain.model.PageSyncState
 import com.changeyourlife.cyl.domain.model.PageSyncStatus
 import com.changeyourlife.cyl.domain.model.PageTable
 import com.changeyourlife.cyl.domain.model.PageTableColumn
+import com.changeyourlife.cyl.domain.model.PageTableColumnType
 import com.changeyourlife.cyl.domain.model.PageTableFilter
 import com.changeyourlife.cyl.domain.model.PageTableRow
 import com.changeyourlife.cyl.domain.model.PageTableSort
 import com.changeyourlife.cyl.domain.model.PageTableViewConfig
+import com.changeyourlife.cyl.domain.model.toTypedCellValue
+import com.changeyourlife.cyl.domain.model.withColumnType
 import com.changeyourlife.cyl.domain.repository.PageRepository
 import java.util.UUID
 import javax.inject.Inject
@@ -226,10 +229,18 @@ class PageRepositoryImpl @Inject constructor(
                 )
             },
         ) { updatedAt ->
+            val snapshot = pageContentDao.getPageContentSnapshot(pageId)
+            val columnType = snapshot.columns
+                .firstOrNull { column -> column.id == columnId }
+                ?.type
+                .orEmpty()
+            val typedValue = value.toTypedCellValue(columnType.toPageTableColumnType())
             pageContentDao.updateTableCellValue(
                 rowId = rowId,
                 columnId = columnId,
                 value = value,
+                valueType = typedValue.type.name,
+                valueJson = pageRepositoryJson.encodeToString(typedValue),
                 updatedAt = updatedAt,
             ) > 0
         }
@@ -462,7 +473,11 @@ class PageRepositoryImpl @Inject constructor(
                             idSelector = PageTableColumn::id,
                         ),
                         rows = block.table.rows.map { row ->
-                            row.copy(cells = row.cells + (columnToAdd.id to cellValues[row.id].orEmpty()))
+                            val value = cellValues[row.id].orEmpty()
+                            row.copy(
+                                cells = row.cells + (columnToAdd.id to value),
+                                cellValues = row.cellValues + (columnToAdd.id to columnToAdd.toTypedCellValue(value)),
+                            )
                         },
                     ),
                 )
@@ -911,7 +926,12 @@ class PageRepositoryImpl @Inject constructor(
             columns = columns
                 .filterNot { column -> column.id == columnId }
                 .map { column -> column.withoutColumnReference(columnId) },
-            rows = rows.map { row -> row.copy(cells = row.cells - columnId) },
+            rows = rows.map { row ->
+                row.copy(
+                    cells = row.cells - columnId,
+                    cellValues = row.cellValues - columnId,
+                )
+            },
             sort = if (sort.columnId == columnId) PageTableSort() else sort,
             filter = if (filter.columnId == columnId) PageTableFilter() else filter,
             groupByColumnId = groupByColumnId.takeUnless { it == columnId }.orEmpty(),
@@ -937,9 +957,20 @@ class PageRepositoryImpl @Inject constructor(
         )
     }
 
+    private fun String.toPageTableColumnType(): PageTableColumnType {
+        return runCatching { enumValueOf<PageTableColumnType>(this) }
+            .getOrDefault(PageTableColumnType.Text)
+    }
+
     private fun PageTableRow.withCellsForColumns(columns: List<PageTableColumn>): PageTableRow {
         return copy(
             cells = columns.associate { column -> column.id to cells[column.id].orEmpty() },
+            cellValues = columns.associate { column ->
+                val value = cellValues[column.id]
+                    ?.withColumnType(column.type, cells[column.id].orEmpty())
+                    ?: column.toTypedCellValue(cells[column.id].orEmpty())
+                column.id to value
+            },
         )
     }
 

@@ -111,6 +111,7 @@ class InMemoryContentRepository : ContentRepository {
         rowId: String,
         columnId: String,
         value: String,
+        valueJson: kotlinx.serialization.json.JsonObject?,
         updatedAt: Long,
     ): PageRecord? {
         return mutatePageContent(userId, pageId, updatedAt) { content ->
@@ -119,6 +120,7 @@ class InMemoryContentRepository : ContentRepository {
                 rowId = rowId,
                 columnId = columnId,
                 value = value,
+                valueJson = valueJson,
             )
         }
     }

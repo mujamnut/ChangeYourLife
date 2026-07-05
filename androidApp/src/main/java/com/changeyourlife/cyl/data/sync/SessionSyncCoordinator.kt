@@ -40,8 +40,10 @@ import com.changeyourlife.cyl.data.remote.sync.toDomain as remoteToDomain
 import com.changeyourlife.cyl.data.remote.sync.toSyncDto
 import com.changeyourlife.cyl.domain.model.PageBlock
 import com.changeyourlife.cyl.domain.model.PageBlockType
+import com.changeyourlife.cyl.domain.model.PageContentCodec
 import com.changeyourlife.cyl.domain.model.PageProperty
 import com.changeyourlife.cyl.domain.model.PageTable
+import com.changeyourlife.cyl.domain.model.PageTableCellValue
 import com.changeyourlife.cyl.domain.model.PageTableColumn
 import com.changeyourlife.cyl.domain.model.PageTableRow
 import javax.inject.Inject
@@ -388,6 +390,7 @@ class SessionSyncCoordinator @Inject constructor(
                     rowId = rowId,
                     columnId = columnId,
                     value = value,
+                    valueJson = page.findTableCellValue(rowId, columnId),
                 ),
             )
         }.onSuccess { remotePage ->
@@ -691,6 +694,8 @@ class SessionSyncCoordinator @Inject constructor(
                 request = PageTableRowCreateRequestDto(
                     rowId = row.id,
                     cells = row.cells,
+                    cellValues = row.cellValues,
+                    metadata = row.metadata,
                     targetIndex = targetIndex,
                 ),
             )
@@ -714,7 +719,10 @@ class SessionSyncCoordinator @Inject constructor(
                 id = page.id,
                 tableBlockId = tableBlockId,
                 rowId = row.id,
-                request = PageTableRowPatchRequestDto(blocks = row.blocks),
+                request = PageTableRowPatchRequestDto(
+                    blocks = row.blocks,
+                    metadata = row.metadata,
+                ),
             )
         }.onSuccess { remotePage ->
             persistPage(remotePage.toSyncedEntity(previous = page, now = System.currentTimeMillis()))
@@ -1236,5 +1244,21 @@ class SessionSyncCoordinator @Inject constructor(
             rollupTargetColumnId = rollupTargetColumnId,
             rollupAggregation = rollupAggregation.name,
         )
+    }
+
+    private fun PageEntity.findTableCellValue(rowId: String, columnId: String): PageTableCellValue? {
+        return PageContentCodec.decodeDocument(content)
+            .blocks
+            .asSequence()
+            .flatMap { block -> block.flattenBlocks().asSequence() }
+            .filter { block -> block.type == PageBlockType.DatabaseTable }
+            .flatMap { block -> block.table.rows.asSequence() }
+            .firstOrNull { row -> row.id == rowId }
+            ?.cellValues
+            ?.get(columnId)
+    }
+
+    private fun PageBlock.flattenBlocks(): List<PageBlock> {
+        return listOf(this) + children.flatMap { child -> child.flattenBlocks() }
     }
 }

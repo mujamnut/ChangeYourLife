@@ -42,7 +42,7 @@ import com.changeyourlife.cyl.data.local.entity.WorkspaceEntity
         SyncTombstoneEntity::class,
         AiActionLogEntity::class,
     ],
-    version = 12,
+    version = 13,
     exportSchema = true,
 )
 abstract class CylDatabase : RoomDatabase() {

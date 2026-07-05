@@ -19,10 +19,14 @@ import com.changeyourlife.cyl.domain.model.PageTableColumn
 import com.changeyourlife.cyl.domain.model.PageTableColumnType
 import com.changeyourlife.cyl.domain.model.PageTableFilter
 import com.changeyourlife.cyl.domain.model.PageTableRow
+import com.changeyourlife.cyl.domain.model.PageTableRowMetadata
 import com.changeyourlife.cyl.domain.model.PageTableSort
 import com.changeyourlife.cyl.domain.model.PageTableView
 import com.changeyourlife.cyl.domain.model.PageTableViewConfig
 import com.changeyourlife.cyl.domain.model.PageTextSpan
+import com.changeyourlife.cyl.domain.model.displayValue
+import com.changeyourlife.cyl.domain.model.toTypedCellValue
+import com.changeyourlife.cyl.domain.model.withColumnType
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
@@ -186,18 +190,21 @@ private fun PageTableEntity.toDomain(
     rows: List<PageTableRowEntity>,
     cellsByRowId: Map<String, List<PageTableCellEntity>>,
 ): PageTable {
+    val domainColumns = columns
+        .sortedBy { column -> column.sortOrder }
+        .map { column -> column.toDomain() }
+    val columnsById = domainColumns.associateBy { column -> column.id }
     return PageTable(
         title = title,
         view = view.enumValueOrDefault(PageTableView.Table),
         viewConfig = viewConfigJson.decodeObject(PageTableViewConfig()),
-        columns = columns
-            .sortedBy { column -> column.sortOrder }
-            .map { column -> column.toDomain() },
+        columns = domainColumns,
         rows = rows
             .sortedBy { row -> row.sortOrder }
             .map { row ->
                 row.toDomain(
                     cells = cellsByRowId[row.id].orEmpty(),
+                    columnsById = columnsById,
                 )
             },
         sort = sortJson.decodeObject(PageTableSort()),
@@ -221,10 +228,30 @@ private fun PageTableColumnEntity.toDomain(): PageTableColumn {
     )
 }
 
-private fun PageTableRowEntity.toDomain(cells: List<PageTableCellEntity>): PageTableRow {
+private fun PageTableRowEntity.toDomain(
+    cells: List<PageTableCellEntity>,
+    columnsById: Map<String, PageTableColumn>,
+): PageTableRow {
+    val cellTextValues = cells.associate { cell -> cell.columnId to cell.value }
+    val typedValues = cells.associate { cell ->
+        val type = columnsById[cell.columnId]?.type ?: cell.valueType.enumValueOrDefault(PageTableColumnType.Text)
+        val fallback = cell.value.toTypedCellValue(type)
+        val typedValue = cell.valueJson
+            .decodeObject(fallback)
+            .withColumnType(type, cell.value)
+        cell.columnId to typedValue
+    }
+    val decodedMetadata = metadataJson.decodeObject(PageTableRowMetadata())
     return PageTableRow(
         id = id,
-        cells = cells.associate { cell -> cell.columnId to cell.value },
+        cells = cellTextValues,
+        cellValues = typedValues,
+        metadata = decodedMetadata.copy(
+            icon = icon.ifBlank { decodedMetadata.icon },
+            isFavorite = isFavorite || decodedMetadata.isFavorite,
+            createdAt = decodedMetadata.createdAt.takeIf { value -> value > 0 } ?: createdAt,
+            lastEditedAt = decodedMetadata.lastEditedAt.takeIf { value -> value > 0 } ?: updatedAt,
+        ),
         blocks = contentJson.decodeList<PageBlock>(),
     )
 }
@@ -319,21 +346,33 @@ private class PageContentProjectionCollector(
                 sortOrder = index,
             )
         }
+        val columnsById = table.columns.associateBy { column -> column.id }
         table.rows.forEachIndexed { index, row ->
+            val rowMetadata = row.metadata
             rows += PageTableRowEntity(
                 id = row.id,
                 tableId = tableId,
                 sortOrder = index,
                 contentJson = pageContentJson.encodeToString(row.blocks),
+                icon = rowMetadata.icon,
+                isFavorite = rowMetadata.isFavorite,
+                metadataJson = pageContentJson.encodeToString(rowMetadata),
                 createdAt = createdAt,
                 updatedAt = updatedAt,
                 deletedAt = deletedAt,
             )
-            row.cells.forEach { (columnId, value) ->
+            table.columns.forEach { column ->
+                val columnId = column.id
+                val value = row.cells[columnId].orEmpty()
+                val typedValue = row.cellValues[columnId]
+                    ?.withColumnType(column.type, value)
+                    ?: column.toTypedCellValue(value)
                 cells += PageTableCellEntity(
                     rowId = row.id,
                     columnId = columnId,
-                    value = value,
+                    value = typedValue.displayValue(value),
+                    valueType = columnsById[columnId]?.type?.name ?: typedValue.type.name,
+                    valueJson = pageContentJson.encodeToString(typedValue),
                     createdAt = createdAt,
                     updatedAt = updatedAt,
                     deletedAt = deletedAt,

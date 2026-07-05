@@ -83,6 +83,7 @@ object PageContentCodec {
         return PageTableRow(
             id = UUID.randomUUID().toString(),
             cells = columns.associate { column -> column.id to "" },
+            cellValues = columns.associate { column -> column.id to column.toTypedCellValue("") },
         )
     }
 
@@ -133,6 +134,13 @@ object PageContentCodec {
             row.copy(
                 cells = normalizedColumns.associate { column ->
                     column.id to row.cells[column.id].orEmpty()
+                },
+                cellValues = normalizedColumns.associate { column ->
+                    val displayValue = row.cells[column.id].orEmpty()
+                    val typedValue = row.cellValues[column.id]
+                        ?.withColumnType(column.type, displayValue)
+                        ?: column.toTypedCellValue(displayValue)
+                    column.id to typedValue
                 },
                 blocks = row.blocks.normalizedChildBlocks(),
             )

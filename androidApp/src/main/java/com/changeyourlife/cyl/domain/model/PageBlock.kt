@@ -192,7 +192,42 @@ enum class PageTableRollupAggregation {
 data class PageTableRow(
     val id: String,
     val cells: Map<String, String> = emptyMap(),
+    val cellValues: Map<String, PageTableCellValue> = emptyMap(),
+    val metadata: PageTableRowMetadata = PageTableRowMetadata(),
     val blocks: List<PageBlock> = emptyList(),
+)
+
+@Serializable
+data class PageTableRowMetadata(
+    val icon: String = "",
+    val isFavorite: Boolean = false,
+    val createdAt: Long = 0,
+    val createdBy: String = "",
+    val lastEditedAt: Long = 0,
+    val lastEditedBy: String = "",
+)
+
+@Serializable
+data class PageTableCellValue(
+    val type: PageTableColumnType = PageTableColumnType.Text,
+    val text: String = "",
+    val number: String = "",
+    val checked: Boolean = false,
+    val date: PageTableDateCellValue = PageTableDateCellValue(),
+    val files: List<PageMediaAttachment> = emptyList(),
+    val relationRowIds: List<String> = emptyList(),
+)
+
+@Serializable
+data class PageTableDateCellValue(
+    val startDate: String = "",
+    val startTime: String = "",
+    val endDate: String = "",
+    val endTime: String = "",
+    val includeEndDate: Boolean = false,
+    val includeTime: Boolean = false,
+    val timezoneLabel: String = "Local",
+    val reminder: PageTableDateReminder = PageTableDateReminder.OnDayOfEvent,
 )
 
 @Serializable
