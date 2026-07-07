@@ -34,6 +34,7 @@ import com.changeyourlife.cyl.domain.repository.TaskRepository
 import com.changeyourlife.cyl.domain.repository.WorkspaceRepository
 import com.changeyourlife.cyl.domain.repository.AiPageContext
 import com.changeyourlife.cyl.domain.repository.AiRepository
+import com.changeyourlife.cyl.domain.repository.AiException
 import com.changeyourlife.cyl.domain.repository.AiStatus
 import com.changeyourlife.cyl.domain.repository.AiActionLogRepository
 import com.changeyourlife.cyl.domain.repository.ChatAction
@@ -64,7 +65,6 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import retrofit2.HttpException
 
 @HiltViewModel
 class HomeViewModel @Inject constructor(
@@ -1945,11 +1945,8 @@ private fun String.toUserActionLabel(): String {
 }
 
 private fun Throwable.toAiChatErrorMessage(): String {
-    return if (this is HttpException && code() == 401) {
-        "Your session expired after the backend change. Please log in again."
-    } else {
-        "I couldn't reach the CYL backend: ${toBackendConnectionMessage()}"
-    }
+    return (this as? AiException)?.aiError?.userMessage
+        ?: "I couldn't reach the CYL backend: ${toBackendConnectionMessage()}"
 }
 
 data class HomeUiState(

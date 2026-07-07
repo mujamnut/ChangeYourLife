@@ -73,6 +73,12 @@ object AiChatActionOrchestrator {
         )
             .filter { message -> message.isNotBlank() }
             .joinToString("\n\n")
+        val appliedActionIndexes = actionResults.executedActionIndexes
+            .asSequence()
+            .distinct()
+            .filter { index -> index in proposedActions.indices }
+            .filterNot { index -> index in rejectedActionIndexes }
+            .toList()
 
         return AiChatActionOrchestrationResult(
             reply = replyWithResults,
@@ -88,9 +94,8 @@ object AiChatActionOrchestrator {
                 schemaName = backendResult.schemaName,
                 schemaVersion = backendResult.schemaVersion,
                 proposedActions = proposedActions.mapIndexed { index, action -> action.toMetadataItem(index) },
-                executedActions = actionResults.executedActionIndexes
-                    .distinct()
-                    .mapNotNull { index -> proposedActions.getOrNull(index)?.toMetadataItem(index) },
+                executedActions = appliedActionIndexes
+                    .map { index -> proposedActions[index].toMetadataItem(index) },
                 executionMessages = actionResults.messages,
                 validationIssues = backendResult.validationIssues.map { issue ->
                     ChatActionValidationMetadata(

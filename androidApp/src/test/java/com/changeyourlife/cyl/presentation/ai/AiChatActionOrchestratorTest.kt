@@ -235,6 +235,41 @@ class AiChatActionOrchestratorTest {
         assertEquals(listOf(1), result.actionMetadata.validationIssues.map { it.actionIndex })
     }
 
+    @Test
+    fun rejectedPolicyActionsCannotBeMarkedAsExecutedByExecutor() = runBlocking {
+        val result = AiChatActionOrchestrator.orchestrate(
+            workspaceId = "workspace-1",
+            scopedTargetPage = page(),
+            prompt = "ubah nama table jadi sesuai dan tambah row makan",
+            backendResult = ChatActionResult(
+                reply = "Siap.",
+                actions = listOf(
+                    ChatAction(
+                        type = "RENAME_TABLE",
+                        title = "sesuai",
+                        tableTitle = "Budget",
+                    ),
+                    ChatAction(
+                        type = "ADD_TABLE_ROW",
+                        title = "",
+                        tableTitle = "Budget",
+                        rowTitle = "Makan",
+                    ),
+                ),
+            ),
+        ) { _, _, _ ->
+            AiActionExecutionResult(
+                messages = listOf("Done: Added row to Budget"),
+                executedActionIndexes = listOf(0, 1, 99),
+            )
+        }
+
+        assertEquals(listOf("RENAME_TABLE", "ADD_TABLE_ROW"), result.actionMetadata.proposedActions.map { it.type })
+        assertEquals(listOf("ADD_TABLE_ROW"), result.actionMetadata.executedActions.map { it.type })
+        assertEquals(listOf(1), result.actionMetadata.executedActions.map { it.actionIndex })
+        assertEquals(listOf(0), result.actionMetadata.validationIssues.map { it.actionIndex })
+    }
+
     private fun page(): Page {
         return Page(
             id = "page-1",

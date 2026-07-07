@@ -13,6 +13,8 @@ import com.changeyourlife.cyl.data.remote.ai.GenerateTasksRequestDto
 import com.changeyourlife.cyl.data.remote.ai.SummarizeRequestDto
 import com.changeyourlife.cyl.domain.model.PageBlockDocument
 import com.changeyourlife.cyl.domain.repository.AiStatus
+import com.changeyourlife.cyl.domain.repository.AiErrorKind
+import com.changeyourlife.cyl.domain.repository.AiException
 import com.changeyourlife.cyl.domain.repository.AiRepository
 import com.changeyourlife.cyl.domain.repository.AiPageContext
 import com.changeyourlife.cyl.domain.repository.ChatAction
@@ -25,11 +27,12 @@ import java.util.TimeZone
 import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import retrofit2.HttpException
+import kotlinx.serialization.json.Json
 
 class AiRepositoryImpl @Inject constructor(
     private val aiApi: AiApi,
-    private val tokenStore: AuthTokenStore
+    private val tokenStore: AuthTokenStore,
+    private val json: Json,
 ) : AiRepository {
 
     private suspend fun getAuthHeader(): String {
@@ -37,9 +40,17 @@ class AiRepositoryImpl @Inject constructor(
         return "Bearer $token"
     }
 
-    private fun clearSessionIfUnauthorized(error: Throwable) {
-        if (error is HttpException && error.code() == 401) {
+    private fun clearSessionIfUnauthorized(error: AiException) {
+        if (error.aiError.kind == AiErrorKind.Unauthorized) {
             tokenStore.clearToken()
+        }
+    }
+
+    private fun <T> Result<T>.mapAiFailure(): Result<T> {
+        return recoverCatching { error ->
+            val aiException = AiErrorMapper.fromThrowable(error = error, json = json)
+            clearSessionIfUnauthorized(aiException)
+            throw aiException
         }
     }
 
@@ -52,7 +63,7 @@ class AiRepositoryImpl @Inject constructor(
                 model = response.model,
                 apiKeyConfigured = response.apiKeyConfigured,
             )
-        }
+        }.mapAiFailure()
     }
 
     override suspend fun chat(messages: List<Pair<String, String>>): Result<String> = withContext(Dispatchers.IO) {
@@ -62,8 +73,8 @@ class AiRepositoryImpl @Inject constructor(
                 messages = messages.map { ChatMessageDto(role = it.first, content = it.second) }
             )
             val response = aiApi.chat(header, request)
-            response.content
-        }.onFailure(::clearSessionIfUnauthorized)
+            response.content.ifBlank { throw AiErrorMapper.emptyResponse("chat") }
+        }.mapAiFailure()
     }
 
     override suspend fun chatWithActions(
@@ -102,6 +113,9 @@ class AiRepositoryImpl @Inject constructor(
                 clientTimezone = clientTimezone.ifBlank { TimeZone.getDefault().id },
             )
             val response = aiApi.chatWithActions(header, request)
+            if (response.reply.isBlank() && response.actions.isEmpty() && response.validationIssues.isEmpty()) {
+                throw AiErrorMapper.emptyResponse("chatWithActions")
+            }
             ChatActionResult(
                 reply = response.reply,
                 schemaName = response.schemaName,
@@ -195,7 +209,7 @@ class AiRepositoryImpl @Inject constructor(
                     )
                 }
             )
-        }.onFailure(::clearSessionIfUnauthorized)
+        }.mapAiFailure()
     }
 
     override suspend fun summarize(content: String): Result<String> = withContext(Dispatchers.IO) {
@@ -203,8 +217,8 @@ class AiRepositoryImpl @Inject constructor(
             val header = getAuthHeader()
             val request = SummarizeRequestDto(content = content)
             val response = aiApi.summarize(header, request)
-            response.summary
-        }.onFailure(::clearSessionIfUnauthorized)
+            response.summary.ifBlank { throw AiErrorMapper.emptyResponse("summarize") }
+        }.mapAiFailure()
     }
 
     override suspend fun generateTasks(content: String): Result<List<String>> = withContext(Dispatchers.IO) {
@@ -213,7 +227,7 @@ class AiRepositoryImpl @Inject constructor(
             val request = GenerateTasksRequestDto(content = content)
             val response = aiApi.generateTasks(header, request)
             response.tasks
-        }.onFailure(::clearSessionIfUnauthorized)
+        }.mapAiFailure()
     }
 
     override suspend fun generatePlan(prompt: String): Result<PageBlockDocument> = withContext(Dispatchers.IO) {
@@ -221,8 +235,9 @@ class AiRepositoryImpl @Inject constructor(
             val header = getAuthHeader()
             val request = GeneratePlanRequestDto(prompt = prompt)
             val response = aiApi.generatePlan(header, request)
+            if (response.planJson.isBlank()) throw AiErrorMapper.emptyResponse("generatePlan")
             PageBlockCodec.decodeDocument(response.planJson)
-        }.onFailure(::clearSessionIfUnauthorized)
+        }.mapAiFailure()
     }
 }
 
