@@ -1,23 +1,22 @@
 package com.changeyourlife.cyl.presentation.ai
 
+import com.changeyourlife.cyl.domain.model.ChatActionValidationMetadata
 import com.changeyourlife.cyl.domain.model.Page
 import com.changeyourlife.cyl.domain.repository.ChatAction
 import com.changeyourlife.cyl.domain.repository.ChatActionResult
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AiChatActionOrchestratorTest {
     @Test
-    fun planningModeRecordsProposedActionsButDoesNotExecuteThem() = runBlocking {
+    fun smartFlowExecutesBackendActionsAndKeepsMetadata() = runBlocking {
         var executorCalled = false
 
         val result = AiChatActionOrchestrator.orchestrate(
             workspaceId = "workspace-1",
             scopedTargetPage = page(),
-            mode = AiChatMode.Planning,
             prompt = "padam block lama",
             backendResult = ChatActionResult(
                 reply = "Siap.",
@@ -30,30 +29,30 @@ class AiChatActionOrchestratorTest {
             executedAt = 2000L,
             provider = "openrouter",
             model = "openai/gpt-oss-20b:free",
-        ) { _, _, _ ->
+        ) { _, _, actions ->
             executorCalled = true
-            AiActionExecutionResult(messages = listOf("Unexpected edit"))
+            AiActionExecutionResult(
+                messages = listOf("Done: Deleted block lama"),
+                executedActionIndexes = actions.map { candidate -> candidate.originalIndex },
+            )
         }
 
-        assertFalse(executorCalled)
-        assertEquals(
-            "Saya nampak arahan untuk ubah app, tapi mode sekarang Planning. Tukar ke Edit atau Auto untuk apply perubahan ini.",
-            result.reply,
-        )
+        assertTrue(executorCalled)
+        assertEquals("Siap.\n\nDone: Deleted block lama", result.reply)
         assertEquals("audit-planning", result.actionMetadata.auditId)
         assertEquals("user-message-planning", result.actionMetadata.requestMessageId)
         assertEquals(2000L, result.actionMetadata.executedAt)
         assertEquals("openrouter", result.actionMetadata.provider)
         assertEquals("openai/gpt-oss-20b:free", result.actionMetadata.model)
-        assertEquals("Planning", result.actionMetadata.mode)
+        assertEquals("Smart", result.actionMetadata.mode)
         assertEquals(listOf("DELETE_BLOCK"), result.actionMetadata.proposedActions.map { it.type })
         assertEquals(listOf(0), result.actionMetadata.proposedActions.map { it.actionIndex })
-        assertTrue(result.actionMetadata.executedActions.isEmpty())
-        assertTrue(result.actionMetadata.executionMessages.isEmpty())
+        assertEquals(listOf("DELETE_BLOCK"), result.actionMetadata.executedActions.map { it.type })
+        assertEquals(listOf("Done: Deleted block lama"), result.actionMetadata.executionMessages)
     }
 
     @Test
-    fun editModeExecutesBackendActionsAndKeepsMetadata() = runBlocking {
+    fun executesBackendActionsAndKeepsMetadata() = runBlocking {
         var capturedWorkspaceId = ""
         var capturedTargetPage: Page? = null
         var capturedActions = emptyList<ChatAction>()
@@ -61,7 +60,6 @@ class AiChatActionOrchestratorTest {
         val result = AiChatActionOrchestrator.orchestrate(
             workspaceId = "workspace-1",
             scopedTargetPage = page(),
-            mode = AiChatMode.Edit,
             prompt = "tambah row makan 4 ringgit",
             backendResult = ChatActionResult(
                 reply = "Siap.",
@@ -85,10 +83,11 @@ class AiChatActionOrchestratorTest {
         ) { workspaceId, targetPage, actions ->
             capturedWorkspaceId = workspaceId
             capturedTargetPage = targetPage
-            capturedActions = actions
+            capturedActions = actions.map { candidate -> candidate.action }
             AiActionExecutionResult(
                 messages = listOf("Done: Added row to Budget"),
                 pageLinks = listOf(AiChatPageLink(pageId = "page-1", title = "Budget")),
+                executedActionIndexes = actions.map { candidate -> candidate.originalIndex },
             )
         }
 
@@ -110,7 +109,7 @@ class AiChatActionOrchestratorTest {
     }
 
     @Test
-    fun autoModeRecoversMarkdownTableAndExecutesRecoveredAction() = runBlocking {
+    fun recoversMarkdownTableAndExecutesRecoveredAction() = runBlocking {
         var capturedActions = emptyList<ChatAction>()
         val markdownReply = """
             ## Budget
@@ -123,7 +122,6 @@ class AiChatActionOrchestratorTest {
         val result = AiChatActionOrchestrator.orchestrate(
             workspaceId = "workspace-1",
             scopedTargetPage = null,
-            mode = AiChatMode.Auto,
             prompt = "buatkan jadual Budget",
             backendResult = ChatActionResult(
                 reply = markdownReply,
@@ -132,10 +130,11 @@ class AiChatActionOrchestratorTest {
                 schemaVersion = 1,
             ),
         ) { _, _, actions ->
-            capturedActions = actions
+            capturedActions = actions.map { candidate -> candidate.action }
             AiActionExecutionResult(
                 messages = listOf("Done: Created page Budget"),
                 pageLinks = listOf(AiChatPageLink(pageId = "created-1", title = "Budget")),
+                executedActionIndexes = actions.map { candidate -> candidate.originalIndex },
             )
         }
 
@@ -154,7 +153,6 @@ class AiChatActionOrchestratorTest {
         val result = AiChatActionOrchestrator.orchestrate(
             workspaceId = "workspace-1",
             scopedTargetPage = page(),
-            mode = AiChatMode.Edit,
             prompt = "ubah nama table jadi sesuai dan tambah row makan 4 ringgit",
             backendResult = ChatActionResult(
                 reply = "Siap.",
@@ -179,8 +177,11 @@ class AiChatActionOrchestratorTest {
             requestMessageId = "user-message-mixed",
             executedAt = 4000L,
         ) { _, _, actions ->
-            capturedActions = actions
-            AiActionExecutionResult(messages = listOf("Done: Added row to Budget"))
+            capturedActions = actions.map { candidate -> candidate.action }
+            AiActionExecutionResult(
+                messages = listOf("Done: Added row to Budget"),
+                executedActionIndexes = actions.map { candidate -> candidate.originalIndex },
+            )
         }
 
         assertEquals(listOf("ADD_TABLE_ROW"), capturedActions.map { it.type })
@@ -189,6 +190,49 @@ class AiChatActionOrchestratorTest {
         assertEquals(listOf("ADD_TABLE_ROW"), result.actionMetadata.executedActions.map { it.type })
         assertEquals(listOf(1), result.actionMetadata.executedActions.map { it.actionIndex })
         assertEquals(listOf(0), result.actionMetadata.validationIssues.map { it.actionIndex })
+    }
+
+    @Test
+    fun executorRejectedActionsAreNotMarkedAsExecuted() = runBlocking {
+        val result = AiChatActionOrchestrator.orchestrate(
+            workspaceId = "workspace-1",
+            scopedTargetPage = page(),
+            prompt = "tambah row dan update block yang tak wujud",
+            backendResult = ChatActionResult(
+                reply = "Siap.",
+                actions = listOf(
+                    ChatAction(
+                        type = "ADD_TABLE_ROW",
+                        title = "",
+                        tableTitle = "Budget",
+                        rowTitle = "Makan",
+                    ),
+                    ChatAction(
+                        type = "UPDATE_BLOCK",
+                        title = "",
+                        blockId = "missing",
+                        content = "New",
+                    ),
+                ),
+            ),
+        ) { _, _, _ ->
+            AiActionExecutionResult(
+                messages = listOf("Done: Added row to Budget", "Failed UPDATE_BLOCK: Could not find block"),
+                validationIssues = listOf(
+                    ChatActionValidationMetadata(
+                        actionIndex = 1,
+                        field = "blockId",
+                        code = "execution_failed",
+                        message = "Could not find block",
+                    ),
+                ),
+                executedActionIndexes = listOf(0),
+            )
+        }
+
+        assertEquals(listOf("ADD_TABLE_ROW", "UPDATE_BLOCK"), result.actionMetadata.proposedActions.map { it.type })
+        assertEquals(listOf("ADD_TABLE_ROW"), result.actionMetadata.executedActions.map { it.type })
+        assertEquals(listOf(1), result.actionMetadata.validationIssues.map { it.actionIndex })
     }
 
     private fun page(): Page {

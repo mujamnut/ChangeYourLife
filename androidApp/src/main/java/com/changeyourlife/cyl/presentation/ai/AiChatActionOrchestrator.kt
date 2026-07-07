@@ -13,7 +13,6 @@ object AiChatActionOrchestrator {
     suspend fun orchestrate(
         workspaceId: String,
         scopedTargetPage: Page?,
-        mode: AiChatMode,
         prompt: String,
         backendResult: ChatActionResult,
         auditId: String = UUID.randomUUID().toString(),
@@ -24,7 +23,7 @@ object AiChatActionOrchestrator {
         executeActions: suspend (
             workspaceId: String,
             scopedTargetPage: Page?,
-            actions: List<ChatAction>,
+            actions: List<AiActionExecutionCandidate>,
         ) -> AiActionExecutionResult,
     ): AiChatActionOrchestrationResult {
         val backendReply = backendResult.reply.ifBlank {
@@ -41,11 +40,20 @@ object AiChatActionOrchestrator {
         }
         val proposedActions = backendResult.actions.ifEmpty { recoveredMarkdownActions }
         val actionDecision = AiActionExecutionPolicy.decide(
-            mode = mode,
             backendActions = proposedActions,
         )
-        val actionsToExecute = actionDecision.executableActions
-        val skippedActionIndexes = actionDecision.validationIssues
+        val actionsToExecute = actionDecision.executableCandidates
+        val rejectedActionIndexes = (
+            actionDecision.validationIssues +
+                backendResult.validationIssues.map { issue ->
+                    ChatActionValidationMetadata(
+                        actionIndex = issue.actionIndex,
+                        field = issue.field,
+                        code = issue.code,
+                        message = issue.message,
+                    )
+                }
+            )
             .mapNotNull { issue -> issue.actionIndex }
             .toSet()
         val actionResults = if (actionsToExecute.isEmpty()) {
@@ -54,9 +62,6 @@ object AiChatActionOrchestrator {
             executeActions(workspaceId, scopedTargetPage, actionsToExecute)
         }
         val assistantReply = when {
-            mode == AiChatMode.Planning && proposedActions.isNotEmpty() ->
-                "Saya nampak arahan untuk ubah app, tapi mode sekarang Planning. Tukar ke Edit atau Auto untuk apply perubahan ini."
-
             recoveredMarkdownActions.isNotEmpty() ->
                 "Siap - saya tukar jadual itu kepada data CYL."
 
@@ -79,17 +84,13 @@ object AiChatActionOrchestrator {
                 executedAt = executedAt,
                 provider = provider,
                 model = model,
-                mode = mode.name,
+                mode = "Smart",
                 schemaName = backendResult.schemaName,
                 schemaVersion = backendResult.schemaVersion,
                 proposedActions = proposedActions.mapIndexed { index, action -> action.toMetadataItem(index) },
-                executedActions = if (mode == AiChatMode.Planning) {
-                    emptyList()
-                } else {
-                    proposedActions.mapIndexedNotNull { index, action ->
-                        action.takeIf { index !in skippedActionIndexes }?.toMetadataItem(index)
-                    }
-                },
+                executedActions = actionResults.executedActionIndexes
+                    .distinct()
+                    .mapNotNull { index -> proposedActions.getOrNull(index)?.toMetadataItem(index) },
                 executionMessages = actionResults.messages,
                 validationIssues = backendResult.validationIssues.map { issue ->
                     ChatActionValidationMetadata(
@@ -98,7 +99,9 @@ object AiChatActionOrchestrator {
                         code = issue.code,
                         message = issue.message,
                     )
-                } + actionDecision.validationIssues + actionResults.validationIssues,
+                } + actionDecision.validationIssues + actionResults.validationIssues.filterNot { issue ->
+                    issue.actionIndex != null && issue.actionIndex in rejectedActionIndexes
+                },
             ),
         )
     }

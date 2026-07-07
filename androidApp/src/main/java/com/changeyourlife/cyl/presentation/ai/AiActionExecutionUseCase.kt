@@ -28,17 +28,34 @@ class AiActionExecutionUseCase @Inject constructor(
         scopedTargetPage: Page?,
         actions: List<ChatAction>,
     ): AiActionExecutionResult {
+        return executeCandidates(
+            workspaceId = workspaceId,
+            scopedTargetPage = scopedTargetPage,
+            actions = actions.mapIndexed { index, action ->
+                AiActionExecutionCandidate(
+                    originalIndex = index,
+                    action = action,
+                )
+            },
+        )
+    }
+
+    suspend fun executeCandidates(
+        workspaceId: String,
+        scopedTargetPage: Page?,
+        actions: List<AiActionExecutionCandidate>,
+    ): AiActionExecutionResult {
         if (actions.isEmpty()) return AiActionExecutionResult()
-        val globalActions = actions.filter { action -> action.isHomeScopedAction() }
-        val pageActions = actions.filterNot { action -> action.isHomeScopedAction() }
+        val globalActions = actions.filter { candidate -> candidate.action.isHomeScopedAction() }
+        val pageActions = actions.filterNot { candidate -> candidate.action.isHomeScopedAction() }
         val globalResult = executeHomeScopedActions(workspaceId, globalActions)
         val pageResult = when {
             pageActions.isEmpty() -> AiActionExecutionResult()
             scopedTargetPage != null -> executePageScopedActions(scopedTargetPage, pageActions)
             else -> AiActionExecutionResult(
-                validationIssues = pageActions.mapIndexed { index, _ ->
+                validationIssues = pageActions.map { candidate ->
                     ChatActionValidationMetadata(
-                        actionIndex = index,
+                        actionIndex = candidate.originalIndex,
                         field = "targetTitle",
                         code = "target_page_required",
                         message = "This action needs a page target. Mention a page with @ or open the page before asking AI to edit it.",
@@ -51,13 +68,15 @@ class AiActionExecutionUseCase @Inject constructor(
 
     private suspend fun executeHomeScopedActions(
         workspaceId: String,
-        actions: List<ChatAction>,
+        actions: List<AiActionExecutionCandidate>,
     ): AiActionExecutionResult {
         if (actions.isEmpty()) return AiActionExecutionResult()
         return runCatching {
             val messages = mutableListOf<String>()
             val pageLinks = mutableListOf<AiChatPageLink>()
-            actions.forEach { action ->
+            val executedActionIndexes = mutableListOf<Int>()
+            actions.forEach { candidate ->
+                val action = candidate.action
                 when (action.type.normalizedActionType()) {
                     "CREATE_PAGE",
                     "CREATE_DATABASE",
@@ -71,12 +90,14 @@ class AiActionExecutionUseCase @Inject constructor(
                         )
                         messages += "Done: Created page ${created.title.ifBlank { "Untitled page" }}"
                         pageLinks += created.toChatPageLink()
+                        executedActionIndexes += candidate.originalIndex
                     }
                 }
             }
             AiActionExecutionResult(
                 messages = messages,
                 pageLinks = pageLinks,
+                executedActionIndexes = executedActionIndexes,
             )
         }.getOrElse { error ->
             AiActionExecutionResult(
@@ -87,24 +108,39 @@ class AiActionExecutionUseCase @Inject constructor(
 
     private suspend fun executePageScopedActions(
         page: Page,
-        actions: List<ChatAction>,
+        actions: List<AiActionExecutionCandidate>,
     ): AiActionExecutionResult {
         return runCatching {
-            val supportedActions = actions
-                .map { action ->
-                    action.copy(
-                        targetTitle = action.targetTitle.ifBlank { page.title },
+            val resolvedCandidates = actions.map { candidate ->
+                AiActionExecutionCandidate(
+                    originalIndex = candidate.originalIndex,
+                    action = candidate.action.copy(
+                        targetTitle = candidate.action.targetTitle.ifBlank { page.title },
+                    ),
+                )
+            }
+            val supportedCandidates = mutableListOf<AiActionExecutionCandidate>()
+            val unsupportedIssues = mutableListOf<ChatActionValidationMetadata>()
+            resolvedCandidates.forEach { candidate ->
+                if (aiPageActionExecutor.supports(candidate.action)) {
+                    supportedCandidates += candidate
+                } else {
+                    unsupportedIssues += ChatActionValidationMetadata(
+                        actionIndex = candidate.originalIndex,
+                        field = "type",
+                        code = "unsupported_action_type",
+                        message = "Unsupported action type: ${candidate.action.type}",
                     )
                 }
-                .filter { action -> aiPageActionExecutor.supports(action) }
-            if (supportedActions.isEmpty()) {
-                AiActionExecutionResult()
+            }
+            if (supportedCandidates.isEmpty()) {
+                AiActionExecutionResult(validationIssues = unsupportedIssues)
             } else {
                 val execution = aiPageActionExecutor.executeOnPage(
                     page = page,
                     title = page.title,
                     document = PageBlockCodec.decodeDocument(page.content),
-                    actions = supportedActions,
+                    actions = supportedCandidates.map { candidate -> candidate.action },
                 )
                 val didUpdatePage = execution.updatedTitle != null || execution.updatedDocument != null
                 val updatedPage = if (didUpdatePage) {
@@ -132,15 +168,25 @@ class AiActionExecutionUseCase @Inject constructor(
                         }
                     },
                     pageLinks = pageLinks,
-                    validationIssues = execution.validationIssues.map { issue ->
+                    validationIssues = unsupportedIssues + execution.validationIssues.map { issue ->
                         ChatActionValidationMetadata(
-                            actionIndex = issue.actionIndex,
+                            actionIndex = issue.actionIndex?.let { index ->
+                                supportedCandidates.getOrNull(index)?.originalIndex ?: index
+                            },
                             field = issue.field,
                             code = issue.code,
                             message = issue.message,
                         )
                     },
-                    undoCommands = execution.undoCommands,
+                    undoCommands = execution.undoCommands.map { command ->
+                        command.copy(
+                            actionIndex = supportedCandidates.getOrNull(command.actionIndex)?.originalIndex
+                                ?: command.actionIndex,
+                        )
+                    },
+                    executedActionIndexes = execution.executedActionIndexes.mapNotNull { index ->
+                        supportedCandidates.getOrNull(index)?.originalIndex
+                    },
                 )
             }
         }.getOrElse { error ->
@@ -156,6 +202,7 @@ data class AiActionExecutionResult(
     val pageLinks: List<AiChatPageLink> = emptyList(),
     val validationIssues: List<ChatActionValidationMetadata> = emptyList(),
     val undoCommands: List<AiUndoCommandSummary> = emptyList(),
+    val executedActionIndexes: List<Int> = emptyList(),
 )
 
 operator fun AiActionExecutionResult.plus(other: AiActionExecutionResult): AiActionExecutionResult {
@@ -166,6 +213,7 @@ operator fun AiActionExecutionResult.plus(other: AiActionExecutionResult): AiAct
         },
         validationIssues = validationIssues + other.validationIssues,
         undoCommands = undoCommands + other.undoCommands,
+        executedActionIndexes = (executedActionIndexes + other.executedActionIndexes).distinct(),
     )
 }
 

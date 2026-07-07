@@ -7,20 +7,8 @@ import org.junit.Test
 
 class AiActionExecutionPolicyTest {
     @Test
-    fun planningModeNeverExecutesBackendActions() {
+    fun doesNotInventActionsWhenBackendReturnsNone() {
         val decision = AiActionExecutionPolicy.decide(
-            mode = AiChatMode.Planning,
-            backendActions = listOf(ChatAction(type = "APPEND_BLOCK", title = "Note")),
-        )
-
-        assertTrue(decision.executableActions.isEmpty())
-        assertTrue(decision.validationIssues.isEmpty())
-    }
-
-    @Test
-    fun editModeDoesNotInventActionsWhenBackendReturnsNone() {
-        val decision = AiActionExecutionPolicy.decide(
-            mode = AiChatMode.Edit,
             backendActions = emptyList(),
         )
 
@@ -29,11 +17,10 @@ class AiActionExecutionPolicyTest {
     }
 
     @Test
-    fun editModeExecutesBackendActionsOnly() {
+    fun executesBackendActionsByDefault() {
         val backendAction = ChatAction(type = "ADD_TABLE_ROW", title = "", rowTitle = "Makan")
 
         val decision = AiActionExecutionPolicy.decide(
-            mode = AiChatMode.Edit,
             backendActions = listOf(backendAction),
         )
 
@@ -42,12 +29,25 @@ class AiActionExecutionPolicyTest {
     }
 
     @Test
-    fun autoModeSkipsUnsafeQualitativeRename() {
+    fun skipsMissingActionType() {
+        val validRow = ChatAction(type = "ADD_TABLE_ROW", title = "", rowTitle = "Fuel")
+
+        val decision = AiActionExecutionPolicy.decide(
+            backendActions = listOf(ChatAction(type = "", title = "Unknown"), validRow),
+        )
+
+        assertEquals(listOf(validRow), decision.executableActions)
+        assertEquals(1, decision.validationIssues.size)
+        assertEquals(0, decision.validationIssues.single().actionIndex)
+        assertEquals("MISSING_ACTION_TYPE", decision.validationIssues.single().code)
+    }
+
+    @Test
+    fun skipsUnsafeQualitativeRename() {
         val unsafeRename = ChatAction(type = "RENAME_TABLE", title = "sesuai dan pendek")
         val validRow = ChatAction(type = "ADD_TABLE_ROW", title = "", rowTitle = "Fuel")
 
         val decision = AiActionExecutionPolicy.decide(
-            mode = AiChatMode.Auto,
             backendActions = listOf(unsafeRename, validRow),
         )
 
@@ -58,11 +58,10 @@ class AiActionExecutionPolicyTest {
     }
 
     @Test
-    fun autoModeAllowsConcreteRename() {
+    fun allowsConcreteRename() {
         val rename = ChatAction(type = "RENAME_TABLE", title = "Budget")
 
         val decision = AiActionExecutionPolicy.decide(
-            mode = AiChatMode.Auto,
             backendActions = listOf(rename),
         )
 

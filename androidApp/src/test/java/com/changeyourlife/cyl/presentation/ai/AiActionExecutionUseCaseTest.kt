@@ -139,6 +139,26 @@ class AiActionExecutionUseCaseTest {
         assertEquals("target_page_required", result.validationIssues.single().code)
     }
 
+    @Test
+    fun executeCandidatesPreservesOriginalIndexForValidationIssue() = runBlocking {
+        val useCase = useCase(FakePageRepository())
+
+        val result = useCase.executeCandidates(
+            workspaceId = "workspace-1",
+            scopedTargetPage = null,
+            actions = listOf(
+                AiActionExecutionCandidate(
+                    originalIndex = 4,
+                    action = ChatAction(type = "ADD_BLOCK", title = "Note", content = "Note"),
+                ),
+            ),
+        )
+
+        assertEquals(1, result.validationIssues.size)
+        assertEquals(4, result.validationIssues.single().actionIndex)
+        assertEquals("target_page_required", result.validationIssues.single().code)
+    }
+
     private fun useCase(pageRepository: FakePageRepository): AiActionExecutionUseCase {
         return AiActionExecutionUseCase(
             pageRepository = pageRepository,

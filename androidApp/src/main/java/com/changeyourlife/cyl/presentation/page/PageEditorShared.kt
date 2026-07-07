@@ -169,7 +169,6 @@ import com.changeyourlife.cyl.domain.model.PageTextSpan
 import com.changeyourlife.cyl.domain.model.displayValue
 import com.changeyourlife.cyl.domain.model.isActive
 import com.changeyourlife.cyl.domain.model.withColumnType
-import com.changeyourlife.cyl.presentation.ai.AiChatMode
 import com.changeyourlife.cyl.presentation.ai.AiChatSheet
 import com.changeyourlife.cyl.presentation.ai.AiChatMessage
 import com.changeyourlife.cyl.presentation.ai.AiChatPageLink
@@ -1980,9 +1979,8 @@ internal fun PageEditorScreenPreview() {
             onUndoEditorChange = {},
             onKeepLocalConflict = {},
             onUseRemoteConflict = {},
-            onSendAiMessage = { _, _, _, _ -> },
+            onSendAiMessage = { _, _, _ -> },
             onUndoAiAction = { _, _ -> },
-            onHomeAiModeChange = {},
             onClearHomeAiHistory = {},
             onCreateHomeChatSession = {},
             onDismissHomeAiError = {},

@@ -35,8 +35,6 @@ import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -75,11 +73,8 @@ fun AiChatSheet(
     mentionPages: List<Page>,
     isGenerating: Boolean,
     errorMessage: String?,
-    aiMode: AiChatMode,
-    availableModes: List<AiChatMode> = AiChatMode.entries,
     modelLabel: String = "AI model",
-    onAiModeChange: (AiChatMode) -> Unit,
-    onSendMessage: (String, List<String>, AiChatMode) -> Unit,
+    onSendMessage: (String, List<String>) -> Unit,
     onUndoAction: (String, String) -> Unit,
     onClearHistory: () -> Unit,
     onCreateChatSession: () -> Unit,
@@ -102,9 +97,6 @@ fun AiChatSheet(
     var selectedMentionPageIds by rememberSaveable(attachedPageId) {
         mutableStateOf(emptyList<String>())
     }
-    val effectiveMode = aiMode.takeIf { mode -> mode in availableModes }
-        ?: availableModes.firstOrNull()
-        ?: AiChatMode.Planning
     val listState = rememberLazyListState()
     val context = LocalContext.current
     val mentionSuggestionState = EditorSuggestionController.resolve(
@@ -134,12 +126,7 @@ fun AiChatSheet(
                     modifier = Modifier.weight(1f),
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    AiModeModelSelector(
-                        mode = effectiveMode,
-                        availableModes = availableModes,
-                        modelLabel = modelLabel,
-                        onModeChange = onAiModeChange,
-                    )
+                    AiModelChip(modelLabel = modelLabel)
                     if (!attachedPageTitle.isNullOrBlank()) {
                         Text(
                             text = attachedPageTitle.ifBlank { "Untitled page" },
@@ -339,7 +326,6 @@ fun AiChatSheet(
                                         pages = mentionPages,
                                         knownPageIds = selectedMentionPageIds + attachedMentionPageIds,
                                     ),
-                                    effectiveMode,
                                 )
                                 inputText = ""
                                 selectedMentionPageIds = emptyList()
@@ -358,7 +344,6 @@ fun AiChatSheet(
                                     pages = mentionPages,
                                     knownPageIds = selectedMentionPageIds + attachedMentionPageIds,
                                 ),
-                                effectiveMode,
                             )
                             inputText = ""
                             selectedMentionPageIds = emptyList()
@@ -438,13 +423,9 @@ private fun AiChatActionDetails(
                     modifier = Modifier.padding(10.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    if (metadata.mode.isNotBlank() || metadata.schemaName.isNotBlank()) {
+                    if (metadata.schemaName.isNotBlank()) {
                         Text(
-                            text = listOfNotNull(
-                                metadata.mode.takeIf { it.isNotBlank() }?.lowercase()
-                                    ?.replaceFirstChar { char -> char.titlecase() },
-                                metadata.schemaName.takeIf { it.isNotBlank() }?.let { "${it} v${metadata.schemaVersion}" },
-                            ).joinToString(" - "),
+                            text = "${metadata.schemaName} v${metadata.schemaVersion}",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
@@ -555,87 +536,33 @@ private fun AiActionTextSection(
 }
 
 @Composable
-private fun AiModeModelSelector(
-    mode: AiChatMode,
-    availableModes: List<AiChatMode>,
+private fun AiModelChip(
     modelLabel: String,
-    onModeChange: (AiChatMode) -> Unit,
 ) {
-    var isMenuOpen by rememberSaveable { mutableStateOf(false) }
-    val canSwitchMode = availableModes.size > 1
     val displayModel = modelLabel.compactAiModelLabel()
     val selectorModifier = Modifier
         .clip(RoundedCornerShape(999.dp))
         .background(MaterialTheme.colorScheme.surfaceContainer)
-        .let { base ->
-            if (canSwitchMode) {
-                base.clickable { isMenuOpen = true }
-            } else {
-                base
-            }
-        }
-        .padding(start = 9.dp, end = if (canSwitchMode) 5.dp else 9.dp, top = 4.dp, bottom = 4.dp)
+        .padding(horizontal = 9.dp, vertical = 4.dp)
 
-    Box {
-        Row(
-            modifier = selectorModifier,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(
-                imageVector = Icons.Rounded.AutoAwesome,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(16.dp),
-            )
-            Text(
-                text = "${mode.label} - $displayModel",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            if (canSwitchMode) {
-                Icon(
-                    imageVector = Icons.Rounded.KeyboardArrowDown,
-                    contentDescription = "Change AI mode",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(16.dp),
-                )
-            }
-        }
-
-        DropdownMenu(
-            expanded = isMenuOpen,
-            onDismissRequest = { isMenuOpen = false },
-        ) {
-            availableModes.forEach { option ->
-                DropdownMenuItem(
-                    text = {
-                        Column {
-                            Text(
-                                text = option.label,
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = if (option == mode) FontWeight.SemiBold else FontWeight.Normal,
-                            )
-                            if (option == mode) {
-                                Text(
-                                    text = displayModel,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            }
-                        }
-                    },
-                    onClick = {
-                        isMenuOpen = false
-                        onModeChange(option)
-                    },
-                )
-            }
-        }
+    Row(
+        modifier = selectorModifier,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = Icons.Rounded.AutoAwesome,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(16.dp),
+        )
+        Text(
+            text = displayModel,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 

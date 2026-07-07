@@ -66,6 +66,7 @@ class AiPageActionExecutor @Inject constructor(
         val createdTasks = mutableListOf<TaskItem>()
         val createdReminders = mutableListOf<Reminder>()
         val undoCommands = mutableListOf<AiUndoCommandSummary>()
+        val executedActionIndexes = mutableListOf<Int>()
 
         for ((actionIndex, action) in actions.withIndex()) {
             val actionType = action.type.normalizedActionType()
@@ -793,8 +794,15 @@ class AiPageActionExecutor @Inject constructor(
                     else -> error("Unsupported action type: ${action.type}")
                 }
             }.onSuccess { message ->
+                executedActionIndexes += actionIndex
                 messages += "Done: $message"
             }.onFailure { error ->
+                validationIssues += AiPageActionValidationIssue(
+                    actionIndex = actionIndex,
+                    field = "type",
+                    code = "execution_failed",
+                    message = error.localizedMessage ?: "Action failed before it could update the page.",
+                )
                 messages += "Failed ${action.type}: ${error.localizedMessage ?: "Unknown error"}"
             }
         }
@@ -818,6 +826,7 @@ class AiPageActionExecutor @Inject constructor(
             pageLinks = pageLinks,
             validationIssues = validationIssues,
             undoCommands = undoCommands,
+            executedActionIndexes = executedActionIndexes,
         )
     }
 
@@ -1063,6 +1072,7 @@ data class AiPageActionExecutionResult(
     val pageLinks: List<AiChatPageLink> = emptyList(),
     val validationIssues: List<AiPageActionValidationIssue> = emptyList(),
     val undoCommands: List<AiUndoCommandSummary> = emptyList(),
+    val executedActionIndexes: List<Int> = emptyList(),
 )
 
 data class AiPageActionValidationIssue(

@@ -89,7 +89,6 @@ import com.changeyourlife.cyl.domain.model.ChatSession
 import com.changeyourlife.cyl.domain.model.Page
 import com.changeyourlife.cyl.domain.model.Reminder
 import com.changeyourlife.cyl.domain.model.SyncOverview
-import com.changeyourlife.cyl.presentation.ai.AiChatMode
 import com.changeyourlife.cyl.presentation.ai.AiChatSheet
 import com.changeyourlife.cyl.presentation.ai.AiChatMessage
 import com.changeyourlife.cyl.presentation.ai.AiChatPageLink
@@ -140,7 +139,6 @@ fun HomeRoute(
         onCreateWorkspace = viewModel::createWorkspace,
         onSendChatMessage = viewModel::sendChatMessage,
         onUndoAiAction = viewModel::undoAiAction,
-        onAiModeChange = viewModel::updateAiChatMode,
         onClearChatHistory = viewModel::clearChatHistory,
         onCreateChatSession = viewModel::createNewChatSession,
         onSelectChatSession = viewModel::selectChatSession,
@@ -190,9 +188,8 @@ private fun HomeScreen(
     onDismissCreateWorkspace: () -> Unit,
     onNewWorkspaceNameChange: (String) -> Unit,
     onCreateWorkspace: () -> Unit,
-    onSendChatMessage: (String, List<String>, AiChatMode) -> Unit,
+    onSendChatMessage: (String, List<String>) -> Unit,
     onUndoAiAction: (String, String) -> Unit,
-    onAiModeChange: (AiChatMode) -> Unit,
     onClearChatHistory: () -> Unit,
     onCreateChatSession: () -> Unit,
     onSelectChatSession: (String) -> Unit,
@@ -229,9 +226,7 @@ private fun HomeScreen(
             mentionPages = uiState.allPages,
             isGenerating = uiState.isAiGeneratingChat,
             errorMessage = uiState.aiChatError,
-            aiMode = uiState.aiChatMode,
             modelLabel = uiState.aiModelLabel,
-            onAiModeChange = onAiModeChange,
             onSendMessage = onSendChatMessage,
             onUndoAction = onUndoAiAction,
             onClearHistory = onClearChatHistory,
@@ -1866,9 +1861,8 @@ private fun HomeRoutePreview() {
             onDismissCreateWorkspace = {},
             onNewWorkspaceNameChange = {},
             onCreateWorkspace = {},
-            onSendChatMessage = { _, _, _ -> },
+            onSendChatMessage = { _, _ -> },
             onUndoAiAction = { _, _ -> },
-            onAiModeChange = {},
             onClearChatHistory = {},
             onCreateChatSession = {},
             onSelectChatSession = {},

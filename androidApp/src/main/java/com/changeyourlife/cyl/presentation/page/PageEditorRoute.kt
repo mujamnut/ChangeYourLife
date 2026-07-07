@@ -167,7 +167,6 @@ import com.changeyourlife.cyl.domain.model.PageTableView
 import com.changeyourlife.cyl.domain.model.PageTableViewConfig
 import com.changeyourlife.cyl.domain.model.PageSyncState
 import com.changeyourlife.cyl.domain.model.PageTextSpan
-import com.changeyourlife.cyl.presentation.ai.AiChatMode
 import com.changeyourlife.cyl.presentation.ai.AiChatSheet
 import com.changeyourlife.cyl.presentation.ai.AiChatMessage
 import com.changeyourlife.cyl.presentation.ai.AiChatPageLink
@@ -188,9 +187,8 @@ fun PageEditorRoute(
     initialSearchTargetType: String = "",
     initialSearchTargetId: String = "",
     onOpenPage: (String, String, String) -> Unit,
-    onSendAiMessage: (String, List<String>, AiChatMode, String?) -> Unit,
+    onSendAiMessage: (String, List<String>, String?) -> Unit,
     onUndoAiAction: (String, String) -> Unit,
-    onHomeAiModeChange: (AiChatMode) -> Unit,
     onClearHomeAiHistory: () -> Unit,
     onCreateHomeChatSession: () -> Unit,
     onDismissHomeAiError: () -> Unit,
@@ -276,7 +274,6 @@ fun PageEditorRoute(
         onUseRemoteConflict = viewModel::useRemoteConflict,
         onSendAiMessage = onSendAiMessage,
         onUndoAiAction = onUndoAiAction,
-        onHomeAiModeChange = onHomeAiModeChange,
         onClearHomeAiHistory = onClearHomeAiHistory,
         onCreateHomeChatSession = onCreateHomeChatSession,
         onDismissHomeAiError = onDismissHomeAiError,
@@ -364,9 +361,8 @@ internal fun PageEditorScreen(
     onUndoEditorChange: () -> Unit,
     onKeepLocalConflict: () -> Unit,
     onUseRemoteConflict: () -> Unit,
-    onSendAiMessage: (String, List<String>, AiChatMode, String?) -> Unit,
+    onSendAiMessage: (String, List<String>, String?) -> Unit,
     onUndoAiAction: (String, String) -> Unit,
-    onHomeAiModeChange: (AiChatMode) -> Unit,
     onClearHomeAiHistory: () -> Unit,
     onCreateHomeChatSession: () -> Unit,
     onDismissHomeAiError: () -> Unit,
@@ -506,9 +502,6 @@ internal fun PageEditorScreen(
                 onUndoEditorChange = onUndoEditorChange,
                 onSearch = { isPageSearchSheetOpen = true },
                 onOpenAi = {
-                    if (homeAiState.aiChatMode == AiChatMode.Planning) {
-                        onHomeAiModeChange(AiChatMode.Edit)
-                    }
                     isAiChatSheetOpen = true
                 },
                 onCreateBlock = { isBlockPickerSheetOpen = true },
@@ -526,11 +519,9 @@ internal fun PageEditorScreen(
                 mentionPages = homeAiState.allPages,
                 isGenerating = homeAiState.isAiGeneratingChat,
                 errorMessage = homeAiState.aiChatError,
-                aiMode = homeAiState.aiChatMode,
                 modelLabel = homeAiState.aiModelLabel,
-                onAiModeChange = onHomeAiModeChange,
-                onSendMessage = { message, mentionedPageIds, mode ->
-                    onSendAiMessage(message, mentionedPageIds, mode, uiState.page?.id)
+                onSendMessage = { message, mentionedPageIds ->
+                    onSendAiMessage(message, mentionedPageIds, uiState.page?.id)
                 },
                 onUndoAction = onUndoAiAction,
                 onClearHistory = onClearHomeAiHistory,

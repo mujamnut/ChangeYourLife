@@ -42,7 +42,6 @@ import com.changeyourlife.cyl.presentation.ai.AiActionExecutionUseCase
 import com.changeyourlife.cyl.presentation.ai.AiActionLogFactory
 import com.changeyourlife.cyl.presentation.ai.AiChatActionOrchestrator
 import com.changeyourlife.cyl.presentation.ai.AiChatMessageMapper
-import com.changeyourlife.cyl.presentation.ai.AiChatMode
 import com.changeyourlife.cyl.presentation.ai.AiChatMessage
 import com.changeyourlife.cyl.presentation.ai.AiChatPageLink
 import com.changeyourlife.cyl.presentation.ai.toPageTableColumnFromAi
@@ -125,7 +124,6 @@ class HomeViewModel @Inject constructor(
 
     private val isAiGeneratingChat = MutableStateFlow(false)
     private val aiChatError = MutableStateFlow<String?>(null)
-    private val aiChatMode = MutableStateFlow(AiChatMode.Planning)
     private val aiStatusState = MutableStateFlow(AiStatus())
     private val aiModelLabel = MutableStateFlow("AI model")
     private val searchQuery = MutableStateFlow("")
@@ -159,8 +157,7 @@ class HomeViewModel @Inject constructor(
         chatMetaState,
         isAiGeneratingChat,
         aiChatError,
-        aiChatMode,
-    ) { messages, meta, isGenerating, error, mode ->
+    ) { messages, meta, isGenerating, error ->
         HomeChatState(
             messages = messages,
             sessions = meta.sessions,
@@ -168,7 +165,6 @@ class HomeViewModel @Inject constructor(
             activeSessionId = meta.activeSessionId,
             isGenerating = isGenerating,
             error = error,
-            mode = mode,
         )
     }
 
@@ -247,7 +243,6 @@ class HomeViewModel @Inject constructor(
             activeChatSessionId = chat.activeSessionId,
             isAiGeneratingChat = chat.isGenerating,
             aiChatError = chat.error,
-            aiChatMode = chat.mode,
         )
     }.let { baseState ->
         combine(baseState, chatHistorySearchQuery, chatHistorySearchResults) { state, chatSearchQuery, chatSearchResults ->
@@ -408,10 +403,6 @@ class HomeViewModel @Inject constructor(
         chatHistorySearchQuery.value = ""
     }
 
-    fun updateAiChatMode(mode: AiChatMode) {
-        aiChatMode.value = mode
-    }
-
     fun createWorkspace() {
         val name = workspaceFormState.value.newWorkspaceName.trim()
         if (name.isBlank()) return
@@ -443,12 +434,10 @@ class HomeViewModel @Inject constructor(
     fun sendChatMessage(
         prompt: String,
         mentionedPageIds: List<String> = emptyList(),
-        mode: AiChatMode = aiChatMode.value,
     ) {
         sendChatMessageScoped(
             prompt = prompt,
             mentionedPageIds = mentionedPageIds,
-            mode = mode,
             attachedPageId = null,
         )
     }
@@ -456,13 +445,11 @@ class HomeViewModel @Inject constructor(
     fun sendChatMessage(
         prompt: String,
         mentionedPageIds: List<String>,
-        mode: AiChatMode,
         attachedPageId: String?,
     ) {
         sendChatMessageScoped(
             prompt = prompt,
             mentionedPageIds = mentionedPageIds,
-            mode = mode,
             attachedPageId = attachedPageId,
         )
     }
@@ -493,7 +480,6 @@ class HomeViewModel @Inject constructor(
     private fun sendChatMessageScoped(
         prompt: String,
         mentionedPageIds: List<String>,
-        mode: AiChatMode,
         attachedPageId: String?,
     ) {
         if (prompt.isBlank() || isAiGeneratingChat.value) return
@@ -544,23 +530,21 @@ class HomeViewModel @Inject constructor(
             val allChatMessages = chatHistoryRepository.observeMessagesForScope(scopeId)
                 .first()
                 .filterNot { message -> message.id == savedUserMessage.id }
-            if (mode == AiChatMode.Planning) {
-                buildHomeAiSearchReply(
-                    prompt = prompt,
-                    pages = pages,
-                    tasks = openTasks,
-                    chatSessions = allChatSessions,
-                    chatMessages = allChatMessages,
-                )?.let { searchReply ->
-                    isAiGeneratingChat.value = false
-                    chatHistoryRepository.appendMessage(
-                        sessionId = session.id,
-                        role = "assistant",
-                        content = searchReply.content,
-                        pageLinks = searchReply.pageLinks.toDomainChatPageLinks(),
-                    )
-                    return@launch
-                }
+            buildHomeAiSearchReply(
+                prompt = prompt,
+                pages = pages,
+                tasks = openTasks,
+                chatSessions = allChatSessions,
+                chatMessages = allChatMessages,
+            )?.let { searchReply ->
+                isAiGeneratingChat.value = false
+                chatHistoryRepository.appendMessage(
+                    sessionId = session.id,
+                    role = "assistant",
+                    content = searchReply.content,
+                    pageLinks = searchReply.pageLinks.toDomainChatPageLinks(),
+                )
+                return@launch
             }
 
             val messagesForAi = currentMessages + userMessage.copy(
@@ -572,14 +556,13 @@ class HomeViewModel @Inject constructor(
                     val orchestration = AiChatActionOrchestrator.orchestrate(
                         workspaceId = workspaceId,
                         scopedTargetPage = scopedTargetPage,
-                        mode = mode,
                         prompt = prompt,
                         backendResult = result,
                         requestMessageId = savedUserMessage.id,
                         provider = aiStatusState.value.provider,
                         model = aiStatusState.value.model,
                     ) { targetWorkspaceId, targetPage, actions ->
-                        aiActionExecutionUseCase.execute(
+                        aiActionExecutionUseCase.executeCandidates(
                             workspaceId = targetWorkspaceId,
                             scopedTargetPage = targetPage,
                             actions = actions,
@@ -1905,7 +1888,6 @@ private data class HomeChatState(
     val activeSessionId: String? = null,
     val isGenerating: Boolean = false,
     val error: String? = null,
-    val mode: AiChatMode = AiChatMode.Planning,
 )
 
 private fun AiStatus.toDisplayModelLabel(): String {
@@ -1997,7 +1979,6 @@ data class HomeUiState(
     val chatHistorySearchResults: List<ChatHistorySearchResult> = emptyList(),
     val isAiGeneratingChat: Boolean = false,
     val aiChatError: String? = null,
-    val aiChatMode: AiChatMode = AiChatMode.Planning,
     val aiModelLabel: String = "AI model",
     val syncOverview: SyncOverview = SyncOverview(),
 )

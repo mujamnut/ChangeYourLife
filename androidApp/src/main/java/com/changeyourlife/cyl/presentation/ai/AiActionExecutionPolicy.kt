@@ -5,37 +5,54 @@ import com.changeyourlife.cyl.domain.repository.ChatAction
 
 object AiActionExecutionPolicy {
     fun decide(
-        mode: AiChatMode,
         backendActions: List<ChatAction>,
     ): AiActionExecutionDecision {
-        val validationIssues = backendActions.mapIndexedNotNull { index, action ->
-            if (!action.isUnsafeQualitativeRename()) {
-                null
-            } else {
-                ChatActionValidationMetadata(
-                    actionIndex = index,
-                    field = "title",
-                    code = "UNSAFE_QUALITATIVE_RENAME",
-                    message = "Skipped rename because the requested name was only a vague descriptor.",
+        val validationIssues = mutableListOf<ChatActionValidationMetadata>()
+        val executableCandidates = backendActions.mapIndexedNotNull { index, action ->
+            when {
+                action.type.isBlank() -> {
+                    validationIssues += ChatActionValidationMetadata(
+                        actionIndex = index,
+                        field = "type",
+                        code = "MISSING_ACTION_TYPE",
+                        message = "Skipped action because the action type was empty.",
+                    )
+                    null
+                }
+
+                action.isUnsafeQualitativeRename() -> {
+                    validationIssues += ChatActionValidationMetadata(
+                        actionIndex = index,
+                        field = "title",
+                        code = "UNSAFE_QUALITATIVE_RENAME",
+                        message = "Skipped rename because the requested name was only a vague descriptor.",
+                    )
+                    null
+                }
+
+                else -> AiActionExecutionCandidate(
+                    originalIndex = index,
+                    action = action,
                 )
             }
         }
-        val executableActions = when (mode) {
-            AiChatMode.Planning -> emptyList()
-            AiChatMode.Edit,
-            AiChatMode.Auto,
-            -> backendActions.filterNot { action -> action.isUnsafeQualitativeRename() }
-        }
         return AiActionExecutionDecision(
-            executableActions = executableActions,
+            executableCandidates = executableCandidates,
             validationIssues = validationIssues,
         )
     }
 }
 
 data class AiActionExecutionDecision(
-    val executableActions: List<ChatAction>,
+    val executableCandidates: List<AiActionExecutionCandidate>,
     val validationIssues: List<ChatActionValidationMetadata> = emptyList(),
+) {
+    val executableActions: List<ChatAction> = executableCandidates.map { candidate -> candidate.action }
+}
+
+data class AiActionExecutionCandidate(
+    val originalIndex: Int,
+    val action: ChatAction,
 )
 
 private fun ChatAction.isUnsafeQualitativeRename(): Boolean {
