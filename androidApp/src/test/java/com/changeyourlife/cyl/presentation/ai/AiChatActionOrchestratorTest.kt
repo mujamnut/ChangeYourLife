@@ -4,6 +4,7 @@ import com.changeyourlife.cyl.domain.model.ChatActionValidationMetadata
 import com.changeyourlife.cyl.domain.model.Page
 import com.changeyourlife.cyl.domain.repository.ChatAction
 import com.changeyourlife.cyl.domain.repository.ChatActionResult
+import com.changeyourlife.cyl.domain.repository.ChatActionValidationIssue
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -265,6 +266,56 @@ class AiChatActionOrchestratorTest {
         }
 
         assertEquals(listOf("RENAME_TABLE", "ADD_TABLE_ROW"), result.actionMetadata.proposedActions.map { it.type })
+        assertEquals(listOf("ADD_TABLE_ROW"), result.actionMetadata.executedActions.map { it.type })
+        assertEquals(listOf(1), result.actionMetadata.executedActions.map { it.actionIndex })
+        assertEquals(listOf(0), result.actionMetadata.validationIssues.map { it.actionIndex })
+    }
+
+    @Test
+    fun backendValidationIssuesPreventExecutionForThatActionIndex() = runBlocking {
+        var capturedIndexes = emptyList<Int>()
+
+        val result = AiChatActionOrchestrator.orchestrate(
+            workspaceId = "workspace-1",
+            scopedTargetPage = page(),
+            prompt = "tambah row dan field column bercampur",
+            backendResult = ChatActionResult(
+                reply = "Siap.",
+                actions = listOf(
+                    ChatAction(
+                        type = "ADD_TABLE_ROW",
+                        title = "",
+                        tableTitle = "Budget",
+                        rowTitle = "Makan",
+                        columnName = "Category",
+                        options = listOf("Food"),
+                    ),
+                    ChatAction(
+                        type = "ADD_TABLE_ROW",
+                        title = "",
+                        tableTitle = "Budget",
+                        rowTitle = "Fuel",
+                    ),
+                ),
+                validationIssues = listOf(
+                    ChatActionValidationIssue(
+                        actionIndex = 0,
+                        field = "columnName,options",
+                        code = "UNEXPECTED_ACTION_FIELDS",
+                        message = "Skipped invalid row action.",
+                    ),
+                ),
+            ),
+        ) { _, _, actions ->
+            capturedIndexes = actions.map { candidate -> candidate.originalIndex }
+            AiActionExecutionResult(
+                messages = listOf("Done: Added row to Budget"),
+                executedActionIndexes = actions.map { candidate -> candidate.originalIndex },
+            )
+        }
+
+        assertEquals(listOf(1), capturedIndexes)
+        assertEquals(listOf("ADD_TABLE_ROW", "ADD_TABLE_ROW"), result.actionMetadata.proposedActions.map { it.type })
         assertEquals(listOf("ADD_TABLE_ROW"), result.actionMetadata.executedActions.map { it.type })
         assertEquals(listOf(1), result.actionMetadata.executedActions.map { it.actionIndex })
         assertEquals(listOf(0), result.actionMetadata.validationIssues.map { it.actionIndex })

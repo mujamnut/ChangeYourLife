@@ -39,20 +39,25 @@ object AiChatActionOrchestrator {
             emptyList()
         }
         val proposedActions = backendResult.actions.ifEmpty { recoveredMarkdownActions }
+        val backendValidationIssues = backendResult.validationIssues.map { issue ->
+            ChatActionValidationMetadata(
+                actionIndex = issue.actionIndex,
+                field = issue.field,
+                code = issue.code,
+                message = issue.message,
+            )
+        }
+        val backendRejectedActionIndexes = backendValidationIssues
+            .mapNotNull { issue -> issue.actionIndex }
+            .toSet()
         val actionDecision = AiActionExecutionPolicy.decide(
             backendActions = proposedActions,
         )
         val actionsToExecute = actionDecision.executableCandidates
+            .filterNot { candidate -> candidate.originalIndex in backendRejectedActionIndexes }
         val rejectedActionIndexes = (
             actionDecision.validationIssues +
-                backendResult.validationIssues.map { issue ->
-                    ChatActionValidationMetadata(
-                        actionIndex = issue.actionIndex,
-                        field = issue.field,
-                        code = issue.code,
-                        message = issue.message,
-                    )
-                }
+                backendValidationIssues
             )
             .mapNotNull { issue -> issue.actionIndex }
             .toSet()
@@ -97,14 +102,7 @@ object AiChatActionOrchestrator {
                 executedActions = appliedActionIndexes
                     .map { index -> proposedActions[index].toMetadataItem(index) },
                 executionMessages = actionResults.messages,
-                validationIssues = backendResult.validationIssues.map { issue ->
-                    ChatActionValidationMetadata(
-                        actionIndex = issue.actionIndex,
-                        field = issue.field,
-                        code = issue.code,
-                        message = issue.message,
-                    )
-                } + actionDecision.validationIssues + actionResults.validationIssues.filterNot { issue ->
+                validationIssues = backendValidationIssues + actionDecision.validationIssues + actionResults.validationIssues.filterNot { issue ->
                     issue.actionIndex != null && issue.actionIndex in rejectedActionIndexes
                 },
             ),

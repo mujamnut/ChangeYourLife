@@ -17,10 +17,7 @@ import com.changeyourlife.cyl.domain.repository.AiErrorKind
 import com.changeyourlife.cyl.domain.repository.AiException
 import com.changeyourlife.cyl.domain.repository.AiRepository
 import com.changeyourlife.cyl.domain.repository.AiPageContext
-import com.changeyourlife.cyl.domain.repository.ChatAction
 import com.changeyourlife.cyl.domain.repository.ChatActionResult
-import com.changeyourlife.cyl.domain.repository.ChatActionValidationIssue
-import com.changeyourlife.cyl.domain.repository.ChatTableColumn
 import com.changeyourlife.cyl.presentation.page.PageBlockCodec
 import java.time.LocalDate
 import java.util.TimeZone
@@ -116,99 +113,7 @@ class AiRepositoryImpl @Inject constructor(
             if (response.reply.isBlank() && response.actions.isEmpty() && response.validationIssues.isEmpty()) {
                 throw AiErrorMapper.emptyResponse("chatWithActions")
             }
-            ChatActionResult(
-                reply = response.reply,
-                schemaName = response.schemaName,
-                schemaVersion = response.schemaVersion,
-                validationIssues = response.validationIssues.map { issue ->
-                    ChatActionValidationIssue(
-                        actionIndex = issue.actionIndex,
-                        field = issue.field,
-                        code = issue.code,
-                        message = issue.message,
-                    )
-                },
-                actions = response.actions.map {
-                    ChatAction(
-                        type = it.type.normalizedChatActionType(),
-                        title = it.title,
-                        targetTitle = it.targetTitle,
-                        content = it.content,
-                        blockType = it.blockType,
-                        blockId = it.blockId,
-                        blockText = it.blockText,
-                        textToFormat = it.textToFormat,
-                        format = it.format,
-                        linkUrl = it.linkUrl,
-                        color = it.color,
-                        highlight = it.highlight,
-                        rangeStart = it.rangeStart,
-                        rangeEnd = it.rangeEnd,
-                        mediaUri = it.mediaUri,
-                        mediaName = it.mediaName,
-                        mediaMimeType = it.mediaMimeType,
-                        mediaSizeBytes = it.mediaSizeBytes,
-                        isChecked = it.isChecked,
-                        propertyName = it.propertyName,
-                        propertyType = it.propertyType,
-                        value = it.value,
-                        moduleType = it.moduleType,
-                        tableTitle = it.tableTitle,
-                        tableView = it.tableView,
-                        calendarDateColumnId = it.calendarDateColumnId,
-                        calendarDateColumnName = it.calendarDateColumnName,
-                        timelineStartColumnId = it.timelineStartColumnId,
-                        timelineStartColumnName = it.timelineStartColumnName,
-                        timelineEndColumnId = it.timelineEndColumnId,
-                        timelineEndColumnName = it.timelineEndColumnName,
-                        dashboardMetricColumnId = it.dashboardMetricColumnId,
-                        dashboardMetricColumnName = it.dashboardMetricColumnName,
-                        dashboardGroupColumnId = it.dashboardGroupColumnId,
-                        dashboardGroupColumnName = it.dashboardGroupColumnName,
-                        columnId = it.columnId,
-                        columnName = it.columnName,
-                        newColumnName = it.newColumnName,
-                        columnType = it.columnType,
-                        options = it.options,
-                        formula = it.formula,
-                        relationTargetTableId = it.relationTargetTableId,
-                        relationTargetTableTitle = it.relationTargetTableTitle,
-                        rollupRelationColumnId = it.rollupRelationColumnId,
-                        rollupRelationColumnName = it.rollupRelationColumnName,
-                        rollupTargetColumnId = it.rollupTargetColumnId,
-                        rollupTargetColumnName = it.rollupTargetColumnName,
-                        rollupAggregation = it.rollupAggregation,
-                        sortDirection = it.sortDirection,
-                        filterQuery = it.filterQuery,
-                        groupByColumnId = it.groupByColumnId,
-                        groupByColumnName = it.groupByColumnName,
-                        rowId = it.rowId,
-                        rowTitle = it.rowTitle,
-                        newRowTitle = it.newRowTitle,
-                        rowBlockId = it.rowBlockId,
-                        targetIndex = it.targetIndex,
-                        cellValues = it.cellValues,
-                        tableColumns = it.tableColumns.map { column ->
-                            ChatTableColumn(
-                                name = column.name,
-                                type = column.type,
-                                options = column.options,
-                                dateFormat = column.dateFormat,
-                                timeFormat = column.timeFormat,
-                                dateReminder = column.dateReminder,
-                                timezoneLabel = column.timezoneLabel,
-                                formula = column.formula,
-                                relationTargetTableId = column.relationTargetTableId,
-                                rollupRelationColumnName = column.rollupRelationColumnName,
-                                rollupTargetColumnName = column.rollupTargetColumnName,
-                                rollupAggregation = column.rollupAggregation,
-                            )
-                        },
-                        tableRows = it.tableRows,
-                        delayMinutes = it.delayMinutes,
-                    )
-                }
-            )
+            AiActionContractMapper.toDomain(response)
         }.mapAiFailure()
     }
 
@@ -239,11 +144,4 @@ class AiRepositoryImpl @Inject constructor(
             PageBlockCodec.decodeDocument(response.planJson)
         }.mapAiFailure()
     }
-}
-
-private fun String.normalizedChatActionType(): String {
-    return trim()
-        .uppercase()
-        .replace(Regex("[^A-Z0-9]+"), "_")
-        .trim('_')
 }

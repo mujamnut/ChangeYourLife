@@ -74,4 +74,74 @@ class AiActionSchemaValidatorTest {
         assertEquals("formula", issue.field)
         assertEquals("missing_required_field", issue.code)
     }
+
+    @Test
+    fun acceptsCreateDatabaseWithSelectOptions() {
+        val result = validator.validate(
+            listOf(
+                AiService.AiActionItem(
+                    type = "CREATE_DATABASE",
+                    tableTitle = "Expense bulan 7",
+                    tableColumns = listOf(
+                        AiService.AiTableColumnItem(
+                            name = "Category",
+                            type = "Select",
+                            options = listOf("Food", "Fuel", "Makeup", "Transport"),
+                        ),
+                        AiService.AiTableColumnItem(
+                            name = "Status",
+                            type = "Select",
+                            options = listOf("Planned", "Paid"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        assertEquals(emptyList(), result.issues)
+        assertEquals("CREATE_DATABASE", result.actions.single().type)
+        assertEquals(listOf("Food", "Fuel", "Makeup", "Transport"), result.actions.single().tableColumns.first().options)
+    }
+
+    @Test
+    fun acceptsAddTableColumnWithDropdownOptions() {
+        val result = validator.validate(
+            listOf(
+                AiService.AiActionItem(
+                    type = "ADD_TABLE_COLUMN",
+                    tableTitle = "Expense bulan 7",
+                    columnName = "Category",
+                    columnType = "Select",
+                    options = listOf("Food", "Fuel", "Makeup", "Transport"),
+                ),
+            ),
+        )
+
+        assertEquals(emptyList(), result.issues)
+        val action = result.actions.single()
+        assertEquals("ADD_TABLE_COLUMN", action.type)
+        assertEquals("Category", action.columnName)
+        assertEquals(listOf("Food", "Fuel", "Makeup", "Transport"), action.options)
+    }
+
+    @Test
+    fun rejectsTableRowActionWithColumnConfigFields() {
+        val result = validator.validate(
+            listOf(
+                AiService.AiActionItem(
+                    type = "ADD_TABLE_ROW",
+                    tableTitle = "Expense bulan 7",
+                    rowTitle = "Makan",
+                    cellValues = mapOf("Amount" to "4"),
+                    columnName = "Category",
+                    options = listOf("Food"),
+                ),
+            ),
+        )
+
+        assertEquals(emptyList(), result.actions)
+        val issue = result.issues.single()
+        assertEquals("columnName,options", issue.field)
+        assertEquals("unexpected_action_fields", issue.code)
+    }
 }
