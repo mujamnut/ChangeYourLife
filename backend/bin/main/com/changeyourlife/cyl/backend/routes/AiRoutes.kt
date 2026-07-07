@@ -106,6 +106,7 @@ fun Route.aiRoutes(aiService: AiService) {
                                 columnName = it.columnName,
                                 newColumnName = it.newColumnName,
                                 columnType = it.columnType,
+                                options = it.options,
                                 formula = it.formula,
                                 relationTargetTableId = it.relationTargetTableId,
                                 relationTargetTableTitle = it.relationTargetTableTitle,
@@ -125,10 +126,11 @@ fun Route.aiRoutes(aiService: AiService) {
                                 targetIndex = it.targetIndex,
                                 cellValues = it.cellValues,
                                 tableColumns = it.tableColumns.map { column ->
-                                    AiTableColumn(
-                                        name = column.name,
-                                        type = column.type,
-                                        dateFormat = column.dateFormat,
+                                        AiTableColumn(
+                                            name = column.name,
+                                            type = column.type,
+                                            options = column.options,
+                                            dateFormat = column.dateFormat,
                                         timeFormat = column.timeFormat,
                                         dateReminder = column.dateReminder,
                                         timezoneLabel = column.timezoneLabel,

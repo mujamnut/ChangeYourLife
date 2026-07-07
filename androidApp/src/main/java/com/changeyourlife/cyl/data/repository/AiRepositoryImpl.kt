@@ -155,6 +155,7 @@ class AiRepositoryImpl @Inject constructor(
                         columnName = it.columnName,
                         newColumnName = it.newColumnName,
                         columnType = it.columnType,
+                        options = it.options,
                         formula = it.formula,
                         relationTargetTableId = it.relationTargetTableId,
                         relationTargetTableTitle = it.relationTargetTableTitle,
@@ -177,6 +178,7 @@ class AiRepositoryImpl @Inject constructor(
                             ChatTableColumn(
                                 name = column.name,
                                 type = column.type,
+                                options = column.options,
                                 dateFormat = column.dateFormat,
                                 timeFormat = column.timeFormat,
                                 dateReminder = column.dateReminder,

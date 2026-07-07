@@ -98,6 +98,7 @@ data class AiTaskContextDto(
 data class AiTableColumnDto(
     val name: String = "",
     val type: String = "Text",
+    val options: List<String> = emptyList(),
     val dateFormat: String = "",
     val timeFormat: String = "",
     val dateReminder: String = "",
@@ -150,6 +151,7 @@ data class AiActionDto(
     val columnName: String = "",
     val newColumnName: String = "",
     val columnType: String = "Text",
+    val options: List<String> = emptyList(),
     val formula: String = "",
     val relationTargetTableId: String = "",
     val relationTargetTableTitle: String = "",

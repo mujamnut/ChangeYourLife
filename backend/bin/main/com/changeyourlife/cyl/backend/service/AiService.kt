@@ -133,6 +133,7 @@ class AiService(
     data class AiTableColumnItem(
         val name: String = "",
         val type: String = "Text",
+        val options: List<String> = emptyList(),
         val dateFormat: String = "",
         val timeFormat: String = "",
         val dateReminder: String = "",
@@ -185,6 +186,7 @@ class AiService(
         val columnName: String = "",
         val newColumnName: String = "",
         val columnType: String = "Text",
+        val options: List<String> = emptyList(),
         val formula: String = "",
         val relationTargetTableId: String = "",
         val relationTargetTableTitle: String = "",
@@ -348,7 +350,7 @@ class AiService(
             Main fields you may use:
             targetTitle, title, content, blockType, blockText, propertyName, propertyType, value,
             tableTitle, tableView, columnName, newColumnName, columnType, rowTitle, newRowTitle,
-            cellValues, tableColumns, tableRows, formula, sortDirection, filterQuery, groupByColumnName,
+            cellValues, tableColumns, tableRows, options, formula, sortDirection, filterQuery, groupByColumnName,
             textToFormat, format, linkUrl, color, highlight, rangeStart, rangeEnd.
 
             Table column types:
@@ -364,11 +366,16 @@ class AiService(
             - For date words like harini/today, use the client date.
             - For money like "29 ringgit", put the numeric value in an amount/price/cost column if such column exists or create a Number column.
             - For table creation, infer sensible columns and rows from the user's intent instead of using fixed templates.
+            - For Select, MultiSelect, or Status dropdown values, include options as a string array on the column or action.
+            - If the user asks for a category dropdown, use columnType "Select" and include category options.
             - For multi-step requests, return multiple actions in order.
 
             Examples:
             User: buatkan page baru untuk bulan 7 punya monthly expenses,dengan gaji 1488
-            JSON: {"reply":"Siap - saya buat page monthly expenses bulan 7.","actions":[{"type":"CREATE_PAGE","title":"Monthly Expenses July","tableTitle":"Monthly Expenses","tableColumns":[{"name":"Category","type":"Text"},{"name":"Budget","type":"Number"},{"name":"Actual","type":"Number"},{"name":"Status","type":"Status"},{"name":"Notes","type":"Text"}],"tableRows":[{"Category":"Salary","Budget":"1488","Actual":"1488","Status":"Income"}]}]}
+            JSON: {"reply":"Siap - saya buat page monthly expenses bulan 7.","actions":[{"type":"CREATE_PAGE","title":"Monthly Expenses July","tableTitle":"Monthly Expenses","tableColumns":[{"name":"Category","type":"Select","options":["Income","Rent","Food","Transport","Makeup","Other"]},{"name":"Budget","type":"Number"},{"name":"Actual","type":"Number"},{"name":"Status","type":"Status","options":["Planned","Paid","Over budget"]},{"name":"Notes","type":"Text"}],"tableRows":[{"Category":"Income","Budget":"1488","Actual":"1488","Status":"Paid"}]}]}
+
+            User: tambah property Category dropdown dengan Food, Fuel, Makeup
+            JSON: {"reply":"Siap - saya tambah dropdown Category.","actions":[{"type":"ADD_TABLE_COLUMN","columnName":"Category","columnType":"Select","options":["Food","Fuel","Makeup"]}]}
 
             User: saya guna 29 ringgit harini beli makeup
             JSON: {"reply":"Siap - saya tambah rekod belanja itu.","actions":[{"type":"ADD_TABLE_ROW","rowTitle":"makeup","cellValues":{"Item":"makeup","Amount":"29","Date":"${clientDate.ifBlank { "today" }}"}}]}

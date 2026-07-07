@@ -14,6 +14,7 @@ import com.changeyourlife.cyl.domain.model.PageTextSpan
 import com.changeyourlife.cyl.domain.model.Reminder
 import com.changeyourlife.cyl.domain.model.TaskItem
 import com.changeyourlife.cyl.domain.repository.ChatAction
+import com.changeyourlife.cyl.domain.repository.ChatTableColumn
 import com.changeyourlife.cyl.domain.repository.PageRepository
 import com.changeyourlife.cyl.domain.repository.ReminderRepository
 import com.changeyourlife.cyl.domain.repository.TaskRepository
@@ -50,8 +51,9 @@ class AiPageActionExecutorTest {
             updatedAt = 1000,
             deletedAt = null,
         )
+        val pageRepository = FakePageRepository(page, document)
         val executor = AiPageActionExecutor(
-            pageRepository = FakePageRepository(page, document),
+            pageRepository = pageRepository,
             taskRepository = FakeTaskRepository(),
             reminderRepository = FakeReminderRepository(),
             applyEditorCommandUseCase = ApplyEditorCommandUseCase(),
@@ -363,8 +365,9 @@ class AiPageActionExecutorTest {
             updatedAt = 1000,
             deletedAt = null,
         )
+        val pageRepository = FakePageRepository(page, document)
         val executor = AiPageActionExecutor(
-            pageRepository = FakePageRepository(page, document),
+            pageRepository = pageRepository,
             taskRepository = FakeTaskRepository(),
             reminderRepository = FakeReminderRepository(),
             applyEditorCommandUseCase = ApplyEditorCommandUseCase(),
@@ -391,6 +394,116 @@ class AiPageActionExecutorTest {
             .columns
             .single { column -> column.id == totalColumn.id }
         assertEquals("{Amount} * 2", updatedTotalColumn.formula)
+    }
+
+    @Test
+    fun createsDatabaseColumnsWithSelectOptionsFromAiPayload() = runBlocking {
+        val document = PageBlockDocument()
+        val page = Page(
+            id = "page-1",
+            workspaceId = "workspace-1",
+            parentPageId = null,
+            title = "Budget Tracker",
+            content = PageBlockCodec.encodeDocument(document),
+            sortOrder = 0,
+            createdAt = 1000,
+            updatedAt = 1000,
+            deletedAt = null,
+        )
+        val pageRepository = FakePageRepository(page, document)
+        val executor = AiPageActionExecutor(
+            pageRepository = pageRepository,
+            taskRepository = FakeTaskRepository(),
+            reminderRepository = FakeReminderRepository(),
+            applyEditorCommandUseCase = ApplyEditorCommandUseCase(),
+        )
+
+        val result = executor.executeOnPage(
+            page = page,
+            title = page.title,
+            document = document,
+            actions = listOf(
+                ChatAction(
+                    type = "CREATE_DATABASE",
+                    title = "Budget",
+                    tableTitle = "Budget",
+                    tableColumns = listOf(
+                        ChatTableColumn(
+                            name = "Category",
+                            type = "Select",
+                            options = listOf("Food", "Fuel", "Makeup"),
+                        ),
+                        ChatTableColumn(
+                            name = "Status",
+                            type = "Status",
+                            options = listOf("Planned", "Paid"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        assertEquals(emptyList<AiPageActionValidationIssue>(), result.validationIssues)
+        val columns = PageBlockCodec.decodeDocument(requireNotNull(pageRepository.getPage(page.id)).content).table.columns
+        assertEquals(listOf("Food", "Fuel", "Makeup"), columns[0].config.options.map { it.name })
+        assertEquals(listOf("Planned", "Paid"), columns[1].config.options.map { it.name })
+    }
+
+    @Test
+    fun updatesExistingSelectColumnOptionsFromAiPayload() = runBlocking {
+        val categoryColumn = PageTableColumn(
+            id = "column-category",
+            name = "Category",
+            type = PageTableColumnType.Select,
+        )
+        val document = PageBlockDocument(
+            blocks = listOf(
+                PageBlock(
+                    id = "block-table",
+                    type = PageBlockType.DatabaseTable,
+                    table = PageTable(
+                        title = "Budget",
+                        columns = listOf(categoryColumn),
+                    ),
+                ),
+            ),
+        )
+        val page = Page(
+            id = "page-1",
+            workspaceId = "workspace-1",
+            parentPageId = null,
+            title = "Budget Tracker",
+            content = PageBlockCodec.encodeDocument(document),
+            sortOrder = 0,
+            createdAt = 1000,
+            updatedAt = 1000,
+            deletedAt = null,
+        )
+        val executor = AiPageActionExecutor(
+            pageRepository = FakePageRepository(page, document),
+            taskRepository = FakeTaskRepository(),
+            reminderRepository = FakeReminderRepository(),
+            applyEditorCommandUseCase = ApplyEditorCommandUseCase(),
+        )
+
+        val result = executor.executeOnPage(
+            page = page,
+            title = page.title,
+            document = document,
+            actions = listOf(
+                ChatAction(
+                    type = "UPDATE_TABLE_COLUMN_CONFIG",
+                    title = "Category",
+                    tableTitle = "Budget",
+                    columnName = "Category",
+                    options = listOf("Food", "Fuel", "Makeup", " food "),
+                ),
+            ),
+        )
+
+        assertEquals(emptyList<AiPageActionValidationIssue>(), result.validationIssues)
+        val updatedColumn = requireNotNull(result.updatedDocument).table.columns.single()
+        assertEquals(listOf("Food", "Fuel", "Makeup"), updatedColumn.config.options.map { it.name })
     }
 
     @Test

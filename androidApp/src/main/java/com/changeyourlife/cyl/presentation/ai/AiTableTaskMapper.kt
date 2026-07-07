@@ -5,13 +5,17 @@ import com.changeyourlife.cyl.domain.model.PageBlockDocument
 import com.changeyourlife.cyl.domain.model.PageBlockType
 import com.changeyourlife.cyl.domain.model.PageTable
 import com.changeyourlife.cyl.domain.model.PageTableColumn
+import com.changeyourlife.cyl.domain.model.PageTableColumnConfig
 import com.changeyourlife.cyl.domain.model.PageTableColumnType
 import com.changeyourlife.cyl.domain.model.PageTableDateFormat
 import com.changeyourlife.cyl.domain.model.PageTableDateReminder
+import com.changeyourlife.cyl.domain.model.PageTableOptionColor
 import com.changeyourlife.cyl.domain.model.PageTableRow
+import com.changeyourlife.cyl.domain.model.PageTableSelectOption
 import com.changeyourlife.cyl.domain.model.PageTableTimeFormat
 import com.changeyourlife.cyl.domain.model.PageTableView
 import com.changeyourlife.cyl.domain.model.PageTableViewConfig
+import com.changeyourlife.cyl.domain.model.normalizedForType
 import com.changeyourlife.cyl.domain.repository.ChatAction
 import com.changeyourlife.cyl.domain.repository.ChatTableColumn
 import com.changeyourlife.cyl.presentation.page.PageBlockCodec
@@ -27,6 +31,7 @@ data class TaskTableMutationResult(
 fun ChatTableColumn.toPageTableColumnFromAi(): PageTableColumn {
     val columnType = type.toPageTableColumnTypeFromAi()
     return PageBlockCodec.newTableColumn(name.trim(), columnType).copy(
+        config = PageTableColumnConfig(options = options.toAiTableSelectOptions()).normalizedForType(columnType),
         dateFormat = dateFormat.toPageTableDateFormat(),
         timeFormat = timeFormat.toPageTableTimeFormat(defaultFor = name, type = columnType),
         dateReminder = dateReminder.toPageTableDateReminder(defaultFor = name, type = columnType),
@@ -35,6 +40,29 @@ fun ChatTableColumn.toPageTableColumnFromAi(): PageTableColumn {
         relationTargetTableId = relationTargetTableId,
         rollupAggregation = rollupAggregation.toPageTableRollupAggregationFromAi(),
     )
+}
+
+internal fun List<String>.toAiTableSelectOptions(): List<PageTableSelectOption> {
+    val colors = listOf(
+        PageTableOptionColor.Blue,
+        PageTableOptionColor.Green,
+        PageTableOptionColor.Yellow,
+        PageTableOptionColor.Orange,
+        PageTableOptionColor.Purple,
+        PageTableOptionColor.Pink,
+        PageTableOptionColor.Red,
+        PageTableOptionColor.Gray,
+    )
+    return map { value -> value.trim() }
+        .filter { value -> value.isNotBlank() }
+        .distinctBy { value -> value.lowercase() }
+        .mapIndexed { index, value ->
+            PageTableSelectOption(
+                id = value.normalizedAiKey().replace(" ", "-").ifBlank { "option" } + "-$index",
+                name = value,
+                color = colors[index % colors.size],
+            )
+        }
 }
 
 fun ChatAction.isTaskTableRowAction(): Boolean {

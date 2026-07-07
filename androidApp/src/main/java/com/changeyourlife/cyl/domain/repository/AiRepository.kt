@@ -61,6 +61,7 @@ data class AiBlockContext(
 data class ChatTableColumn(
     val name: String = "",
     val type: String = "Text",
+    val options: List<String> = emptyList(),
     val dateFormat: String = "",
     val timeFormat: String = "",
     val dateReminder: String = "",
@@ -112,6 +113,7 @@ data class ChatAction(
     val columnName: String = "",
     val newColumnName: String = "",
     val columnType: String = "Text",
+    val options: List<String> = emptyList(),
     val formula: String = "",
     val relationTargetTableId: String = "",
     val relationTargetTableTitle: String = "",

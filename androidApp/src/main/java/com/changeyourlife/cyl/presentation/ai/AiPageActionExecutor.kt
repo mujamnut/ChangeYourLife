@@ -23,6 +23,7 @@ import com.changeyourlife.cyl.domain.model.Reminder
 import com.changeyourlife.cyl.domain.model.RichTextFormat
 import com.changeyourlife.cyl.domain.model.RichTextSpanEngine
 import com.changeyourlife.cyl.domain.model.TaskItem
+import com.changeyourlife.cyl.domain.model.normalizedForType
 import com.changeyourlife.cyl.domain.model.toAiUndoCommandSummary
 import com.changeyourlife.cyl.domain.repository.ChatAction
 import com.changeyourlife.cyl.domain.repository.PageRepository
@@ -2363,7 +2364,12 @@ private fun PageTableColumn.withActionConfig(
     relationColumn: PageTableColumn? = null,
     resolvedRollupTargetColumnId: String = "",
 ): PageTableColumn {
+    val optionConfig = action.options.toAiTableSelectOptions()
+        .takeIf { options -> options.isNotEmpty() }
+        ?.let { options -> config.copy(options = options).normalizedForType(type) }
+        ?: config.normalizedForType(type)
     return copy(
+        config = optionConfig,
         formula = action.effectiveFormula().ifBlank { formula },
         relationTargetTableId = action.relationTargetTableId.ifBlank { relationTargetTableId },
         rollupRelationColumnId = relationColumn?.id ?: action.rollupRelationColumnId.ifBlank { rollupRelationColumnId },
