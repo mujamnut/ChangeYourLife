@@ -60,6 +60,46 @@ class AiActionExecutionUseCaseTest {
     }
 
     @Test
+    fun createsHomeScopedPageWithDatabaseDropdownOptions() = runBlocking {
+        val pageRepository = FakePageRepository()
+        val useCase = useCase(pageRepository)
+
+        val result = useCase.execute(
+            workspaceId = "workspace-1",
+            scopedTargetPage = null,
+            actions = listOf(
+                ChatAction(
+                    type = "CREATE_PAGE",
+                    title = "July Monthly Expenses",
+                    tableTitle = "Monthly Expenses",
+                    tableColumns = listOf(
+                        ChatTableColumn(
+                            name = "Category",
+                            type = "Select",
+                            options = listOf("Food", "Fuel", "Makeup", "Transport"),
+                        ),
+                        ChatTableColumn(
+                            name = "Status",
+                            type = "Status",
+                            options = listOf("Planned", "Paid"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        assertEquals(listOf("Done: Created page July Monthly Expenses"), result.messages)
+        val document = PageBlockCodec.decodeDocument(pageRepository.createdPages.single().content)
+        val table = document.blocks.single().table
+        assertEquals("Monthly Expenses", table.title)
+        assertEquals(listOf("Category", "Status"), table.columns.map { column -> column.name })
+        assertEquals(PageTableColumnType.Select, table.columns[0].type)
+        assertEquals(listOf("Food", "Fuel", "Makeup", "Transport"), table.columns[0].config.options.map { it.name })
+        assertEquals(PageTableColumnType.Status, table.columns[1].type)
+        assertEquals(listOf("Planned", "Paid"), table.columns[1].config.options.map { it.name })
+    }
+
+    @Test
     fun executesPageScopedActionAndPersistsUpdatedDocument() = runBlocking {
         val document = PageBlockDocument(blocks = listOf(PageBlock(id = "note", type = PageBlockType.Text, text = "Old")))
         val page = page(document)

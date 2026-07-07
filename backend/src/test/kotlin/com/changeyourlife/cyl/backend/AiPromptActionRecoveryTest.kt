@@ -135,4 +135,25 @@ class AiPromptActionRecoveryTest {
         assertEquals("Salary", action.tableRows.single()["Category"])
         assertEquals("1488", action.tableRows.single()["Budget"])
     }
+
+    @Test
+    fun recoversHomeExpensePageWithExplicitDropdownOptions() {
+        val result = recovery.recoverActionFromPrompt(
+            prompt = "buat page expense bulan 7, ada database dengan Category dropdown Food, Fuel, Makeup, Transport dan Status dropdown Planned, Paid",
+            pages = emptyList(),
+        )
+
+        val action = assertNotNull(result).actions.single()
+        assertEquals("CREATE_PAGE", action.type)
+        assertEquals("July Monthly Expenses", action.title)
+        assertEquals("Monthly Expenses", action.tableTitle)
+
+        val category = action.tableColumns.single { column -> column.name == "Category" }
+        assertEquals("Select", category.type)
+        assertEquals(listOf("Food", "Fuel", "Makeup", "Transport"), category.options)
+
+        val status = action.tableColumns.single { column -> column.name == "Status" }
+        assertEquals("Status", status.type)
+        assertEquals(listOf("Planned", "Paid"), status.options)
+    }
 }

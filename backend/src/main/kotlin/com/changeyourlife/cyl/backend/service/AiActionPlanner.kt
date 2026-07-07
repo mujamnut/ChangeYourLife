@@ -69,8 +69,46 @@ class AiActionPlanner {
         ) {
             return true
         }
+        if (actions.hasTableCreationPayload() &&
+            modelResult.actions.hasAnyCreationAction() &&
+            actions.tableCreationPayloadScore() > modelResult.actions.tableCreationPayloadScore()
+        ) {
+            return true
+        }
         return false
     }
+
+    private fun List<AiService.AiActionItem>.hasAnyCreationAction(): Boolean =
+        any { action ->
+            action.type.normalizedActionType() in setOf(
+                "CREATE_PAGE",
+                "CREATE_SUBPAGE",
+                "CREATE_DATABASE",
+                "CREATE_TABLE",
+            )
+        }
+
+    private fun List<AiService.AiActionItem>.hasTableCreationPayload(): Boolean =
+        any { action ->
+            val type = action.type.normalizedActionType()
+            type in setOf("CREATE_PAGE", "CREATE_DATABASE", "CREATE_TABLE") &&
+                (action.tableColumns.isNotEmpty() || action.tableRows.isNotEmpty() || action.cellValues.isNotEmpty())
+        }
+
+    private fun List<AiService.AiActionItem>.tableCreationPayloadScore(): Int =
+        filter { action ->
+            action.type.normalizedActionType() in setOf("CREATE_PAGE", "CREATE_DATABASE", "CREATE_TABLE")
+        }.sumOf { action ->
+            val dropdownOptionCount = action.tableColumns.sumOf { column -> column.options.size } + action.options.size
+            val structuralScore = action.tableColumns.size * 10 +
+                dropdownOptionCount * 4 +
+                action.tableRows.size * 8 +
+                action.cellValues.size * 3
+            structuralScore +
+                (if (action.type.normalizedActionType() == "CREATE_PAGE") 5 else 0) +
+                (if (action.tableTitle.isNotBlank()) 2 else 0) +
+                (if (action.title.isNotBlank()) 1 else 0)
+        }
 
     private fun String.withoutMentionContext(): String =
         substringBefore("CYL_MENTION_CONTEXT:").trim()

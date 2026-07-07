@@ -301,6 +301,12 @@ class AiPromptActionRecovery(
             else -> extractCreatePageTitle().ifBlank { "Untitled page" }
         }
         val salaryAmount = extractSalaryAmount()
+        val explicitDropdownColumns = extractDropdownTableColumns()
+        val baseTableColumns = when {
+            isExpensePage -> monthlyExpenseTableColumns()
+            isHomeTablePage -> pageTitle.defaultRecoveredTableColumns(value)
+            else -> emptyList()
+        }.withExplicitDropdownColumns(explicitDropdownColumns)
         return AiActionItem(
             type = "CREATE_PAGE",
             title = pageTitle,
@@ -310,11 +316,7 @@ class AiPromptActionRecovery(
                 else -> ""
             },
             tableView = "Table",
-            tableColumns = when {
-                isExpensePage -> monthlyExpenseTableColumns()
-                isHomeTablePage -> pageTitle.defaultRecoveredTableColumns(value)
-                else -> emptyList()
-            },
+            tableColumns = baseTableColumns,
             tableRows = if (isExpensePage && salaryAmount != null) {
                 listOf(
                     mapOf(
@@ -453,6 +455,100 @@ class AiPromptActionRecovery(
         AiTableColumnItem(name = "Variance", type = "Number"),
         AiTableColumnItem(name = "Notes", type = "Text"),
     )
+
+    private fun String.extractDropdownTableColumns(): List<AiTableColumnItem> {
+        val matches = Regex(
+            "(?i)\\b([\\p{L}][\\p{L}0-9 _/-]{0,48}?)\\s+(dropdown|select|multi[-\\s]?select)\\b",
+        ).findAll(this).mapNotNull { match ->
+            val rawName = match.groupValues.getOrNull(1).orEmpty()
+            val marker = match.groupValues.getOrNull(2).orEmpty()
+            val name = rawName.cleanDropdownColumnName()
+            if (name.isBlank()) return@mapNotNull null
+            DropdownColumnMatch(
+                logicalStart = match.range.first + rawName.logicalDropdownColumnStartOffset(),
+                markerEnd = match.range.last + 1,
+                name = name,
+                type = dropdownColumnType(name = name, marker = marker),
+            )
+        }.toList()
+
+        if (matches.isEmpty()) return emptyList()
+
+        return matches.mapIndexed { index, match ->
+            val nextStart = matches.getOrNull(index + 1)?.logicalStart ?: length
+            val optionText = substring(match.markerEnd, nextStart.coerceAtLeast(match.markerEnd))
+            AiTableColumnItem(
+                name = match.name,
+                type = match.type,
+                options = optionText.extractDropdownOptions(),
+            )
+        }.filter { column -> column.options.isNotEmpty() }
+            .distinctBy { column -> column.name.normalizedColumnName() }
+    }
+
+    private data class DropdownColumnMatch(
+        val logicalStart: Int,
+        val markerEnd: Int,
+        val name: String,
+        val type: String,
+    )
+
+    private fun String.logicalDropdownColumnStartOffset(): Int {
+        val connectors = listOf(" dengan ", " with ", " dan ", " and ", " ada ", " has ", " have ")
+        val lower = lowercase()
+        val index = connectors
+            .map { connector -> lower.lastIndexOf(connector) to connector.length }
+            .filter { (position, _) -> position >= 0 }
+            .maxByOrNull { (position, _) -> position }
+            ?: return 0
+        return index.first + index.second
+    }
+
+    private fun String.cleanDropdownColumnName(): String {
+        val afterConnector = substring(logicalDropdownColumnStartOffset())
+        return afterConnector
+            .replace(
+                Regex("(?i)\\b(ada|has|have|database|table|jadual|property|properties|prop|column|field|dengan|with|dan|and|yang|iaitu)\\b"),
+                " ",
+            )
+            .replace(Regex("\\s+"), " ")
+            .trim(' ', '-', ':', ',', '.', '"', '\'')
+            .toReadableTitle()
+    }
+
+    private fun dropdownColumnType(name: String, marker: String): String {
+        val normalizedName = name.normalizedColumnName()
+        val normalizedMarker = marker.lowercase().replace(Regex("[^a-z]+"), "")
+        return when {
+            normalizedMarker.contains("multi") -> "MultiSelect"
+            normalizedName == "status" || normalizedMarker == "status" -> "Status"
+            else -> "Select"
+        }
+    }
+
+    private fun String.extractDropdownOptions(): List<String> {
+        return replace(
+            Regex("(?i)\\b(dengan|with|option|options|pilihan|nilai|value|values|iaitu|yaitu|seperti)\\b"),
+            " ",
+        )
+            .replace(Regex("[.;:]+$"), " ")
+            .split(Regex("(?i)\\s*(?:,|/|\\b(?:dan|and)\\b)\\s*"))
+            .map { option -> option.trim(' ', '-', ':', '.', '"', '\'') }
+            .filter { option -> option.isNotBlank() }
+            .distinctBy { option -> option.lowercase() }
+    }
+
+    private fun List<AiTableColumnItem>.withExplicitDropdownColumns(
+        explicitColumns: List<AiTableColumnItem>,
+    ): List<AiTableColumnItem> {
+        if (explicitColumns.isEmpty()) return this
+        val explicitByName = explicitColumns.associateBy { column -> column.name.normalizedColumnName() }
+        val replaced = map { column ->
+            explicitByName[column.name.normalizedColumnName()] ?: column
+        }
+        val existingNames = replaced.map { column -> column.name.normalizedColumnName() }.toSet()
+        return replaced + explicitColumns.filterNot { column -> column.name.normalizedColumnName() in existingNames }
+    }
 
     private fun String.extractCreatePageTitle(): String {
         return removeTargetMention("")
@@ -1093,6 +1189,12 @@ class AiPromptActionRecovery(
     private fun String.normalizeForAiMatch(): String =
         lowercase()
             .replace(Regex("[^a-z0-9\\s]"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+
+    private fun String.normalizedColumnName(): String =
+        lowercase()
+            .replace(Regex("[^a-z0-9]+"), " ")
             .replace(Regex("\\s+"), " ")
             .trim()
 

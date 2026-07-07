@@ -164,4 +164,51 @@ class AiActionPlannerTest {
 
         assertEquals(modelResult, result)
     }
+
+    @Test
+    fun prefersRicherPromptPagePlanWhenModelOnlyCreatesSparseDatabase() {
+        val modelResult = AiService.AiActionResult(
+            reply = "Siap - saya buat database itu.",
+            actions = listOf(
+                AiService.AiActionItem(
+                    type = "CREATE_DATABASE",
+                    tableTitle = "Expenses",
+                ),
+            ),
+        )
+        val promptResult = AiService.AiActionResult(
+            reply = "Siap - saya buat page expense bulan 7.",
+            actions = listOf(
+                AiService.AiActionItem(
+                    type = "CREATE_PAGE",
+                    title = "July Monthly Expenses",
+                    tableTitle = "Monthly Expenses",
+                    tableColumns = listOf(
+                        AiService.AiTableColumnItem(
+                            name = "Category",
+                            type = "Select",
+                            options = listOf("Food", "Fuel", "Makeup", "Transport"),
+                        ),
+                        AiService.AiTableColumnItem(
+                            name = "Status",
+                            type = "Status",
+                            options = listOf("Planned", "Paid"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        val result = planner.selectActionResult(
+            prompt = "buat page expense bulan 7, ada database dengan Category dropdown Food, Fuel, Makeup, Transport dan Status dropdown Planned, Paid",
+            modelResult = modelResult,
+            promptResult = promptResult,
+        )
+
+        val action = assertNotNull(result).actions.single()
+        assertEquals("CREATE_PAGE", action.type)
+        assertEquals("July Monthly Expenses", action.title)
+        assertEquals(listOf("Category", "Status"), action.tableColumns.map { it.name })
+        assertEquals(listOf("Food", "Fuel", "Makeup", "Transport"), action.tableColumns[0].options)
+    }
 }
