@@ -175,6 +175,31 @@ class TableMutationUseCaseTest {
     }
 
     @Test
+    fun deleteColumnRejectsPrimaryColumn() {
+        val nameColumn = PageTableColumn(id = "name", name = "Name")
+        val amountColumn = PageTableColumn(id = "amount", name = "Amount", type = PageTableColumnType.Number)
+        val document = tableDocument(
+            columns = listOf(nameColumn, amountColumn),
+            rows = listOf(
+                PageTableRow(
+                    id = "row-1",
+                    cells = mapOf("name" to "Food", "amount" to "4"),
+                ),
+            ),
+        )
+
+        val result = useCase.deleteColumn(
+            document = document,
+            tableBlockId = "table-1",
+            columnId = "name",
+        )
+
+        assertFalse(result.changed)
+        assertEquals(listOf("name", "amount"), result.document.table.columns.map { column -> column.id })
+        assertEquals("Food", result.document.table.rows.single().cells["name"])
+    }
+
+    @Test
     fun addRowAppliesColumnDefaultValues() {
         val statusColumn = PageTableColumn(
             id = "status",

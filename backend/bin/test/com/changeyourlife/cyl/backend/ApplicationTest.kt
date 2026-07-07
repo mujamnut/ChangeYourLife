@@ -934,14 +934,30 @@ class ApplicationTest {
         assertTrue(addedColumnContent.contains("column-amount"), addedColumnContent)
         assertTrue(addedColumnContent.contains("\"column-amount\":\"4\""), addedColumnContent)
 
+        val addNotesColumnResponse = client.post("/api/v1/pages/${page.id}/tables/block-table/columns") {
+            header(HttpHeaders.Authorization, authHeader)
+            contentType(ContentType.Application.Json)
+            setBody(
+                Json.encodeToString(
+                    PageTableColumnCreateRequest(
+                        columnId = "column-notes",
+                        name = "Notes",
+                        type = "Text",
+                    ),
+                ),
+            )
+        }
+        assertEquals(HttpStatusCode.OK, addNotesColumnResponse.status)
+
         val moveColumnResponse = client.patch("/api/v1/pages/${page.id}/tables/block-table/columns/column-amount/position") {
             header(HttpHeaders.Authorization, authHeader)
             contentType(ContentType.Application.Json)
-            setBody(Json.encodeToString(PageElementPositionPatchRequest(targetIndex = 0)))
+            setBody(Json.encodeToString(PageElementPositionPatchRequest(targetIndex = 2)))
         }
         assertEquals(HttpStatusCode.OK, moveColumnResponse.status)
         val movedColumnContent = Json.decodeFromString<PageSyncDto>(moveColumnResponse.bodyAsText()).content
-        assertTrue(movedColumnContent.indexOf("column-amount") < movedColumnContent.indexOf("column-name"), movedColumnContent)
+        assertTrue(movedColumnContent.indexOf("column-name") < movedColumnContent.indexOf("column-notes"), movedColumnContent)
+        assertTrue(movedColumnContent.indexOf("column-notes") < movedColumnContent.indexOf("column-amount"), movedColumnContent)
 
         val addRowResponse = client.post("/api/v1/pages/${page.id}/tables/block-table/rows") {
             header(HttpHeaders.Authorization, authHeader)

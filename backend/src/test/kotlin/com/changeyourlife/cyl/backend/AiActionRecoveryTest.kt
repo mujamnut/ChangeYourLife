@@ -305,7 +305,7 @@ class AiActionRecoveryTest {
     }
 
     @Test
-    fun chatWithActionsRecoversActionWhenAiReplyHasNoStructuredActions() {
+    fun chatWithActionsDoesNotRecoverActionWhenSandboxReplyHasNoStructuredActions() {
         val sandboxService = AiService()
         val result = sandboxService.chatWithActions(
             messages = listOf(
@@ -336,12 +336,7 @@ class AiActionRecoveryTest {
             ),
         )
 
-        val action = result.actions.single()
-        assertEquals("ADD_TABLE_ROW", action.type)
-        assertEquals("Budget Tracker", action.targetTitle)
-        assertEquals("Expenses", action.tableTitle)
-        assertEquals("fuel", action.rowTitle)
-        assertEquals("5", action.cellValues["Amount"])
+        assertEquals(emptyList(), result.actions)
     }
 
     @Test
@@ -703,7 +698,7 @@ class AiActionRecoveryTest {
     }
 
     @Test
-    fun selectorPrefersPromptRowPlanWhenModelOnlyCreatesTable() {
+    fun selectorRepairsModelWhenItStoresRowPromptAsTableName() {
         val modelResult = AiService.AiActionResult(
             reply = "Siap - saya buat table itu.",
             actions = listOf(
@@ -744,7 +739,7 @@ class AiActionRecoveryTest {
     }
 
     @Test
-    fun selectorPrefersPromptMultiStepWhenModelMissesASegment() {
+    fun selectorKeepsValidModelResultWhenPromptRecoveryHasExtraSegments() {
         val modelResult = AiService.AiActionResult(
             reply = "Siap - saya tambah row itu.",
             actions = listOf(
@@ -780,6 +775,7 @@ class AiActionRecoveryTest {
         )
 
         val actions = assertNotNull(selected).actions
-        assertEquals(listOf("DELETE_ALL_BLOCKS", "ADD_TABLE_ROW"), actions.map { it.type })
+        assertEquals(listOf("ADD_TABLE_ROW"), actions.map { it.type })
+        assertEquals("makan", actions.single().rowTitle)
     }
 }

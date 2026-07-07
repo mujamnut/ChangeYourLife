@@ -449,6 +449,9 @@ object PageContentJsonMutator {
         if (tableBlockId.isBlank() || columnId.isBlank()) return null
         return mutateTable(content, tableBlockId) { table ->
             val columns = table["columns"] as? JsonArray ?: JsonArray(emptyList())
+            if (columns.size <= 1) return@mutateTable null
+            val primaryColumnId = (columns.firstOrNull() as? JsonObject)?.stringValue("id")
+            if (primaryColumnId == columnId) return@mutateTable null
             val updatedColumns = columns.filterNot { element ->
                 (element as? JsonObject)?.stringValue("id") == columnId
             }
@@ -475,8 +478,10 @@ object PageContentJsonMutator {
             val index = columns.indexOfFirst { element ->
                 (element as? JsonObject)?.stringValue("id") == columnId
             }
-            if (index < 0) return@mutateTable null
-            table.withElement("columns", columns.moveElement(index, targetIndex))
+            if (index <= 0) return@mutateTable null
+            val updatedColumns = columns.moveElement(index, targetIndex.coerceAtLeast(1))
+            if (updatedColumns == columns) return@mutateTable null
+            table.withElement("columns", updatedColumns)
         }
     }
 

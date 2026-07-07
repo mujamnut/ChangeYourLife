@@ -6,29 +6,23 @@ class AiActionPlanner {
         modelResult: AiService.AiActionResult?,
         promptResult: AiService.AiActionResult?,
     ): AiService.AiActionResult? {
-        if (promptResult != null &&
-            promptResult.isCreativeCreationFallback() &&
-            (modelResult == null || modelResult.actions.isEmpty())
-        ) {
-            return modelResult
-        }
-        if (promptResult != null &&
-            (
-                modelResult == null ||
-                    modelResult.actions.isEmpty() ||
-                    promptResult.shouldReplaceModelResult(modelResult, prompt)
-                )
-        ) {
+        if (promptResult == null) return modelResult
+
+        if (modelResult == null) {
+            if (promptResult.isCreativeCreationFallback()) return null
             return promptResult.copy(
-                validationIssues = modelResult?.validationIssues.orEmpty() + promptResult.validationIssues,
+                validationIssues = promptResult.validationIssues,
             )
         }
-        if (modelResult != null && modelResult.actions.isNotEmpty()) return modelResult
-        if (promptResult != null) {
+
+        if (modelResult.actions.isEmpty()) return modelResult
+
+        if (promptResult.shouldRepairClearlyMalformedModelResult(modelResult, prompt)) {
             return promptResult.copy(
-                validationIssues = modelResult?.validationIssues.orEmpty() + promptResult.validationIssues,
+                validationIssues = modelResult.validationIssues + promptResult.validationIssues,
             )
         }
+
         return modelResult
     }
 
@@ -42,7 +36,7 @@ class AiActionPlanner {
             )
         }
 
-    private fun AiService.AiActionResult.shouldReplaceModelResult(
+    private fun AiService.AiActionResult.shouldRepairClearlyMalformedModelResult(
         modelResult: AiService.AiActionResult,
         prompt: String,
     ): Boolean {
@@ -51,9 +45,9 @@ class AiActionPlanner {
         val visiblePrompt = prompt.withoutMentionContext()
         val promptTypes = actions.map { action -> action.type.normalizedActionType() }.toSet()
         val modelTypes = modelResult.actions.map { action -> action.type.normalizedActionType() }.toSet()
-        if ("DELETE_ALL_BLOCKS" in promptTypes && "DELETE_ALL_BLOCKS" !in modelTypes) return true
-        if (actions.size > modelResult.actions.size && visiblePrompt.actionSegments().size >= actions.size) return true
-        if (visiblePrompt.looksLikeTableRowRequest() &&
+        val promptLooksLikeRowData = visiblePrompt.looksLikeTableRowRequest() ||
+            visiblePrompt.extractMoneyAmount() != null
+        if (promptLooksLikeRowData &&
             "ADD_TABLE_ROW" in promptTypes &&
             modelTypes.any { type -> type in setOf("CREATE_DATABASE", "CREATE_TABLE") } &&
             "ADD_TABLE_ROW" !in modelTypes

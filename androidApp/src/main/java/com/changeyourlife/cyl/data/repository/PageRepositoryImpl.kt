@@ -510,7 +510,13 @@ class PageRepositoryImpl @Inject constructor(
             },
         ) { document ->
             document.updateTableBlock(tableBlockId) { block ->
-                if (block.table.columns.none { column -> column.id == columnId }) return@updateTableBlock null
+                if (
+                    block.table.columns.size <= 1 ||
+                    block.table.columns.firstOrNull()?.id == columnId ||
+                    block.table.columns.none { column -> column.id == columnId }
+                ) {
+                    return@updateTableBlock null
+                }
                 block.copy(table = block.table.withoutColumn(columnId))
             }
         }
@@ -535,8 +541,14 @@ class PageRepositoryImpl @Inject constructor(
             },
         ) { document ->
             document.updateTableBlock(tableBlockId) { block ->
-                val moved = block.table.columns.moveElement(columnId, targetIndex, PageTableColumn::id)
-                if (moved === block.table.columns) null else block.copy(table = block.table.copy(columns = moved))
+                val currentIndex = block.table.columns.indexOfFirst { column -> column.id == columnId }
+                if (currentIndex <= 0) return@updateTableBlock null
+                val moved = block.table.columns.moveElement(
+                    itemId = columnId,
+                    targetIndex = targetIndex.coerceAtLeast(1),
+                    idSelector = PageTableColumn::id,
+                )
+                if (moved == block.table.columns) null else block.copy(table = block.table.copy(columns = moved))
             }
         }
     }

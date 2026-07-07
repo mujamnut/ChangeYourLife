@@ -2821,6 +2821,10 @@ internal fun TableColumnEditSheet(
     val hasColumnValues = remember(table.rows, column.id) {
         table.rows.any { row -> row.cellText(column).isNotBlank() }
     }
+    val isPrimaryColumn = remember(table.columns, column.id) {
+        table.columns.firstOrNull()?.id == column.id
+    }
+    val canDeleteColumn = table.columns.size > 1 && !isPrimaryColumn
 
     if (isDeleteConfirmOpen) {
         AlertDialog(
@@ -2957,8 +2961,9 @@ internal fun TableColumnEditSheet(
                         PropertyMenuRow(
                             icon = Icons.Rounded.Delete,
                             label = "Delete property",
+                            value = if (isPrimaryColumn) "Primary" else "",
                             color = MaterialTheme.colorScheme.error,
-                            enabled = table.columns.size > 1,
+                            enabled = canDeleteColumn,
                             onClick = {
                                 if (hasColumnValues) {
                                     isDeleteConfirmOpen = true
@@ -4264,12 +4269,12 @@ private fun PageTable.tableColumnWidth(
         PageTableColumnType.Text -> 260
     }
     val minWidth = if (includeInlineOpen) {
-        (baseMinWidth - 14).coerceAtLeast(96)
+        (baseMinWidth + 8).coerceAtLeast(112)
     } else {
         baseMinWidth
     }
     val maxWidth = if (includeInlineOpen) {
-        (baseMaxWidth - 28).coerceAtLeast(minWidth)
+        (baseMaxWidth - 8).coerceAtLeast(minWidth)
     } else {
         baseMaxWidth
     }
@@ -5842,12 +5847,6 @@ internal fun TableChoiceCellEditor(
                     }
                 }
             }
-            Icon(
-                imageVector = Icons.Rounded.KeyboardArrowDown,
-                contentDescription = null,
-                modifier = Modifier.size(18.dp),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
         }
         DropdownMenu(
             expanded = isExpanded,
@@ -5931,16 +5930,10 @@ private fun TableChoiceValuePill(
             .widthIn(max = 96.dp)
             .clip(RoundedCornerShape(999.dp))
             .background(color.copy(alpha = 0.12f))
-            .padding(horizontal = 7.dp),
-        horizontalArrangement = Arrangement.spacedBy(5.dp),
+            .padding(horizontal = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(0.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(
-            modifier = Modifier
-                .size(7.dp)
-                .clip(RoundedCornerShape(999.dp))
-                .background(color),
-        )
         Text(
             text = name,
             style = MaterialTheme.typography.labelSmall,

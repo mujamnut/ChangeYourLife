@@ -11,7 +11,7 @@ class AiActionPlannerTest {
     private val planner = AiActionPlanner()
 
     @Test
-    fun prefersPromptRowPlanWhenModelOnlyCreatesTable() {
+    fun repairsModelWhenItStoresRowPromptAsTableName() {
         val modelResult = AiService.AiActionResult(
             reply = "Siap - saya buat table itu.",
             actions = listOf(
@@ -163,5 +163,103 @@ class AiActionPlannerTest {
         )
 
         assertEquals(modelResult, result)
+    }
+
+    @Test
+    fun keepsValidModelCreationInsteadOfReplacingWithPromptTemplate() {
+        val modelResult = AiService.AiActionResult(
+            reply = "Siap - saya buat database itu.",
+            actions = listOf(
+                AiService.AiActionItem(
+                    type = "CREATE_DATABASE",
+                    tableTitle = "Expenses",
+                ),
+            ),
+        )
+        val promptResult = AiService.AiActionResult(
+            reply = "Siap - saya buat page expense bulan 7.",
+            actions = listOf(
+                AiService.AiActionItem(
+                    type = "CREATE_PAGE",
+                    title = "July Monthly Expenses",
+                    tableTitle = "Monthly Expenses",
+                    tableColumns = listOf(
+                        AiService.AiTableColumnItem(
+                            name = "Category",
+                            type = "Select",
+                            options = listOf("Food", "Fuel", "Makeup", "Transport"),
+                        ),
+                        AiService.AiTableColumnItem(
+                            name = "Status",
+                            type = "Status",
+                            options = listOf("Planned", "Paid"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        val result = planner.selectActionResult(
+            prompt = "buat page expense bulan 7, ada database dengan Category dropdown Food, Fuel, Makeup, Transport dan Status dropdown Planned, Paid",
+            modelResult = modelResult,
+            promptResult = promptResult,
+        )
+
+        val action = assertNotNull(result).actions.single()
+        assertEquals("CREATE_DATABASE", action.type)
+        assertEquals("Expenses", action.tableTitle)
+        assertEquals(emptyList(), action.tableColumns)
+    }
+
+    @Test
+    fun keepsEmptyModelActionReplyInsteadOfPromptRecovery() {
+        val modelResult = AiService.AiActionResult(
+            reply = "Saya faham, tapi saya belum akan ubah app.",
+            actions = emptyList(),
+        )
+        val promptResult = AiService.AiActionResult(
+            reply = "Siap - saya tambah row itu.",
+            actions = listOf(
+                AiService.AiActionItem(
+                    type = "ADD_TABLE_ROW",
+                    targetTitle = "Budget Tracker",
+                    tableTitle = "Budget Tracker",
+                    rowTitle = "Fuel",
+                ),
+            ),
+        )
+
+        val result = planner.selectActionResult(
+            prompt = "tambah row fuel",
+            modelResult = modelResult,
+            promptResult = promptResult,
+        )
+
+        assertEquals(modelResult, result)
+    }
+
+    @Test
+    fun usesPromptFallbackOnlyWhenModelResultIsMissingAndActionIsConcrete() {
+        val promptResult = AiService.AiActionResult(
+            reply = "Siap - saya tambah row itu.",
+            actions = listOf(
+                AiService.AiActionItem(
+                    type = "ADD_TABLE_ROW",
+                    targetTitle = "Budget Tracker",
+                    tableTitle = "Budget Tracker",
+                    rowTitle = "Fuel",
+                ),
+            ),
+        )
+
+        val result = planner.selectActionResult(
+            prompt = "tambah row fuel",
+            modelResult = null,
+            promptResult = promptResult,
+        )
+
+        val action = assertNotNull(result).actions.single()
+        assertEquals("ADD_TABLE_ROW", action.type)
+        assertEquals("Fuel", action.rowTitle)
     }
 }

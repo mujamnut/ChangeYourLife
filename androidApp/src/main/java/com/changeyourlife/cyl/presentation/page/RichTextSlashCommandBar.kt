@@ -75,7 +75,16 @@ fun richTextMentionPaletteItems(pages: List<Page>): List<RichTextCommandPaletteI
 }
 
 fun RichTextSlashCommand.paletteItemId(): String {
-    return "slash:${label.lowercase().replace(" ", "_")}"
+    return when (val commandAction = action) {
+        is RichTextSlashAction.ChangeType -> "slash:type:${commandAction.type.name.lowercase()}"
+        is RichTextSlashAction.InsertBlock -> {
+            "slash:insert:${commandAction.type.name.lowercase()}:${commandAction.position.name.lowercase()}"
+        }
+        RichTextSlashAction.CreateLinkedPage -> "slash:create_linked_page"
+        RichTextSlashAction.OpenPropertySheet -> "slash:open_property_sheet"
+        RichTextSlashAction.IndentBlock -> "slash:indent"
+        RichTextSlashAction.OutdentBlock -> "slash:outdent"
+    }
 }
 
 fun Page.paletteItemId(): String {

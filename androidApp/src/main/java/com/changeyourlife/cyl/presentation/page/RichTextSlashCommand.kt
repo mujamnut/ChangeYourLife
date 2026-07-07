@@ -110,8 +110,8 @@ object RichTextSlashCommandParser {
             aliases = listOf("media", "file", "image", "photo"),
         ),
         RichTextSlashCommand(
-            label = "Database",
-            hint = "Structured database",
+            label = "Table",
+            hint = "Database table",
             action = RichTextSlashAction.ChangeType(PageBlockType.DatabaseTable),
             aliases = listOf("database", "db", "data", "datasource"),
         ),

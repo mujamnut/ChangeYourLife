@@ -501,11 +501,16 @@ class TableMutationUseCase(
         document: PageBlockDocument,
         tableBlockId: String,
         columnId: String,
-    ): TableMutationResult = replaceTable(document, tableBlockId) { table ->
-        if (table.columns.size <= 1) {
-            table
-        } else {
-            table.copy(
+    ): TableMutationResult {
+        val tableBlock = document.findTableBlock(tableBlockId)
+            ?: return document.noTableResult(tableBlockId)
+        val table = tableBlock.table
+        if (table.columns.size <= 1 || table.columns.firstOrNull()?.id == columnId) {
+            return document.unchangedTableResult(tableBlockId, table)
+        }
+        return document.replaceTableResult(
+            tableBlockId = tableBlockId,
+            table = table.copy(
                 columns = table.columns
                     .filterNot { column -> column.id == columnId }
                     .map { column -> column.withoutColumnReference(columnId) },
@@ -518,8 +523,8 @@ class TableMutationUseCase(
                 sort = if (table.sort.columnId == columnId) PageTableSort() else table.sort,
                 filter = if (table.filter.columnId == columnId) PageTableFilter() else table.filter,
                 groupByColumnId = if (table.groupByColumnId == columnId) "" else table.groupByColumnId,
-            )
-        }
+            ),
+        )
     }
 
     fun addRow(

@@ -11,7 +11,7 @@ class AiActionPlannerTest {
     private val planner = AiActionPlanner()
 
     @Test
-    fun prefersPromptRowPlanWhenModelOnlyCreatesTable() {
+    fun repairsModelWhenItStoresRowPromptAsTableName() {
         val modelResult = AiService.AiActionResult(
             reply = "Siap - saya buat table itu.",
             actions = listOf(
@@ -166,7 +166,7 @@ class AiActionPlannerTest {
     }
 
     @Test
-    fun prefersRicherPromptPagePlanWhenModelOnlyCreatesSparseDatabase() {
+    fun keepsValidModelCreationInsteadOfReplacingWithPromptTemplate() {
         val modelResult = AiService.AiActionResult(
             reply = "Siap - saya buat database itu.",
             actions = listOf(
@@ -206,9 +206,60 @@ class AiActionPlannerTest {
         )
 
         val action = assertNotNull(result).actions.single()
-        assertEquals("CREATE_PAGE", action.type)
-        assertEquals("July Monthly Expenses", action.title)
-        assertEquals(listOf("Category", "Status"), action.tableColumns.map { it.name })
-        assertEquals(listOf("Food", "Fuel", "Makeup", "Transport"), action.tableColumns[0].options)
+        assertEquals("CREATE_DATABASE", action.type)
+        assertEquals("Expenses", action.tableTitle)
+        assertEquals(emptyList(), action.tableColumns)
+    }
+
+    @Test
+    fun keepsEmptyModelActionReplyInsteadOfPromptRecovery() {
+        val modelResult = AiService.AiActionResult(
+            reply = "Saya faham, tapi saya belum akan ubah app.",
+            actions = emptyList(),
+        )
+        val promptResult = AiService.AiActionResult(
+            reply = "Siap - saya tambah row itu.",
+            actions = listOf(
+                AiService.AiActionItem(
+                    type = "ADD_TABLE_ROW",
+                    targetTitle = "Budget Tracker",
+                    tableTitle = "Budget Tracker",
+                    rowTitle = "Fuel",
+                ),
+            ),
+        )
+
+        val result = planner.selectActionResult(
+            prompt = "tambah row fuel",
+            modelResult = modelResult,
+            promptResult = promptResult,
+        )
+
+        assertEquals(modelResult, result)
+    }
+
+    @Test
+    fun usesPromptFallbackOnlyWhenModelResultIsMissingAndActionIsConcrete() {
+        val promptResult = AiService.AiActionResult(
+            reply = "Siap - saya tambah row itu.",
+            actions = listOf(
+                AiService.AiActionItem(
+                    type = "ADD_TABLE_ROW",
+                    targetTitle = "Budget Tracker",
+                    tableTitle = "Budget Tracker",
+                    rowTitle = "Fuel",
+                ),
+            ),
+        )
+
+        val result = planner.selectActionResult(
+            prompt = "tambah row fuel",
+            modelResult = null,
+            promptResult = promptResult,
+        )
+
+        val action = assertNotNull(result).actions.single()
+        assertEquals("ADD_TABLE_ROW", action.type)
+        assertEquals("Fuel", action.rowTitle)
     }
 }

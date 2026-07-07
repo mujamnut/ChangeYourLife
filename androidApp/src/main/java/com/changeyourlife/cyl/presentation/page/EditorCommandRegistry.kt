@@ -137,13 +137,19 @@ private fun List<EditorCommandRegistryEntry>.enabledIn(
 
 private fun RichTextSlashCommand.defaultGroup(): EditorCommandGroup {
     return when (action) {
-        is RichTextSlashAction.ChangeType -> when (label) {
-            "Bullet", "Numbered", "Todo", "Toggle" -> EditorCommandGroup.Lists
-            "Media", "Bookmark" -> EditorCommandGroup.Media
-            "Database" -> EditorCommandGroup.Database
+        is RichTextSlashAction.ChangeType -> when (action.type) {
+            PageBlockType.Bullet,
+            PageBlockType.Numbered,
+            PageBlockType.Todo,
+            PageBlockType.Toggle,
+            -> EditorCommandGroup.Lists
+            PageBlockType.MediaFile,
+            PageBlockType.WebBookmark,
+            -> EditorCommandGroup.Media
+            PageBlockType.DatabaseTable -> EditorCommandGroup.Database
             else -> EditorCommandGroup.Basic
         }
-        is RichTextSlashAction.InsertBlock -> if (label == "Database") {
+        is RichTextSlashAction.InsertBlock -> if (action.type == PageBlockType.DatabaseTable) {
             EditorCommandGroup.Database
         } else {
             EditorCommandGroup.Insert

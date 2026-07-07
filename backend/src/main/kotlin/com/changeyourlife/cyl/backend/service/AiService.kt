@@ -245,7 +245,11 @@ class AiService(
             pages = pages,
         )
 
-        val promptResult = recoverActionFromPrompt(prompt = userMessage, pages = pages)
+        val promptResult = if (reply.canUsePromptActionRecovery()) {
+            recoverActionFromPrompt(prompt = userMessage, pages = pages)
+        } else {
+            null
+        }
         selectActionResultForPrompt(
             prompt = userMessage,
             modelResult = modelResult,
@@ -668,6 +672,18 @@ internal fun String.cleanAiJson(): String {
     val open = cleaned[start]
     val close = if (open == '{') '}' else ']'
     return cleaned.extractBalancedJson(start, open, close) ?: cleaned
+}
+
+private fun String.canUsePromptActionRecovery(): Boolean {
+    val normalized = trim().lowercase()
+    if (normalized.isBlank()) return false
+    return !(
+        normalized.startsWith("error:") ||
+            normalized.contains("backend ai request failed") ||
+            normalized.contains("error contacting ai") ||
+            normalized.contains("ai provider returned an empty response") ||
+            normalized.contains("[ai sandbox mode")
+        )
 }
 
 private fun String.extractBalancedJson(
