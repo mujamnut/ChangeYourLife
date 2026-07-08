@@ -1,9 +1,12 @@
 package com.changeyourlife.cyl.presentation.ai
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.widget.Toast
+import androidx.compose.foundation.border
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -11,10 +14,14 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
@@ -22,16 +29,27 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.automirrored.rounded.Undo
+import androidx.compose.material.icons.rounded.AccessTime
+import androidx.compose.material.icons.rounded.AlternateEmail
+import androidx.compose.material.icons.rounded.AttachFile
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.CameraAlt
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.Extension
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.Photo
+import androidx.compose.material.icons.rounded.Public
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -40,7 +58,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SheetState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -48,11 +65,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -65,6 +85,7 @@ import com.changeyourlife.cyl.presentation.page.EditorSuggestionController
 import com.changeyourlife.cyl.presentation.page.RichTextCommandPalette
 import com.changeyourlife.cyl.presentation.page.RichTextCommandPaletteKind
 import com.changeyourlife.cyl.presentation.page.paletteItemId
+import com.changeyourlife.cyl.presentation.page.richTextMentionPaletteItems
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -97,14 +118,98 @@ fun AiChatSheet(
     var selectedMentionPageIds by rememberSaveable(attachedPageId) {
         mutableStateOf(emptyList<String>())
     }
+    var stagedAttachmentLabels by rememberSaveable {
+        mutableStateOf(emptyList<String>())
+    }
     val listState = rememberLazyListState()
     val context = LocalContext.current
+    val photoPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent(),
+    ) { uri ->
+        if (uri != null) {
+            stagedAttachmentLabels = (stagedAttachmentLabels + "Photo").takeLast(4)
+        }
+    }
+    val filePicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent(),
+    ) { uri ->
+        if (uri != null) {
+            stagedAttachmentLabels = (stagedAttachmentLabels + "File").takeLast(4)
+        }
+    }
+    val cameraPreview = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicturePreview(),
+    ) { bitmap ->
+        if (bitmap != null) {
+            stagedAttachmentLabels = (stagedAttachmentLabels + "Camera").takeLast(4)
+        }
+    }
     val mentionSuggestionState = EditorSuggestionController.resolve(
         text = inputText,
         cursor = inputText.length,
         mentionPages = mentionPages,
         enabledKinds = setOf(RichTextCommandPaletteKind.Mention),
     )
+    var isAttachmentPanelOpen by rememberSaveable { mutableStateOf(false) }
+    var isSettingsPanelOpen by rememberSaveable { mutableStateOf(false) }
+    var isMentionPickerOpen by rememberSaveable { mutableStateOf(false) }
+    val mentionChips = remember(
+        attachedPageId,
+        attachedPageTitle,
+        selectedMentionPageIds,
+        mentionPages,
+    ) {
+        buildList {
+            if (!attachedPageId.isNullOrBlank()) {
+                add(
+                    AiMentionChipUi(
+                        pageId = attachedPageId,
+                        title = attachedPageTitle?.ifBlank { "Untitled page" } ?: "Current page",
+                        canRemove = false,
+                    ),
+                )
+            }
+            selectedMentionPageIds
+                .filterNot { id -> id == attachedPageId }
+                .distinct()
+                .mapNotNull { id -> mentionPages.firstOrNull { page -> page.id == id } }
+                .forEach { page ->
+                    add(
+                        AiMentionChipUi(
+                            pageId = page.id,
+                            title = page.title.ifBlank { "Untitled page" },
+                            canRemove = true,
+                        ),
+                    )
+                }
+        }
+    }
+    val sendCurrentPrompt = {
+        if (inputText.isNotBlank() && !isGenerating) {
+            val message = inputText.trim()
+            onSendMessage(
+                message,
+                message.resolveMentionedPageIds(
+                    pages = mentionPages,
+                    knownPageIds = selectedMentionPageIds + attachedMentionPageIds,
+                ),
+            )
+            inputText = ""
+            selectedMentionPageIds = emptyList()
+            stagedAttachmentLabels = emptyList()
+            isAttachmentPanelOpen = false
+            isSettingsPanelOpen = false
+            isMentionPickerOpen = false
+        }
+    }
+    val onSelectMentionPage: (Page) -> Unit = { page ->
+        inputText = inputText.removeActiveMentionQuery()
+        selectedMentionPageIds = (selectedMentionPageIds + page.id)
+            .filter { id -> id.isNotBlank() }
+            .distinct()
+        isMentionPickerOpen = false
+        isAttachmentPanelOpen = false
+    }
 
     LaunchedEffect(messages.size) {
         if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
@@ -114,56 +219,22 @@ fun AiChatSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
     ) {
-        Column(modifier = Modifier.padding(bottom = 16.dp)) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 6.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    AiModelChip(modelLabel = modelLabel)
-                    if (!attachedPageTitle.isNullOrBlank()) {
-                        Text(
-                            text = attachedPageTitle.ifBlank { "Untitled page" },
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(999.dp))
-                                .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.58f))
-                                .padding(horizontal = 10.dp, vertical = 4.dp),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = onCreateChatSession) {
-                        Icon(
-                            imageVector = Icons.Rounded.Add,
-                            contentDescription = "New chat",
-                        )
-                    }
-                    if (messages.isNotEmpty()) {
-                        IconButton(onClick = onClearHistory) {
-                            Icon(
-                                imageVector = Icons.Rounded.Delete,
-                                contentDescription = "Clear chat",
-                            )
-                        }
-                    }
-                    IconButton(onClick = onDismiss) {
-                        Icon(
-                            imageVector = Icons.Rounded.Close,
-                            contentDescription = "Close",
-                        )
-                    }
-                }
-            }
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(0.92f)
+                .padding(bottom = 12.dp),
+        ) {
+            AiSheetHeader(
+                hasMessages = messages.isNotEmpty(),
+                onOpenHistory = {
+                    isSettingsPanelOpen = true
+                    isAttachmentPanelOpen = false
+                    isMentionPickerOpen = false
+                },
+                onCreateChatSession = onCreateChatSession,
+            )
+
             if (errorMessage != null) {
                 Card(
                     modifier = Modifier
@@ -187,10 +258,9 @@ fun AiChatSheet(
                 state = listState,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(360.dp)
-                    .padding(horizontal = 16.dp),
+                    .weight(1f),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
-                contentPadding = PaddingValues(vertical = 8.dp),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
             ) {
                 if (messages.isEmpty() && !isGenerating) {
                     item {
@@ -283,85 +353,660 @@ fun AiChatSheet(
                 }
             }
 
-            if (mentionSuggestionState != null) {
+            val manualMentionItems = if (isMentionPickerOpen) {
+                richTextMentionPaletteItems(mentionPages)
+            } else {
+                emptyList()
+            }
+            if (isMentionPickerOpen || mentionSuggestionState != null) {
                 RichTextCommandPalette(
-                    items = mentionSuggestionState.items,
+                    items = if (isMentionPickerOpen) manualMentionItems else mentionSuggestionState?.items.orEmpty(),
                     onSelect = { item ->
                         val page = mentionPages.firstOrNull { candidate ->
                             candidate.paletteItemId() == item.id
                         }
                         if (page != null) {
-                            inputText = inputText.insertMention(page.title.ifBlank { "Untitled page" })
-                            selectedMentionPageIds = (selectedMentionPageIds + page.id)
-                                .filter { id -> id.isNotBlank() }
-                                .distinct()
+                            onSelectMentionPage(page)
                         }
                     },
                     modifier = Modifier.padding(horizontal = 16.dp),
-                    selectedItemId = mentionSuggestionState.selectedItem?.id,
+                    selectedItemId = mentionSuggestionState?.selectedItem?.id,
                 )
             }
 
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.Bottom,
-            ) {
-                OutlinedTextField(
-                    value = inputText,
-                    onValueChange = { inputText = it },
-                    modifier = Modifier.weight(1f),
-                    placeholder = { Text("Message AI...") },
-                    maxLines = 4,
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                    keyboardActions = KeyboardActions(
-                        onSend = {
-                            if (inputText.isNotBlank() && !isGenerating) {
-                                val message = inputText.trim()
-                                onSendMessage(
-                                    message,
-                                    message.resolveMentionedPageIds(
-                                        pages = mentionPages,
-                                        knownPageIds = selectedMentionPageIds + attachedMentionPageIds,
-                                    ),
-                                )
-                                inputText = ""
-                                selectedMentionPageIds = emptyList()
-                            }
-                        },
-                    ),
-                    shape = RoundedCornerShape(16.dp),
-                )
-                IconButton(
-                    onClick = {
-                        if (inputText.isNotBlank() && !isGenerating) {
-                            val message = inputText.trim()
-                            onSendMessage(
-                                message,
-                                message.resolveMentionedPageIds(
-                                    pages = mentionPages,
-                                    knownPageIds = selectedMentionPageIds + attachedMentionPageIds,
-                                ),
-                            )
-                            inputText = ""
-                            selectedMentionPageIds = emptyList()
-                        }
+            if (isAttachmentPanelOpen) {
+                AiAttachmentPanel(
+                    onPickPhoto = { photoPicker.launch("image/*") },
+                    onPickFile = { filePicker.launch("*/*") },
+                    onMentionContext = {
+                        isMentionPickerOpen = true
+                        isAttachmentPanelOpen = false
+                        isSettingsPanelOpen = false
                     },
-                    enabled = inputText.isNotBlank() && !isGenerating,
-                ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Rounded.Send,
-                        contentDescription = "Send",
-                        tint = if (inputText.isNotBlank() && !isGenerating) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-                        },
+                    onOpenCamera = { cameraPreview.launch(null) },
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                )
+            }
+            if (isSettingsPanelOpen) {
+                AiSettingsPanel(
+                    modelLabel = modelLabel,
+                    hasMessages = messages.isNotEmpty(),
+                    onClearHistory = onClearHistory,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                )
+            }
+
+            AiComposerCard(
+                inputText = inputText,
+                onInputTextChange = { inputText = it },
+                mentionChips = mentionChips,
+                onRemoveMention = { pageId ->
+                    selectedMentionPageIds = selectedMentionPageIds.filterNot { id -> id == pageId }
+                },
+                stagedAttachmentLabels = stagedAttachmentLabels,
+                onRemoveAttachment = { index ->
+                    stagedAttachmentLabels = stagedAttachmentLabels.filterIndexed { itemIndex, _ ->
+                        itemIndex != index
+                    }
+                },
+                onOpenAttachments = {
+                    isAttachmentPanelOpen = !isAttachmentPanelOpen
+                    isSettingsPanelOpen = false
+                    isMentionPickerOpen = false
+                },
+                onOpenSettings = {
+                    isSettingsPanelOpen = !isSettingsPanelOpen
+                    isAttachmentPanelOpen = false
+                    isMentionPickerOpen = false
+                },
+                onSend = sendCurrentPrompt,
+                isGenerating = isGenerating,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            )
+        }
+    }
+}
+
+private data class AiMentionChipUi(
+    val pageId: String,
+    val title: String,
+    val canRemove: Boolean,
+)
+
+@Composable
+private fun AiSheetHeader(
+    hasMessages: Boolean,
+    onOpenHistory: () -> Unit,
+    onCreateChatSession: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 6.dp),
+    ) {
+        AiRoundIconButton(
+            icon = Icons.Rounded.AccessTime,
+            contentDescription = "Chat options",
+            enabled = hasMessages,
+            onClick = onOpenHistory,
+            modifier = Modifier.align(Alignment.TopStart),
+        )
+        Column(
+            modifier = Modifier.align(Alignment.TopCenter),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(62.dp)
+                    .clip(RoundedCornerShape(31.dp))
+                    .background(MaterialTheme.colorScheme.surfaceContainerHigh),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.AutoAwesome,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(32.dp),
+                )
+            }
+            Text(
+                text = "CYL AI",
+                modifier = Modifier
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(MaterialTheme.colorScheme.surface)
+                    .border(
+                        width = 1.dp,
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.58f),
+                        shape = RoundedCornerShape(999.dp),
                     )
+                    .padding(horizontal = 12.dp, vertical = 3.dp),
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+        }
+        AiRoundIconButton(
+            icon = Icons.Rounded.Edit,
+            contentDescription = "New chat",
+            onClick = onCreateChatSession,
+            modifier = Modifier.align(Alignment.TopEnd),
+        )
+    }
+}
+
+@Composable
+private fun AiComposerCard(
+    inputText: String,
+    onInputTextChange: (String) -> Unit,
+    mentionChips: List<AiMentionChipUi>,
+    onRemoveMention: (String) -> Unit,
+    stagedAttachmentLabels: List<String>,
+    onRemoveAttachment: (Int) -> Unit,
+    onOpenAttachments: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onSend: () -> Unit,
+    isGenerating: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val canSend = inputText.isNotBlank() && !isGenerating
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(26.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = CardDefaults.outlinedCardBorder().copy(
+            width = 1.dp,
+            brush = SolidColor(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.58f)),
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            if (mentionChips.isNotEmpty()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    mentionChips.take(2).forEach { chip ->
+                        AiMentionChip(
+                            chip = chip,
+                            onRemove = { onRemoveMention(chip.pageId) },
+                            modifier = Modifier.weight(1f, fill = false),
+                        )
+                    }
+                    if (mentionChips.size > 2) {
+                        Text(
+                            text = "+${mentionChips.size - 2}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
+            if (stagedAttachmentLabels.isNotEmpty()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    stagedAttachmentLabels.take(3).forEachIndexed { index, label ->
+                        AiAttachmentChip(
+                            label = label,
+                            onRemove = { onRemoveAttachment(index) },
+                            modifier = Modifier.weight(1f, fill = false),
+                        )
+                    }
+                    if (stagedAttachmentLabels.size > 3) {
+                        Text(
+                            text = "+${stagedAttachmentLabels.size - 3}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+
+            BasicTextField(
+                value = inputText,
+                onValueChange = onInputTextChange,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 42.dp, max = 118.dp),
+                textStyle = MaterialTheme.typography.bodyLarge.copy(
+                    color = MaterialTheme.colorScheme.onSurface,
+                ),
+                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                maxLines = 5,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                keyboardActions = KeyboardActions(onSend = { onSend() }),
+                decorationBox = { innerTextField ->
+                    Box(
+                        modifier = Modifier.fillMaxWidth(),
+                        contentAlignment = Alignment.CenterStart,
+                    ) {
+                        if (inputText.isBlank()) {
+                            Text(
+                                text = "Ask, search, or make anything",
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.62f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        innerTextField()
+                    }
+                },
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                AiComposerIconButton(
+                    icon = Icons.Rounded.Add,
+                    contentDescription = "Add attachment or context",
+                    onClick = onOpenAttachments,
+                )
+                AiComposerIconButton(
+                    icon = Icons.Rounded.Tune,
+                    contentDescription = "AI settings",
+                    onClick = onOpenSettings,
+                )
+                Spacer(modifier = Modifier.weight(1f))
+                AiSendButton(
+                    enabled = canSend,
+                    isGenerating = isGenerating,
+                    onClick = onSend,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AiMentionChip(
+    chip: AiMentionChipUi,
+    onRemove: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .height(34.dp)
+            .clip(RoundedCornerShape(17.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainer)
+            .border(
+                width = 1.dp,
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
+                shape = RoundedCornerShape(17.dp),
+            )
+            .padding(start = 9.dp, end = if (chip.canRemove) 2.dp else 9.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = Icons.Rounded.Edit,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(16.dp),
+        )
+        Text(
+            text = chip.title,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        if (chip.canRemove) {
+            IconButton(
+                onClick = onRemove,
+                modifier = Modifier.size(30.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Close,
+                    contentDescription = "Remove context",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AiAttachmentChip(
+    label: String,
+    onRemove: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .height(34.dp)
+            .clip(RoundedCornerShape(17.dp))
+            .background(MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.52f))
+            .border(
+                width = 1.dp,
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.38f),
+                shape = RoundedCornerShape(17.dp),
+            )
+            .padding(start = 9.dp, end = 2.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = if (label == "File") Icons.Rounded.AttachFile else Icons.Rounded.Photo,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSecondaryContainer,
+            modifier = Modifier.size(16.dp),
+        )
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSecondaryContainer,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        IconButton(
+            onClick = onRemove,
+            modifier = Modifier.size(30.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Close,
+                contentDescription = "Remove attachment",
+                tint = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.76f),
+                modifier = Modifier.size(16.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun AiAttachmentPanel(
+    onPickPhoto: () -> Unit,
+    onPickFile: () -> Unit,
+    onMentionContext: () -> Unit,
+    onOpenCamera: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    AiPanelSurface(modifier = modifier) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            AiPanelAction(
+                icon = Icons.Rounded.Photo,
+                label = "Photo",
+                onClick = onPickPhoto,
+                modifier = Modifier.weight(1f),
+            )
+            AiPanelAction(
+                icon = Icons.Rounded.AttachFile,
+                label = "File",
+                onClick = onPickFile,
+                modifier = Modifier.weight(1f),
+            )
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            AiPanelAction(
+                icon = Icons.Rounded.AlternateEmail,
+                label = "Context",
+                onClick = onMentionContext,
+                modifier = Modifier.weight(1f),
+            )
+            AiPanelAction(
+                icon = Icons.Rounded.CameraAlt,
+                label = "Camera",
+                onClick = onOpenCamera,
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
+}
+
+@Composable
+private fun AiSettingsPanel(
+    modelLabel: String,
+    hasMessages: Boolean,
+    onClearHistory: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    AiPanelSurface(modifier = modifier) {
+        AiSettingRow(
+            icon = Icons.Rounded.AutoAwesome,
+            label = "Model",
+            value = modelLabel.compactAiModelLabel(),
+        )
+        AiSettingRow(
+            icon = Icons.Rounded.Public,
+            label = "Source",
+            value = "App context",
+        )
+        AiSettingRow(
+            icon = Icons.Rounded.Public,
+            label = "Web search",
+            value = "Off",
+        )
+        AiSettingRow(
+            icon = Icons.Rounded.Extension,
+            label = "Skills",
+            value = "Default",
+        )
+        AiSettingRow(
+            icon = Icons.Rounded.Person,
+            label = "Personalize",
+            value = "Default",
+        )
+        if (hasMessages) {
+            TextButton(
+                onClick = onClearHistory,
+                contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Delete,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                )
+                Text(text = "Clear chat")
+            }
+        }
+    }
+}
+
+@Composable
+private fun AiPanelSurface(
+    modifier: Modifier = Modifier,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+        border = CardDefaults.outlinedCardBorder().copy(
+            width = 1.dp,
+            brush = SolidColor(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.38f)),
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            content = content,
+        )
+    }
+}
+
+@Composable
+private fun AiPanelAction(
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .height(44.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .clickable(onClick = onClick)
+            .background(MaterialTheme.colorScheme.surface)
+            .padding(horizontal = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(19.dp),
+        )
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@Composable
+private fun AiSettingRow(
+    icon: ImageVector,
+    label: String,
+    value: String,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(42.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surface)
+            .padding(horizontal = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(18.dp),
+        )
+        Text(
+            text = label,
+            modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@Composable
+private fun AiRoundIconButton(
+    icon: ImageVector,
+    contentDescription: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+) {
+    IconButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier
+            .size(52.dp)
+            .clip(RoundedCornerShape(26.dp))
+            .background(MaterialTheme.colorScheme.surface)
+            .border(
+                width = 1.dp,
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
+                shape = RoundedCornerShape(26.dp),
+            ),
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            tint = if (enabled) {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)
+            },
+            modifier = Modifier.size(22.dp),
+        )
+    }
+}
+
+@Composable
+private fun AiComposerIconButton(
+    icon: ImageVector,
+    contentDescription: String,
+    onClick: () -> Unit,
+) {
+    IconButton(
+        onClick = onClick,
+        modifier = Modifier.size(40.dp),
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(22.dp),
+        )
+    }
+}
+
+@Composable
+private fun AiSendButton(
+    enabled: Boolean,
+    isGenerating: Boolean,
+    onClick: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .size(40.dp)
+            .clip(RoundedCornerShape(20.dp))
+            .background(
+                if (enabled) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.surfaceContainerHigh
+                },
+            )
+            .clickable(enabled = enabled, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (isGenerating) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(18.dp),
+                strokeWidth = 2.dp,
+                color = MaterialTheme.colorScheme.onPrimary,
+            )
+        } else {
+            Icon(
+                imageVector = Icons.AutoMirrored.Rounded.Send,
+                contentDescription = "Send",
+                tint = if (enabled) {
+                    MaterialTheme.colorScheme.onPrimary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.46f)
+                },
+                modifier = Modifier.size(20.dp),
+            )
         }
     }
 }
@@ -536,37 +1181,6 @@ private fun AiActionTextSection(
 }
 
 @Composable
-private fun AiModelChip(
-    modelLabel: String,
-) {
-    val displayModel = modelLabel.compactAiModelLabel()
-    val selectorModifier = Modifier
-        .clip(RoundedCornerShape(999.dp))
-        .background(MaterialTheme.colorScheme.surfaceContainer)
-        .padding(horizontal = 9.dp, vertical = 4.dp)
-
-    Row(
-        modifier = selectorModifier,
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(
-            imageVector = Icons.Rounded.AutoAwesome,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(16.dp),
-        )
-        Text(
-            text = displayModel,
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-    }
-}
-
-@Composable
 private fun EmptyAiMessageHint(attachedPageTitle: String?) {
     Box(
         modifier = Modifier
@@ -618,11 +1232,11 @@ private fun AiChatPageLinks(
     }
 }
 
-private fun String.insertMention(title: String): String {
+private fun String.removeActiveMentionQuery(): String {
     val atIndex = lastIndexOf('@')
-    val mention = "@$title "
-    if (atIndex < 0) return this + mention
-    return substring(0, atIndex) + mention
+    if (atIndex < 0) return this
+    val before = substring(0, atIndex).trimEnd()
+    return if (before.isBlank()) "" else "$before "
 }
 
 private fun String.resolveMentionedPageIds(
