@@ -17,6 +17,7 @@ import com.changeyourlife.cyl.presentation.page.PageBlockCodec
 import com.changeyourlife.cyl.presentation.page.PageModuleTemplates
 import com.changeyourlife.cyl.presentation.page.PageModuleType
 import com.changeyourlife.cyl.presentation.ai.toPageTableColumnFromAi
+import kotlinx.coroutines.flow.first
 import javax.inject.Inject
 
 class AiActionExecutionUseCase @Inject constructor(
@@ -52,16 +53,7 @@ class AiActionExecutionUseCase @Inject constructor(
         val pageResult = when {
             pageActions.isEmpty() -> AiActionExecutionResult()
             scopedTargetPage != null -> executePageScopedActions(scopedTargetPage, pageActions)
-            else -> AiActionExecutionResult(
-                validationIssues = pageActions.map { candidate ->
-                    ChatActionValidationMetadata(
-                        actionIndex = candidate.originalIndex,
-                        field = "targetTitle",
-                        code = "target_page_required",
-                        message = "This action needs a page target. Mention a page with @ or open the page before asking AI to edit it.",
-                    )
-                },
-            )
+            else -> executeTargetedPageActions(workspaceId, pageActions)
         }
         return globalResult + pageResult
     }
@@ -195,7 +187,63 @@ class AiActionExecutionUseCase @Inject constructor(
             )
         }
     }
+
+    private suspend fun executeTargetedPageActions(
+        workspaceId: String,
+        actions: List<AiActionExecutionCandidate>,
+    ): AiActionExecutionResult {
+        val pages = pageRepository.observePages(workspaceId).first()
+        val groupedActions = linkedMapOf<Page, MutableList<AiActionExecutionCandidate>>()
+        val validationIssues = mutableListOf<ChatActionValidationMetadata>()
+
+        actions.forEach { candidate ->
+            val targetTitle = candidate.action.targetTitle.trim()
+            if (targetTitle.isBlank()) {
+                validationIssues += candidate.targetPageIssue(
+                    code = "target_page_required",
+                    message = "This action needs a page target. Mention a page with @ or open the page before asking AI to edit it.",
+                )
+                return@forEach
+            }
+
+            when (val resolution = AiPageTargetResolver.resolveExactTarget(pages, targetTitle)) {
+                is TargetPageResolution.Found -> {
+                    groupedActions.getOrPut(resolution.page) { mutableListOf() } += candidate
+                }
+                TargetPageResolution.Ambiguous -> {
+                    validationIssues += candidate.targetPageIssue(
+                        code = "target_page_ambiguous",
+                        message = "More than one page matches '$targetTitle'. Mention the exact page from the picker before editing.",
+                    )
+                }
+                TargetPageResolution.Missing -> {
+                    validationIssues += candidate.targetPageIssue(
+                        code = "target_page_not_found",
+                        message = "I could not find an exact page named '$targetTitle'. Mention the page with @ before editing.",
+                    )
+                }
+            }
+        }
+
+        return groupedActions.entries.fold(AiActionExecutionResult(validationIssues = validationIssues)) { result, entry ->
+            result + executePageScopedActions(
+                page = entry.key,
+                actions = entry.value,
+            )
+        }
+    }
 }
+
+private fun AiActionExecutionCandidate.targetPageIssue(
+    code: String,
+    message: String,
+): ChatActionValidationMetadata =
+    ChatActionValidationMetadata(
+        actionIndex = originalIndex,
+        field = "targetTitle",
+        code = code,
+        message = message,
+    )
 
 data class AiActionExecutionResult(
     val messages: List<String> = emptyList(),

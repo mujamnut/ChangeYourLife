@@ -10,6 +10,7 @@ import com.changeyourlife.cyl.domain.model.PageTable
 import com.changeyourlife.cyl.domain.model.PageTableColumn
 import com.changeyourlife.cyl.domain.model.PageTableColumnType
 import com.changeyourlife.cyl.domain.model.PageTableRow
+import com.changeyourlife.cyl.domain.model.ChatActionValidationMetadata
 import com.changeyourlife.cyl.domain.model.Reminder
 import com.changeyourlife.cyl.domain.model.TaskItem
 import com.changeyourlife.cyl.domain.repository.ChatAction
@@ -159,6 +160,81 @@ class AiActionExecutionUseCaseTest {
         assertEquals("target_page_required", result.validationIssues.single().code)
     }
 
+    @Test
+    fun executesPageActionByExactTargetTitleWhenNoScopedPage() = runBlocking {
+        val budget = page(PageBlockDocument(), id = "page-budget", title = "Budget")
+        val budgetTracker = page(PageBlockDocument(), id = "page-budget-tracker", title = "Budget Tracker")
+        val pageRepository = FakePageRepository(budget, budgetTracker)
+        val useCase = useCase(pageRepository)
+
+        val result = useCase.execute(
+            workspaceId = "workspace-1",
+            scopedTargetPage = null,
+            actions = listOf(
+                ChatAction(
+                    type = "ADD_BLOCK",
+                    title = "",
+                    targetTitle = "Budget Tracker",
+                    content = "Only tracker",
+                ),
+            ),
+        )
+
+        assertEquals(emptyList<ChatActionValidationMetadata>(), result.validationIssues)
+        val untouchedBudget = PageBlockCodec.decodeDocument(requireNotNull(pageRepository.getPage("page-budget")).content)
+        val updatedTracker = PageBlockCodec.decodeDocument(requireNotNull(pageRepository.getPage("page-budget-tracker")).content)
+        assertEquals(emptyList<PageBlock>(), untouchedBudget.meaningfulBlocks())
+        assertEquals(listOf("Only tracker"), updatedTracker.meaningfulBlocks().map { block -> block.text })
+    }
+
+    @Test
+    fun doesNotFuzzyMatchShortTargetTitleToLongerPageTitle() = runBlocking {
+        val budgetTracker = page(PageBlockDocument(), id = "page-budget-tracker", title = "Budget Tracker")
+        val pageRepository = FakePageRepository(budgetTracker)
+        val useCase = useCase(pageRepository)
+
+        val result = useCase.execute(
+            workspaceId = "workspace-1",
+            scopedTargetPage = null,
+            actions = listOf(
+                ChatAction(
+                    type = "ADD_BLOCK",
+                    title = "",
+                    targetTitle = "Budget",
+                    content = "Wrong target",
+                ),
+            ),
+        )
+
+        assertTrue(result.messages.isEmpty())
+        assertEquals("target_page_not_found", result.validationIssues.single().code)
+        val document = PageBlockCodec.decodeDocument(requireNotNull(pageRepository.getPage("page-budget-tracker")).content)
+        assertEquals(emptyList<PageBlock>(), document.meaningfulBlocks())
+    }
+
+    @Test
+    fun rejectsAmbiguousExactTargetTitleWhenNoScopedPage() = runBlocking {
+        val firstBudget = page(PageBlockDocument(), id = "page-budget-1", title = "Budget")
+        val secondBudget = page(PageBlockDocument(), id = "page-budget-2", title = "Budget")
+        val useCase = useCase(FakePageRepository(firstBudget, secondBudget))
+
+        val result = useCase.execute(
+            workspaceId = "workspace-1",
+            scopedTargetPage = null,
+            actions = listOf(
+                ChatAction(
+                    type = "ADD_BLOCK",
+                    title = "",
+                    targetTitle = "Budget",
+                    content = "Ambiguous",
+                ),
+            ),
+        )
+
+        assertTrue(result.messages.isEmpty())
+        assertEquals("target_page_ambiguous", result.validationIssues.single().code)
+    }
+
     private fun useCase(pageRepository: FakePageRepository): AiActionExecutionUseCase {
         return AiActionExecutionUseCase(
             pageRepository = pageRepository,
@@ -171,12 +247,16 @@ class AiActionExecutionUseCaseTest {
         )
     }
 
-    private fun page(document: PageBlockDocument): Page {
+    private fun page(
+        document: PageBlockDocument,
+        id: String = "page-1",
+        title: String = "Target",
+    ): Page {
         return Page(
-            id = "page-1",
+            id = id,
             workspaceId = "workspace-1",
             parentPageId = null,
-            title = "Target",
+            title = title,
             content = PageBlockCodec.encodeDocument(document),
             sortOrder = 0,
             createdAt = 1000,
@@ -185,45 +265,59 @@ class AiActionExecutionUseCaseTest {
         )
     }
 
+    private fun PageBlockDocument.meaningfulBlocks(): List<PageBlock> {
+        return blocks.filterNot { block ->
+            block.type == PageBlockType.Text &&
+                block.text.isBlank() &&
+                block.richTextSpans.isEmpty() &&
+                block.mediaAttachments.isEmpty() &&
+                block.children.isEmpty()
+        }
+    }
+
     private class FakePageRepository(
-        initialPage: Page? = null,
+        vararg initialPages: Page,
     ) : PageRepository {
-        private var page: Page? = initialPage
+        constructor(initialPage: Page?) : this(*listOfNotNull(initialPage).toTypedArray())
+
+        private val pages = linkedMapOf<String, Page>().apply {
+            initialPages.forEach { page -> put(page.id, page) }
+        }
         val createdPages = mutableListOf<Page>()
 
-        override fun observePages(workspaceId: String): Flow<List<Page>> = flowOf(page?.let(::listOf).orEmpty())
+        override fun observePages(workspaceId: String): Flow<List<Page>> = flowOf(pages.values.toList())
 
         override fun observeChildPages(parentPageId: String): Flow<List<Page>> = flowOf(emptyList())
 
-        override fun observeRecentPages(limit: Int): Flow<List<Page>> = flowOf(page?.let(::listOf).orEmpty())
+        override fun observeRecentPages(limit: Int): Flow<List<Page>> = flowOf(pages.values.toList())
 
-        override fun observeRecentPages(workspaceId: String, limit: Int): Flow<List<Page>> = flowOf(page?.let(::listOf).orEmpty())
+        override fun observeRecentPages(workspaceId: String, limit: Int): Flow<List<Page>> = flowOf(pages.values.toList())
 
         override fun observeDeletedPages(workspaceId: String): Flow<List<Page>> = flowOf(emptyList())
 
-        override fun observePage(pageId: String): Flow<Page?> = flowOf(page.takeIf { it?.id == pageId })
+        override fun observePage(pageId: String): Flow<Page?> = flowOf(pages[pageId])
 
         override fun observePageSyncState(pageId: String): Flow<PageSyncState> = flowOf(PageSyncState())
 
-        override fun observePageCount(): Flow<Int> = flowOf(if (page == null) 0 else 1)
+        override fun observePageCount(): Flow<Int> = flowOf(pages.size)
 
         override fun observePageCount(workspaceId: String): Flow<Int> = observePageCount()
 
-        override suspend fun getPage(pageId: String): Page? = page.takeIf { it?.id == pageId }
+        override suspend fun getPage(pageId: String): Page? = pages[pageId]
 
         override suspend fun upsertPage(page: Page) {
-            this.page = page
+            pages[page.id] = page
         }
 
         override suspend fun updateBlockText(pageId: String, blockId: String, text: String): Boolean {
-            val current = page ?: return false
+            val current = pages[pageId] ?: return false
             val document = PageBlockCodec.decodeDocument(current.content)
             val updated = document.copy(
                 blocks = document.blocks.map { block ->
                     if (block.id == blockId) block.copy(text = text) else block
                 },
             )
-            page = current.copy(content = PageBlockCodec.encodeDocument(updated))
+            pages[pageId] = current.copy(content = PageBlockCodec.encodeDocument(updated))
             return true
         }
 
@@ -298,7 +392,7 @@ class AiActionExecutionUseCaseTest {
                 deletedAt = null,
             )
             createdPages += created
-            page = created
+            pages[created.id] = created
             return created
         }
 

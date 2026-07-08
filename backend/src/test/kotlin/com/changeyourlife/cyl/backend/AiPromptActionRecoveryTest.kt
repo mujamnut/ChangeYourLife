@@ -6,6 +6,7 @@ import com.changeyourlife.cyl.backend.service.AiPromptActionRecovery
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 
 class AiPromptActionRecoveryTest {
     private val recovery = AiPromptActionRecovery()
@@ -119,6 +120,80 @@ class AiPromptActionRecoveryTest {
         assertEquals("CREATE_DATABASE", action.type)
         assertEquals("Reban Ayam", action.targetTitle)
         assertEquals("penjagaan ayam", action.tableTitle)
+    }
+
+    @Test
+    fun doesNotFuzzyMatchShortMentionToLongerPageTitle() {
+        val result = recovery.recoverActionFromPrompt(
+            prompt = "padam semua block dalam @Budget",
+            pages = listOf(
+                AiPageContext(
+                    id = "page-budget-tracker",
+                    title = "Budget Tracker",
+                    blocks = listOf(AiBlockContext(id = "block-1", type = "Text", text = "old note")),
+                ),
+            ),
+        )
+
+        assertNull(result)
+    }
+
+    @Test
+    fun doesNotPickFirstMentionWhenMultipleMentionContextHasNoVisibleTarget() {
+        val result = recovery.recoverActionFromPrompt(
+            prompt = """
+                padam semua block dalam page tersebut
+
+                CYL_MENTION_CONTEXT:
+                The user selected these page mentions from the chat UI. Treat them as exact target pages for create/update/delete actions:
+                - @Budget id=page-budget
+                - @Notes id=page-notes
+            """.trimIndent(),
+            pages = listOf(
+                AiPageContext(
+                    id = "page-budget",
+                    title = "Budget",
+                    blocks = listOf(AiBlockContext(id = "budget-block", type = "Text", text = "budget")),
+                ),
+                AiPageContext(
+                    id = "page-notes",
+                    title = "Notes",
+                    blocks = listOf(AiBlockContext(id = "notes-block", type = "Text", text = "notes")),
+                ),
+            ),
+        )
+
+        assertNull(result)
+    }
+
+    @Test
+    fun resolvesExactVisibleTargetWhenMultipleMentionContextExists() {
+        val result = recovery.recoverActionFromPrompt(
+            prompt = """
+                @Notes padam semua block
+
+                CYL_MENTION_CONTEXT:
+                The user selected these page mentions from the chat UI. Treat them as exact target pages for create/update/delete actions:
+                - @Budget id=page-budget
+                - @Notes id=page-notes
+            """.trimIndent(),
+            pages = listOf(
+                AiPageContext(
+                    id = "page-budget",
+                    title = "Budget",
+                    blocks = listOf(AiBlockContext(id = "budget-block", type = "Text", text = "budget")),
+                ),
+                AiPageContext(
+                    id = "page-notes",
+                    title = "Notes",
+                    blocks = listOf(AiBlockContext(id = "notes-block", type = "Text", text = "notes")),
+                ),
+            ),
+        )
+
+        val action = assertNotNull(result).actions.single()
+        assertEquals("DELETE_ALL_BLOCKS", action.type)
+        assertEquals("Notes", action.targetTitle)
     }
 
     @Test

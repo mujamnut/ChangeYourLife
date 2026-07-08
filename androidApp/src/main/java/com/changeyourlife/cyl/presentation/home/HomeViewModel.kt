@@ -45,6 +45,8 @@ import com.changeyourlife.cyl.presentation.ai.AiChatActionOrchestrator
 import com.changeyourlife.cyl.presentation.ai.AiChatMessageMapper
 import com.changeyourlife.cyl.presentation.ai.AiChatMessage
 import com.changeyourlife.cyl.presentation.ai.AiChatPageLink
+import com.changeyourlife.cyl.presentation.ai.AiPageTargetResolver
+import com.changeyourlife.cyl.presentation.ai.TargetPageResolution
 import com.changeyourlife.cyl.presentation.ai.toPageTableColumnFromAi
 import com.changeyourlife.cyl.presentation.ai.toRoleContentPairs
 import com.changeyourlife.cyl.presentation.page.PageBlockCodec
@@ -848,28 +850,10 @@ class HomeViewModel @Inject constructor(
     }
 
     private fun List<Page>.findMentionedPages(prompt: String): List<Page> {
-        val normalizedPrompt = prompt.lowercase()
-        val pagesWithTitle = filter { page -> page.title.isNotBlank() }
-            .sortedByDescending { page -> page.title.length }
-        pagesWithTitle.firstOrNull { page ->
-            normalizedPrompt.contains("@${page.title.lowercase()}")
-        }?.let { return listOf(it) }
-
-        val mention = Regex("@([^\\n,.;:]+)")
-            .find(prompt)
-            ?.groupValues
-            ?.getOrNull(1)
-            ?.trim()
-            ?.lowercase()
-            .orEmpty()
-        if (mention.isBlank()) return emptyList()
-        return pagesWithTitle.filter { page ->
-            val title = page.title.lowercase()
-            title == mention ||
-                title.startsWith(mention) ||
-                mention.startsWith(title) ||
-                title.contains(mention)
-        }.take(1)
+        return AiPageTargetResolver.findMentionedPages(
+            prompt = prompt,
+            pages = this,
+        )
     }
 
     private suspend fun findMentionedPage(
@@ -881,29 +865,7 @@ class HomeViewModel @Inject constructor(
         pages.findPagesByIds(mentionedPageIds).firstOrNull()?.let { page ->
             return page
         }
-        val normalizedPrompt = prompt.lowercase()
-        val pagesWithTitle = pages
-            .filter { page -> page.title.isNotBlank() }
-            .sortedByDescending { page -> page.title.length }
-        pagesWithTitle.firstOrNull { page ->
-            normalizedPrompt.contains("@${page.title.lowercase()}")
-        }?.let { return it }
-
-        val mention = Regex("@([^\\n,.;:]+)")
-            .find(prompt)
-            ?.groupValues
-            ?.getOrNull(1)
-            ?.trim()
-            ?.lowercase()
-            .orEmpty()
-        if (mention.isBlank()) return null
-        return pagesWithTitle.firstOrNull { page ->
-            val title = page.title.lowercase()
-            title == mention ||
-                title.startsWith(mention) ||
-                mention.startsWith(title) ||
-                title.contains(mention)
-        }
+        return pages.findMentionedPages(prompt).firstOrNull()
     }
 
     private suspend fun resolveTargetPage(
@@ -1154,8 +1116,12 @@ class HomeViewModel @Inject constructor(
     private suspend fun findPageByTitle(workspaceId: String, title: String): Page? {
         if (title.isBlank()) return null
         val pages = pageRepository.observePages(workspaceId).first()
-        return pages.firstOrNull { page -> page.title.equals(title, ignoreCase = true) }
-            ?: pages.firstOrNull { page -> page.title.contains(title, ignoreCase = true) }
+        return when (val resolution = AiPageTargetResolver.resolveExactTarget(pages, title)) {
+            is TargetPageResolution.Found -> resolution.page
+            TargetPageResolution.Ambiguous,
+            TargetPageResolution.Missing,
+            -> null
+        }
     }
 
     private suspend fun findTaskByTitle(workspaceId: String, title: String): TaskItem? {

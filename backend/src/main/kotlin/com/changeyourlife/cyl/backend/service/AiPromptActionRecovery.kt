@@ -159,49 +159,11 @@ class AiPromptActionRecovery(
     }
 
     private fun List<AiPageContext>.findTargetPage(prompt: String): AiPageContext? {
-        prompt.extractMentionContextPageIds().firstNotNullOfOrNull { pageId ->
-            firstOrNull { page -> page.id == pageId }
-        }?.let { return it }
-
-        val normalizedPrompt = prompt.lowercase()
-        val pagesWithTitle = filter { page -> page.title.isNotBlank() }
-            .sortedByDescending { page -> page.title.length }
-
-        pagesWithTitle.firstOrNull { page ->
-            normalizedPrompt.contains("@${page.title.lowercase()}")
-        }?.let { return it }
-
-        val mention = Regex("@([^\\n,.;:]+)")
-            .find(prompt)
-            ?.groupValues
-            ?.getOrNull(1)
-            ?.trim()
-            ?.lowercase()
-            .orEmpty()
-        if (mention.isNotBlank()) {
-            pagesWithTitle.firstOrNull { page ->
-                val title = page.title.lowercase()
-                title == mention ||
-                    title.startsWith(mention) ||
-                    mention.startsWith(title) ||
-                    title.contains(mention)
-            }?.let { return it }
-        }
-
-        return singleOrNull()?.takeIf {
-            prompt.looksLikePageMutationRequest() || prompt.looksLikeTableRowRequest()
-        }
-    }
-
-    private fun String.extractMentionContextPageIds(): List<String> {
-        val context = substringAfter("CYL_MENTION_CONTEXT:", missingDelimiterValue = "")
-        if (context.isBlank()) return emptyList()
-        return Regex("\\bid=([^\\s]+)")
-            .findAll(context)
-            .map { match -> match.groupValues.getOrNull(1).orEmpty().trim() }
-            .filter { pageId -> pageId.isNotBlank() }
-            .distinct()
-            .toList()
+        return AiPageTargetMatcher.findTargetPage(
+            pages = this,
+            prompt = prompt,
+            allowSinglePageFallback = prompt.looksLikePageMutationRequest() || prompt.looksLikeTableRowRequest(),
+        )
     }
 
     private fun String.withoutMentionContext(): String =

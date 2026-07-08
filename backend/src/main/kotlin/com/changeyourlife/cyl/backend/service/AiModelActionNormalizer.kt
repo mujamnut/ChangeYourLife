@@ -68,7 +68,7 @@ class AiModelActionNormalizer(
         val normalizedType = type.normalizedActionType()
         val explicitTarget = targetTitle.cleanAiPageTitle()
             .ifBlank { title.cleanAiPageTitle().takeIf { normalizedType != "CREATE_DATABASE" }.orEmpty() }
-        val targetPage = pages.findPageByAiTitle(explicitTarget)
+        val targetPage = AiPageTargetMatcher.findPageByAiTitle(pages, explicitTarget)
             ?: pages.findTargetPage(prompt)
         return copy(
             type = normalizedType,
@@ -85,9 +85,9 @@ class AiModelActionNormalizer(
     ): AiService.AiActionResult? {
         val action = stringValue("action").lowercase()
         if (action.isBlank()) return null
-        val targetPage = pages.findPageByAiTitle(stringValue("page"))
-            ?: pages.findPageByAiTitle(stringValue("targetPage"))
-            ?: pages.findPageByAiTitle(stringValue("targetTitle"))
+        val targetPage = AiPageTargetMatcher.findPageByAiTitle(pages, stringValue("page"))
+            ?: AiPageTargetMatcher.findPageByAiTitle(pages, stringValue("targetPage"))
+            ?: AiPageTargetMatcher.findPageByAiTitle(pages, stringValue("targetTitle"))
             ?: pages.findTargetPage(prompt)
             ?: return null
         val dataRows = legacyDataRows()
@@ -222,50 +222,12 @@ class AiModelActionNormalizer(
         }?.value.orEmpty()
     }
 
-    private fun List<AiPageContext>.findPageByAiTitle(rawTitle: String): AiPageContext? {
-        val normalized = rawTitle.cleanAiPageTitle().normalizeForAiMatch()
-        if (normalized.isBlank()) return null
-        return firstOrNull { page -> page.id == rawTitle.trim() }
-            ?: firstOrNull { page -> page.title.normalizeForAiMatch() == normalized }
-            ?: firstOrNull { page ->
-                val title = page.title.normalizeForAiMatch()
-                title.isNotBlank() && (title.contains(normalized) || normalized.contains(title))
-            }
-    }
-
     private fun List<AiPageContext>.findTargetPage(prompt: String): AiPageContext? {
-        prompt.extractMentionContextPageIds().firstNotNullOfOrNull { pageId ->
-            firstOrNull { page -> page.id == pageId }
-        }?.let { return it }
-
-        val normalizedPrompt = prompt.lowercase()
-        val pagesWithTitle = filter { page -> page.title.isNotBlank() }
-            .sortedByDescending { page -> page.title.length }
-
-        pagesWithTitle.firstOrNull { page ->
-            normalizedPrompt.contains("@${page.title.lowercase()}")
-        }?.let { return it }
-
-        val mention = Regex("@([^\\n,.;:]+)")
-            .find(prompt)
-            ?.groupValues
-            ?.getOrNull(1)
-            ?.trim()
-            ?.lowercase()
-            .orEmpty()
-        if (mention.isNotBlank()) {
-            pagesWithTitle.firstOrNull { page ->
-                val title = page.title.lowercase()
-                title == mention ||
-                    title.startsWith(mention) ||
-                    mention.startsWith(title) ||
-                    title.contains(mention)
-            }?.let { return it }
-        }
-
-        return singleOrNull()?.takeIf {
-            prompt.looksLikePageMutationRequest() || prompt.looksLikeTableRowRequest()
-        }
+        return AiPageTargetMatcher.findTargetPage(
+            pages = this,
+            prompt = prompt,
+            allowSinglePageFallback = prompt.looksLikePageMutationRequest() || prompt.looksLikeTableRowRequest(),
+        )
     }
 
     private fun AiPageContext.defaultTableTitle(): String? {
@@ -284,17 +246,6 @@ class AiModelActionNormalizer(
                 ?.let { return it }
         }
         return blocks.firstOrNull { block -> block.tableTitle.isNotBlank() }?.tableTitle
-    }
-
-    private fun String.extractMentionContextPageIds(): List<String> {
-        val context = substringAfter("CYL_MENTION_CONTEXT:", missingDelimiterValue = "")
-        if (context.isBlank()) return emptyList()
-        return Regex("\\bid=([^\\s]+)")
-            .findAll(context)
-            .map { match -> match.groupValues.getOrNull(1).orEmpty().trim() }
-            .filter { pageId -> pageId.isNotBlank() }
-            .distinct()
-            .toList()
     }
 
     private fun String.withoutMentionContext(): String =
@@ -388,9 +339,6 @@ class AiModelActionNormalizer(
             ?.takeIf { value -> value.isNotBlank() }
     }
 
-    private fun String.cleanAiPageTitle(): String =
-        trim().removePrefix("@").trim()
-
     private fun String.toAiColumnName(): String =
         trim()
             .replace("_", " ")
@@ -408,11 +356,8 @@ class AiModelActionNormalizer(
             .replace(" ", "")
             .lowercase()
 
-    private fun String.normalizeForAiMatch(): String =
-        lowercase()
-            .replace(Regex("[^a-z0-9\\s]"), " ")
-            .replace(Regex("\\s+"), " ")
-            .trim()
+    private fun String.cleanAiPageTitle(): String =
+        trim().removePrefix("@").trim()
 
     private fun String.normalizedActionType(): String =
         trim()
