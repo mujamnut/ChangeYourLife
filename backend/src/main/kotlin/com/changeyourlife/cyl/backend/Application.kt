@@ -94,6 +94,9 @@ fun Application.module(
     environment.log.info(
         "AI provider initialized: provider=${aiService.activeProvider}, model=${aiService.activeModel}, apiKeyConfigured=${!aiService.isMockMode}",
     )
+    environment.log.info(
+        "AI vision initialized: pipeline=${aiService.visionPipelineVersion}, maxDimension=${aiService.visionMaxImageDimension}, maxBytes=${aiService.visionMaxImageBytes}, lmStudioVisionModels=${aiService.lmStudioVisionModelLabel}",
+    )
     val aiJobService = AiJobService()
     val emailService = EmailService(appConfig.email)
     environment.log.info("Email provider initialized: resendConfigured=${appConfig.email.isConfigured}")

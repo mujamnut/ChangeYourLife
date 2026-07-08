@@ -25,6 +25,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import org.slf4j.LoggerFactory
 
 class AiService(
     private val lmStudioBaseUrl: String? = null,
@@ -46,6 +47,8 @@ class AiService(
     private val promptActionRecovery: AiPromptActionRecovery = AiPromptActionRecovery(actionSchemaValidator),
     private val completionProvider: ((List<ChatMessage>, Boolean, Double) -> String)? = null,
 ) {
+    private val logger = LoggerFactory.getLogger(AiService::class.java)
+
     private val json = Json {
         ignoreUnknownKeys = true
         encodeDefaults = true
@@ -117,6 +120,11 @@ class AiService(
             val last = key.substring(maxOf(0, len - 5))
             return "provider=$activeProvider, len=$len, first='$first', last='$last'"
         }
+
+    val visionPipelineVersion: String = VisionPipelineVersion
+    val visionMaxImageDimension: Int = VisionMaxImageDimension
+    val visionMaxImageBytes: Int = VisionMaxImageBytes
+    val lmStudioVisionModelLabel: String = lmStudioVisionModels.joinToString(",")
 
     fun chat(
         messages: List<ChatMessage>,
@@ -619,6 +627,19 @@ class AiService(
         stream: Boolean = false,
     ): String {
         val visionImages = images.map { image -> image.optimizedForVision() }
+        val originalBytes = images.sumOf { image -> image.sizeBytes.coerceAtLeast(0) }
+        val optimizedBytes = visionImages.sumOf { image -> image.sizeBytes.coerceAtLeast(0) }
+        logger.info(
+            "AI vision request prepared: pipeline={}, providerUrl={}, model={}, stream={}, images={}, originalBytes={}, optimizedBytes={}, maxDimension={}",
+            VisionPipelineVersion,
+            completionsUrl.withoutQuery(),
+            model.ifBlank { defaultModel },
+            stream,
+            visionImages.size,
+            originalBytes,
+            optimizedBytes,
+            VisionMaxImageDimension,
+        )
         val prompt = buildString {
             appendLine("/no_think")
             appendLine("Read the attached image(s) for the CYL app.")
@@ -690,10 +711,19 @@ class AiService(
 
         var lastError: Exception? = null
         repeat(VisionRequestMaxAttempts) { attempt ->
+            val startedAt = System.nanoTime()
             if (stream) {
                 val response = httpClient.send(request, HttpResponse.BodyHandlers.ofLines())
                 if (response.statusCode() == 200) {
                     val streamContent = response.body().readVisionStreamContent()
+                    logger.info(
+                        "AI vision stream completed: model={}, attempt={}, durationMs={}, contentChars={}, reasoningChars={}",
+                        model.ifBlank { defaultModel },
+                        attempt + 1,
+                        startedAt.elapsedMillis(),
+                        streamContent.content.length,
+                        streamContent.reasoning.length,
+                    )
                     if (streamContent.content.isNotBlank()) return streamContent.content
                     if (streamContent.reasoning.containsImageBlindnessHint()) {
                         throw Exception(
@@ -705,6 +735,14 @@ class AiService(
                 }
 
                 val error = Exception("Vision HTTP ${response.statusCode()} - ${response.body().readLinesForError()}")
+                logger.warn(
+                    "AI vision stream failed: model={}, attempt={}, status={}, durationMs={}, error={}",
+                    model.ifBlank { defaultModel },
+                    attempt + 1,
+                    response.statusCode(),
+                    startedAt.elapsedMillis(),
+                    error.compactVisionError(),
+                )
                 lastError = error
                 if (!response.statusCode().isRetryableVisionStatus() || attempt == VisionRequestMaxAttempts - 1) {
                     throw error
@@ -716,6 +754,14 @@ class AiService(
                     val message = apiResponse.choices.firstOrNull()?.message
                         ?: throw Exception("Vision model returned no choices.")
                     val content = message.content.orEmpty().trim()
+                    logger.info(
+                        "AI vision completed: model={}, attempt={}, durationMs={}, contentChars={}, reasoningChars={}",
+                        model.ifBlank { defaultModel },
+                        attempt + 1,
+                        startedAt.elapsedMillis(),
+                        content.length,
+                        message.reasoning_content.orEmpty().length,
+                    )
                     if (content.isNotBlank()) return content
                     val reasoning = message.reasoning_content.orEmpty().trim()
                     if (reasoning.containsImageBlindnessHint()) {
@@ -728,6 +774,14 @@ class AiService(
                 }
 
                 val error = Exception("Vision HTTP ${response.statusCode()} - ${response.body()}")
+                logger.warn(
+                    "AI vision failed: model={}, attempt={}, status={}, durationMs={}, error={}",
+                    model.ifBlank { defaultModel },
+                    attempt + 1,
+                    response.statusCode(),
+                    startedAt.elapsedMillis(),
+                    error.compactVisionError(),
+                )
                 lastError = error
                 if (!response.statusCode().isRetryableVisionStatus() || attempt == VisionRequestMaxAttempts - 1) {
                     throw error
@@ -868,6 +922,12 @@ class AiService(
             .replace(Regex("\\s+"), " ")
             .take(320)
     }
+
+    private fun String.withoutQuery(): String =
+        substringBefore('?').take(180)
+
+    private fun Long.elapsedMillis(): Long =
+        Duration.ofNanos(System.nanoTime() - this).toMillis()
 
     private fun String.isVisionFailure(): Boolean =
         trim().startsWith("Image reading failed", ignoreCase = true)
@@ -1035,9 +1095,10 @@ class AiService(
         const val VisionRequestMaxAttempts = 2
         const val VisionRetryDelayMillis = 900L
         const val VisionMaxTokens = 220
-        const val VisionMaxImageDimension = 1024
-        const val VisionMaxImageBytes = 700 * 1024
-        const val VisionJpegQuality = 0.84f
+        const val VisionPipelineVersion = "lmstudio-stream-resize-v3"
+        const val VisionMaxImageDimension = 640
+        const val VisionMaxImageBytes = 350 * 1024
+        const val VisionJpegQuality = 0.76f
         const val MaxTextContextFiles = 4
         const val MaxTextContextChars = 16_000
         val AiRequestTimeout: Duration = Duration.ofMinutes(5)

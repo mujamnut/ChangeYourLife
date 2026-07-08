@@ -39,7 +39,11 @@ data class AiStatusResponse(
     val model: String,
     val apiKeyConfigured: Boolean,
     val apiKeyLength: Int,
-    val apiKeyInspect: String
+    val apiKeyInspect: String,
+    val visionPipelineVersion: String = "",
+    val visionMaxImageDimension: Int = 0,
+    val visionMaxImageBytes: Int = 0,
+    val lmStudioVisionModels: String = "",
 )
 
 @Serializable

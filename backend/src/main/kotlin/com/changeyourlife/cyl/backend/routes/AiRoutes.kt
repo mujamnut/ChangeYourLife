@@ -40,7 +40,11 @@ fun Route.aiRoutes(
                     model = aiService.activeModel,
                     apiKeyConfigured = !aiService.isMockMode,
                     apiKeyLength = aiService.apiKeyLength,
-                    apiKeyInspect = aiService.apiKeyInspect
+                    apiKeyInspect = aiService.apiKeyInspect,
+                    visionPipelineVersion = aiService.visionPipelineVersion,
+                    visionMaxImageDimension = aiService.visionMaxImageDimension,
+                    visionMaxImageBytes = aiService.visionMaxImageBytes,
+                    lmStudioVisionModels = aiService.lmStudioVisionModelLabel,
                 )
             )
         }
