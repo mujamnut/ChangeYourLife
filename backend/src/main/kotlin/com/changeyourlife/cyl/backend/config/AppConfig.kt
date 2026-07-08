@@ -12,10 +12,8 @@ data class AppConfig(
     val email: EmailConfig,
     val lmStudioBaseUrl: String?,
     val lmStudioApiKey: String?,
+    val lmStudioModel: String,
     val lmStudioVisionModels: List<String>,
-    val openAiApiKey: String?,
-    val openAiModel: String,
-    val openAiVisionModels: List<String>,
     val glmApiKey: String?,
     val geminiApiKey: String?,
     val openRouterApiKey: String?,
@@ -23,9 +21,8 @@ data class AppConfig(
     val openRouterVisionModels: List<String>,
 ) {
     companion object {
+        private const val DefaultLmStudioModel = "qwen/qwen3.5-9b"
         private val DefaultLmStudioVisionModels = listOf("qwen/qwen3.5-9b")
-        private const val DefaultOpenAiModel = "gpt-4o-mini"
-        private val DefaultOpenAiVisionModels = listOf("gpt-4o-mini")
         private const val DefaultOpenRouterModel = "openai/gpt-oss-20b:free"
         private val DefaultOpenRouterVisionModels = listOf(
             "google/gemma-4-26b-a4b-it:free",
@@ -48,6 +45,11 @@ data class AppConfig(
                     envNames = listOf("LMSTUDIO_API_KEY", "LM_STUDIO_API_KEY"),
                     propNames = listOf("lmstudio.api.key", "LMSTUDIO_API_KEY", "LM_STUDIO_API_KEY"),
                 ),
+                lmStudioModel = loadSetting(
+                    environment = environment,
+                    envNames = listOf("LMSTUDIO_MODEL", "LM_STUDIO_MODEL"),
+                    propNames = listOf("lmstudio.model", "LMSTUDIO_MODEL", "LM_STUDIO_MODEL"),
+                ) ?: DefaultLmStudioModel,
                 lmStudioVisionModels = loadSetting(
                     environment = environment,
                     envNames = listOf("LMSTUDIO_VISION_MODELS", "LMSTUDIO_VISION_MODEL", "LM_STUDIO_VISION_MODEL"),
@@ -61,28 +63,6 @@ data class AppConfig(
                 )?.toModelList()
                     ?.takeIf { models -> models.isNotEmpty() }
                     ?: DefaultLmStudioVisionModels,
-                openAiApiKey = loadApiKey(
-                    environment = environment,
-                    envNames = listOf("OPENAI_API_KEY"),
-                    propNames = listOf("openai.api.key", "OPENAI_API_KEY"),
-                ),
-                openAiModel = loadSetting(
-                    environment = environment,
-                    envNames = listOf("OPENAI_MODEL"),
-                    propNames = listOf("openai.model", "OPENAI_MODEL"),
-                ) ?: DefaultOpenAiModel,
-                openAiVisionModels = loadSetting(
-                    environment = environment,
-                    envNames = listOf("OPENAI_VISION_MODELS", "OPENAI_VISION_MODEL"),
-                    propNames = listOf(
-                        "openai.vision.models",
-                        "OPENAI_VISION_MODELS",
-                        "openai.vision.model",
-                        "OPENAI_VISION_MODEL",
-                    ),
-                )?.toModelList()
-                    ?.takeIf { models -> models.isNotEmpty() }
-                    ?: DefaultOpenAiVisionModels,
                 glmApiKey = loadApiKey(
                     environment = environment,
                     envNames = listOf("GLM_API_KEY"),

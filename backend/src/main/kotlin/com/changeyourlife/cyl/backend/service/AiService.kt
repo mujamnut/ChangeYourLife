@@ -20,10 +20,8 @@ import kotlinx.serialization.json.put
 class AiService(
     private val lmStudioBaseUrl: String? = null,
     private val lmStudioApiKey: String? = null,
+    private val lmStudioModel: String = "qwen/qwen3.5-9b",
     private val lmStudioVisionModels: List<String> = listOf("qwen/qwen3.5-9b"),
-    private val openAiApiKey: String? = null,
-    private val openAiModel: String = "gpt-4o-mini",
-    private val openAiVisionModels: List<String> = listOf("gpt-4o-mini"),
     private val glmApiKey: String? = null,
     private val geminiApiKey: String? = null,
     private val openRouterApiKey: String? = null,
@@ -49,63 +47,66 @@ class AiService(
         .connectTimeout(Duration.ofSeconds(30))
         .build()
 
-    // Direct OpenAI takes priority, then OpenRouter, Gemini, GLM, and sandbox.
-    val activeProvider: String = when {
-        !openAiApiKey.isNullOrBlank() -> "openai"
-        !openRouterApiKey.isNullOrBlank() -> "openrouter"
-        !geminiApiKey.isNullOrBlank() -> "gemini"
-        !glmApiKey.isNullOrBlank() -> "glm"
-        else -> "sandbox"
+    private val completionEndpoints: List<CompletionEndpoint> = buildList {
+        if (!lmStudioBaseUrl.isNullOrBlank()) {
+            add(
+                CompletionEndpoint(
+                    provider = "lmstudio",
+                    model = lmStudioModel.ifBlank { DefaultLmStudioModel },
+                    url = lmStudioBaseUrl.orEmpty().toChatCompletionsUrl(),
+                    apiKey = lmStudioApiKey,
+                ),
+            )
+        }
+        if (!openRouterApiKey.isNullOrBlank()) {
+            add(
+                CompletionEndpoint(
+                    provider = "openrouter",
+                    model = openRouterModel.ifBlank { "openai/gpt-oss-20b:free" },
+                    url = OpenRouterCompletionsUrl,
+                    apiKey = openRouterApiKey,
+                ),
+            )
+        }
+        if (!geminiApiKey.isNullOrBlank()) {
+            add(
+                CompletionEndpoint(
+                    provider = "gemini",
+                    model = "gemini-3.5-flash",
+                    url = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+                    apiKey = geminiApiKey,
+                ),
+            )
+        }
+        if (!glmApiKey.isNullOrBlank()) {
+            add(
+                CompletionEndpoint(
+                    provider = "glm",
+                    model = "glm-4-flash",
+                    url = "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+                    apiKey = glmApiKey,
+                ),
+            )
+        }
     }
 
-    val activeModel: String = when (activeProvider) {
-        "openai" -> openAiModel.ifBlank { "gpt-4o-mini" }
-        "openrouter" -> openRouterModel.ifBlank { "openai/gpt-oss-20b:free" }
-        "gemini" -> "gemini-3.5-flash"
-        "glm" -> "glm-4-flash"
-        else -> "mock"
-    }
+    val activeProvider: String = completionEndpoints.firstOrNull()?.provider ?: "sandbox"
+
+    val activeModel: String = completionEndpoints.firstOrNull()?.model ?: "mock"
 
     val isMockMode: Boolean = activeProvider == "sandbox"
 
-    val apiKeyLength: Int = when (activeProvider) {
-        "openai" -> openAiApiKey?.length ?: 0
-        "openrouter" -> openRouterApiKey?.length ?: 0
-        "gemini" -> geminiApiKey?.length ?: 0
-        "glm" -> glmApiKey?.length ?: 0
-        else -> 0
-    }
+    val apiKeyLength: Int = completionEndpoints.firstOrNull()?.apiKey?.length ?: 0
 
     val apiKeyInspect: String
         get() {
-            val key = when (activeProvider) {
-                "openai" -> openAiApiKey
-                "openrouter" -> openRouterApiKey
-                "gemini" -> geminiApiKey
-                "glm" -> glmApiKey
-                else -> null
-            } ?: return "null"
+            val endpoint = completionEndpoints.firstOrNull() ?: return "null"
+            val key = endpoint.apiKey ?: return "provider=${endpoint.provider}, key=null"
             if (key.isBlank()) return "blank"
             val len = key.length
             val first = key.substring(0, minOf(5, len))
             val last = key.substring(maxOf(0, len - 5))
             return "provider=$activeProvider, len=$len, first='$first', last='$last'"
-        }
-
-    private val completionsUrl: String = when (activeProvider) {
-        "openai" -> "https://api.openai.com/v1/chat/completions"
-        "openrouter" -> "https://openrouter.ai/api/v1/chat/completions"
-        "gemini" -> "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
-        else -> "https://open.bigmodel.cn/api/paas/v4/chat/completions"
-    }
-
-    private val activeApiKey: String?
-        get() = when (activeProvider) {
-            "openai" -> openAiApiKey
-            "openrouter" -> openRouterApiKey
-            "gemini" -> geminiApiKey
-            "glm" -> glmApiKey
-            else -> null
         }
 
     fun chat(
@@ -116,38 +117,11 @@ class AiService(
         completionProvider?.invoke(preparedMessages, false, 0.7)?.let { reply -> return reply }
         if (isMockMode) {
             val userMsg = preparedMessages.lastOrNull { it.role == "user" }?.content.orEmpty()
-            return "[AI Sandbox Mode - No API Key]\nHere is a simulated response to your question: \"$userMsg\". Add OPENAI_API_KEY or OPENROUTER_API_KEY to enable live AI answers."
+            return "[AI Sandbox Mode - No API Key]\nHere is a simulated response to your question: \"$userMsg\". Add LMSTUDIO_BASE_URL or OPENROUTER_API_KEY to enable live AI answers."
         }
 
         return try {
-            val body = json.encodeToString(
-                ApiRequest(
-                    model = activeModel,
-                    messages = preparedMessages.map { ApiMessage(it.role, it.content) }
-                )
-            )
-
-            val request = HttpRequest.newBuilder()
-                .uri(URI.create(completionsUrl))
-                .header("Content-Type", "application/json")
-                .header("Authorization", "Bearer $activeApiKey")
-                .header("HTTP-Referer", "https://changeyourlife.local")
-                .header("X-Title", "ChangeYourLife")
-                .timeout(Duration.ofSeconds(90)) // read + response timeout
-                .POST(HttpRequest.BodyPublishers.ofString(body))
-                .build()
-
-            val response = httpClient.send(request, HttpResponse.BodyHandlers.ofString())
-            if (response.statusCode() == 200) {
-                val apiResponse = json.decodeFromString<ApiResponse>(response.body())
-                apiResponse.choices.firstOrNull()
-                    ?.message
-                    ?.content
-                    ?.ifBlank { null }
-                    ?: "Sorry, the AI provider returned an empty response. Please try again or switch model."
-            } else {
-                "Error: Backend AI request failed with status code ${response.statusCode()}.\nResponse: ${response.body()}"
-            }
+            chatCompletions(preparedMessages, temperature = 0.7)
         } catch (e: Exception) {
             "Error contacting AI completions endpoint: ${e.localizedMessage}"
         }
@@ -254,7 +228,7 @@ class AiService(
             .orEmpty()
 
         val reply = if (isMockMode) {
-            "[AI Sandbox Mode - No API Key]\nHere is a simulated response to your question: \"$userMessage\". Add OPENAI_API_KEY or OPENROUTER_API_KEY to enable live AI answers."
+            "[AI Sandbox Mode - No API Key]\nHere is a simulated response to your question: \"$userMessage\". Add LMSTUDIO_BASE_URL or OPENROUTER_API_KEY to enable live AI answers."
         } else {
             chatForActions(
                 messages = preparedMessages,
@@ -491,10 +465,7 @@ class AiService(
 
         val imageSummary = when {
             validImages.isEmpty() -> ""
-            !lmStudioBaseUrl.isNullOrBlank() -> analyzeImagesWithLmStudioFallback(validImages)
-            !openAiApiKey.isNullOrBlank() -> analyzeImagesWithOpenAiFallback(validImages)
-            !openRouterApiKey.isNullOrBlank() -> analyzeImagesWithOpenRouterFallback(validImages)
-            else -> "Image reading unavailable because LMSTUDIO_BASE_URL, OPENAI_API_KEY, or OPENROUTER_API_KEY is not configured."
+            else -> analyzeImagesWithVisionFallback(validImages)
         }
         val textSummary = textFiles.joinToString(separator = "\n\n") { file ->
             """
@@ -515,6 +486,34 @@ class AiService(
             ${if (imageSummary.isNotBlank()) "Image context:\n$imageSummary" else ""}
             ${if (textSummary.isNotBlank()) "Text file context:\n$textSummary" else ""}
         """.trimIndent()
+    }
+
+    private fun analyzeImagesWithVisionFallback(images: List<AiImageInput>): String {
+        val failures = mutableListOf<String>()
+
+        if (!lmStudioBaseUrl.isNullOrBlank()) {
+            val lmStudioResult = analyzeImagesWithLmStudioFallback(images)
+            if (!lmStudioResult.isVisionFailure()) return lmStudioResult
+            failures += lmStudioResult
+        }
+
+        if (!openRouterApiKey.isNullOrBlank()) {
+            val openRouterResult = analyzeImagesWithOpenRouterFallback(images)
+            if (!openRouterResult.isVisionFailure()) {
+                return buildString {
+                    if (failures.isNotEmpty()) {
+                        appendLine("LM Studio vision failed, so CYL used the next configured vision provider.")
+                    }
+                    append(openRouterResult)
+                }
+            }
+            failures += openRouterResult
+        }
+
+        if (failures.isEmpty()) {
+            return "Image reading unavailable because LMSTUDIO_BASE_URL or OPENROUTER_API_KEY is not configured."
+        }
+        return failures.joinToString(separator = "\n\n")
     }
 
     private fun analyzeImagesWithLmStudioFallback(images: List<AiImageInput>): String {
@@ -588,44 +587,6 @@ class AiService(
 
         return """
             Image reading failed after trying ${models.size} vision model(s).
-            Tried:
-            ${failures.joinToString(separator = "\n") { failure -> "- $failure" }}
-        """.trimIndent()
-    }
-
-    private fun analyzeImagesWithOpenAiFallback(images: List<AiImageInput>): String {
-        val models = openAiVisionModels
-            .ifEmpty { DefaultOpenAiVisionModels }
-            .map { model -> model.trim() }
-            .filter { model -> model.isNotBlank() }
-            .distinct()
-            .take(MaxVisionFallbackModels)
-        val failures = mutableListOf<String>()
-
-        models.forEach { model ->
-            runCatching {
-                analyzeImagesWithVisionProvider(
-                    images = images,
-                    model = model,
-                    defaultModel = DefaultOpenAiVisionModels.first(),
-                    completionsUrl = OpenAiCompletionsUrl,
-                    apiKey = openAiApiKey.orEmpty(),
-                )
-            }.onSuccess { content ->
-                if (content.isNotBlank()) {
-                    return """
-                        Vision model used: $model
-                        $content
-                    """.trimIndent()
-                }
-                failures += "$model: empty response"
-            }.onFailure { error ->
-                failures += "$model: ${error.compactVisionError()}"
-            }
-        }
-
-        return """
-            Image reading failed after trying ${models.size} OpenAI vision model(s).
             Tried:
             ${failures.joinToString(separator = "\n") { failure -> "- $failure" }}
         """.trimIndent()
@@ -731,39 +692,94 @@ class AiService(
             .take(320)
     }
 
+    private fun String.isVisionFailure(): Boolean =
+        trim().startsWith("Image reading failed", ignoreCase = true)
+
     private fun String.toChatCompletionsUrl(): String {
         val normalized = trim().trimEnd('/')
-        return if (normalized.endsWith("/chat/completions")) {
-            normalized
-        } else {
-            "$normalized/chat/completions"
+        return when {
+            normalized.endsWith("/chat/completions") -> normalized
+            normalized.endsWith("/v1") -> "$normalized/chat/completions"
+            else -> "$normalized/v1/chat/completions"
         }
     }
 
     private fun chatCompletionsJson(
         messages: List<ChatMessage>,
         temperature: Double = 0.2,
+    ): String = chatCompletions(
+        messages = messages,
+        temperature = temperature,
+        responseFormat = ApiResponseFormat("json_object"),
+    )
+
+    private fun chatCompletions(
+        messages: List<ChatMessage>,
+        temperature: Double = 0.7,
+        responseFormat: ApiResponseFormat? = null,
     ): String {
-        val body = json.encodeToString(
-            ApiRequest(
-                model = activeModel,
-                messages = messages.map { ApiMessage(it.role, it.content) },
-                temperature = temperature,
-                response_format = ApiResponseFormat("json_object")
-            )
+        val failures = mutableListOf<String>()
+        completionEndpoints.forEach { endpoint ->
+            runCatching {
+                sendChatCompletion(
+                    endpoint = endpoint,
+                    messages = messages,
+                    temperature = temperature,
+                    responseFormat = responseFormat,
+                )
+            }.onSuccess { content ->
+                if (content.isNotBlank()) return content
+                failures += "${endpoint.provider}/${endpoint.model}: empty response"
+            }.onFailure { error ->
+                failures += "${endpoint.provider}/${endpoint.model}: ${error.compactVisionError()}"
+            }
+        }
+        throw Exception(
+            "All AI providers failed. Tried: ${failures.joinToString(separator = " | ")}",
         )
+    }
 
-        val request = HttpRequest.newBuilder()
-            .uri(URI.create(completionsUrl))
-            .header("Content-Type", "application/json")
-            .header("Authorization", "Bearer $activeApiKey")
-            .header("HTTP-Referer", "https://changeyourlife.local")
-            .header("X-Title", "ChangeYourLife")
-            .timeout(Duration.ofSeconds(90)) // read + response timeout
-            .POST(HttpRequest.BodyPublishers.ofString(body))
-            .build()
+    private fun sendChatCompletion(
+        endpoint: CompletionEndpoint,
+        messages: List<ChatMessage>,
+        temperature: Double,
+        responseFormat: ApiResponseFormat?,
+    ): String {
+        fun requestBody(format: ApiResponseFormat?): String =
+            json.encodeToString(
+                ApiRequest(
+                    model = endpoint.model,
+                    messages = messages.map { ApiMessage(it.role, it.content) },
+                    temperature = temperature,
+                    response_format = format,
+                )
+            )
 
-        val response = httpClient.send(request, HttpResponse.BodyHandlers.ofString())
+        fun send(format: ApiResponseFormat?): HttpResponse<String> {
+            val requestBuilder = HttpRequest.newBuilder()
+                .uri(URI.create(endpoint.url))
+                .header("Content-Type", "application/json")
+                .header("HTTP-Referer", "https://changeyourlife.local")
+                .header("X-Title", "ChangeYourLife")
+                .timeout(Duration.ofSeconds(90)) // read + response timeout
+                .POST(HttpRequest.BodyPublishers.ofString(requestBody(format)))
+            if (!endpoint.apiKey.isNullOrBlank()) {
+                requestBuilder.header("Authorization", "Bearer ${endpoint.apiKey}")
+            }
+            return httpClient.send(requestBuilder.build(), HttpResponse.BodyHandlers.ofString())
+        }
+
+        val response = send(responseFormat).let { initialResponse ->
+            if (
+                initialResponse.statusCode() != 200 &&
+                endpoint.provider == "lmstudio" &&
+                responseFormat != null
+            ) {
+                send(null)
+            } else {
+                initialResponse
+            }
+        }
         return if (response.statusCode() == 200) {
             val apiResponse = json.decodeFromString<ApiResponse>(response.body())
             apiResponse.choices.firstOrNull()
@@ -772,11 +788,18 @@ class AiService(
                 ?.ifBlank { null }
                 ?: throw Exception("AI provider returned an empty response.")
         } else {
-            throw Exception("HTTP Error: ${response.statusCode()} - ${response.body()}")
+            throw Exception("${endpoint.provider} HTTP ${response.statusCode()} - ${response.body()}")
         }
     }
 
-    // Shared OpenAI-compatible request/response models (work for both Gemini and GLM)
+    private data class CompletionEndpoint(
+        val provider: String,
+        val model: String,
+        val url: String,
+        val apiKey: String?,
+    )
+
+    // Shared chat-completions request/response models.
     @Serializable
     private data class ApiRequest(
         val model: String,
@@ -816,10 +839,9 @@ class AiService(
         const val MaxVisionFallbackModels = 5
         const val MaxTextContextFiles = 4
         const val MaxTextContextChars = 16_000
+        const val DefaultLmStudioModel = "qwen/qwen3.5-9b"
         val DefaultLmStudioVisionModels = listOf("qwen/qwen3.5-9b")
-        const val OpenAiCompletionsUrl = "https://api.openai.com/v1/chat/completions"
         const val OpenRouterCompletionsUrl = "https://openrouter.ai/api/v1/chat/completions"
-        val DefaultOpenAiVisionModels = listOf("gpt-4o-mini")
         val DefaultVisionModels = listOf(
             "google/gemma-4-26b-a4b-it:free",
             "google/gemma-3-4b-it:free",

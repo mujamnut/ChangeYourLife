@@ -82,10 +82,8 @@ fun Application.module(
     val aiService = AiService(
         lmStudioBaseUrl = appConfig.lmStudioBaseUrl,
         lmStudioApiKey = appConfig.lmStudioApiKey,
+        lmStudioModel = appConfig.lmStudioModel,
         lmStudioVisionModels = appConfig.lmStudioVisionModels,
-        openAiApiKey = appConfig.openAiApiKey,
-        openAiModel = appConfig.openAiModel,
-        openAiVisionModels = appConfig.openAiVisionModels,
         glmApiKey = appConfig.glmApiKey,
         geminiApiKey = appConfig.geminiApiKey,
         openRouterApiKey = appConfig.openRouterApiKey,

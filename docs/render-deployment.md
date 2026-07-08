@@ -25,9 +25,9 @@ Set these in Render:
 ```txt
 DATABASE_URL=postgresql://avnadmin:<password>@<host>:<port>/defaultdb?sslmode=require
 JWT_SECRET=replace-with-a-long-random-secret
-OPENAI_API_KEY=sk-your-openai-key-here
-OPENAI_MODEL=gpt-4o-mini
-OPENAI_VISION_MODELS=gpt-4o-mini
+LMSTUDIO_BASE_URL=https://lmstudio.yourdomain.com
+LMSTUDIO_MODEL=qwen/qwen3.5-9b
+LMSTUDIO_VISION_MODEL=qwen/qwen3.5-9b
 OPENROUTER_API_KEY=sk-or-v1-your-key-here
 OPENROUTER_MODEL=openai/gpt-oss-20b:free
 OPENROUTER_VISION_MODELS=google/gemma-4-26b-a4b-it:free,google/gemma-3-4b-it:free,google/gemini-2.0-flash-exp:free
@@ -37,7 +37,7 @@ KTOR_DEVELOPMENT=false
 DATABASE_MAX_POOL_SIZE=5
 ```
 
-LM Studio local image reading is not available from Render with `http://127.0.0.1:1234/v1`, because that address points to the Render container, not your PC. Only set `LMSTUDIO_BASE_URL` on Render if you expose LM Studio through a reachable HTTPS URL.
+LM Studio local chat/image reading is not available from Render with `http://127.0.0.1:1234`, because that address points to the Render container, not your PC. Only set `LMSTUDIO_BASE_URL` on Render if you expose LM Studio through a reachable HTTPS URL, for example Cloudflare Tunnel.
 
 `OPENROUTER_API_KEY` is optional, but AI will fall back to sandbox mode when no AI key is configured.
 `RESEND_API_KEY` and `EMAIL_FROM` are required for production forgot-password emails. In Resend, verify your sending domain first, then use a sender from that domain.

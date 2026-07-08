@@ -9,18 +9,12 @@ sdk.dir=C\:/Users/<your-user>/AppData/Local/Android/Sdk
 # Local LM Studio image reading. Backend must be able to reach this URL.
 # If backend runs on the same PC as LM Studio, keep 127.0.0.1.
 # If backend runs on Render, 127.0.0.1 will not reach your PC.
-# LMSTUDIO_BASE_URL=http://127.0.0.1:1234/v1
+# LMSTUDIO_BASE_URL=http://127.0.0.1:1234
+# LMSTUDIO_MODEL=qwen/qwen3.5-9b
 # LMSTUDIO_VISION_MODEL=qwen/qwen3.5-9b
 # LMSTUDIO_API_KEY=
 #
-# Backend AI provider. Direct OpenAI is used first when this key is present.
-# Do not commit your real key.
-# OPENAI_API_KEY=sk-your-openai-key-here
-# OPENAI_MODEL=gpt-4o-mini
-# Optional direct OpenAI image-reading models for AI chat attachments.
-# OPENAI_VISION_MODELS=gpt-4o-mini
-#
-# OpenRouter is used when OPENAI_API_KEY is not configured.
+# OpenRouter is used when LM Studio is not configured or fails.
 # OPENROUTER_API_KEY=sk-or-v1-your-key-here
 # OPENROUTER_MODEL=openai/gpt-oss-20b:free
 # Optional OpenRouter image-reading models for AI chat attachments. Must support image input.

@@ -54,4 +54,4 @@ For persistent auth/data with Aiven PostgreSQL, set `DATABASE_URL=postgresql://a
 
 For cloud backend hosting, deploy the backend to Render using the root `Dockerfile` or `render.yaml`. See `docs/render-deployment.md`.
 
-For local image reading with LM Studio, set `LMSTUDIO_BASE_URL=http://127.0.0.1:1234/v1` and `LMSTUDIO_VISION_MODEL=qwen/qwen3.5-9b` in `local.properties`, then run the backend on the same machine as LM Studio. For AI text generation, set `OPENAI_API_KEY` or fall back to OpenRouter via `OPENROUTER_API_KEY`.
+For LM Studio chat and image reading, set `LMSTUDIO_BASE_URL=http://127.0.0.1:1234`, `LMSTUDIO_MODEL=qwen/qwen3.5-9b`, and `LMSTUDIO_VISION_MODEL=qwen/qwen3.5-9b` in `local.properties`. The backend tries LM Studio first, then falls back to OpenRouter/Gemini/GLM when those providers are configured.

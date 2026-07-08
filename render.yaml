@@ -17,12 +17,14 @@ services:
         sync: false
       - key: JWT_SECRET
         sync: false
-      - key: OPENAI_API_KEY
+      - key: LMSTUDIO_BASE_URL
         sync: false
-      - key: OPENAI_MODEL
-        value: gpt-4o-mini
-      - key: OPENAI_VISION_MODELS
-        value: gpt-4o-mini
+      - key: LMSTUDIO_API_KEY
+        sync: false
+      - key: LMSTUDIO_MODEL
+        value: qwen/qwen3.5-9b
+      - key: LMSTUDIO_VISION_MODEL
+        value: qwen/qwen3.5-9b
       - key: OPENROUTER_API_KEY
         sync: false
       - key: OPENROUTER_MODEL
