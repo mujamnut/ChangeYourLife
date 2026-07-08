@@ -5,11 +5,20 @@ import com.changeyourlife.cyl.backend.model.ai.AiImageInput
 import com.changeyourlife.cyl.backend.model.ai.AiPageContext
 import com.changeyourlife.cyl.backend.model.ai.AiTaskContext
 import com.changeyourlife.cyl.backend.model.ai.ChatMessage
+import java.awt.Color
+import java.awt.RenderingHints
+import java.awt.image.BufferedImage
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.time.Duration
+import java.util.Base64
+import javax.imageio.IIOImage
+import javax.imageio.ImageIO
+import javax.imageio.ImageWriteParam
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -531,6 +540,7 @@ class AiService(
                     defaultModel = DefaultLmStudioVisionModels.first(),
                     completionsUrl = completionsUrl,
                     apiKey = lmStudioApiKey.orEmpty(),
+                    stream = true,
                 )
             }.onSuccess { content ->
                 if (content.isNotBlank()) {
@@ -606,7 +616,9 @@ class AiService(
         defaultModel: String,
         completionsUrl: String,
         apiKey: String,
+        stream: Boolean = false,
     ): String {
+        val visionImages = images.map { image -> image.optimizedForVision() }
         val prompt = buildString {
             appendLine("/no_think")
             appendLine("Read the attached image(s) for the CYL app.")
@@ -615,7 +627,7 @@ class AiService(
             appendLine("If the image is a receipt, bill, spreadsheet, screenshot, table, calendar, or note, preserve important rows and values.")
             appendLine("Do not invent data that is not visible.")
             appendLine("Keep output short. No markdown. No analysis.")
-            images.forEachIndexed { index, image ->
+            visionImages.forEachIndexed { index, image ->
                 appendLine("Image ${index + 1}: name=${image.name.ifBlank { "image" }}, mime=${image.mimeType.ifBlank { "image/*" }}, bytes=${image.sizeBytes}")
             }
         }
@@ -624,6 +636,9 @@ class AiService(
             put("model", model.ifBlank { defaultModel })
             put("temperature", 0.0)
             put("max_tokens", VisionMaxTokens)
+            if (stream) {
+                put("stream", true)
+            }
             put(
                 "messages",
                 buildJsonArray {
@@ -639,7 +654,7 @@ class AiService(
                                             put("text", prompt)
                                         },
                                     )
-                                    images.forEach { image ->
+                                    visionImages.forEach { image ->
                                         add(
                                             buildJsonObject {
                                                 put("type", "image_url")
@@ -647,7 +662,7 @@ class AiService(
                                                     "image_url",
                                                     buildJsonObject {
                                                         put("url", image.dataUrl)
-                                                        put("detail", "high")
+                                                        put("detail", "low")
                                                     },
                                                 )
                                             },
@@ -675,31 +690,162 @@ class AiService(
 
         var lastError: Exception? = null
         repeat(VisionRequestMaxAttempts) { attempt ->
-            val response = httpClient.send(request, HttpResponse.BodyHandlers.ofString())
-            if (response.statusCode() == 200) {
-                val apiResponse = json.decodeFromString<ApiResponse>(response.body())
-                val message = apiResponse.choices.firstOrNull()?.message
-                    ?: throw Exception("Vision model returned no choices.")
-                val content = message.content.orEmpty().trim()
-                if (content.isNotBlank()) return content
-                val reasoning = message.reasoning_content.orEmpty().trim()
-                if (reasoning.containsImageBlindnessHint()) {
-                    throw Exception(
-                        "Vision model responded as if it did not receive image pixels. " +
-                            "In LM Studio, confirm the server model is the same vision-capable model used in chat and that OpenAI-compatible image input is enabled.",
-                    )
+            if (stream) {
+                val response = httpClient.send(request, HttpResponse.BodyHandlers.ofLines())
+                if (response.statusCode() == 200) {
+                    val streamContent = response.body().readVisionStreamContent()
+                    if (streamContent.content.isNotBlank()) return streamContent.content
+                    if (streamContent.reasoning.containsImageBlindnessHint()) {
+                        throw Exception(
+                            "Vision model responded as if it did not receive image pixels. " +
+                                "In LM Studio, confirm the server model is the same vision-capable model used in chat and that OpenAI-compatible image input is enabled.",
+                        )
+                    }
+                    throw Exception("Vision model returned an empty response.")
                 }
-                throw Exception("Vision model returned an empty response.")
-            }
 
-            val error = Exception("Vision HTTP ${response.statusCode()} - ${response.body()}")
-            lastError = error
-            if (!response.statusCode().isRetryableVisionStatus() || attempt == VisionRequestMaxAttempts - 1) {
-                throw error
+                val error = Exception("Vision HTTP ${response.statusCode()} - ${response.body().readLinesForError()}")
+                lastError = error
+                if (!response.statusCode().isRetryableVisionStatus() || attempt == VisionRequestMaxAttempts - 1) {
+                    throw error
+                }
+            } else {
+                val response = httpClient.send(request, HttpResponse.BodyHandlers.ofString())
+                if (response.statusCode() == 200) {
+                    val apiResponse = json.decodeFromString<ApiResponse>(response.body())
+                    val message = apiResponse.choices.firstOrNull()?.message
+                        ?: throw Exception("Vision model returned no choices.")
+                    val content = message.content.orEmpty().trim()
+                    if (content.isNotBlank()) return content
+                    val reasoning = message.reasoning_content.orEmpty().trim()
+                    if (reasoning.containsImageBlindnessHint()) {
+                        throw Exception(
+                            "Vision model responded as if it did not receive image pixels. " +
+                                "In LM Studio, confirm the server model is the same vision-capable model used in chat and that OpenAI-compatible image input is enabled.",
+                        )
+                    }
+                    throw Exception("Vision model returned an empty response.")
+                }
+
+                val error = Exception("Vision HTTP ${response.statusCode()} - ${response.body()}")
+                lastError = error
+                if (!response.statusCode().isRetryableVisionStatus() || attempt == VisionRequestMaxAttempts - 1) {
+                    throw error
+                }
             }
             Thread.sleep(VisionRetryDelayMillis * (attempt + 1))
         }
         throw lastError ?: Exception("Vision request failed.")
+    }
+
+    private data class VisionStreamContent(
+        val content: String,
+        val reasoning: String,
+    )
+
+    private fun java.util.stream.Stream<String>.readVisionStreamContent(): VisionStreamContent {
+        val content = StringBuilder()
+        val reasoning = StringBuilder()
+        use { lines ->
+            val iterator = lines.iterator()
+            while (iterator.hasNext()) {
+                val line = iterator.next().trim()
+                if (!line.startsWith("data:", ignoreCase = true)) continue
+                val payload = line.removePrefix("data:").trim()
+                if (payload == "[DONE]") break
+                runCatching {
+                    json.decodeFromString<ApiStreamResponse>(payload)
+                }.getOrNull()?.choices.orEmpty().forEach { choice ->
+                    content.append(choice.delta.content.orEmpty())
+                    reasoning.append(choice.delta.reasoning_content.orEmpty())
+                    content.append(choice.message?.content.orEmpty())
+                    reasoning.append(choice.message?.reasoning_content.orEmpty())
+                }
+            }
+        }
+        return VisionStreamContent(
+            content = content.toString().trim(),
+            reasoning = reasoning.toString().trim(),
+        )
+    }
+
+    private fun java.util.stream.Stream<String>.readLinesForError(): String =
+        use { lines ->
+            lines
+                .limit(20)
+                .toList()
+                .joinToString(separator = " ")
+                .replace(Regex("\\s+"), " ")
+                .take(480)
+        }
+
+    private fun AiImageInput.optimizedForVision(): AiImageInput {
+        if (!dataUrl.startsWith("data:image/", ignoreCase = true)) return this
+        val marker = ";base64,"
+        val markerIndex = dataUrl.indexOf(marker, ignoreCase = true)
+        if (markerIndex < 0) return this
+
+        return runCatching {
+            val header = dataUrl.substringBefore(marker)
+            val originalBytes = Base64.getDecoder().decode(dataUrl.substring(markerIndex + marker.length))
+            val source = ImageIO.read(ByteArrayInputStream(originalBytes)) ?: return this
+            val longestSide = maxOf(source.width, source.height).coerceAtLeast(1)
+            val scale = minOf(1.0, VisionMaxImageDimension.toDouble() / longestSide.toDouble())
+            val targetWidth = maxOf(1, (source.width * scale).toInt())
+            val targetHeight = maxOf(1, (source.height * scale).toInt())
+
+            if (
+                scale >= 0.999 &&
+                originalBytes.size <= VisionMaxImageBytes &&
+                header.contains("image/jpeg", ignoreCase = true)
+            ) {
+                return this
+            }
+
+            val resized = BufferedImage(targetWidth, targetHeight, BufferedImage.TYPE_INT_RGB)
+            val graphics = resized.createGraphics()
+            try {
+                graphics.color = Color.WHITE
+                graphics.fillRect(0, 0, targetWidth, targetHeight)
+                graphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC)
+                graphics.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY)
+                graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+                graphics.drawImage(source, 0, 0, targetWidth, targetHeight, null)
+            } finally {
+                graphics.dispose()
+            }
+
+            val output = ByteArrayOutputStream()
+            val writer = ImageIO.getImageWritersByFormatName("jpg").asSequence().firstOrNull()
+            if (writer == null) {
+                ImageIO.write(resized, "jpg", output)
+            } else {
+                val imageOutput = ImageIO.createImageOutputStream(output)
+                try {
+                    writer.output = imageOutput
+                    val params = writer.defaultWriteParam
+                    if (params.canWriteCompressed()) {
+                        params.compressionMode = ImageWriteParam.MODE_EXPLICIT
+                        params.compressionQuality = VisionJpegQuality
+                    }
+                    writer.write(null, IIOImage(resized, null, null), params)
+                } finally {
+                    imageOutput.close()
+                    writer.dispose()
+                }
+            }
+
+            val optimizedBytes = output.toByteArray()
+            copy(
+                dataUrl = "data:image/jpeg;base64,${Base64.getEncoder().encodeToString(optimizedBytes)}",
+                mimeType = "image/jpeg",
+                name = name.ifBlank { "image" }.replaceAfterLast('.', "jpg", missingDelimiterValue = "${name.ifBlank { "image" }}.jpg"),
+                sizeBytes = optimizedBytes.size.toLong(),
+                kind = "image",
+            )
+        }.getOrElse {
+            this
+        }
     }
 
     private fun Int.isRetryableVisionStatus(): Boolean =
@@ -861,6 +1007,23 @@ class AiService(
         val message: ApiMessage
     )
 
+    @Serializable
+    private data class ApiStreamResponse(
+        val choices: List<ApiStreamChoice> = emptyList(),
+    )
+
+    @Serializable
+    private data class ApiStreamChoice(
+        val delta: ApiStreamDelta = ApiStreamDelta(),
+        val message: ApiMessage? = null,
+    )
+
+    @Serializable
+    private data class ApiStreamDelta(
+        val content: String? = null,
+        val reasoning_content: String? = null,
+    )
+
     private companion object {
         const val MaxActionContextPages = 25
         const val MaxActionContextTablesPerPage = 5
@@ -872,6 +1035,9 @@ class AiService(
         const val VisionRequestMaxAttempts = 2
         const val VisionRetryDelayMillis = 900L
         const val VisionMaxTokens = 220
+        const val VisionMaxImageDimension = 1024
+        const val VisionMaxImageBytes = 700 * 1024
+        const val VisionJpegQuality = 0.84f
         const val MaxTextContextFiles = 4
         const val MaxTextContextChars = 16_000
         val AiRequestTimeout: Duration = Duration.ofMinutes(5)

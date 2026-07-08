@@ -15,6 +15,11 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.content.MediaType
+import androidx.compose.foundation.content.ReceiveContentListener
+import androidx.compose.foundation.content.consume
+import androidx.compose.foundation.content.contentReceiver
+import androidx.compose.foundation.content.hasMediaType
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -35,8 +40,11 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.input.TextFieldLineLimits
+import androidx.compose.foundation.text.input.TextFieldState
+import androidx.compose.foundation.text.input.rememberTextFieldState
+import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.automirrored.rounded.Undo
@@ -133,9 +141,8 @@ fun AiChatSheet(
             ?.let(::listOf)
             .orEmpty()
     }
-    var inputText by rememberSaveable(attachedPageId) {
-        mutableStateOf("")
-    }
+    val inputState = rememberTextFieldState()
+    val inputText = inputState.text.toString()
     var selectedMentionPageIds by rememberSaveable(attachedPageId) {
         mutableStateOf(emptyList<String>())
     }
@@ -175,6 +182,37 @@ fun AiChatSheet(
                     stagedImageAttachments = (stagedImageAttachments + attachment).takeLast(MaxAiChatImages)
                 }
         }
+    }
+    val pastedImageReceiver = ReceiveContentListener { transferableContent ->
+        if (!transferableContent.hasMediaType(MediaType.Image)) {
+            return@ReceiveContentListener transferableContent
+        }
+
+        var attachedCount = 0
+        var usedPlatformUri = false
+        val platformUri = transferableContent.platformTransferableContent?.linkUri
+        val remainingContent = transferableContent.consume { item ->
+            val uri = item.uri ?: platformUri?.takeIf { !usedPlatformUri }
+            val attachment = uri?.let { imageUri ->
+                context.toPastedImageAttachment(imageUri, fallbackName = "Pasted image")
+            }
+            if (attachment != null) {
+                if (item.uri == null) usedPlatformUri = true
+                stagedImageAttachments = (stagedImageAttachments + attachment).takeLast(MaxAiChatImages)
+                attachedCount += 1
+                true
+            } else {
+                false
+            }
+        }
+        if (attachedCount > 0) {
+            Toast.makeText(
+                context,
+                if (attachedCount == 1) "Image pasted" else "$attachedCount images pasted",
+                Toast.LENGTH_SHORT,
+            ).show()
+        }
+        remainingContent
     }
     val mentionSuggestionState = EditorSuggestionController.resolve(
         text = inputText,
@@ -236,7 +274,7 @@ fun AiChatSheet(
                 ),
                 stagedImageAttachments,
             )
-            inputText = ""
+            inputState.setTextAndPlaceCursorAtEnd("")
             selectedMentionPageIds = emptyList()
             stagedImageAttachments = emptyList()
             activePanel = null
@@ -244,7 +282,7 @@ fun AiChatSheet(
         }
     }
     val onSelectMentionPage: (Page) -> Unit = { page ->
-        inputText = inputText.removeActiveMentionQuery()
+        inputState.setTextAndPlaceCursorAtEnd(inputText.removeActiveMentionQuery())
         selectedMentionPageIds = (selectedMentionPageIds + page.id)
             .filter { id -> id.isNotBlank() }
             .distinct()
@@ -254,6 +292,9 @@ fun AiChatSheet(
 
     LaunchedEffect(messages.size) {
         if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
+    }
+    LaunchedEffect(attachedPageId) {
+        inputState.setTextAndPlaceCursorAtEnd("")
     }
     LaunchedEffect(activePanel, isMentionPickerOpen) {
         if (activePanel != null || isMentionPickerOpen) {
@@ -416,8 +457,8 @@ fun AiChatSheet(
             }
 
             AiComposerCard(
+                inputState = inputState,
                 inputText = inputText,
-                onInputTextChange = { inputText = it },
                 mentionChips = mentionChips,
                 onRemoveMention = { pageId ->
                     selectedMentionPageIds = selectedMentionPageIds.filterNot { id -> id == pageId }
@@ -457,6 +498,7 @@ fun AiChatSheet(
                 },
                 onSend = sendCurrentPrompt,
                 isGenerating = isGenerating,
+                pastedImageReceiver = pastedImageReceiver,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
             )
 
@@ -622,6 +664,18 @@ private fun Context.toAiImageAttachment(
             ).show()
             null
         }
+    }
+}
+
+private fun Context.toPastedImageAttachment(
+    uri: Uri,
+    fallbackName: String,
+): AiImageAttachment? {
+    val attachment = toAiImageAttachment(uri = uri, fallbackName = fallbackName) ?: return null
+    return if (attachment.kind == "image" || attachment.mimeType.startsWith("image/", ignoreCase = true)) {
+        attachment.copy(name = attachment.name.ifBlank { fallbackName })
+    } else {
+        null
     }
 }
 
@@ -1264,10 +1318,11 @@ private fun AiSheetHeader(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun AiComposerCard(
+    inputState: TextFieldState,
     inputText: String,
-    onInputTextChange: (String) -> Unit,
     mentionChips: List<AiMentionChipUi>,
     onRemoveMention: (String) -> Unit,
     stagedAttachmentLabels: List<String>,
@@ -1278,6 +1333,7 @@ private fun AiComposerCard(
     onOpenSettings: () -> Unit,
     onSend: () -> Unit,
     isGenerating: Boolean,
+    pastedImageReceiver: ReceiveContentListener,
     modifier: Modifier = Modifier,
 ) {
     val canSend = (inputText.isNotBlank() || stagedAttachmentLabels.isNotEmpty()) && !isGenerating
@@ -1343,12 +1399,12 @@ private fun AiComposerCard(
             }
 
             BasicTextField(
-                value = inputText,
-                onValueChange = onInputTextChange,
+                state = inputState,
                 enabled = isInputEnabled,
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(min = 42.dp, max = 118.dp)
+                    .contentReceiver(pastedImageReceiver)
                     .onFocusChanged { focusState ->
                         if (focusState.isFocused) {
                             onInputFocus()
@@ -1358,10 +1414,10 @@ private fun AiComposerCard(
                     color = MaterialTheme.colorScheme.onSurface,
                 ),
                 cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                maxLines = 5,
+                lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = 5),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                keyboardActions = KeyboardActions(onSend = { onSend() }),
-                decorationBox = { innerTextField ->
+                onKeyboardAction = { onSend() },
+                decorator = { innerTextField ->
                     Box(
                         modifier = Modifier.fillMaxWidth(),
                         contentAlignment = Alignment.CenterStart,
