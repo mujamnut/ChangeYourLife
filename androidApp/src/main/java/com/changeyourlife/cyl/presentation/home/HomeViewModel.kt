@@ -532,21 +532,23 @@ class HomeViewModel @Inject constructor(
             val allChatMessages = chatHistoryRepository.observeMessagesForScope(scopeId)
                 .first()
                 .filterNot { message -> message.id == savedUserMessage.id }
-            buildHomeAiSearchReply(
-                prompt = prompt,
-                pages = pages,
-                tasks = openTasks,
-                chatSessions = allChatSessions,
-                chatMessages = allChatMessages,
-            )?.let { searchReply ->
-                isAiGeneratingChat.value = false
-                chatHistoryRepository.appendMessage(
-                    sessionId = session.id,
-                    role = "assistant",
-                    content = searchReply.content,
-                    pageLinks = searchReply.pageLinks.toDomainChatPageLinks(),
-                )
-                return@launch
+            if (images.isEmpty()) {
+                buildHomeAiSearchReply(
+                    prompt = prompt,
+                    pages = pages,
+                    tasks = openTasks,
+                    chatSessions = allChatSessions,
+                    chatMessages = allChatMessages,
+                )?.let { searchReply ->
+                    isAiGeneratingChat.value = false
+                    chatHistoryRepository.appendMessage(
+                        sessionId = session.id,
+                        role = "assistant",
+                        content = searchReply.content,
+                        pageLinks = searchReply.pageLinks.toDomainChatPageLinks(),
+                    )
+                    return@launch
+                }
             }
 
             val messagesForAi = currentMessages + userMessage.copy(
@@ -1200,13 +1202,6 @@ private fun String.isReadOnlySearchRequest(): Boolean {
         "list",
         "tunjuk",
         "show",
-        "apa",
-        "mana",
-        "berapa",
-        "count",
-        "kira",
-        "ringkas",
-        "summarize",
     )
     val mutationWords = listOf(
         "buat",

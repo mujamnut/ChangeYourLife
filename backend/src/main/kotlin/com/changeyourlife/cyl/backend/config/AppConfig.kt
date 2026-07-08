@@ -14,11 +14,15 @@ data class AppConfig(
     val geminiApiKey: String?,
     val openRouterApiKey: String?,
     val openRouterModel: String,
-    val openRouterVisionModel: String,
+    val openRouterVisionModels: List<String>,
 ) {
     companion object {
         private const val DefaultOpenRouterModel = "openai/gpt-oss-20b:free"
-        private const val DefaultOpenRouterVisionModel = "google/gemma-4-26b-a4b-it:free"
+        private val DefaultOpenRouterVisionModels = listOf(
+            "google/gemma-4-26b-a4b-it:free",
+            "google/gemma-3-4b-it:free",
+            "google/gemini-2.0-flash-exp:free",
+        )
 
         fun fromEnvironment(environment: Map<String, String> = System.getenv()): AppConfig {
             return AppConfig(
@@ -45,12 +49,27 @@ data class AppConfig(
                     envNames = listOf("OPENROUTER_MODEL"),
                     propNames = listOf("openrouter.model", "OPENROUTER_MODEL"),
                 ) ?: DefaultOpenRouterModel,
-                openRouterVisionModel = loadSetting(
+                openRouterVisionModels = loadSetting(
                     environment = environment,
-                    envNames = listOf("OPENROUTER_VISION_MODEL", "AI_VISION_MODEL"),
-                    propNames = listOf("openrouter.vision.model", "OPENROUTER_VISION_MODEL", "AI_VISION_MODEL"),
-                ) ?: DefaultOpenRouterVisionModel,
+                    envNames = listOf("OPENROUTER_VISION_MODELS", "OPENROUTER_VISION_MODEL", "AI_VISION_MODEL"),
+                    propNames = listOf(
+                        "openrouter.vision.models",
+                        "OPENROUTER_VISION_MODELS",
+                        "openrouter.vision.model",
+                        "OPENROUTER_VISION_MODEL",
+                        "AI_VISION_MODEL",
+                    ),
+                )?.toModelList()
+                    ?.takeIf { models -> models.isNotEmpty() }
+                    ?: DefaultOpenRouterVisionModels,
             )
+        }
+
+        private fun String.toModelList(): List<String> {
+            return split(',', ';', '|')
+                .map { model -> model.trim().removeSurrounding("\"").removeSurrounding("'") }
+                .filter { model -> model.isNotBlank() }
+                .distinct()
         }
 
         private fun loadApiKey(

@@ -22,7 +22,11 @@ class AiService(
     private val geminiApiKey: String? = null,
     private val openRouterApiKey: String? = null,
     private val openRouterModel: String = "openai/gpt-oss-20b:free",
-    private val openRouterVisionModel: String = "google/gemma-4-26b-a4b-it:free",
+    private val openRouterVisionModels: List<String> = listOf(
+        "google/gemma-4-26b-a4b-it:free",
+        "google/gemma-3-4b-it:free",
+        "google/gemini-2.0-flash-exp:free",
+    ),
     private val actionPlanner: AiActionPlanner = AiActionPlanner(),
     private val actionSchemaValidator: AiActionSchemaValidator = AiActionSchemaValidator(),
     private val modelActionNormalizer: AiModelActionNormalizer = AiModelActionNormalizer(actionSchemaValidator),
@@ -476,11 +480,7 @@ class AiService(
         val imageSummary = when {
             validImages.isEmpty() -> ""
             openRouterApiKey.isNullOrBlank() -> "Image reading unavailable because OPENROUTER_API_KEY is not configured."
-            else -> runCatching {
-                analyzeImagesWithOpenRouter(validImages)
-            }.getOrElse { error ->
-                "Image reading failed: ${error.localizedMessage ?: error::class.simpleName.orEmpty()}"
-            }
+            else -> analyzeImagesWithOpenRouterFallback(validImages)
         }
         val textSummary = textFiles.joinToString(separator = "\n\n") { file ->
             """
@@ -503,7 +503,45 @@ class AiService(
         """.trimIndent()
     }
 
-    private fun analyzeImagesWithOpenRouter(images: List<AiImageInput>): String {
+    private fun analyzeImagesWithOpenRouterFallback(images: List<AiImageInput>): String {
+        val models = openRouterVisionModels
+            .ifEmpty { DefaultVisionModels }
+            .map { model -> model.trim() }
+            .filter { model -> model.isNotBlank() }
+            .distinct()
+            .take(MaxVisionFallbackModels)
+        val failures = mutableListOf<String>()
+
+        models.forEach { model ->
+            runCatching {
+                analyzeImagesWithOpenRouter(
+                    images = images,
+                    model = model,
+                )
+            }.onSuccess { content ->
+                if (content.isNotBlank()) {
+                    return """
+                        Vision model used: $model
+                        $content
+                    """.trimIndent()
+                }
+                failures += "$model: empty response"
+            }.onFailure { error ->
+                failures += "$model: ${error.compactVisionError()}"
+            }
+        }
+
+        return """
+            Image reading failed after trying ${models.size} vision model(s).
+            Tried:
+            ${failures.joinToString(separator = "\n") { failure -> "- $failure" }}
+        """.trimIndent()
+    }
+
+    private fun analyzeImagesWithOpenRouter(
+        images: List<AiImageInput>,
+        model: String,
+    ): String {
         val prompt = buildString {
             appendLine("Read the attached image(s) for the CYL app.")
             appendLine("Extract only useful facts for a Notion-like personal productivity app.")
@@ -516,7 +554,7 @@ class AiService(
         }
 
         val body = buildJsonObject {
-            put("model", openRouterVisionModel.ifBlank { "google/gemma-4-26b-a4b-it:free" })
+            put("model", model.ifBlank { DefaultVisionModels.first() })
             put("temperature", 0.0)
             put("max_tokens", 900)
             put(
@@ -575,6 +613,13 @@ class AiService(
             ?.content
             ?.ifBlank { null }
             ?: throw Exception("Vision model returned an empty response.")
+    }
+
+    private fun Throwable.compactVisionError(): String {
+        return (localizedMessage ?: message ?: this::class.simpleName.orEmpty())
+            .replace("\n", " ")
+            .replace(Regex("\\s+"), " ")
+            .take(320)
     }
 
     private fun chatCompletionsJson(
@@ -650,8 +695,14 @@ class AiService(
         const val MaxActionContextTasks = 20
         const val MaxActionContextBlockText = 260
         const val MaxVisionImages = 4
+        const val MaxVisionFallbackModels = 5
         const val MaxTextContextFiles = 4
         const val MaxTextContextChars = 16_000
+        val DefaultVisionModels = listOf(
+            "google/gemma-4-26b-a4b-it:free",
+            "google/gemma-3-4b-it:free",
+            "google/gemini-2.0-flash-exp:free",
+        )
     }
 }
 

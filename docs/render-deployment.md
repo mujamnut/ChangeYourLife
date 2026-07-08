@@ -27,7 +27,7 @@ DATABASE_URL=postgresql://avnadmin:<password>@<host>:<port>/defaultdb?sslmode=re
 JWT_SECRET=replace-with-a-long-random-secret
 OPENROUTER_API_KEY=sk-or-v1-your-key-here
 OPENROUTER_MODEL=openai/gpt-oss-20b:free
-OPENROUTER_VISION_MODEL=google/gemma-4-26b-a4b-it:free
+OPENROUTER_VISION_MODELS=google/gemma-4-26b-a4b-it:free,google/gemma-3-4b-it:free,google/gemini-2.0-flash-exp:free
 RESEND_API_KEY=re_your-key-here
 EMAIL_FROM=ChangeYourLife <noreply@yourdomain.com>
 KTOR_DEVELOPMENT=false
