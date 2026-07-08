@@ -19,6 +19,7 @@ import com.changeyourlife.cyl.backend.plugins.configureHTTP
 import com.changeyourlife.cyl.backend.plugins.configureMonitoring
 import com.changeyourlife.cyl.backend.plugins.configureRouting
 import com.changeyourlife.cyl.backend.plugins.configureSerialization
+import com.changeyourlife.cyl.backend.service.AiJobService
 import com.changeyourlife.cyl.backend.service.AiService
 import com.changeyourlife.cyl.backend.service.EmailService
 import com.changeyourlife.cyl.backend.service.JwtService
@@ -93,6 +94,7 @@ fun Application.module(
     environment.log.info(
         "AI provider initialized: provider=${aiService.activeProvider}, model=${aiService.activeModel}, apiKeyConfigured=${!aiService.isMockMode}",
     )
+    val aiJobService = AiJobService()
     val emailService = EmailService(appConfig.email)
     environment.log.info("Email provider initialized: resendConfigured=${appConfig.email.isConfigured}")
 
@@ -104,6 +106,7 @@ fun Application.module(
         jwtService = JwtService(appConfig.jwt),
         databaseConfigured = dataSource != null,
         aiService = aiService,
+        aiJobService = aiJobService,
         passwordResetEmailSender = emailService,
     )
 }

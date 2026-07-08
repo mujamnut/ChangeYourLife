@@ -9,6 +9,7 @@ import com.changeyourlife.cyl.data.remote.ai.AiTaskContextDto
 import com.changeyourlife.cyl.data.remote.ai.ChatMessageDto
 import com.changeyourlife.cyl.data.remote.ai.ChatRequestDto
 import com.changeyourlife.cyl.data.remote.ai.ChatWithActionsRequestDto
+import com.changeyourlife.cyl.domain.repository.AiError
 import com.changeyourlife.cyl.domain.repository.AiStatus
 import com.changeyourlife.cyl.domain.repository.AiErrorKind
 import com.changeyourlife.cyl.domain.repository.AiException
@@ -20,6 +21,7 @@ import java.time.LocalDate
 import java.util.TimeZone
 import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 
@@ -117,11 +119,66 @@ class AiRepositoryImpl @Inject constructor(
                     )
                 },
             )
-            val response = aiApi.chatWithActions(header, request)
+            val response = runChatWithActionsJob(header = header, request = request)
             if (response.reply.isBlank() && response.actions.isEmpty() && response.validationIssues.isEmpty()) {
                 throw AiErrorMapper.emptyResponse("chatWithActions")
             }
             AiActionContractMapper.toDomain(response)
         }.mapAiFailure()
+    }
+
+    private suspend fun runChatWithActionsJob(
+        header: String,
+        request: ChatWithActionsRequestDto,
+    ) = withContext(Dispatchers.IO) {
+        val accepted = aiApi.createChatWithActionsJob(header, request)
+        val jobId = accepted.jobId.ifBlank {
+            throw AiErrorMapper.emptyResponse("chatWithActionsJob")
+        }
+
+        var pollDelayMs = AiJobInitialPollDelayMillis
+        val startedAt = System.currentTimeMillis()
+        while (System.currentTimeMillis() - startedAt < AiJobPollingTimeoutMillis) {
+            delay(pollDelayMs)
+            val status = aiApi.chatWithActionsJobStatus(header, jobId)
+            when (status.status.lowercase()) {
+                AiJobSucceeded -> {
+                    return@withContext status.result
+                        ?: throw AiErrorMapper.emptyResponse("chatWithActionsJobResult")
+                }
+                AiJobFailed -> {
+                    throw AiException(
+                        AiError(
+                            kind = AiErrorKind.ProviderError,
+                            userMessage = "AI job failed before it could update the page. Please try again.",
+                            developerMessage = status.error.ifBlank { "AI job $jobId failed without an error message." },
+                            retryable = true,
+                        ),
+                    )
+                }
+                AiJobQueued, AiJobRunning -> Unit
+                else -> Unit
+            }
+            pollDelayMs = minOf((pollDelayMs * 1.35).toLong(), AiJobMaxPollDelayMillis)
+        }
+
+        throw AiException(
+            AiError(
+                kind = AiErrorKind.ProviderError,
+                userMessage = "AI is still processing. Please try again shortly, or use a smaller/faster model.",
+                developerMessage = "AI job $jobId did not complete within ${AiJobPollingTimeoutMillis}ms.",
+                retryable = true,
+            ),
+        )
+    }
+
+    private companion object {
+        private const val AiJobQueued = "queued"
+        private const val AiJobRunning = "running"
+        private const val AiJobSucceeded = "succeeded"
+        private const val AiJobFailed = "failed"
+        private const val AiJobInitialPollDelayMillis = 900L
+        private const val AiJobMaxPollDelayMillis = 3_000L
+        private const val AiJobPollingTimeoutMillis = 10L * 60L * 1000L
     }
 }

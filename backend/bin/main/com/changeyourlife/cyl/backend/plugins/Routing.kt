@@ -10,6 +10,7 @@ import com.changeyourlife.cyl.backend.routes.aiRoutes
 import com.changeyourlife.cyl.backend.routes.authRoutes
 import com.changeyourlife.cyl.backend.routes.chatSyncRoutes
 import com.changeyourlife.cyl.backend.routes.contentRoutes
+import com.changeyourlife.cyl.backend.service.AiJobService
 import com.changeyourlife.cyl.backend.service.AiService
 import com.changeyourlife.cyl.backend.service.JwtService
 import com.changeyourlife.cyl.backend.service.PasswordResetEmailSender
@@ -27,6 +28,7 @@ fun Application.configureRouting(
     jwtService: JwtService,
     databaseConfigured: Boolean,
     aiService: AiService,
+    aiJobService: AiJobService,
     passwordResetEmailSender: PasswordResetEmailSender,
 ) {
     routing {
@@ -65,6 +67,7 @@ fun Application.configureRouting(
 
         aiRoutes(
             aiService = aiService,
+            aiJobService = aiJobService,
         )
     }
 }

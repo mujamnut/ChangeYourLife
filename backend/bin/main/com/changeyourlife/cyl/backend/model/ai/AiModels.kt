@@ -176,3 +176,21 @@ data class ChatWithActionsResponse(
     val schemaVersion: Int = CYL_ACTION_SCHEMA_VERSION,
     val validationIssues: List<AiActionValidationIssue> = emptyList(),
 )
+
+@Serializable
+data class AiChatActionsJobAcceptedResponse(
+    val jobId: String,
+    val status: String,
+    val createdAtEpochMillis: Long,
+    val updatedAtEpochMillis: Long,
+)
+
+@Serializable
+data class AiChatActionsJobStatusResponse(
+    val jobId: String,
+    val status: String,
+    val createdAtEpochMillis: Long,
+    val updatedAtEpochMillis: Long,
+    val result: ChatWithActionsResponse? = null,
+    val error: String = "",
+)

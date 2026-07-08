@@ -172,3 +172,21 @@ data class ChatWithActionsResponseDto(
     val schemaVersion: Int = 1,
     val validationIssues: List<AiActionValidationIssueDto> = emptyList(),
 )
+
+@Serializable
+data class AiChatActionsJobAcceptedResponseDto(
+    val jobId: String = "",
+    val status: String = "",
+    val createdAtEpochMillis: Long = 0L,
+    val updatedAtEpochMillis: Long = 0L,
+)
+
+@Serializable
+data class AiChatActionsJobStatusResponseDto(
+    val jobId: String = "",
+    val status: String = "",
+    val createdAtEpochMillis: Long = 0L,
+    val updatedAtEpochMillis: Long = 0L,
+    val result: ChatWithActionsResponseDto? = null,
+    val error: String = "",
+)
