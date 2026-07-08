@@ -19,37 +19,6 @@ data class ChatResponseDto(
 )
 
 @Serializable
-data class SummarizeRequestDto(
-    val content: String
-)
-
-@Serializable
-data class SummarizeResponseDto(
-    val summary: String
-)
-
-@Serializable
-data class GenerateTasksRequestDto(
-    val content: String
-)
-
-@Serializable
-data class GenerateTasksResponseDto(
-    val tasks: List<String>
-)
-
-@Serializable
-data class GeneratePlanRequestDto(
-    val prompt: String,
-    val type: String = "general"
-)
-
-@Serializable
-data class GeneratePlanResponseDto(
-    val planJson: String
-)
-
-@Serializable
 data class AiStatusResponseDto(
     val mode: String = "",
     val provider: String = "",

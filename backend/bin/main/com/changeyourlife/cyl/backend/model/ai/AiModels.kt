@@ -22,37 +22,6 @@ data class ChatResponse(
 )
 
 @Serializable
-data class SummarizeRequest(
-    val content: String
-)
-
-@Serializable
-data class SummarizeResponse(
-    val summary: String
-)
-
-@Serializable
-data class GenerateTasksRequest(
-    val content: String
-)
-
-@Serializable
-data class GenerateTasksResponse(
-    val tasks: List<String>
-)
-
-@Serializable
-data class GeneratePlanRequest(
-    val prompt: String,
-    val type: String = "general"
-)
-
-@Serializable
-data class GeneratePlanResponse(
-    val planJson: String
-)
-
-@Serializable
 data class AiStatusResponse(
     val mode: String,
     val provider: String,

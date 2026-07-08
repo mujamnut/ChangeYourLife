@@ -2,12 +2,6 @@ package com.changeyourlife.cyl.backend.routes
 
 import com.changeyourlife.cyl.backend.model.ai.ChatRequest
 import com.changeyourlife.cyl.backend.model.ai.ChatResponse
-import com.changeyourlife.cyl.backend.model.ai.GeneratePlanRequest
-import com.changeyourlife.cyl.backend.model.ai.GeneratePlanResponse
-import com.changeyourlife.cyl.backend.model.ai.GenerateTasksRequest
-import com.changeyourlife.cyl.backend.model.ai.GenerateTasksResponse
-import com.changeyourlife.cyl.backend.model.ai.SummarizeRequest
-import com.changeyourlife.cyl.backend.model.ai.SummarizeResponse
 import com.changeyourlife.cyl.backend.model.ai.ChatWithActionsRequest
 import com.changeyourlife.cyl.backend.model.ai.ChatWithActionsResponse
 import com.changeyourlife.cyl.backend.model.ai.AiAction
@@ -149,23 +143,6 @@ fun Route.aiRoutes(aiService: AiService) {
                 )
             }
 
-            post("/summarize") {
-                val request = call.receive<SummarizeRequest>()
-                val summary = withContext(Dispatchers.IO) { aiService.summarize(request.content) }
-                call.respond(SummarizeResponse(summary = summary))
-            }
-
-            post("/generate-tasks") {
-                val request = call.receive<GenerateTasksRequest>()
-                val tasks = withContext(Dispatchers.IO) { aiService.generateTasks(request.content) }
-                call.respond(GenerateTasksResponse(tasks = tasks))
-            }
-
-            post("/generate-plan") {
-                val request = call.receive<GeneratePlanRequest>()
-                val plan = withContext(Dispatchers.IO) { aiService.generatePlan(request.prompt) }
-                call.respond(GeneratePlanResponse(planJson = plan))
-            }
         }
     }
 }

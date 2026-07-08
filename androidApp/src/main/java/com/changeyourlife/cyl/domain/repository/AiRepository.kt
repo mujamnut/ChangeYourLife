@@ -1,7 +1,5 @@
 package com.changeyourlife.cyl.domain.repository
 
-import com.changeyourlife.cyl.domain.model.PageBlockDocument
-
 interface AiRepository {
     suspend fun status(): Result<AiStatus>
     suspend fun chat(messages: List<Pair<String, String>>): Result<String>
@@ -12,9 +10,6 @@ interface AiRepository {
         clientDate: String = "",
         clientTimezone: String = "",
     ): Result<ChatActionResult>
-    suspend fun summarize(content: String): Result<String>
-    suspend fun generateTasks(content: String): Result<List<String>>
-    suspend fun generatePlan(prompt: String): Result<PageBlockDocument>
 }
 
 data class AiStatus(

@@ -9,7 +9,6 @@ import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.time.Duration
-import java.util.UUID
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -424,102 +423,6 @@ class AiService(
         prompt = prompt,
         pages = pages,
     )
-    fun summarize(text: String): String {
-        if (isMockMode) {
-            return "Mock Summary: The page contents detail a personal productivity framework covering habits, workspaces, and notes. This is a local mock summary for testing. [Sandbox Mode]"
-        }
-
-        val prompt = "Please summarize the following document content concisely in one brief paragraph:\n\n$text"
-        val messages = listOf(
-            ChatMessage(role = "system", content = "You are a helpful notes assistant. Summarize text provided by the user."),
-            ChatMessage(role = "user", content = prompt)
-        )
-        return chat(messages)
-    }
-
-    fun generateTasks(text: String): List<String> {
-        if (isMockMode) {
-            return listOf(
-                "Task 1: Set up AI-assisted templates (Mock)",
-                "Task 2: Detail weekly workspace dashboard (Mock)",
-                "Task 3: Schedule sync engine tests (Mock)"
-            )
-        }
-
-        val systemPrompt = """
-            You are a task management extraction assistant.
-            Your job is to read the text provided by the user and extract a list of actionable task items.
-            Return ONLY a raw JSON array of strings. Do not explain anything.
-            Example output format: ["Buy flight tickets", "Pack suitcases", "Check-in online"]
-        """.trimIndent()
-
-        val prompt = "Read the following document and extract a list of todo tasks:\n\n$text"
-
-        return try {
-            val messages = listOf(
-                ChatMessage(role = "system", content = systemPrompt),
-                ChatMessage(role = "user", content = prompt)
-            )
-            val response = chatCompletionsJson(messages)
-            json.decodeFromString<List<String>>(response.cleanAiJson())
-        } catch (e: Exception) {
-            listOf("Failed to extract tasks: ${e.localizedMessage}")
-        }
-    }
-
-    fun generatePlan(prompt: String): String {
-        if (isMockMode) {
-            return createMockPlanJson(prompt)
-        }
-
-        val systemPrompt = """
-            You are an expert personal productivity AI assistant. Generate a structured page plan.
-            Output ONLY a valid JSON object — no markdown fences, no extra text.
-
-            Structure:
-            {
-              "version": 1,
-              "properties": [
-                { "id": "uuid-string", "name": "Property Name", "type": "Text|Number|Select|Status|Date|Checkbox|Formula|Relation|Rollup", "value": "value-string" }
-              ],
-              "blocks": [
-                {
-                  "id": "uuid-string",
-                  "type": "Text|Heading|Todo|Bullet|Numbered|Toggle|Quote|Callout|Code|Table|WebBookmark|Divider|MediaFile|DatabaseTable",
-                  "text": "text-content",
-                  "isChecked": false,
-                  "table": {
-                    "title": "Table Title",
-                    "view": "Table",
-                    "columns": [{ "id": "col-uuid", "name": "Column Name", "type": "Text|Number|Status|Date|Checkbox|Formula|Relation|Rollup", "formula": "", "relationTargetTableId": "", "rollupRelationColumnId": "", "rollupTargetColumnId": "", "rollupAggregation": "Count" }],
-                    "rows": [{ "id": "row-uuid", "cells": { "col-uuid": "cell-value" } }]
-                  },
-                  "children": []
-                }
-              ]
-            }
-
-            Rules:
-            - Generate unique UUID strings for all id fields.
-            - Block types: Text, Heading, Todo, Bullet, Numbered, Toggle, Quote, Callout, Code, Table, WebBookmark, Divider, MediaFile, DatabaseTable.
-            - Use Table only for a simple visual table block. Use DatabaseTable for structured databases with properties, views, rows, relation, rollup, or AI-editable records.
-            - Property types: Text, Checkbox, Date, Status.
-            - If DatabaseTable: include at least 2 columns, 2 rows, and cells map to column IDs.
-            - Output MUST be valid JSON only.
-        """.trimIndent()
-
-        val messages = listOf(
-            ChatMessage(role = "system", content = systemPrompt),
-            ChatMessage(role = "user", content = prompt)
-        )
-
-        return try {
-            chatCompletionsJson(messages).cleanAiJson()
-        } catch (e: Exception) {
-            createMockPlanJson("Error generating plan: ${e.localizedMessage}")
-        }
-    }
-
     private fun chatCompletionsJson(
         messages: List<ChatMessage>,
         temperature: Double = 0.2,
@@ -554,61 +457,6 @@ class AiService(
         } else {
             throw Exception("HTTP Error: ${response.statusCode()} - ${response.body()}")
         }
-    }
-
-    private fun createMockPlanJson(prompt: String): String {
-        val planId = UUID.randomUUID().toString()
-        val quoteId = UUID.randomUUID().toString()
-        val todo1Id = UUID.randomUUID().toString()
-        val todo2Id = UUID.randomUUID().toString()
-        val divId1 = UUID.randomUUID().toString()
-        val subHeadingId = UUID.randomUUID().toString()
-        val bullet1Id = UUID.randomUUID().toString()
-        val bullet2Id = UUID.randomUUID().toString()
-        val divId2 = UUID.randomUUID().toString()
-        val tableId = UUID.randomUUID().toString()
-        val col1 = UUID.randomUUID().toString()
-        val col2 = UUID.randomUUID().toString()
-        val col3 = UUID.randomUUID().toString()
-        val r1 = UUID.randomUUID().toString()
-        val r2 = UUID.randomUUID().toString()
-
-        return """
-        {
-          "version": 1,
-          "properties": [
-            { "id": "prop-cyl-mock", "name": "AI Generated", "type": "Checkbox", "value": "true" }
-          ],
-          "blocks": [
-            { "id": "$planId", "type": "Heading", "text": "Plan: $prompt (Sandbox Mode)" },
-            { "id": "$quoteId", "type": "Quote", "text": "This is a sandbox response. Add OPENROUTER_API_KEY to enable live AI generation." },
-            { "id": "$todo1Id", "type": "Todo", "text": "Task A: Research details on $prompt", "isChecked": false },
-            { "id": "$todo2Id", "type": "Todo", "text": "Task B: Outline requirements for $prompt", "isChecked": false },
-            { "id": "$divId1", "type": "Divider" },
-            { "id": "$subHeadingId", "type": "Heading", "text": "Itinerary & Stages" },
-            { "id": "$bullet1Id", "type": "Bullet", "text": "Stage 1: Prep resources and initial setup" },
-            { "id": "$bullet2Id", "type": "Bullet", "text": "Stage 2: Execute checklist and finalize milestones" },
-            { "id": "$divId2", "type": "Divider" },
-            {
-              "id": "$tableId",
-              "type": "DatabaseTable",
-              "table": {
-                "title": "Expense Estimation",
-                "view": "Table",
-                "columns": [
-                  { "id": "$col1", "name": "Item Description", "type": "Text" },
-                  { "id": "$col2", "name": "Estimate Cost", "type": "Number" },
-                  { "id": "$col3", "name": "Status", "type": "Status" }
-                ],
-                "rows": [
-                  { "id": "$r1", "cells": { "$col1": "Initial Setup", "$col2": "150", "$col3": "Paid" } },
-                  { "id": "$r2", "cells": { "$col1": "Travel & Logistics", "$col2": "500", "$col3": "Pending" } }
-                ]
-              }
-            }
-          ]
-        }
-        """.trimIndent()
     }
 
     // Shared OpenAI-compatible request/response models (work for both Gemini and GLM)

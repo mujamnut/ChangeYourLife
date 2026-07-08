@@ -8,17 +8,12 @@ import com.changeyourlife.cyl.data.remote.ai.AiTaskContextDto
 import com.changeyourlife.cyl.data.remote.ai.ChatMessageDto
 import com.changeyourlife.cyl.data.remote.ai.ChatRequestDto
 import com.changeyourlife.cyl.data.remote.ai.ChatWithActionsRequestDto
-import com.changeyourlife.cyl.data.remote.ai.GeneratePlanRequestDto
-import com.changeyourlife.cyl.data.remote.ai.GenerateTasksRequestDto
-import com.changeyourlife.cyl.data.remote.ai.SummarizeRequestDto
-import com.changeyourlife.cyl.domain.model.PageBlockDocument
 import com.changeyourlife.cyl.domain.repository.AiStatus
 import com.changeyourlife.cyl.domain.repository.AiErrorKind
 import com.changeyourlife.cyl.domain.repository.AiException
 import com.changeyourlife.cyl.domain.repository.AiRepository
 import com.changeyourlife.cyl.domain.repository.AiPageContext
 import com.changeyourlife.cyl.domain.repository.ChatActionResult
-import com.changeyourlife.cyl.presentation.page.PageBlockCodec
 import java.time.LocalDate
 import java.util.TimeZone
 import javax.inject.Inject
@@ -114,34 +109,6 @@ class AiRepositoryImpl @Inject constructor(
                 throw AiErrorMapper.emptyResponse("chatWithActions")
             }
             AiActionContractMapper.toDomain(response)
-        }.mapAiFailure()
-    }
-
-    override suspend fun summarize(content: String): Result<String> = withContext(Dispatchers.IO) {
-        runCatching {
-            val header = getAuthHeader()
-            val request = SummarizeRequestDto(content = content)
-            val response = aiApi.summarize(header, request)
-            response.summary.ifBlank { throw AiErrorMapper.emptyResponse("summarize") }
-        }.mapAiFailure()
-    }
-
-    override suspend fun generateTasks(content: String): Result<List<String>> = withContext(Dispatchers.IO) {
-        runCatching {
-            val header = getAuthHeader()
-            val request = GenerateTasksRequestDto(content = content)
-            val response = aiApi.generateTasks(header, request)
-            response.tasks
-        }.mapAiFailure()
-    }
-
-    override suspend fun generatePlan(prompt: String): Result<PageBlockDocument> = withContext(Dispatchers.IO) {
-        runCatching {
-            val header = getAuthHeader()
-            val request = GeneratePlanRequestDto(prompt = prompt)
-            val response = aiApi.generatePlan(header, request)
-            if (response.planJson.isBlank()) throw AiErrorMapper.emptyResponse("generatePlan")
-            PageBlockCodec.decodeDocument(response.planJson)
         }.mapAiFailure()
     }
 }
