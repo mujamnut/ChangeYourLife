@@ -54,4 +54,4 @@ For persistent auth/data with Aiven PostgreSQL, set `DATABASE_URL=postgresql://a
 
 For cloud backend hosting, deploy the backend to Render using the root `Dockerfile` or `render.yaml`. See `docs/render-deployment.md`.
 
-For AI via OpenRouter, set `OPENROUTER_API_KEY` in `local.properties`. The backend defaults to `OPENROUTER_MODEL=openai/gpt-oss-20b:free` when OpenRouter is configured. Image attachments use `OPENROUTER_VISION_MODELS`, a comma-separated fallback list of image-capable models tried in order.
+For AI, set `OPENAI_API_KEY` in `local.properties` or Render env to use OpenAI directly. Optional settings: `OPENAI_MODEL` and `OPENAI_VISION_MODELS`. If `OPENAI_API_KEY` is not configured, the backend falls back to OpenRouter via `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, and `OPENROUTER_VISION_MODELS`.

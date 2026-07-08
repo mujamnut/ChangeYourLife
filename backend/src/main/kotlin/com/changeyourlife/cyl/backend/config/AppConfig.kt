@@ -10,6 +10,9 @@ data class AppConfig(
     val database: DatabaseConfig,
     val jwt: JwtConfig,
     val email: EmailConfig,
+    val openAiApiKey: String?,
+    val openAiModel: String,
+    val openAiVisionModels: List<String>,
     val glmApiKey: String?,
     val geminiApiKey: String?,
     val openRouterApiKey: String?,
@@ -17,6 +20,8 @@ data class AppConfig(
     val openRouterVisionModels: List<String>,
 ) {
     companion object {
+        private const val DefaultOpenAiModel = "gpt-4o-mini"
+        private val DefaultOpenAiVisionModels = listOf("gpt-4o-mini")
         private const val DefaultOpenRouterModel = "openai/gpt-oss-20b:free"
         private val DefaultOpenRouterVisionModels = listOf(
             "google/gemma-4-26b-a4b-it:free",
@@ -29,6 +34,28 @@ data class AppConfig(
                 database = DatabaseConfig.fromEnvironment(environment),
                 jwt = JwtConfig.fromEnvironment(environment),
                 email = EmailConfig.fromEnvironment(environment),
+                openAiApiKey = loadApiKey(
+                    environment = environment,
+                    envNames = listOf("OPENAI_API_KEY"),
+                    propNames = listOf("openai.api.key", "OPENAI_API_KEY"),
+                ),
+                openAiModel = loadSetting(
+                    environment = environment,
+                    envNames = listOf("OPENAI_MODEL"),
+                    propNames = listOf("openai.model", "OPENAI_MODEL"),
+                ) ?: DefaultOpenAiModel,
+                openAiVisionModels = loadSetting(
+                    environment = environment,
+                    envNames = listOf("OPENAI_VISION_MODELS", "OPENAI_VISION_MODEL"),
+                    propNames = listOf(
+                        "openai.vision.models",
+                        "OPENAI_VISION_MODELS",
+                        "openai.vision.model",
+                        "OPENAI_VISION_MODEL",
+                    ),
+                )?.toModelList()
+                    ?.takeIf { models -> models.isNotEmpty() }
+                    ?: DefaultOpenAiVisionModels,
                 glmApiKey = loadApiKey(
                     environment = environment,
                     envNames = listOf("GLM_API_KEY"),

@@ -17,6 +17,12 @@ services:
         sync: false
       - key: JWT_SECRET
         sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-4o-mini
+      - key: OPENAI_VISION_MODELS
+        value: gpt-4o-mini
       - key: OPENROUTER_API_KEY
         sync: false
       - key: OPENROUTER_MODEL

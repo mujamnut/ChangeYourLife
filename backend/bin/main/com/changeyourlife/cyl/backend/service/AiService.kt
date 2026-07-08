@@ -18,6 +18,9 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
 class AiService(
+    private val openAiApiKey: String? = null,
+    private val openAiModel: String = "gpt-4o-mini",
+    private val openAiVisionModels: List<String> = listOf("gpt-4o-mini"),
     private val glmApiKey: String? = null,
     private val geminiApiKey: String? = null,
     private val openRouterApiKey: String? = null,
@@ -43,8 +46,9 @@ class AiService(
         .connectTimeout(Duration.ofSeconds(30))
         .build()
 
-    // OpenRouter takes priority, then Gemini, then GLM, then sandbox.
+    // Direct OpenAI takes priority, then OpenRouter, Gemini, GLM, and sandbox.
     val activeProvider: String = when {
+        !openAiApiKey.isNullOrBlank() -> "openai"
         !openRouterApiKey.isNullOrBlank() -> "openrouter"
         !geminiApiKey.isNullOrBlank() -> "gemini"
         !glmApiKey.isNullOrBlank() -> "glm"
@@ -52,6 +56,7 @@ class AiService(
     }
 
     val activeModel: String = when (activeProvider) {
+        "openai" -> openAiModel.ifBlank { "gpt-4o-mini" }
         "openrouter" -> openRouterModel.ifBlank { "openai/gpt-oss-20b:free" }
         "gemini" -> "gemini-3.5-flash"
         "glm" -> "glm-4-flash"
@@ -61,6 +66,7 @@ class AiService(
     val isMockMode: Boolean = activeProvider == "sandbox"
 
     val apiKeyLength: Int = when (activeProvider) {
+        "openai" -> openAiApiKey?.length ?: 0
         "openrouter" -> openRouterApiKey?.length ?: 0
         "gemini" -> geminiApiKey?.length ?: 0
         "glm" -> glmApiKey?.length ?: 0
@@ -70,6 +76,7 @@ class AiService(
     val apiKeyInspect: String
         get() {
             val key = when (activeProvider) {
+                "openai" -> openAiApiKey
                 "openrouter" -> openRouterApiKey
                 "gemini" -> geminiApiKey
                 "glm" -> glmApiKey
@@ -83,6 +90,7 @@ class AiService(
         }
 
     private val completionsUrl: String = when (activeProvider) {
+        "openai" -> "https://api.openai.com/v1/chat/completions"
         "openrouter" -> "https://openrouter.ai/api/v1/chat/completions"
         "gemini" -> "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
         else -> "https://open.bigmodel.cn/api/paas/v4/chat/completions"
@@ -90,6 +98,7 @@ class AiService(
 
     private val activeApiKey: String?
         get() = when (activeProvider) {
+            "openai" -> openAiApiKey
             "openrouter" -> openRouterApiKey
             "gemini" -> geminiApiKey
             "glm" -> glmApiKey
@@ -104,7 +113,7 @@ class AiService(
         completionProvider?.invoke(preparedMessages, false, 0.7)?.let { reply -> return reply }
         if (isMockMode) {
             val userMsg = preparedMessages.lastOrNull { it.role == "user" }?.content.orEmpty()
-            return "[AI Sandbox Mode - No API Key]\nHere is a simulated response to your question: \"$userMsg\". Add OPENROUTER_API_KEY to enable live AI answers."
+            return "[AI Sandbox Mode - No API Key]\nHere is a simulated response to your question: \"$userMsg\". Add OPENAI_API_KEY or OPENROUTER_API_KEY to enable live AI answers."
         }
 
         return try {
@@ -242,7 +251,7 @@ class AiService(
             .orEmpty()
 
         val reply = if (isMockMode) {
-            "[AI Sandbox Mode - No API Key]\nHere is a simulated response to your question: \"$userMessage\". Add OPENROUTER_API_KEY to enable live AI answers."
+            "[AI Sandbox Mode - No API Key]\nHere is a simulated response to your question: \"$userMessage\". Add OPENAI_API_KEY or OPENROUTER_API_KEY to enable live AI answers."
         } else {
             chatForActions(
                 messages = preparedMessages,
@@ -479,8 +488,9 @@ class AiService(
 
         val imageSummary = when {
             validImages.isEmpty() -> ""
-            openRouterApiKey.isNullOrBlank() -> "Image reading unavailable because OPENROUTER_API_KEY is not configured."
-            else -> analyzeImagesWithOpenRouterFallback(validImages)
+            !openAiApiKey.isNullOrBlank() -> analyzeImagesWithOpenAiFallback(validImages)
+            !openRouterApiKey.isNullOrBlank() -> analyzeImagesWithOpenRouterFallback(validImages)
+            else -> "Image reading unavailable because OPENAI_API_KEY or OPENROUTER_API_KEY is not configured."
         }
         val textSummary = textFiles.joinToString(separator = "\n\n") { file ->
             """
@@ -538,9 +548,61 @@ class AiService(
         """.trimIndent()
     }
 
+    private fun analyzeImagesWithOpenAiFallback(images: List<AiImageInput>): String {
+        val models = openAiVisionModels
+            .ifEmpty { DefaultOpenAiVisionModels }
+            .map { model -> model.trim() }
+            .filter { model -> model.isNotBlank() }
+            .distinct()
+            .take(MaxVisionFallbackModels)
+        val failures = mutableListOf<String>()
+
+        models.forEach { model ->
+            runCatching {
+                analyzeImagesWithVisionProvider(
+                    images = images,
+                    model = model,
+                    defaultModel = DefaultOpenAiVisionModels.first(),
+                    completionsUrl = OpenAiCompletionsUrl,
+                    apiKey = openAiApiKey.orEmpty(),
+                )
+            }.onSuccess { content ->
+                if (content.isNotBlank()) {
+                    return """
+                        Vision model used: $model
+                        $content
+                    """.trimIndent()
+                }
+                failures += "$model: empty response"
+            }.onFailure { error ->
+                failures += "$model: ${error.compactVisionError()}"
+            }
+        }
+
+        return """
+            Image reading failed after trying ${models.size} OpenAI vision model(s).
+            Tried:
+            ${failures.joinToString(separator = "\n") { failure -> "- $failure" }}
+        """.trimIndent()
+    }
+
     private fun analyzeImagesWithOpenRouter(
         images: List<AiImageInput>,
         model: String,
+    ): String = analyzeImagesWithVisionProvider(
+        images = images,
+        model = model,
+        defaultModel = DefaultVisionModels.first(),
+        completionsUrl = OpenRouterCompletionsUrl,
+        apiKey = openRouterApiKey.orEmpty(),
+    )
+
+    private fun analyzeImagesWithVisionProvider(
+        images: List<AiImageInput>,
+        model: String,
+        defaultModel: String,
+        completionsUrl: String,
+        apiKey: String,
     ): String {
         val prompt = buildString {
             appendLine("Read the attached image(s) for the CYL app.")
@@ -554,7 +616,7 @@ class AiService(
         }
 
         val body = buildJsonObject {
-            put("model", model.ifBlank { DefaultVisionModels.first() })
+            put("model", model.ifBlank { defaultModel })
             put("temperature", 0.0)
             put("max_tokens", 900)
             put(
@@ -594,9 +656,9 @@ class AiService(
         }.toString()
 
         val request = HttpRequest.newBuilder()
-            .uri(URI.create("https://openrouter.ai/api/v1/chat/completions"))
+            .uri(URI.create(completionsUrl))
             .header("Content-Type", "application/json")
-            .header("Authorization", "Bearer $openRouterApiKey")
+            .header("Authorization", "Bearer $apiKey")
             .header("HTTP-Referer", "https://changeyourlife.local")
             .header("X-Title", "ChangeYourLife")
             .timeout(Duration.ofSeconds(90))
@@ -698,6 +760,9 @@ class AiService(
         const val MaxVisionFallbackModels = 5
         const val MaxTextContextFiles = 4
         const val MaxTextContextChars = 16_000
+        const val OpenAiCompletionsUrl = "https://api.openai.com/v1/chat/completions"
+        const val OpenRouterCompletionsUrl = "https://openrouter.ai/api/v1/chat/completions"
+        val DefaultOpenAiVisionModels = listOf("gpt-4o-mini")
         val DefaultVisionModels = listOf(
             "google/gemma-4-26b-a4b-it:free",
             "google/gemma-3-4b-it:free",

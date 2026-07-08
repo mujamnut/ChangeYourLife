@@ -49,7 +49,15 @@ JWT_SECRET=replace-with-a-long-random-secret
 
 Restart `.\gradlew.bat :backend:run` after changing these values. A successful persistent setup logs `PostgreSQL connection pool initialized.` instead of the in-memory repository warning.
 
-For AI through OpenRouter, add this to `local.properties` and restart the backend:
+For AI through direct OpenAI, add this to `local.properties` and restart the backend:
+
+```properties
+OPENAI_API_KEY=sk-your-openai-key-here
+OPENAI_MODEL=gpt-4o-mini
+OPENAI_VISION_MODELS=gpt-4o-mini
+```
+
+For AI through OpenRouter instead, add this to `local.properties` and restart the backend:
 
 ```properties
 OPENROUTER_API_KEY=sk-or-v1-your-key-here
@@ -57,7 +65,7 @@ OPENROUTER_MODEL=openai/gpt-oss-20b:free
 OPENROUTER_VISION_MODELS=google/gemma-4-26b-a4b-it:free,google/gemma-3-4b-it:free,google/gemini-2.0-flash-exp:free
 ```
 
-The backend chooses OpenRouter first when `OPENROUTER_API_KEY` is present, then Gemini, then GLM, then sandbox mode.
+The backend chooses OpenAI first when `OPENAI_API_KEY` is present, then OpenRouter, then Gemini, then GLM, then sandbox mode.
 
 ## Dependency Notes
 

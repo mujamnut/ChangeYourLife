@@ -6,11 +6,17 @@ sdk.dir=C\:/Users/<your-user>/AppData/Local/Android/Sdk
 # Physical phone:
 # cyl.api.base.url=http://<your-computer-ip>:8080/
 
-# Backend AI provider. OpenRouter is used first when this key is present.
+# Backend AI provider. Direct OpenAI is used first when this key is present.
 # Do not commit your real key.
+# OPENAI_API_KEY=sk-your-openai-key-here
+# OPENAI_MODEL=gpt-4o-mini
+# Optional direct OpenAI image-reading models for AI chat attachments.
+# OPENAI_VISION_MODELS=gpt-4o-mini
+#
+# OpenRouter is used when OPENAI_API_KEY is not configured.
 # OPENROUTER_API_KEY=sk-or-v1-your-key-here
 # OPENROUTER_MODEL=openai/gpt-oss-20b:free
-# Optional image-reading models for AI chat attachments. Must support image input.
+# Optional OpenRouter image-reading models for AI chat attachments. Must support image input.
 # Backend will try these in order until one succeeds.
 # OPENROUTER_VISION_MODELS=google/gemma-4-26b-a4b-it:free,google/gemma-3-4b-it:free,google/gemini-2.0-flash-exp:free
 
