@@ -13,10 +13,12 @@ data class ChatMessage(
 
 @Serializable
 data class AiImageInput(
-    val dataUrl: String,
+    val dataUrl: String = "",
+    val textContent: String = "",
     val mimeType: String = "",
     val name: String = "",
     val sizeBytes: Long = 0,
+    val kind: String = "image",
 )
 
 @Serializable

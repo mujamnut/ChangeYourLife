@@ -22,7 +22,7 @@ services:
       - key: OPENROUTER_MODEL
         value: openai/gpt-oss-20b:free
       - key: OPENROUTER_VISION_MODEL
-        value: google/gemma-3-4b-it
+        value: google/gemma-4-26b-a4b-it:free
       - key: RESEND_API_KEY
         sync: false
       - key: EMAIL_FROM

@@ -227,7 +227,7 @@ fun AiChatSheet(
     }
     val sendCurrentPrompt = {
         if ((inputText.isNotBlank() || stagedImageAttachments.isNotEmpty()) && !isGenerating) {
-            val message = inputText.trim().ifBlank { "Read the attached image and help me use it in CYL." }
+            val message = inputText.trim().ifBlank { "Read the attached file or image and help me use it in CYL." }
             onSendMessage(
                 message,
                 message.resolveMentionedPageIds(
@@ -503,7 +503,7 @@ fun AiChatSheet(
                         activePanel == AiComposerPanel.Attachments -> {
                             AiAttachmentPanel(
                                 onPickPhoto = { photoPicker.launch("image/*") },
-                                onPickFile = { filePicker.launch("image/*") },
+                                onPickFile = { filePicker.launch("*/*") },
                                 onMentionContext = {
                                     activePanel = null
                                     isMentionPickerOpen = true
@@ -561,40 +561,118 @@ private enum class AiComposerPanel {
 
 private const val MaxAiChatImages = 4
 private const val MaxAiChatImageBytes = 4L * 1024L * 1024L
+private const val MaxAiChatTextFileBytes = 256L * 1024L
 
 private fun Context.toAiImageAttachment(
     uri: Uri,
     fallbackName: String,
 ): AiImageAttachment? {
-    val mimeType = contentResolver.getType(uri).orEmpty().ifBlank { "image/jpeg" }
-    if (!mimeType.startsWith("image/", ignoreCase = true)) {
-        Toast.makeText(this, "Only image files can be read by AI for now.", Toast.LENGTH_SHORT).show()
-        return null
-    }
-
+    val rawMimeType = contentResolver.getType(uri).orEmpty()
     val name = queryOpenableName(uri).ifBlank { fallbackName }
     val bytes = runCatching {
         contentResolver.openInputStream(uri)?.use { input ->
-            input.readBytesWithLimit(MaxAiChatImageBytes + 1)
+            input.readBytesWithLimit(maxOf(MaxAiChatImageBytes, MaxAiChatTextFileBytes) + 1)
         }
     }.getOrNull()
 
     if (bytes == null || bytes.isEmpty()) {
-        Toast.makeText(this, "Could not read that image.", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "Could not read that file.", Toast.LENGTH_SHORT).show()
         return null
     }
-    if (bytes.size.toLong() > MaxAiChatImageBytes) {
-        Toast.makeText(this, "Image is too large. Use an image under 4 MB.", Toast.LENGTH_SHORT).show()
-        return null
+    val mimeType = inferAttachmentMimeType(
+        rawMimeType = rawMimeType,
+        name = name,
+        bytes = bytes,
+    )
+
+    return when {
+        mimeType.startsWith("image/", ignoreCase = true) -> {
+            if (bytes.size.toLong() > MaxAiChatImageBytes) {
+                Toast.makeText(this, "Image is too large. Use an image under 4 MB.", Toast.LENGTH_SHORT).show()
+                null
+            } else {
+                AiImageAttachment(
+                    dataUrl = "data:$mimeType;base64,${Base64.encodeToString(bytes, Base64.NO_WRAP)}",
+                    mimeType = mimeType,
+                    name = name,
+                    sizeBytes = bytes.size.toLong(),
+                    kind = "image",
+                )
+            }
+        }
+        isReadableTextAttachment(mimeType = mimeType, name = name) -> {
+            if (bytes.size.toLong() > MaxAiChatTextFileBytes) {
+                Toast.makeText(this, "Text file is too large. Use a file under 256 KB.", Toast.LENGTH_SHORT).show()
+                null
+            } else {
+                AiImageAttachment(
+                    textContent = bytes.toString(Charsets.UTF_8).cleanTextFileForAi(),
+                    mimeType = mimeType,
+                    name = name,
+                    sizeBytes = bytes.size.toLong(),
+                    kind = "text",
+                )
+            }
+        }
+        else -> {
+            Toast.makeText(
+                this,
+                "This file type is not readable yet. Use image, TXT, CSV, Markdown, or JSON.",
+                Toast.LENGTH_LONG,
+            ).show()
+            null
+        }
+    }
+}
+
+private fun inferAttachmentMimeType(
+    rawMimeType: String,
+    name: String,
+    bytes: ByteArray,
+): String {
+    val normalized = rawMimeType.lowercase().trim()
+    if (normalized.startsWith("image/") || normalized.startsWith("text/")) return normalized
+    if (normalized.isNotBlank() && normalized != "application/octet-stream") {
+        return normalized
     }
 
-    return AiImageAttachment(
-        dataUrl = "data:$mimeType;base64,${Base64.encodeToString(bytes, Base64.NO_WRAP)}",
-        mimeType = mimeType,
-        name = name,
-        sizeBytes = bytes.size.toLong(),
-    )
+    val lowerName = name.lowercase()
+    return when {
+        lowerName.endsWith(".jpg") || lowerName.endsWith(".jpeg") || bytes.isJpeg() -> "image/jpeg"
+        lowerName.endsWith(".png") || bytes.isPng() -> "image/png"
+        lowerName.endsWith(".webp") || bytes.isWebp() -> "image/webp"
+        lowerName.endsWith(".gif") || bytes.isGif() -> "image/gif"
+        isReadableTextAttachment(mimeType = normalized, name = name) -> "text/plain"
+        else -> normalized.ifBlank { "application/octet-stream" }
+    }
 }
+
+private fun ByteArray.isJpeg(): Boolean =
+    size >= 3 && this[0] == 0xFF.toByte() && this[1] == 0xD8.toByte() && this[2] == 0xFF.toByte()
+
+private fun ByteArray.isPng(): Boolean =
+    size >= 8 &&
+        this[0] == 0x89.toByte() &&
+        this[1] == 0x50.toByte() &&
+        this[2] == 0x4E.toByte() &&
+        this[3] == 0x47.toByte()
+
+private fun ByteArray.isGif(): Boolean =
+    size >= 6 &&
+        this[0] == 'G'.code.toByte() &&
+        this[1] == 'I'.code.toByte() &&
+        this[2] == 'F'.code.toByte()
+
+private fun ByteArray.isWebp(): Boolean =
+    size >= 12 &&
+        this[0] == 'R'.code.toByte() &&
+        this[1] == 'I'.code.toByte() &&
+        this[2] == 'F'.code.toByte() &&
+        this[3] == 'F'.code.toByte() &&
+        this[8] == 'W'.code.toByte() &&
+        this[9] == 'E'.code.toByte() &&
+        this[10] == 'B'.code.toByte() &&
+        this[11] == 'P'.code.toByte()
 
 private fun Context.queryOpenableName(uri: Uri): String {
     return runCatching {
@@ -631,6 +709,7 @@ private fun Bitmap.toAiImageAttachment(
         mimeType = "image/jpeg",
         name = "$name.jpg",
         sizeBytes = bytes.size.toLong(),
+        kind = "image",
     )
 }
 
@@ -648,6 +727,42 @@ private fun java.io.InputStream.readBytesWithLimit(limitBytes: Long): ByteArray 
         output.write(buffer, 0, read)
     }
     return output.toByteArray()
+}
+
+private fun isReadableTextAttachment(
+    mimeType: String,
+    name: String,
+): Boolean {
+    val lowerMime = mimeType.lowercase()
+    val lowerName = name.lowercase()
+    return lowerMime.startsWith("text/") ||
+        lowerMime in setOf(
+            "application/json",
+            "application/xml",
+            "application/yaml",
+            "application/x-yaml",
+            "application/csv",
+            "application/sql",
+            "application/javascript",
+        ) ||
+        lowerName.endsWith(".txt") ||
+        lowerName.endsWith(".md") ||
+        lowerName.endsWith(".markdown") ||
+        lowerName.endsWith(".csv") ||
+        lowerName.endsWith(".tsv") ||
+        lowerName.endsWith(".json") ||
+        lowerName.endsWith(".xml") ||
+        lowerName.endsWith(".yaml") ||
+        lowerName.endsWith(".yml") ||
+        lowerName.endsWith(".sql") ||
+        lowerName.endsWith(".log")
+}
+
+private fun String.cleanTextFileForAi(): String {
+    return replace("\u0000", "")
+        .lines()
+        .joinToString("\n") { line -> line.trimEnd() }
+        .trim()
 }
 
 private const val DefaultAiAvatarIconKey = "spark"

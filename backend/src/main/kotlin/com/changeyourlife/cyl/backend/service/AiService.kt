@@ -22,7 +22,7 @@ class AiService(
     private val geminiApiKey: String? = null,
     private val openRouterApiKey: String? = null,
     private val openRouterModel: String = "openai/gpt-oss-20b:free",
-    private val openRouterVisionModel: String = "google/gemma-3-4b-it",
+    private val openRouterVisionModel: String = "google/gemma-4-26b-a4b-it:free",
     private val actionPlanner: AiActionPlanner = AiActionPlanner(),
     private val actionSchemaValidator: AiActionSchemaValidator = AiActionSchemaValidator(),
     private val modelActionNormalizer: AiModelActionNormalizer = AiModelActionNormalizer(actionSchemaValidator),
@@ -466,26 +466,40 @@ class AiService(
             }
             .take(MaxVisionImages)
             .toList()
-        if (validImages.isEmpty()) return ""
+        val textFiles = images
+            .asSequence()
+            .filter { file -> file.textContent.isNotBlank() }
+            .take(MaxTextContextFiles)
+            .toList()
+        if (validImages.isEmpty() && textFiles.isEmpty()) return ""
 
-        if (openRouterApiKey.isNullOrBlank()) {
-            return """
-                CYL_IMAGE_CONTEXT:
-                The user attached ${validImages.size} image(s), but image reading is unavailable because OPENROUTER_API_KEY is not configured.
+        val imageSummary = when {
+            validImages.isEmpty() -> ""
+            openRouterApiKey.isNullOrBlank() -> "Image reading unavailable because OPENROUTER_API_KEY is not configured."
+            else -> runCatching {
+                analyzeImagesWithOpenRouter(validImages)
+            }.getOrElse { error ->
+                "Image reading failed: ${error.localizedMessage ?: error::class.simpleName.orEmpty()}"
+            }
+        }
+        val textSummary = textFiles.joinToString(separator = "\n\n") { file ->
+            """
+                File: ${file.name.ifBlank { "attached file" }}
+                MIME: ${file.mimeType.ifBlank { "text/plain" }}
+                Bytes: ${file.sizeBytes}
+                Content:
+                ${file.textContent.take(MaxTextContextChars)}
             """.trimIndent()
         }
 
-        val summary = runCatching {
-            analyzeImagesWithOpenRouter(validImages)
-        }.getOrElse { error ->
-            "Image reading failed: ${error.localizedMessage ?: error::class.simpleName.orEmpty()}"
-        }
-
         return """
-            CYL_IMAGE_CONTEXT:
-            The user attached ${validImages.size} image(s). Use this extracted image context as user-provided evidence.
-            Do not mention internal image pipeline details unless the user asks.
-            $summary
+            CYL_FILE_CONTEXT:
+            The user attached ${validImages.size} image(s) and ${textFiles.size} readable text file(s).
+            Use this extracted attachment context as user-provided evidence.
+            If Image context says image reading failed or unavailable, tell the user the attachment reached CYL but the vision model failed, and include the concise failure reason.
+            Do not mention internal attachment pipeline details unless the user asks.
+            ${if (imageSummary.isNotBlank()) "Image context:\n$imageSummary" else ""}
+            ${if (textSummary.isNotBlank()) "Text file context:\n$textSummary" else ""}
         """.trimIndent()
     }
 
@@ -502,7 +516,7 @@ class AiService(
         }
 
         val body = buildJsonObject {
-            put("model", openRouterVisionModel.ifBlank { "google/gemma-3-4b-it" })
+            put("model", openRouterVisionModel.ifBlank { "google/gemma-4-26b-a4b-it:free" })
             put("temperature", 0.0)
             put("max_tokens", 900)
             put(
@@ -636,6 +650,8 @@ class AiService(
         const val MaxActionContextTasks = 20
         const val MaxActionContextBlockText = 260
         const val MaxVisionImages = 4
+        const val MaxTextContextFiles = 4
+        const val MaxTextContextChars = 16_000
     }
 }
 

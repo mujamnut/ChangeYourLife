@@ -109,9 +109,11 @@ class AiRepositoryImpl @Inject constructor(
                 images = images.map { image ->
                     AiImageInputDto(
                         dataUrl = image.dataUrl,
+                        textContent = image.textContent,
                         mimeType = image.mimeType,
                         name = image.name,
                         sizeBytes = image.sizeBytes,
+                        kind = image.kind,
                     )
                 },
             )

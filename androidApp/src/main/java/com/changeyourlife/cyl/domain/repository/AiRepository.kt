@@ -21,10 +21,12 @@ data class AiStatus(
 )
 
 data class AiImageAttachment(
-    val dataUrl: String,
+    val dataUrl: String = "",
+    val textContent: String = "",
     val mimeType: String = "",
     val name: String = "",
     val sizeBytes: Long = 0,
+    val kind: String = "image",
 )
 
 data class ChatActionResult(
