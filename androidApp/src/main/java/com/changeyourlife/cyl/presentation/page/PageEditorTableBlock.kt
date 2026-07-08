@@ -5945,14 +5945,14 @@ private fun TableChoiceValuePill(
 
 private fun PageTableOptionColor.toChoiceColor(): Color {
     return when (this) {
-        PageTableOptionColor.Gray -> Color(0xFF8A8F98)
-        PageTableOptionColor.Red -> Color(0xFFE25555)
-        PageTableOptionColor.Orange -> Color(0xFFE58A2A)
-        PageTableOptionColor.Yellow -> Color(0xFFD3A322)
-        PageTableOptionColor.Green -> Color(0xFF36A269)
-        PageTableOptionColor.Blue -> Color(0xFF3182CE)
-        PageTableOptionColor.Purple -> Color(0xFF805AD5)
-        PageTableOptionColor.Pink -> Color(0xFFD53F8C)
+        PageTableOptionColor.Gray -> Color(0xFF8A8A84)
+        PageTableOptionColor.Red -> Color(0xFF5E5E59)
+        PageTableOptionColor.Orange -> Color(0xFF707069)
+        PageTableOptionColor.Yellow -> Color(0xFF9A9A92)
+        PageTableOptionColor.Green -> Color(0xFF4F4F4A)
+        PageTableOptionColor.Blue -> Color(0xFF3A3A37)
+        PageTableOptionColor.Purple -> Color(0xFF6F6F68)
+        PageTableOptionColor.Pink -> Color(0xFFA8A8A0)
     }
 }
 

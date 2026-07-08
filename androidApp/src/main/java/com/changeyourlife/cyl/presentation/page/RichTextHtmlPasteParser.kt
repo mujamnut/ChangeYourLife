@@ -72,7 +72,7 @@ private class HtmlPasteParser {
             tag.name in strikeTags -> pushStyle { copy(strikethrough = true) }
             tag.name in codeTags -> pushStyle { copy(code = true) }
             tag.name == "a" -> pushStyle { copy(linkUrl = tag.attributes["href"].orEmpty().decodeHtmlEntities()) }
-            tag.name == "mark" -> pushStyle { copy(highlight = "#FFF59D") }
+            tag.name == "mark" -> pushStyle { copy(highlight = "#E6E6E2") }
             tag.name == "span" || tag.name == "font" -> pushStyle { withHtmlAttributes(tag.attributes) }
             tag.name == "input" -> applyInputTag(tag)
         }
@@ -404,7 +404,7 @@ private val namedCssColors = mapOf(
     "blue" to "#0000FF",
     "yellow" to "#FFFF00",
     "orange" to "#FFA500",
-    "purple" to "#800080",
+    "purple" to "#6F6F68",
     "gray" to "#808080",
     "grey" to "#808080",
 )

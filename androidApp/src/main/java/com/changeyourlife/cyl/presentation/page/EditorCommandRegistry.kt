@@ -59,14 +59,14 @@ object EditorCommandRegistry {
                 action = RichTextToolbarRegistryAction.Link,
             ),
             RichTextToolbarRegistryEntry(
-                id = "color:blue",
-                label = "Blue",
-                action = RichTextToolbarRegistryAction.ApplyColor("#1565C0"),
+                id = "color:graphite",
+                label = "Graphite",
+                action = RichTextToolbarRegistryAction.ApplyColor("#2F2F2C"),
             ),
             RichTextToolbarRegistryEntry(
-                id = "highlight:yellow",
+                id = "highlight:neutral",
                 label = "Highlight",
-                action = RichTextToolbarRegistryAction.ApplyHighlight("#FFF59D"),
+                action = RichTextToolbarRegistryAction.ApplyHighlight("#E6E6E2"),
             ),
         )
 

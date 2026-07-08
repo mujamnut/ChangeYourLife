@@ -44,14 +44,12 @@ fun ChatTableColumn.toPageTableColumnFromAi(): PageTableColumn {
 
 internal fun List<String>.toAiTableSelectOptions(): List<PageTableSelectOption> {
     val colors = listOf(
+        PageTableOptionColor.Gray,
         PageTableOptionColor.Blue,
         PageTableOptionColor.Green,
         PageTableOptionColor.Yellow,
         PageTableOptionColor.Orange,
-        PageTableOptionColor.Purple,
-        PageTableOptionColor.Pink,
         PageTableOptionColor.Red,
-        PageTableOptionColor.Gray,
     )
     return map { value -> value.trim() }
         .filter { value -> value.isNotBlank() }

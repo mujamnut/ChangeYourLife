@@ -893,7 +893,7 @@ private fun PageTextSpan.toSpanStyle(): SpanStyle {
         fontStyle = if (italic) FontStyle.Italic else null,
         fontFamily = if (code) FontFamily.Monospace else null,
         color = color.toComposeColorOrUnspecified().takeIf { it != Color.Unspecified }
-            ?: if (linkUrl.isNotBlank() || mentionPageId.isNotBlank()) Color(0xFF1565C0) else Color.Unspecified,
+            ?: if (linkUrl.isNotBlank() || mentionPageId.isNotBlank()) Color(0xFF2F2F2C) else Color.Unspecified,
         background = highlight.toComposeColorOrUnspecified(),
         textDecoration = if (textDecorations.isEmpty()) {
             null

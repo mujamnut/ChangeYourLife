@@ -38,12 +38,12 @@ internal data class AiAvatarIconOption(
 )
 
 internal val aiAvatarColors = listOf(
-    Color(0xFFE74C3C),
-    Color(0xFF2E7DFF),
-    Color(0xFF18A058),
-    Color(0xFFF59E0B),
-    Color(0xFF8B5CF6),
-    Color(0xFF0F766E),
+    Color(0xFF111111),
+    Color(0xFF2A2A28),
+    Color(0xFF464642),
+    Color(0xFF64645F),
+    Color(0xFF7E7E78),
+    Color(0xFF9A9A92),
 )
 
 internal fun aiAvatarIconOptions(): List<AiAvatarIconOption> {
