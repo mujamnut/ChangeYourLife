@@ -36,6 +36,7 @@ import com.changeyourlife.cyl.domain.repository.AiImageAttachment
 import com.changeyourlife.cyl.domain.repository.AiStatus
 import com.changeyourlife.cyl.domain.repository.AiActionLogRepository
 import com.changeyourlife.cyl.domain.usecase.ApplyAiActionUndoUseCase
+import com.changeyourlife.cyl.domain.usecase.BuildAiMemoryContextUseCase
 import com.changeyourlife.cyl.presentation.ai.AiActionExecutionUseCase
 import com.changeyourlife.cyl.presentation.ai.AiActionLogFactory
 import com.changeyourlife.cyl.presentation.ai.AiChatActionOrchestrator
@@ -73,6 +74,7 @@ class HomeViewModel @Inject constructor(
     private val aiRepository: AiRepository,
     private val aiActionExecutionUseCase: AiActionExecutionUseCase,
     private val applyAiActionUndoUseCase: ApplyAiActionUndoUseCase,
+    private val buildAiMemoryContextUseCase: BuildAiMemoryContextUseCase,
     private val aiActionLogRepository: AiActionLogRepository,
     private val chatHistoryRepository: ChatHistoryRepository,
     private val syncStatusRepository: SyncStatusRepository,
@@ -553,7 +555,18 @@ class HomeViewModel @Inject constructor(
                 }
             }
 
-            val messagesForAi = currentMessages + userMessage.copy(
+            val memoryContext = buildAiMemoryContextUseCase(
+                currentSessionId = session.id,
+                prompt = prompt,
+                sessions = allChatSessions,
+                messages = allChatMessages,
+            )
+            val memoryMessages = if (memoryContext.isNotBlank) {
+                listOf(AiChatMessage(role = "system", content = memoryContext.content))
+            } else {
+                emptyList()
+            }
+            val messagesForAi = memoryMessages + currentMessages + userMessage.copy(
                 content = prompt.withMentionContext(explicitlyMentionedPages),
             )
             aiRepository.chatWithActions(

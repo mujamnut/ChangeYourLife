@@ -1,11 +1,15 @@
 package com.changeyourlife.cyl.presentation.ai
 
+import android.graphics.BitmapFactory
+import android.util.Base64
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.content.ReceiveContentListener
 import androidx.compose.foundation.content.contentReceiver
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,6 +26,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
@@ -45,17 +50,19 @@ import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Photo
 import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.Tune
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -63,7 +70,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
@@ -78,57 +87,33 @@ internal data class AiMentionChipUi(
     val canRemove: Boolean,
 )
 
+internal data class AiAttachmentPreviewUi(
+    val label: String,
+    val mimeType: String,
+    val dataUrl: String,
+    val kind: String,
+    val statusLabel: String,
+)
+
 @Composable
 internal fun AiKeyboardReplacementPanel(
-    title: String,
-    onClose: () -> Unit,
     modifier: Modifier = Modifier,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .heightIn(min = 258.dp)
-            .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainerLowest)
-            .border(
-                width = 1.dp,
-                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.32f),
-                shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
-            )
+            .height(302.dp)
+            .background(MaterialTheme.colorScheme.surface)
             .navigationBarsPadding()
             .padding(horizontal = 16.dp, vertical = 10.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(36.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            IconButton(
-                onClick = onClose,
-                modifier = Modifier.size(36.dp),
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.Close,
-                    contentDescription = "Close panel",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(18.dp),
-                )
-            }
-        }
-        Column(
-            modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+                .weight(1f),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
             content = content,
         )
     }
@@ -167,14 +152,14 @@ internal fun AiMentionPickerPanel(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(48.dp)
-                    .clip(RoundedCornerShape(12.dp))
+                    .height(46.dp)
+                    .clip(RoundedCornerShape(10.dp))
                     .clickable { onSelect(item) }
                     .background(
                         if (selected) {
-                            MaterialTheme.colorScheme.surfaceContainerHigh
+                            MaterialTheme.colorScheme.surfaceContainer
                         } else {
-                            MaterialTheme.colorScheme.surfaceContainerLowest
+                            MaterialTheme.colorScheme.surface
                         },
                     )
                     .padding(horizontal = 10.dp),
@@ -184,9 +169,9 @@ internal fun AiMentionPickerPanel(
                 Text(
                     text = item.leading,
                     modifier = Modifier
-                        .size(28.dp)
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(MaterialTheme.colorScheme.surfaceContainer)
+                        .size(26.dp)
+                        .clip(RoundedCornerShape(13.dp))
+                        .background(MaterialTheme.colorScheme.surfaceContainerLowest)
                         .padding(top = 3.dp),
                     style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -224,53 +209,53 @@ internal fun AiSheetHeader(
     onOpenProfile: () -> Unit,
     onCreateChatSession: () -> Unit,
 ) {
-    Box(
+    Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 6.dp),
+            .height(56.dp)
+            .padding(horizontal = 14.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         AiRoundIconButton(
             icon = Icons.Rounded.AccessTime,
             contentDescription = "Chat history",
             onClick = onOpenHistory,
-            modifier = Modifier.align(Alignment.TopStart),
         )
-        Column(
+        Box(
             modifier = Modifier
-                .align(Alignment.TopCenter)
-                .clip(RoundedCornerShape(999.dp))
-                .clickable(onClick = onOpenProfile)
-                .padding(horizontal = 8.dp, vertical = 2.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(4.dp),
+                .weight(1f),
+            contentAlignment = Alignment.Center,
         ) {
-            AiAvatar(
-                spec = avatarSpec,
-                size = 62,
-                iconSize = 32,
-            )
-            Text(
-                text = displayName.ifBlank { "CYL AI" },
+            Row(
                 modifier = Modifier
+                    .height(44.dp)
+                    .widthIn(max = 220.dp)
                     .clip(RoundedCornerShape(999.dp))
-                    .background(MaterialTheme.colorScheme.surface)
-                    .border(
-                        width = 1.dp,
-                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.58f),
-                        shape = RoundedCornerShape(999.dp),
-                    )
-                    .padding(horizontal = 12.dp, vertical = 3.dp),
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+                    .clickable(onClick = onOpenProfile)
+                    .padding(horizontal = 10.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                AiAvatar(
+                    spec = avatarSpec,
+                    size = 34,
+                    iconSize = 18,
+                )
+                Text(
+                    text = displayName.ifBlank { "CYL AI" },
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
         AiRoundIconButton(
             icon = Icons.Rounded.Edit,
             contentDescription = "New chat",
             onClick = onCreateChatSession,
-            modifier = Modifier.align(Alignment.TopEnd),
         )
     }
 }
@@ -282,9 +267,11 @@ internal fun AiComposerCard(
     inputText: String,
     mentionChips: List<AiMentionChipUi>,
     onRemoveMention: (String) -> Unit,
-    stagedAttachmentLabels: List<String>,
+    stagedAttachments: List<AiAttachmentPreviewUi>,
     onRemoveAttachment: (Int) -> Unit,
     isInputEnabled: Boolean,
+    isAttachmentsActive: Boolean,
+    isSettingsActive: Boolean,
     onInputFocus: () -> Unit,
     onOpenAttachments: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -293,128 +280,120 @@ internal fun AiComposerCard(
     pastedImageReceiver: ReceiveContentListener,
     modifier: Modifier = Modifier,
 ) {
-    val canSend = (inputText.isNotBlank() || stagedAttachmentLabels.isNotEmpty()) && !isGenerating
-    Card(
-        modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(26.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = CardDefaults.outlinedCardBorder().copy(
-            width = 1.dp,
-            brush = SolidColor(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.58f)),
-        ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            if (mentionChips.isNotEmpty()) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    mentionChips.take(2).forEach { chip ->
-                        AiMentionChip(
-                            chip = chip,
-                            onRemove = { onRemoveMention(chip.pageId) },
-                            modifier = Modifier.weight(1f, fill = false),
-                        )
-                    }
-                    if (mentionChips.size > 2) {
-                        Text(
-                            text = "+${mentionChips.size - 2}",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-            }
-            if (stagedAttachmentLabels.isNotEmpty()) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    stagedAttachmentLabels.take(3).forEachIndexed { index, label ->
-                        AiAttachmentChip(
-                            label = label,
-                            onRemove = { onRemoveAttachment(index) },
-                            modifier = Modifier.weight(1f, fill = false),
-                        )
-                    }
-                    if (stagedAttachmentLabels.size > 3) {
-                        Text(
-                            text = "+${stagedAttachmentLabels.size - 3}",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-            }
+    val canSend = (inputText.isNotBlank() || stagedAttachments.isNotEmpty()) && !isGenerating
+    val mentionRailScroll = rememberScrollState()
+    val attachmentRailScroll = rememberScrollState()
+    val composerShape = RoundedCornerShape(24.dp)
 
-            BasicTextField(
-                state = inputState,
-                enabled = isInputEnabled,
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(composerShape)
+            .background(MaterialTheme.colorScheme.surface)
+            .border(
+                width = 1.dp,
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.42f),
+                shape = composerShape,
+            )
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(7.dp),
+    ) {
+        if (mentionChips.isNotEmpty()) {
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(min = 42.dp, max = 118.dp)
-                    .contentReceiver(pastedImageReceiver)
-                    .onFocusChanged { focusState ->
-                        if (focusState.isFocused) {
-                            onInputFocus()
-                        }
-                    },
-                textStyle = MaterialTheme.typography.bodyLarge.copy(
-                    color = MaterialTheme.colorScheme.onSurface,
-                ),
-                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = 5),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                onKeyboardAction = { onSend() },
-                decorator = { innerTextField ->
-                    Box(
-                        modifier = Modifier.fillMaxWidth(),
-                        contentAlignment = Alignment.CenterStart,
-                    ) {
-                        if (inputText.isBlank()) {
-                            Text(
-                                text = "Ask, search, or make anything",
-                                style = MaterialTheme.typography.bodyLarge,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.62f),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                        innerTextField()
-                    }
-                },
-            )
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
+                    .horizontalScroll(mentionRailScroll),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                AiComposerIconButton(
-                    icon = Icons.Rounded.Add,
-                    contentDescription = "Add attachment or context",
-                    onClick = onOpenAttachments,
-                )
-                AiComposerIconButton(
-                    icon = Icons.Rounded.Tune,
-                    contentDescription = "AI settings",
-                    onClick = onOpenSettings,
-                )
-                Spacer(modifier = Modifier.weight(1f))
-                AiSendButton(
-                    enabled = canSend,
-                    isGenerating = isGenerating,
-                    onClick = onSend,
-                )
+                mentionChips.forEach { chip ->
+                    AiMentionChip(
+                        chip = chip,
+                        onRemove = { onRemoveMention(chip.pageId) },
+                    )
+                }
             }
+        }
+        if (stagedAttachments.isNotEmpty()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(attachmentRailScroll),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                stagedAttachments.forEachIndexed { index, attachment ->
+                    AiAttachmentChip(
+                        attachment = attachment,
+                        onRemove = { onRemoveAttachment(index) },
+                    )
+                }
+            }
+        }
+
+        BasicTextField(
+            state = inputState,
+            enabled = isInputEnabled,
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 36.dp, max = 112.dp)
+                .contentReceiver(pastedImageReceiver)
+                .onFocusChanged { focusState ->
+                    if (focusState.isFocused) {
+                        onInputFocus()
+                    }
+                },
+            textStyle = MaterialTheme.typography.bodyLarge.copy(
+                color = MaterialTheme.colorScheme.onSurface,
+            ),
+            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+            lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = 5),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+            onKeyboardAction = { onSend() },
+            decorator = { innerTextField ->
+                Box(
+                    modifier = Modifier.fillMaxWidth(),
+                    contentAlignment = Alignment.CenterStart,
+                ) {
+                    if (inputText.isBlank()) {
+                        Text(
+                            text = "Ask, search, or make anything",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.58f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    innerTextField()
+                }
+            },
+        )
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(38.dp),
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            AiComposerIconButton(
+                icon = Icons.Rounded.Add,
+                contentDescription = "Add attachment or context",
+                active = isAttachmentsActive,
+                onClick = onOpenAttachments,
+            )
+            AiComposerIconButton(
+                icon = Icons.Rounded.Tune,
+                contentDescription = "AI settings",
+                active = isSettingsActive,
+                onClick = onOpenSettings,
+            )
+            Spacer(modifier = Modifier.weight(1f))
+            AiSendButton(
+                enabled = canSend,
+                isGenerating = isGenerating,
+                onClick = onSend,
+            )
         }
     }
 }
@@ -427,23 +406,23 @@ private fun AiMentionChip(
 ) {
     Row(
         modifier = modifier
-            .height(34.dp)
-            .clip(RoundedCornerShape(17.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainer)
+            .height(32.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerLowest)
             .border(
                 width = 1.dp,
-                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
-                shape = RoundedCornerShape(17.dp),
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.34f),
+                shape = RoundedCornerShape(16.dp),
             )
-            .padding(start = 9.dp, end = if (chip.canRemove) 2.dp else 9.dp),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
+            .padding(start = 9.dp, end = if (chip.canRemove) 0.dp else 9.dp),
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
             imageVector = Icons.Rounded.Edit,
             contentDescription = null,
             tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(16.dp),
+            modifier = Modifier.size(15.dp),
         )
         Text(
             text = chip.title,
@@ -461,7 +440,7 @@ private fun AiMentionChip(
                     imageVector = Icons.Rounded.Close,
                     contentDescription = "Remove context",
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(16.dp),
+                    modifier = Modifier.size(15.dp),
                 )
             }
         }
@@ -470,45 +449,83 @@ private fun AiMentionChip(
 
 @Composable
 private fun AiAttachmentChip(
-    label: String,
+    attachment: AiAttachmentPreviewUi,
     onRemove: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val thumbnail = remember(attachment.dataUrl) {
+        attachment.dataUrl.toAiAttachmentImageBitmap()
+    }
     Row(
         modifier = modifier
-            .height(34.dp)
-            .clip(RoundedCornerShape(17.dp))
-            .background(MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.52f))
+            .height(44.dp)
+            .widthIn(max = 220.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainer)
             .border(
                 width = 1.dp,
-                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.38f),
-                shape = RoundedCornerShape(17.dp),
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.32f),
+                shape = RoundedCornerShape(14.dp),
             )
-            .padding(start = 9.dp, end = 2.dp),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
+            .padding(start = 6.dp, end = 0.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(
-            imageVector = if (label == "File") Icons.Rounded.AttachFile else Icons.Rounded.Photo,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSecondaryContainer,
-            modifier = Modifier.size(16.dp),
-        )
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSecondaryContainer,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
+        Box(
+            modifier = Modifier
+                .size(32.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(MaterialTheme.colorScheme.surface)
+                .border(
+                    width = 1.dp,
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.26f),
+                    shape = RoundedCornerShape(10.dp),
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (thumbnail != null) {
+                Image(
+                    bitmap = thumbnail,
+                    contentDescription = null,
+                    modifier = Modifier.size(32.dp),
+                    contentScale = ContentScale.Crop,
+                )
+            } else {
+                Icon(
+                    imageVector = if (attachment.kind == "text") Icons.Rounded.AttachFile else Icons.Rounded.Photo,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(17.dp),
+                )
+            }
+        }
+        Column(
+            modifier = Modifier.widthIn(max = 120.dp),
+            verticalArrangement = Arrangement.spacedBy(1.dp),
+        ) {
+            Text(
+                text = attachment.label,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = attachment.statusLabel,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
         IconButton(
             onClick = onRemove,
-            modifier = Modifier.size(30.dp),
+            modifier = Modifier.size(36.dp),
         ) {
             Icon(
                 imageVector = Icons.Rounded.Close,
                 contentDescription = "Remove attachment",
-                tint = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.76f),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(16.dp),
             )
         }
@@ -525,42 +542,32 @@ internal fun AiAttachmentPanel(
 ) {
     Column(
         modifier = modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Row(
+        AiPanelAction(
+            icon = Icons.Rounded.Photo,
+            label = "Photo",
+            onClick = onPickPhoto,
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            AiPanelAction(
-                icon = Icons.Rounded.Photo,
-                label = "Photo",
-                onClick = onPickPhoto,
-                modifier = Modifier.weight(1f),
-            )
-            AiPanelAction(
-                icon = Icons.Rounded.AttachFile,
-                label = "File",
-                onClick = onPickFile,
-                modifier = Modifier.weight(1f),
-            )
-        }
-        Row(
+        )
+        AiPanelAction(
+            icon = Icons.Rounded.AttachFile,
+            label = "File",
+            onClick = onPickFile,
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            AiPanelAction(
-                icon = Icons.Rounded.AlternateEmail,
-                label = "Context",
-                onClick = onMentionContext,
-                modifier = Modifier.weight(1f),
-            )
-            AiPanelAction(
-                icon = Icons.Rounded.CameraAlt,
-                label = "Camera",
-                onClick = onOpenCamera,
-                modifier = Modifier.weight(1f),
-            )
-        }
+        )
+        AiPanelAction(
+            icon = Icons.Rounded.AlternateEmail,
+            label = "Context",
+            onClick = onMentionContext,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        AiPanelAction(
+            icon = Icons.Rounded.CameraAlt,
+            label = "Camera",
+            onClick = onOpenCamera,
+            modifier = Modifier.fillMaxWidth(),
+        )
     }
 }
 
@@ -573,60 +580,70 @@ internal fun AiSettingsPanel(
     onClearHistory: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Column(
+    LazyColumn(
         modifier = modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        contentPadding = PaddingValues(bottom = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-        AiSettingRow(
-            icon = Icons.Rounded.AutoAwesome,
-            label = "Model",
-            value = modelLabel.compactAiModelLabel(),
-        )
-        if (visionStatusLabel.isNotBlank()) {
+        item {
             AiSettingRow(
-                icon = Icons.Rounded.Photo,
-                label = "Vision",
-                value = visionStatusLabel.compactAiModelLabel(),
+                icon = Icons.Rounded.AutoAwesome,
+                label = "Model",
+                value = modelLabel.compactAiModelLabel(),
             )
+        }
+        if (visionStatusLabel.isNotBlank()) {
+            item {
+                AiSettingRow(
+                    icon = Icons.Rounded.Photo,
+                    label = "Vision",
+                    value = visionStatusLabel.compactAiModelLabel(),
+                )
+            }
         }
         if (visionPipelineLabel.isNotBlank()) {
+            item {
+                AiSettingRow(
+                    icon = Icons.Rounded.Tune,
+                    label = "Image pipeline",
+                    value = visionPipelineLabel,
+                )
+            }
+        }
+        item {
             AiSettingRow(
-                icon = Icons.Rounded.Tune,
-                label = "Image pipeline",
-                value = visionPipelineLabel,
+                icon = Icons.Rounded.Public,
+                label = "Source",
+                value = "App context, web off",
             )
         }
-        AiSettingRow(
-            icon = Icons.Rounded.Public,
-            label = "Source",
-            value = "App context",
-        )
-        AiSettingRow(
-            icon = Icons.Rounded.Public,
-            label = "Web search",
-            value = "Off",
-        )
-        AiSettingRow(
-            icon = Icons.Rounded.Extension,
-            label = "Skills",
-            value = "Default",
-        )
-        AiSettingRow(
-            icon = Icons.Rounded.Person,
-            label = "Personalize",
-            value = "Profile page",
-        )
+        item {
+            AiSettingRow(
+                icon = Icons.Rounded.Extension,
+                label = "Skills",
+                value = "Default",
+            )
+        }
+        item {
+            AiSettingRow(
+                icon = Icons.Rounded.Person,
+                label = "Personalize",
+                value = "Profile page",
+            )
+        }
         if (hasMessages) {
-            TextButton(
-                onClick = onClearHistory,
-                contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp),
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.Delete,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp),
-                )
-                Text(text = "Clear chat")
+            item {
+                TextButton(
+                    onClick = onClearHistory,
+                    contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Delete,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Text(text = "Clear chat")
+                }
             }
         }
     }
@@ -641,11 +658,10 @@ private fun AiPanelAction(
 ) {
     Row(
         modifier = modifier
-            .height(44.dp)
-            .clip(RoundedCornerShape(14.dp))
+            .height(48.dp)
+            .clip(RoundedCornerShape(10.dp))
             .clickable(onClick = onClick)
-            .background(MaterialTheme.colorScheme.surface)
-            .padding(horizontal = 12.dp),
+            .padding(horizontal = 10.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -653,7 +669,7 @@ private fun AiPanelAction(
             imageVector = icon,
             contentDescription = null,
             tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(19.dp),
+            modifier = Modifier.size(20.dp),
         )
         Text(
             text = label,
@@ -674,9 +690,8 @@ private fun AiSettingRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .height(42.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.surface)
+            .height(46.dp)
+            .clip(RoundedCornerShape(10.dp))
             .padding(horizontal = 12.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -717,13 +732,13 @@ private fun AiRoundIconButton(
         onClick = onClick,
         enabled = enabled,
         modifier = modifier
-            .size(52.dp)
-            .clip(RoundedCornerShape(26.dp))
+            .size(44.dp)
+            .clip(RoundedCornerShape(22.dp))
             .background(MaterialTheme.colorScheme.surface)
             .border(
                 width = 1.dp,
                 color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
-                shape = RoundedCornerShape(26.dp),
+                shape = RoundedCornerShape(22.dp),
             ),
     ) {
         Icon(
@@ -734,7 +749,7 @@ private fun AiRoundIconButton(
             } else {
                 MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)
             },
-            modifier = Modifier.size(22.dp),
+            modifier = Modifier.size(20.dp),
         )
     }
 }
@@ -743,16 +758,39 @@ private fun AiRoundIconButton(
 private fun AiComposerIconButton(
     icon: ImageVector,
     contentDescription: String,
+    active: Boolean,
     onClick: () -> Unit,
 ) {
     IconButton(
         onClick = onClick,
-        modifier = Modifier.size(40.dp),
+        modifier = Modifier
+            .size(40.dp)
+            .clip(RoundedCornerShape(20.dp))
+            .background(
+                if (active) {
+                    MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                } else {
+                    MaterialTheme.colorScheme.surface.copy(alpha = 0f)
+                },
+            )
+            .border(
+                width = 1.dp,
+                color = if (active) {
+                    MaterialTheme.colorScheme.primary.copy(alpha = 0.32f)
+                } else {
+                    MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0f)
+                },
+                shape = RoundedCornerShape(20.dp),
+            ),
     ) {
         Icon(
             imageVector = icon,
             contentDescription = contentDescription,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            tint = if (active) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            },
             modifier = Modifier.size(22.dp),
         )
     }
@@ -799,13 +837,14 @@ private fun AiSendButton(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun AiChatActionDetails(
     metadata: AiChatActionMetadata,
     pageId: String,
     onUndoAction: (String, String) -> Unit,
 ) {
-    var isExpanded by rememberSaveable { mutableStateOf(false) }
+    var isDetailsOpen by rememberSaveable { mutableStateOf(false) }
     val validationCount = metadata.validationIssues.size
     val executedCount = metadata.executedActions.size
     val proposedCount = metadata.proposedActions.size
@@ -820,85 +859,106 @@ internal fun AiChatActionDetails(
     } else {
         MaterialTheme.colorScheme.onSurfaceVariant
     }
+    val summaryBackground = if (validationCount > 0) {
+        MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.42f)
+    } else {
+        MaterialTheme.colorScheme.surfaceContainer
+    }
     val canUndo = metadata.auditId.isNotBlank() &&
         pageId.isNotBlank() &&
         metadata.executedActions.isNotEmpty() &&
         metadata.undoState == AiActionUndoState.Available
 
-    Column(
-        modifier = Modifier.widthIn(max = 300.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
+    Row(
+        modifier = Modifier
+            .height(32.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(summaryBackground)
+            .clickable { isDetailsOpen = true }
+            .padding(start = 10.dp, end = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        TextButton(
-            onClick = { isExpanded = !isExpanded },
-            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+        Text(
+            text = summary,
+            style = MaterialTheme.typography.labelMedium,
+            color = summaryColor,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Icon(
+            imageVector = Icons.Rounded.KeyboardArrowDown,
+            contentDescription = "Show action details",
+            tint = summaryColor,
+            modifier = Modifier.size(16.dp),
+        )
+    }
+
+    if (isDetailsOpen) {
+        ModalBottomSheet(
+            onDismissRequest = { isDetailsOpen = false },
         ) {
-            Text(
-                text = summary,
-                style = MaterialTheme.typography.labelMedium,
-                color = summaryColor,
-            )
-            Icon(
-                imageVector = Icons.Rounded.KeyboardArrowDown,
-                contentDescription = if (isExpanded) "Hide action details" else "Show action details",
-                tint = summaryColor,
-                modifier = Modifier.size(16.dp),
-            )
-        }
-        if (isExpanded) {
-            Card(
-                shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceContainer,
-                ),
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp)
+                    .padding(bottom = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Column(
-                    modifier = Modifier.padding(10.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    if (metadata.schemaName.isNotBlank()) {
-                        Text(
-                            text = "${metadata.schemaName} v${metadata.schemaVersion}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                    AiActionMetadataSection(
-                        title = "Proposed",
-                        items = metadata.proposedActions,
+                Text(
+                    text = "Action details",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                if (metadata.schemaName.isNotBlank()) {
+                    Text(
+                        text = "${metadata.schemaName} v${metadata.schemaVersion}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
-                    AiActionMetadataSection(
-                        title = "Applied",
-                        items = metadata.executedActions,
+                }
+                AiActionMetadataSection(
+                    title = "Proposed",
+                    items = metadata.proposedActions,
+                )
+                AiActionMetadataSection(
+                    title = "Applied",
+                    items = metadata.executedActions,
+                )
+                AiValidationIssueSection(issues = metadata.validationIssues)
+                if (metadata.executionMessages.isNotEmpty()) {
+                    AiActionTextSection(
+                        title = "Result",
+                        lines = metadata.executionMessages,
                     )
-                    AiValidationIssueSection(issues = metadata.validationIssues)
-                    if (metadata.executionMessages.isNotEmpty()) {
-                        AiActionTextSection(
-                            title = "Result",
-                            lines = metadata.executionMessages,
+                }
+                if (canUndo) {
+                    HorizontalDivider(
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.34f),
+                    )
+                    TextButton(
+                        onClick = {
+                            isDetailsOpen = false
+                            onUndoAction(metadata.auditId, pageId)
+                        },
+                        contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Rounded.Undo,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
                         )
+                        Text(text = "Undo AI action")
                     }
-                    if (canUndo) {
-                        TextButton(
-                            onClick = { onUndoAction(metadata.auditId, pageId) },
-                            contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp),
-                        ) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Rounded.Undo,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp),
-                            )
-                            Text(text = "Undo AI action")
-                        }
-                    } else if (metadata.undoState == AiActionUndoState.Applied) {
-                        Text(
-                            text = "Undone",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
+                } else if (metadata.undoState == AiActionUndoState.Applied) {
+                    Text(
+                        text = "Undone",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
         }
@@ -1026,6 +1086,17 @@ private fun String.compactAiModelLabel(): String {
         .replace(":free", " free", ignoreCase = true)
         .trim()
     return model.ifBlank { clean }
+}
+
+private fun String.toAiAttachmentImageBitmap(): androidx.compose.ui.graphics.ImageBitmap? {
+    if (isBlank() || !startsWith("data:image/", ignoreCase = true)) return null
+    val base64Payload = substringAfter("base64,", missingDelimiterValue = "")
+        .takeIf { payload -> payload.isNotBlank() }
+        ?: return null
+    return runCatching {
+        val bytes = Base64.decode(base64Payload, Base64.DEFAULT)
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+    }.getOrNull()
 }
 
 private fun String.prettyActionType(): String {

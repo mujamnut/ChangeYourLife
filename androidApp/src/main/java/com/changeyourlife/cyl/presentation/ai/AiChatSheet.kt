@@ -10,6 +10,11 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import android.util.Base64
 import android.widget.Toast
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -177,6 +182,8 @@ fun AiChatSheet(
     )
     var activePanel by rememberSaveable { mutableStateOf<AiComposerPanel?>(null) }
     var isMentionPickerOpen by rememberSaveable { mutableStateOf(false) }
+    var isKeyboardReplacementVisible by remember { mutableStateOf(false) }
+    val shouldShowKeyboardReplacement = activePanel != null || isMentionPickerOpen || mentionSuggestionState != null
     val avatarSpec = remember(persona) { persona.toAvatarSpec() }
     val mentionChips = remember(
         attachedPageId,
@@ -242,12 +249,15 @@ fun AiChatSheet(
     LaunchedEffect(attachedPageId) {
         inputState.setTextAndPlaceCursorAtEnd("")
     }
-    LaunchedEffect(activePanel, isMentionPickerOpen) {
-        if (activePanel != null || isMentionPickerOpen) {
+    LaunchedEffect(shouldShowKeyboardReplacement) {
+        if (shouldShowKeyboardReplacement) {
             focusManager.clearFocus(force = true)
             keyboardController?.hide()
-            delay(80)
+            delay(120)
             keyboardController?.hide()
+            isKeyboardReplacementVisible = true
+        } else {
+            isKeyboardReplacementVisible = false
         }
     }
 
@@ -321,32 +331,46 @@ fun AiChatSheet(
                         contentAlignment = if (isUser) Alignment.CenterEnd else Alignment.CenterStart,
                     ) {
                         Column(
-                            modifier = Modifier.widthIn(max = 300.dp),
+                            modifier = if (isUser) {
+                                Modifier.widthIn(max = 300.dp)
+                            } else {
+                                Modifier.fillMaxWidth()
+                            },
                             horizontalAlignment = if (isUser) Alignment.End else Alignment.Start,
                             verticalArrangement = Arrangement.spacedBy(4.dp),
                         ) {
                             Text(
                                 text = messageText,
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .combinedClickable(
-                                        onClick = {},
-                                        onLongClick = {
-                                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                            clipboard.setPrimaryClip(
-                                                ClipData.newPlainText("CYL AI message", messageText),
-                                            )
-                                            Toast.makeText(context, "Message copied", Toast.LENGTH_SHORT).show()
-                                        },
-                                    )
-                                    .background(
-                                        if (isUser) {
-                                            MaterialTheme.colorScheme.primaryContainer
-                                        } else {
-                                            MaterialTheme.colorScheme.surfaceContainerHigh
-                                        },
-                                    )
-                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                modifier = if (isUser) {
+                                    Modifier
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .combinedClickable(
+                                            onClick = {},
+                                            onLongClick = {
+                                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                                clipboard.setPrimaryClip(
+                                                    ClipData.newPlainText("CYL AI message", messageText),
+                                                )
+                                                Toast.makeText(context, "Message copied", Toast.LENGTH_SHORT).show()
+                                            },
+                                        )
+                                        .background(MaterialTheme.colorScheme.primaryContainer)
+                                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                                } else {
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .combinedClickable(
+                                            onClick = {},
+                                            onLongClick = {
+                                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                                clipboard.setPrimaryClip(
+                                                    ClipData.newPlainText("CYL AI message", messageText),
+                                                )
+                                                Toast.makeText(context, "Message copied", Toast.LENGTH_SHORT).show()
+                                            },
+                                        )
+                                        .padding(horizontal = 2.dp, vertical = 5.dp)
+                                },
                                 color = if (isUser) {
                                     MaterialTheme.colorScheme.onPrimaryContainer
                                 } else {
@@ -377,9 +401,7 @@ fun AiChatSheet(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                                .padding(horizontal = 2.dp, vertical = 10.dp),
                         ) {
                             CircularProgressIndicator(
                                 modifier = Modifier.size(14.dp),
@@ -402,18 +424,33 @@ fun AiChatSheet(
                 onRemoveMention = { pageId ->
                     selectedMentionPageIds = selectedMentionPageIds.filterNot { id -> id == pageId }
                 },
-                stagedAttachmentLabels = stagedImageAttachments.mapIndexed { index, attachment ->
-                    attachment.name.ifBlank { "Image ${index + 1}" }
+                stagedAttachments = stagedImageAttachments.mapIndexed { index, attachment ->
+                    AiAttachmentPreviewUi(
+                        label = attachment.name.ifBlank {
+                            if (attachment.kind == "text") "File ${index + 1}" else "Image ${index + 1}"
+                        },
+                        mimeType = attachment.mimeType,
+                        dataUrl = attachment.dataUrl,
+                        kind = attachment.kind,
+                        statusLabel = when {
+                            attachment.kind == "text" -> "Text ready"
+                            attachment.mimeType.startsWith("image/", ignoreCase = true) -> "Vision ready"
+                            else -> "Attached"
+                        },
+                    )
                 },
                 onRemoveAttachment = { index ->
                     stagedImageAttachments = stagedImageAttachments.filterIndexed { itemIndex, _ ->
                         itemIndex != index
                     }
                 },
-                isInputEnabled = activePanel == null && !isMentionPickerOpen,
+                isInputEnabled = true,
+                isAttachmentsActive = activePanel == AiComposerPanel.Attachments,
+                isSettingsActive = activePanel == AiComposerPanel.Settings,
                 onInputFocus = {
                     activePanel = null
                     isMentionPickerOpen = false
+                    keyboardController?.show()
                 },
                 onOpenAttachments = {
                     keyboardController?.hide()
@@ -451,17 +488,12 @@ fun AiChatSheet(
             } else {
                 mentionSuggestionState?.items.orEmpty()
             }
-            if (activePanel != null || isMentionPickerOpen || mentionSuggestionState != null) {
+            AnimatedVisibility(
+                visible = shouldShowKeyboardReplacement && isKeyboardReplacementVisible,
+                enter = slideInVertically(initialOffsetY = { height -> height }) + fadeIn(),
+                exit = slideOutVertically(targetOffsetY = { height -> height }) + fadeOut(),
+            ) {
                 AiKeyboardReplacementPanel(
-                    title = when {
-                        isMentionPickerOpen || mentionSuggestionState != null -> "Context"
-                        activePanel == AiComposerPanel.Settings -> "AI settings"
-                        else -> "Add"
-                    },
-                    onClose = {
-                        activePanel = null
-                        isMentionPickerOpen = false
-                    },
                     modifier = Modifier.padding(top = 2.dp),
                 ) {
                     when {
