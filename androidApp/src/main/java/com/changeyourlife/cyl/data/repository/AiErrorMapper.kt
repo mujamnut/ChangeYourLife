@@ -5,6 +5,7 @@ import com.changeyourlife.cyl.domain.repository.AiError
 import com.changeyourlife.cyl.domain.repository.AiErrorKind
 import com.changeyourlife.cyl.domain.repository.AiException
 import java.io.IOException
+import java.net.SocketTimeoutException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -27,6 +28,18 @@ internal object AiErrorMapper {
                 AiError(
                     kind = AiErrorKind.BackendUnreachable,
                     userMessage = "Cannot resolve CYL backend host. Check your internet or DNS, then try again.",
+                    developerMessage = error.toString(),
+                    retryable = true,
+                ),
+                error,
+            )
+        }
+
+        if (error is SocketTimeoutException) {
+            return AiException(
+                AiError(
+                    kind = AiErrorKind.ProviderError,
+                    userMessage = "AI is still processing or timed out. Try again, or use a smaller/faster model.",
                     developerMessage = error.toString(),
                     retryable = true,
                 ),
@@ -143,6 +156,16 @@ internal object AiErrorMapper {
                     retryable = true,
                 )
             }
+            isAiTimeout(effectiveStatus, lower) -> {
+                AiError(
+                    kind = AiErrorKind.ProviderError,
+                    userMessage = "AI is still processing or the tunnel timed out. Try again, or use a smaller/faster LM Studio model.",
+                    developerMessage = combined.ifBlank { "AI request timed out." },
+                    httpStatus = effectiveStatus,
+                    providerCode = providerCode,
+                    retryable = true,
+                )
+            }
             effectiveStatus == 502 || effectiveStatus == 503 || effectiveStatus == 504 -> {
                 AiError(
                     kind = AiErrorKind.BackendUnavailable,
@@ -204,6 +227,16 @@ internal object AiErrorMapper {
             lower.contains("backend ai request failed") ||
             lower.contains("openrouter") ||
             lower.contains("openinference")
+    }
+
+    private fun isAiTimeout(status: Int?, lower: String): Boolean {
+        return status == 504 ||
+            status == 524 ||
+            lower.contains("timed out") ||
+            lower.contains("timeout") ||
+            lower.contains("request timeout") ||
+            lower.contains("gateway timeout") ||
+            lower.contains("cloudflare")
     }
 
     private fun parseErrorPayload(raw: String, json: Json): ParsedAiErrorPayload {

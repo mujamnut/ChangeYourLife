@@ -666,7 +666,7 @@ class AiService(
             .header("Content-Type", "application/json")
             .header("HTTP-Referer", "https://changeyourlife.local")
             .header("X-Title", "ChangeYourLife")
-            .timeout(Duration.ofSeconds(90))
+            .timeout(AiRequestTimeout)
             .POST(HttpRequest.BodyPublishers.ofString(body))
         if (apiKey.isNotBlank()) {
             requestBuilder.header("Authorization", "Bearer $apiKey")
@@ -761,7 +761,7 @@ class AiService(
                 .header("Content-Type", "application/json")
                 .header("HTTP-Referer", "https://changeyourlife.local")
                 .header("X-Title", "ChangeYourLife")
-                .timeout(Duration.ofSeconds(90)) // read + response timeout
+                .timeout(AiRequestTimeout) // read + response timeout
                 .POST(HttpRequest.BodyPublishers.ofString(requestBody(format)))
             if (!endpoint.apiKey.isNullOrBlank()) {
                 requestBuilder.header("Authorization", "Bearer ${endpoint.apiKey}")
@@ -839,6 +839,7 @@ class AiService(
         const val MaxVisionFallbackModels = 5
         const val MaxTextContextFiles = 4
         const val MaxTextContextChars = 16_000
+        val AiRequestTimeout: Duration = Duration.ofMinutes(5)
         const val DefaultLmStudioModel = "qwen/qwen3.5-9b"
         val DefaultLmStudioVisionModels = listOf("qwen/qwen3.5-9b")
         const val OpenRouterCompletionsUrl = "https://openrouter.ai/api/v1/chat/completions"

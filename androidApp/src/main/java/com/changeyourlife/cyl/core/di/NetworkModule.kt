@@ -19,6 +19,8 @@ import okhttp3.MediaType.Companion.toMediaType
 import retrofit2.Retrofit
 import retrofit2.converter.kotlinx.serialization.asConverterFactory
 
+private const val NetworkTimeoutSeconds = 300L
+
 @Module
 @InstallIn(SingletonComponent::class)
 object NetworkModule {
@@ -38,9 +40,9 @@ object NetworkModule {
     fun provideOkHttpClient(): OkHttpClient {
         return OkHttpClient.Builder()
             .dns(CylRenderFallbackDns)
-            .connectTimeout(90, TimeUnit.SECONDS)
-            .readTimeout(90, TimeUnit.SECONDS)
-            .writeTimeout(90, TimeUnit.SECONDS)
+            .connectTimeout(NetworkTimeoutSeconds, TimeUnit.SECONDS)
+            .readTimeout(NetworkTimeoutSeconds, TimeUnit.SECONDS)
+            .writeTimeout(NetworkTimeoutSeconds, TimeUnit.SECONDS)
             .build()
     }
 
