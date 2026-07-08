@@ -481,7 +481,7 @@ class AiService(
             CYL_FILE_CONTEXT:
             The user attached ${validImages.size} image(s) and ${textFiles.size} readable text file(s).
             Use this extracted attachment context as user-provided evidence.
-            If Image context says image reading failed or unavailable, tell the user the attachment reached CYL but the vision model failed, and include the concise failure reason.
+            If Image context says image reading failed or unavailable, tell the user the attachment reached CYL but CYL could not extract readable image context. Ask the user to retry or check the LM Studio vision model/tunnel. Do not mention provider status codes unless the user asks.
             Do not mention internal attachment pipeline details unless the user asks.
             ${if (imageSummary.isNotBlank()) "Image context:\n$imageSummary" else ""}
             ${if (textSummary.isNotBlank()) "Text file context:\n$textSummary" else ""}
@@ -495,17 +495,13 @@ class AiService(
             val lmStudioResult = analyzeImagesWithLmStudioFallback(images)
             if (!lmStudioResult.isVisionFailure()) return lmStudioResult
             failures += lmStudioResult
+            return failures.joinToString(separator = "\n\n")
         }
 
         if (!openRouterApiKey.isNullOrBlank()) {
             val openRouterResult = analyzeImagesWithOpenRouterFallback(images)
             if (!openRouterResult.isVisionFailure()) {
-                return buildString {
-                    if (failures.isNotEmpty()) {
-                        appendLine("LM Studio vision failed, so CYL used the next configured vision provider.")
-                    }
-                    append(openRouterResult)
-                }
+                return openRouterResult
             }
             failures += openRouterResult
         }
@@ -551,6 +547,7 @@ class AiService(
 
         return """
             Image reading failed after trying ${models.size} LM Studio vision model(s).
+            CYL is configured to use LM Studio for image reading, so OpenRouter vision fallback was skipped.
             Endpoint: $completionsUrl
             Tried:
             ${failures.joinToString(separator = "\n") { failure -> "- $failure" }}
@@ -673,17 +670,30 @@ class AiService(
         }
         val request = requestBuilder.build()
 
-        val response = httpClient.send(request, HttpResponse.BodyHandlers.ofString())
-        if (response.statusCode() != 200) {
-            throw Exception("Vision HTTP ${response.statusCode()} - ${response.body()}")
+        var lastError: Exception? = null
+        repeat(VisionRequestMaxAttempts) { attempt ->
+            val response = httpClient.send(request, HttpResponse.BodyHandlers.ofString())
+            if (response.statusCode() == 200) {
+                val apiResponse = json.decodeFromString<ApiResponse>(response.body())
+                return apiResponse.choices.firstOrNull()
+                    ?.message
+                    ?.content
+                    ?.ifBlank { null }
+                    ?: throw Exception("Vision model returned an empty response.")
+            }
+
+            val error = Exception("Vision HTTP ${response.statusCode()} - ${response.body()}")
+            lastError = error
+            if (!response.statusCode().isRetryableVisionStatus() || attempt == VisionRequestMaxAttempts - 1) {
+                throw error
+            }
+            Thread.sleep(VisionRetryDelayMillis * (attempt + 1))
         }
-        val apiResponse = json.decodeFromString<ApiResponse>(response.body())
-        return apiResponse.choices.firstOrNull()
-            ?.message
-            ?.content
-            ?.ifBlank { null }
-            ?: throw Exception("Vision model returned an empty response.")
+        throw lastError ?: Exception("Vision request failed.")
     }
+
+    private fun Int.isRetryableVisionStatus(): Boolean =
+        this == 408 || this == 409 || this == 425 || this == 429 || this >= 500
 
     private fun Throwable.compactVisionError(): String {
         return (localizedMessage ?: message ?: this::class.simpleName.orEmpty())
@@ -837,6 +847,8 @@ class AiService(
         const val MaxActionContextBlockText = 260
         const val MaxVisionImages = 4
         const val MaxVisionFallbackModels = 5
+        const val VisionRequestMaxAttempts = 2
+        const val VisionRetryDelayMillis = 900L
         const val MaxTextContextFiles = 4
         const val MaxTextContextChars = 16_000
         val AiRequestTimeout: Duration = Duration.ofMinutes(5)
