@@ -641,13 +641,13 @@ class AiService(
             VisionMaxImageDimension,
         )
         val prompt = buildString {
-            appendLine("/no_think")
             appendLine("Read the attached image(s) for the CYL app.")
-            appendLine("Extract only useful facts for a Notion-like personal productivity app.")
-            appendLine("Return final answer only as compact JSON with keys: summary, detectedText, tables, amounts, dates, people, places, suggestedPageTitle, suggestedProperties, confidence.")
-            appendLine("If the image is a receipt, bill, spreadsheet, screenshot, table, calendar, or note, preserve important rows and values.")
+            appendLine("Return a concise plain-text OCR/context summary.")
+            appendLine("If there is visible text, copy the visible text as accurately as possible.")
+            appendLine("If the image is a receipt, bill, spreadsheet, screenshot, table, calendar, or note, preserve important rows, values, dates, and amounts.")
+            appendLine("Use Malay/Indonesian if the image or user uses Malay/Indonesian; otherwise use English.")
             appendLine("Do not invent data that is not visible.")
-            appendLine("Keep output short. No markdown. No analysis.")
+            appendLine("Do not include hidden chain-of-thought. Only give the final extracted image context.")
             visionImages.forEachIndexed { index, image ->
                 appendLine("Image ${index + 1}: name=${image.name.ifBlank { "image" }}, mime=${image.mimeType.ifBlank { "image/*" }}, bytes=${image.sizeBytes}")
             }
@@ -731,6 +731,7 @@ class AiService(
                                 "In LM Studio, confirm the server model is the same vision-capable model used in chat and that OpenAI-compatible image input is enabled.",
                         )
                     }
+                    if (streamContent.reasoning.isNotBlank()) return streamContent.reasoning
                     throw Exception("Vision model returned an empty response.")
                 }
 
@@ -754,22 +755,23 @@ class AiService(
                     val message = apiResponse.choices.firstOrNull()?.message
                         ?: throw Exception("Vision model returned no choices.")
                     val content = message.content.orEmpty().trim()
+                    val reasoning = message.allReasoningText().trim()
                     logger.info(
                         "AI vision completed: model={}, attempt={}, durationMs={}, contentChars={}, reasoningChars={}",
                         model.ifBlank { defaultModel },
                         attempt + 1,
                         startedAt.elapsedMillis(),
                         content.length,
-                        message.reasoning_content.orEmpty().length,
+                        reasoning.length,
                     )
                     if (content.isNotBlank()) return content
-                    val reasoning = message.reasoning_content.orEmpty().trim()
                     if (reasoning.containsImageBlindnessHint()) {
                         throw Exception(
                             "Vision model responded as if it did not receive image pixels. " +
-                                "In LM Studio, confirm the server model is the same vision-capable model used in chat and that OpenAI-compatible image input is enabled.",
+                            "In LM Studio, confirm the server model is the same vision-capable model used in chat and that OpenAI-compatible image input is enabled.",
                         )
                     }
+                    if (reasoning.isNotBlank()) return reasoning
                     throw Exception("Vision model returned an empty response.")
                 }
 
@@ -804,23 +806,47 @@ class AiService(
             val iterator = lines.iterator()
             while (iterator.hasNext()) {
                 val line = iterator.next().trim()
-                if (!line.startsWith("data:", ignoreCase = true)) continue
-                val payload = line.removePrefix("data:").trim()
-                if (payload == "[DONE]") break
-                runCatching {
-                    json.decodeFromString<ApiStreamResponse>(payload)
-                }.getOrNull()?.choices.orEmpty().forEach { choice ->
-                    content.append(choice.delta.content.orEmpty())
-                    reasoning.append(choice.delta.reasoning_content.orEmpty())
-                    content.append(choice.message?.content.orEmpty())
-                    reasoning.append(choice.message?.reasoning_content.orEmpty())
+                val payload = when {
+                    line.startsWith("data:", ignoreCase = true) -> line.removePrefix("data:").trim()
+                    line.startsWith("{") -> line
+                    else -> continue
                 }
+                if (payload == "[DONE]") break
+                appendVisionStreamPayload(
+                    payload = payload,
+                    content = content,
+                    reasoning = reasoning,
+                )
             }
         }
         return VisionStreamContent(
             content = content.toString().trim(),
             reasoning = reasoning.toString().trim(),
         )
+    }
+
+    private fun appendVisionStreamPayload(
+        payload: String,
+        content: StringBuilder,
+        reasoning: StringBuilder,
+    ) {
+        runCatching {
+            json.decodeFromString<ApiStreamResponse>(payload)
+        }.getOrNull()?.choices.orEmpty().forEach { choice ->
+            content.append(choice.delta.content.orEmpty())
+            reasoning.append(choice.delta.allReasoningText())
+            content.append(choice.message?.content.orEmpty())
+            reasoning.append(choice.message?.allReasoningText().orEmpty())
+        }
+
+        if (content.isNotBlank() || reasoning.isNotBlank()) return
+
+        runCatching {
+            json.decodeFromString<ApiResponse>(payload)
+        }.getOrNull()?.choices.orEmpty().forEach { choice ->
+            content.append(choice.message.content.orEmpty())
+            reasoning.append(choice.message.allReasoningText())
+        }
     }
 
     private fun java.util.stream.Stream<String>.readLinesForError(): String =
@@ -1050,7 +1076,13 @@ class AiService(
         val role: String = "",
         val content: String? = "",
         val reasoning_content: String? = null,
+        val reasoning: String? = null,
     )
+
+    private fun ApiMessage.allReasoningText(): String =
+        listOf(reasoning_content, reasoning)
+            .filterNot { value -> value.isNullOrBlank() }
+            .joinToString(separator = "\n")
 
     @Serializable
     private data class ApiResponseFormat(
@@ -1082,7 +1114,13 @@ class AiService(
     private data class ApiStreamDelta(
         val content: String? = null,
         val reasoning_content: String? = null,
+        val reasoning: String? = null,
     )
+
+    private fun ApiStreamDelta.allReasoningText(): String =
+        listOf(reasoning_content, reasoning)
+            .filterNot { value -> value.isNullOrBlank() }
+            .joinToString(separator = "\n")
 
     private companion object {
         const val MaxActionContextPages = 25
@@ -1094,8 +1132,8 @@ class AiService(
         const val MaxVisionFallbackModels = 5
         const val VisionRequestMaxAttempts = 2
         const val VisionRetryDelayMillis = 900L
-        const val VisionMaxTokens = 220
-        const val VisionPipelineVersion = "lmstudio-stream-resize-v3"
+        const val VisionMaxTokens = 480
+        const val VisionPipelineVersion = "lmstudio-stream-resize-v4"
         const val VisionMaxImageDimension = 640
         const val VisionMaxImageBytes = 350 * 1024
         const val VisionJpegQuality = 0.76f
