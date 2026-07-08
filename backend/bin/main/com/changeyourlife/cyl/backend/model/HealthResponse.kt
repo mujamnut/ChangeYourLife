@@ -7,4 +7,6 @@ data class HealthResponse(
     val status: String,
     val service: String,
     val database: String,
+    val aiVisionPipeline: String = "",
+    val aiVisionMaxImageDimension: Int = 0,
 )

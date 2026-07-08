@@ -42,6 +42,8 @@ fun Application.configureRouting(
                     status = "ok",
                     service = "cyl-backend",
                     database = if (databaseConfigured) "configured" else "in-memory",
+                    aiVisionPipeline = aiService.visionPipelineVersion,
+                    aiVisionMaxImageDimension = aiService.visionMaxImageDimension,
                 ),
             )
         }
