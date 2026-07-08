@@ -49,6 +49,16 @@ JWT_SECRET=replace-with-a-long-random-secret
 
 Restart `.\gradlew.bat :backend:run` after changing these values. A successful persistent setup logs `PostgreSQL connection pool initialized.` instead of the in-memory repository warning.
 
+For local image reading through LM Studio, start the LM Studio local server, then add this to `local.properties` and restart the backend:
+
+```properties
+LMSTUDIO_BASE_URL=http://127.0.0.1:1234/v1
+LMSTUDIO_VISION_MODEL=qwen/qwen3.5-9b
+# LMSTUDIO_API_KEY=
+```
+
+`127.0.0.1` works only when the backend runs on the same computer as LM Studio. A backend deployed to Render cannot call your local LM Studio unless you expose LM Studio through a reachable URL.
+
 For AI through direct OpenAI, add this to `local.properties` and restart the backend:
 
 ```properties
@@ -65,7 +75,7 @@ OPENROUTER_MODEL=openai/gpt-oss-20b:free
 OPENROUTER_VISION_MODELS=google/gemma-4-26b-a4b-it:free,google/gemma-3-4b-it:free,google/gemini-2.0-flash-exp:free
 ```
 
-The backend chooses OpenAI first when `OPENAI_API_KEY` is present, then OpenRouter, then Gemini, then GLM, then sandbox mode.
+The backend uses LM Studio first for image reading when `LMSTUDIO_BASE_URL` is present. For text chat/action generation, it chooses OpenAI first when `OPENAI_API_KEY` is present, then OpenRouter, then Gemini, then GLM, then sandbox mode.
 
 ## Dependency Notes
 

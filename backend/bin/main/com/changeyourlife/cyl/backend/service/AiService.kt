@@ -18,6 +18,9 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
 class AiService(
+    private val lmStudioBaseUrl: String? = null,
+    private val lmStudioApiKey: String? = null,
+    private val lmStudioVisionModels: List<String> = listOf("qwen/qwen3.5-9b"),
     private val openAiApiKey: String? = null,
     private val openAiModel: String = "gpt-4o-mini",
     private val openAiVisionModels: List<String> = listOf("gpt-4o-mini"),
@@ -488,9 +491,10 @@ class AiService(
 
         val imageSummary = when {
             validImages.isEmpty() -> ""
+            !lmStudioBaseUrl.isNullOrBlank() -> analyzeImagesWithLmStudioFallback(validImages)
             !openAiApiKey.isNullOrBlank() -> analyzeImagesWithOpenAiFallback(validImages)
             !openRouterApiKey.isNullOrBlank() -> analyzeImagesWithOpenRouterFallback(validImages)
-            else -> "Image reading unavailable because OPENAI_API_KEY or OPENROUTER_API_KEY is not configured."
+            else -> "Image reading unavailable because LMSTUDIO_BASE_URL, OPENAI_API_KEY, or OPENROUTER_API_KEY is not configured."
         }
         val textSummary = textFiles.joinToString(separator = "\n\n") { file ->
             """
@@ -510,6 +514,47 @@ class AiService(
             Do not mention internal attachment pipeline details unless the user asks.
             ${if (imageSummary.isNotBlank()) "Image context:\n$imageSummary" else ""}
             ${if (textSummary.isNotBlank()) "Text file context:\n$textSummary" else ""}
+        """.trimIndent()
+    }
+
+    private fun analyzeImagesWithLmStudioFallback(images: List<AiImageInput>): String {
+        val baseUrl = lmStudioBaseUrl?.trim().orEmpty()
+        val completionsUrl = baseUrl.toChatCompletionsUrl()
+        val models = lmStudioVisionModels
+            .ifEmpty { DefaultLmStudioVisionModels }
+            .map { model -> model.trim() }
+            .filter { model -> model.isNotBlank() }
+            .distinct()
+            .take(MaxVisionFallbackModels)
+        val failures = mutableListOf<String>()
+
+        models.forEach { model ->
+            runCatching {
+                analyzeImagesWithVisionProvider(
+                    images = images,
+                    model = model,
+                    defaultModel = DefaultLmStudioVisionModels.first(),
+                    completionsUrl = completionsUrl,
+                    apiKey = lmStudioApiKey.orEmpty(),
+                )
+            }.onSuccess { content ->
+                if (content.isNotBlank()) {
+                    return """
+                        Vision model used: $model
+                        $content
+                    """.trimIndent()
+                }
+                failures += "$model: empty response"
+            }.onFailure { error ->
+                failures += "$model: ${error.compactVisionError()}"
+            }
+        }
+
+        return """
+            Image reading failed after trying ${models.size} LM Studio vision model(s).
+            Endpoint: $completionsUrl
+            Tried:
+            ${failures.joinToString(separator = "\n") { failure -> "- $failure" }}
         """.trimIndent()
     }
 
@@ -655,15 +700,17 @@ class AiService(
             )
         }.toString()
 
-        val request = HttpRequest.newBuilder()
+        val requestBuilder = HttpRequest.newBuilder()
             .uri(URI.create(completionsUrl))
             .header("Content-Type", "application/json")
-            .header("Authorization", "Bearer $apiKey")
             .header("HTTP-Referer", "https://changeyourlife.local")
             .header("X-Title", "ChangeYourLife")
             .timeout(Duration.ofSeconds(90))
             .POST(HttpRequest.BodyPublishers.ofString(body))
-            .build()
+        if (apiKey.isNotBlank()) {
+            requestBuilder.header("Authorization", "Bearer $apiKey")
+        }
+        val request = requestBuilder.build()
 
         val response = httpClient.send(request, HttpResponse.BodyHandlers.ofString())
         if (response.statusCode() != 200) {
@@ -682,6 +729,15 @@ class AiService(
             .replace("\n", " ")
             .replace(Regex("\\s+"), " ")
             .take(320)
+    }
+
+    private fun String.toChatCompletionsUrl(): String {
+        val normalized = trim().trimEnd('/')
+        return if (normalized.endsWith("/chat/completions")) {
+            normalized
+        } else {
+            "$normalized/chat/completions"
+        }
     }
 
     private fun chatCompletionsJson(
@@ -760,6 +816,7 @@ class AiService(
         const val MaxVisionFallbackModels = 5
         const val MaxTextContextFiles = 4
         const val MaxTextContextChars = 16_000
+        val DefaultLmStudioVisionModels = listOf("qwen/qwen3.5-9b")
         const val OpenAiCompletionsUrl = "https://api.openai.com/v1/chat/completions"
         const val OpenRouterCompletionsUrl = "https://openrouter.ai/api/v1/chat/completions"
         val DefaultOpenAiVisionModels = listOf("gpt-4o-mini")

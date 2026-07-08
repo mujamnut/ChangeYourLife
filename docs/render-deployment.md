@@ -37,6 +37,8 @@ KTOR_DEVELOPMENT=false
 DATABASE_MAX_POOL_SIZE=5
 ```
 
+LM Studio local image reading is not available from Render with `http://127.0.0.1:1234/v1`, because that address points to the Render container, not your PC. Only set `LMSTUDIO_BASE_URL` on Render if you expose LM Studio through a reachable HTTPS URL.
+
 `OPENROUTER_API_KEY` is optional, but AI will fall back to sandbox mode when no AI key is configured.
 `RESEND_API_KEY` and `EMAIL_FROM` are required for production forgot-password emails. In Resend, verify your sending domain first, then use a sender from that domain.
 

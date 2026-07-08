@@ -80,6 +80,9 @@ fun Application.module(
         ?: InMemoryChatSyncRepository()
 
     val aiService = AiService(
+        lmStudioBaseUrl = appConfig.lmStudioBaseUrl,
+        lmStudioApiKey = appConfig.lmStudioApiKey,
+        lmStudioVisionModels = appConfig.lmStudioVisionModels,
         openAiApiKey = appConfig.openAiApiKey,
         openAiModel = appConfig.openAiModel,
         openAiVisionModels = appConfig.openAiVisionModels,

@@ -10,6 +10,9 @@ data class AppConfig(
     val database: DatabaseConfig,
     val jwt: JwtConfig,
     val email: EmailConfig,
+    val lmStudioBaseUrl: String?,
+    val lmStudioApiKey: String?,
+    val lmStudioVisionModels: List<String>,
     val openAiApiKey: String?,
     val openAiModel: String,
     val openAiVisionModels: List<String>,
@@ -20,6 +23,7 @@ data class AppConfig(
     val openRouterVisionModels: List<String>,
 ) {
     companion object {
+        private val DefaultLmStudioVisionModels = listOf("qwen/qwen3.5-9b")
         private const val DefaultOpenAiModel = "gpt-4o-mini"
         private val DefaultOpenAiVisionModels = listOf("gpt-4o-mini")
         private const val DefaultOpenRouterModel = "openai/gpt-oss-20b:free"
@@ -34,6 +38,29 @@ data class AppConfig(
                 database = DatabaseConfig.fromEnvironment(environment),
                 jwt = JwtConfig.fromEnvironment(environment),
                 email = EmailConfig.fromEnvironment(environment),
+                lmStudioBaseUrl = loadSetting(
+                    environment = environment,
+                    envNames = listOf("LMSTUDIO_BASE_URL", "LM_STUDIO_BASE_URL"),
+                    propNames = listOf("lmstudio.base.url", "LMSTUDIO_BASE_URL", "LM_STUDIO_BASE_URL"),
+                ),
+                lmStudioApiKey = loadApiKey(
+                    environment = environment,
+                    envNames = listOf("LMSTUDIO_API_KEY", "LM_STUDIO_API_KEY"),
+                    propNames = listOf("lmstudio.api.key", "LMSTUDIO_API_KEY", "LM_STUDIO_API_KEY"),
+                ),
+                lmStudioVisionModels = loadSetting(
+                    environment = environment,
+                    envNames = listOf("LMSTUDIO_VISION_MODELS", "LMSTUDIO_VISION_MODEL", "LM_STUDIO_VISION_MODEL"),
+                    propNames = listOf(
+                        "lmstudio.vision.models",
+                        "LMSTUDIO_VISION_MODELS",
+                        "lmstudio.vision.model",
+                        "LMSTUDIO_VISION_MODEL",
+                        "LM_STUDIO_VISION_MODEL",
+                    ),
+                )?.toModelList()
+                    ?.takeIf { models -> models.isNotEmpty() }
+                    ?: DefaultLmStudioVisionModels,
                 openAiApiKey = loadApiKey(
                     environment = environment,
                     envNames = listOf("OPENAI_API_KEY"),
