@@ -1132,8 +1132,8 @@ class AiService(
         const val MaxVisionFallbackModels = 5
         const val VisionRequestMaxAttempts = 2
         const val VisionRetryDelayMillis = 900L
-        const val VisionMaxTokens = 480
-        const val VisionPipelineVersion = "lmstudio-stream-resize-v4"
+        const val VisionMaxTokens = 2000
+        const val VisionPipelineVersion = "lmstudio-stream-resize-v5"
         const val VisionMaxImageDimension = 640
         const val VisionMaxImageBytes = 350 * 1024
         const val VisionJpegQuality = 0.76f
