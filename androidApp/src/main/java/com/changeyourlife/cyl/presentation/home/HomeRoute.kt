@@ -93,6 +93,7 @@ import com.changeyourlife.cyl.domain.repository.AiImageAttachment
 import com.changeyourlife.cyl.presentation.ai.AiChatSheet
 import com.changeyourlife.cyl.presentation.ai.AiChatMessage
 import com.changeyourlife.cyl.presentation.ai.AiChatPageLink
+import com.changeyourlife.cyl.presentation.ai.AiPersonaUiState
 import com.changeyourlife.cyl.presentation.components.CylBottomCommandBar
 import com.changeyourlife.cyl.presentation.components.CylChromePill
 import com.changeyourlife.cyl.presentation.components.CylChromeIconButton
@@ -107,9 +108,12 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeRoute(
+    aiPersona: AiPersonaUiState,
     onCreatePage: () -> Unit,
     onOpenPage: (String, String, String) -> Unit,
     onSearch: () -> Unit,
+    onOpenAiHistory: () -> Unit,
+    onOpenAiProfile: () -> Unit,
     onLoggedOut: () -> Unit,
     modifier: Modifier = Modifier,
     viewModel: HomeViewModel = hiltViewModel(),
@@ -118,6 +122,7 @@ fun HomeRoute(
 
     HomeScreen(
         uiState = uiState,
+        aiPersona = aiPersona,
         onCreatePage = {
             viewModel.createQuickPage { page ->
                 onOpenPage(page.id, "", "")
@@ -135,6 +140,8 @@ fun HomeRoute(
         onOpenPage = { pageId -> onOpenPage(pageId, "", "") },
         onOpenPageTarget = onOpenPage,
         onSearch = onSearch,
+        onOpenAiHistory = onOpenAiHistory,
+        onOpenAiProfile = onOpenAiProfile,
         onDismissCreateWorkspace = viewModel::hideCreateWorkspace,
         onNewWorkspaceNameChange = viewModel::updateNewWorkspaceName,
         onCreateWorkspace = viewModel::createWorkspace,
@@ -178,6 +185,7 @@ fun HomeSearchRoute(
 @Composable
 private fun HomeScreen(
     uiState: HomeUiState,
+    aiPersona: AiPersonaUiState,
     onCreatePage: () -> Unit,
     onCreateModule: (PageModuleType) -> Unit,
     onDeletePage: (String) -> Unit,
@@ -186,6 +194,8 @@ private fun HomeScreen(
     onOpenPage: (String) -> Unit,
     onOpenPageTarget: (String, String, String) -> Unit,
     onSearch: () -> Unit,
+    onOpenAiHistory: () -> Unit,
+    onOpenAiProfile: () -> Unit,
     onDismissCreateWorkspace: () -> Unit,
     onNewWorkspaceNameChange: (String) -> Unit,
     onCreateWorkspace: () -> Unit,
@@ -225,17 +235,28 @@ private fun HomeScreen(
             AiChatSheet(
                 messages = uiState.chatMessages,
                 mentionPages = uiState.allPages,
-                chatSessions = uiState.chatSessions,
-                activeChatSessionId = uiState.activeChatSessionId,
+                persona = aiPersona,
                 isGenerating = uiState.isAiGeneratingChat,
                 errorMessage = uiState.aiChatError,
                 modelLabel = uiState.aiModelLabel,
+                visionStatusLabel = uiState.aiVisionStatusLabel,
+                visionPipelineLabel = uiState.aiVisionPipelineLabel,
                 onSendMessage = onSendChatMessage,
                 onUndoAction = onUndoAiAction,
                 onClearHistory = onClearChatHistory,
                 onCreateChatSession = onCreateChatSession,
-                onSelectChatSession = onSelectChatSession,
-                onDeleteChatSession = onDeleteChatSession,
+                onOpenHistoryPage = {
+                    scope.launch { chatSheetState.hide() }.invokeOnCompletion {
+                        isChatSheetOpen = false
+                        onOpenAiHistory()
+                    }
+                },
+                onOpenProfilePage = {
+                    scope.launch { chatSheetState.hide() }.invokeOnCompletion {
+                        isChatSheetOpen = false
+                        onOpenAiProfile()
+                    }
+                },
                 onDismissError = onDismissChatError,
             onOpenPage = { pageId, targetType, targetId ->
                 scope.launch { chatSheetState.hide() }.invokeOnCompletion {
@@ -1855,6 +1876,7 @@ private fun HomeRoutePreview() {
                 isLoading = false,
                 pageCount = 2,
             ),
+            aiPersona = AiPersonaUiState(),
             onCreatePage = {},
             onCreateModule = {},
             onDeletePage = {},
@@ -1863,6 +1885,8 @@ private fun HomeRoutePreview() {
             onOpenPage = {},
             onOpenPageTarget = { _, _, _ -> },
             onSearch = {},
+            onOpenAiHistory = {},
+            onOpenAiProfile = {},
             onDismissCreateWorkspace = {},
             onNewWorkspaceNameChange = {},
             onCreateWorkspace = {},

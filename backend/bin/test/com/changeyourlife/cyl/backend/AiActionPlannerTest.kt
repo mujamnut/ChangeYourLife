@@ -1,5 +1,6 @@
 package com.changeyourlife.cyl.backend
 
+import com.changeyourlife.cyl.backend.model.ai.AiActionValidationIssue
 import com.changeyourlife.cyl.backend.service.AiActionPlanner
 import com.changeyourlife.cyl.backend.service.AiService
 import kotlin.test.Test
@@ -239,7 +240,7 @@ class AiActionPlannerTest {
     }
 
     @Test
-    fun usesPromptFallbackOnlyWhenModelResultIsMissingAndActionIsConcrete() {
+    fun doesNotUsePromptFallbackWhenModelResultIsMissing() {
         val promptResult = AiService.AiActionResult(
             reply = "Siap - saya tambah row itu.",
             actions = listOf(
@@ -258,8 +259,44 @@ class AiActionPlannerTest {
             promptResult = promptResult,
         )
 
+        assertNull(result)
+    }
+
+    @Test
+    fun repairsPromptOnlyWhenModelAttemptIsMalformed() {
+        val modelResult = AiService.AiActionResult(
+            reply = "Siap - saya tambah row itu.",
+            actions = emptyList(),
+            validationIssues = listOf(
+                AiActionValidationIssue(
+                    actionIndex = 0,
+                    field = "type",
+                    code = "unsupported_action_type",
+                    message = "Unsupported action type.",
+                ),
+            ),
+        )
+        val promptResult = AiService.AiActionResult(
+            reply = "Siap - saya tambah row itu.",
+            actions = listOf(
+                AiService.AiActionItem(
+                    type = "ADD_TABLE_ROW",
+                    targetTitle = "Budget Tracker",
+                    tableTitle = "Budget Tracker",
+                    rowTitle = "Fuel",
+                ),
+            ),
+        )
+
+        val result = planner.selectActionResult(
+            prompt = "tambah row fuel",
+            modelResult = modelResult,
+            promptResult = promptResult,
+        )
+
         val action = assertNotNull(result).actions.single()
         assertEquals("ADD_TABLE_ROW", action.type)
         assertEquals("Fuel", action.rowTitle)
+        assertEquals("unsupported_action_type", result.validationIssues.single().code)
     }
 }

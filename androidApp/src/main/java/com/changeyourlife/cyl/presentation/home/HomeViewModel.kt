@@ -249,11 +249,13 @@ class HomeViewModel @Inject constructor(
             )
         }
     }.let { baseState ->
-        combine(baseState, searchQuery, aiModelLabel) { state, query, modelLabel ->
+        combine(baseState, searchQuery, aiModelLabel, aiStatusState) { state, query, modelLabel, aiStatus ->
             state.copy(
                 searchQuery = query,
                 searchResults = state.allPages.toSearchResults(query),
                 aiModelLabel = modelLabel,
+                aiVisionStatusLabel = aiStatus.toVisionStatusLabel(),
+                aiVisionPipelineLabel = aiStatus.toVisionPipelineLabel(),
             )
         }
     }.stateIn(
@@ -532,7 +534,7 @@ class HomeViewModel @Inject constructor(
             val allChatMessages = chatHistoryRepository.observeMessagesForScope(scopeId)
                 .first()
                 .filterNot { message -> message.id == savedUserMessage.id }
-            if (images.isEmpty()) {
+            if (images.isEmpty() && !prompt.referencesCurrentAttachment()) {
                 buildHomeAiSearchReply(
                     prompt = prompt,
                     pages = pages,
@@ -990,6 +992,7 @@ private fun buildHomeAiSearchReply(
     chatSessions: List<ChatSession>,
     chatMessages: List<ChatMessage>,
 ): HomeAiSearchReply? {
+    if (prompt.referencesCurrentAttachment()) return null
     if (!prompt.isReadOnlySearchRequest()) return null
     val terms = prompt.searchTerms()
     if (terms.isEmpty()) {
@@ -1229,6 +1232,71 @@ private fun String.isReadOnlySearchRequest(): Boolean {
         mutationWords.none { word -> text.contains(word) }
 }
 
+private fun String.referencesCurrentAttachment(): Boolean {
+    val text = lowercase()
+    val attachmentWords = listOf(
+        "gambar",
+        "image",
+        "imej",
+        "photo",
+        "foto",
+        "screenshot",
+        "tangkapan skrin",
+        "lampiran",
+        "attachment",
+        "attached",
+        "file",
+        "dokumen",
+        "document",
+        "pdf",
+    )
+    if (attachmentWords.none { word -> text.contains(word) }) return false
+
+    val currentAttachmentHints = listOf(
+        "ini",
+        "itu",
+        "tersebut",
+        "this",
+        "that",
+        "attached",
+        "dilampir",
+        "lampirkan",
+        "upload",
+        "uploaded",
+        "paste",
+        "pasted",
+        "masukkan",
+        "dalam gambar",
+        "pada gambar",
+        "dari gambar",
+        "daripada gambar",
+        "from the image",
+        "in the image",
+        "this file",
+        "this document",
+    )
+    val analysisWords = listOf(
+        "apa",
+        "baca",
+        "read",
+        "lihat",
+        "nampak",
+        "see",
+        "describe",
+        "terangkan",
+        "extract",
+        "ocr",
+        "scan",
+        "teks",
+        "text",
+        "tulisan",
+        "isi",
+        "kandungan",
+    )
+    return currentAttachmentHints.any { hint -> text.contains(hint) } ||
+        analysisWords.any { word -> text.contains(word) }
+}
+
 private fun String.searchTerms(): List<String> {
     val stopWords = setOf(
         "ai",
@@ -1415,6 +1483,28 @@ private fun AiStatus.toDisplayModelLabel(): String {
     }
 }
 
+private fun AiStatus.toVisionStatusLabel(): String {
+    val model = lmStudioVisionModels
+        .split(',')
+        .map { value -> value.trim() }
+        .firstOrNull { value -> value.isNotBlank() }
+        ?: ""
+    return when {
+        model.isNotBlank() -> model
+        visionPipelineVersion.isNotBlank() -> "Configured"
+        else -> ""
+    }
+}
+
+private fun AiStatus.toVisionPipelineLabel(): String {
+    val parts = buildList {
+        if (visionPipelineVersion.isNotBlank()) add(visionPipelineVersion)
+        if (visionMaxImageDimension > 0) add("${visionMaxImageDimension}px")
+        if (visionMaxImageBytes > 0) add("${visionMaxImageBytes / 1024}KB")
+    }
+    return parts.joinToString(" · ")
+}
+
 private fun String.sanitizeAiUserVisibleText(): String {
     return lineSequence()
         .map { line ->
@@ -1491,6 +1581,8 @@ data class HomeUiState(
     val isAiGeneratingChat: Boolean = false,
     val aiChatError: String? = null,
     val aiModelLabel: String = "AI model",
+    val aiVisionStatusLabel: String = "",
+    val aiVisionPipelineLabel: String = "",
     val syncOverview: SyncOverview = SyncOverview(),
 )
 

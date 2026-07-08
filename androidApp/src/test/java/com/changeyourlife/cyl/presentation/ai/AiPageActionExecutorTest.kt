@@ -30,6 +30,50 @@ import org.junit.Test
 
 class AiPageActionExecutorTest {
     @Test
+    fun rejectedTableRowActionCarriesDomainTrace() = runBlocking {
+        val document = PageBlockDocument(
+            blocks = listOf(PageBlock(id = "block-note", type = PageBlockType.Text, text = "Plain note")),
+        )
+        val page = Page(
+            id = "page-1",
+            workspaceId = "workspace-1",
+            parentPageId = null,
+            title = "Budget",
+            content = PageBlockCodec.encodeDocument(document),
+            sortOrder = 0,
+            createdAt = 1000,
+            updatedAt = 1000,
+            deletedAt = null,
+        )
+        val executor = AiPageActionExecutor(
+            pageRepository = FakePageRepository(page, document),
+            taskRepository = FakeTaskRepository(),
+            reminderRepository = FakeReminderRepository(),
+            applyEditorCommandUseCase = ApplyEditorCommandUseCase(),
+        )
+
+        val result = executor.executeOnPage(
+            page = page,
+            title = page.title,
+            document = document,
+            actions = listOf(
+                ChatAction(
+                    type = "add_table_row",
+                    title = "",
+                    tableTitle = "Expenses",
+                    rowTitle = "Food",
+                ),
+            ),
+        )
+
+        assertEquals(1, result.validationIssues.size)
+        assertEquals("ADD_TABLE_ROW", result.validationIssues.single().actionType)
+        assertEquals("row", result.validationIssues.single().actionDomain)
+        assertTrue(result.messages.single().startsWith("Rejected Row/ADD_TABLE_ROW #1:"))
+        assertEquals(emptyList<Int>(), result.executedActionIndexes)
+    }
+
+    @Test
     fun executesFormatBlockTextAsRichTextSpanWithUndoCommand() = runBlocking {
         val document = PageBlockDocument(
             blocks = listOf(

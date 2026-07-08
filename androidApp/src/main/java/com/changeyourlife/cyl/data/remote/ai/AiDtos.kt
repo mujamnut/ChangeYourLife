@@ -35,6 +35,23 @@ data class AiStatusResponseDto(
     val provider: String = "",
     val model: String = "",
     val apiKeyConfigured: Boolean = false,
+    val visionPipelineVersion: String = "",
+    val visionMaxImageDimension: Int = 0,
+    val visionMaxImageBytes: Int = 0,
+    val lmStudioVisionModels: String = "",
+)
+
+@Serializable
+data class AiDiagnosticsDto(
+    val phase: String = "",
+    val imageCount: Int = 0,
+    val textFileCount: Int = 0,
+    val visionAttempted: Boolean = false,
+    val visionProvider: String = "",
+    val visionModel: String = "",
+    val visionStatus: String = "",
+    val visionPipelineVersion: String = "",
+    val warning: String = "",
 )
 
 // Chat-with-actions: Gemini JSON-mode endpoint for reliable action detection
@@ -171,6 +188,7 @@ data class ChatWithActionsResponseDto(
     val schemaName: String = "",
     val schemaVersion: Int = 1,
     val validationIssues: List<AiActionValidationIssueDto> = emptyList(),
+    val diagnostics: AiDiagnosticsDto = AiDiagnosticsDto(),
 )
 
 @Serializable
@@ -179,6 +197,8 @@ data class AiChatActionsJobAcceptedResponseDto(
     val status: String = "",
     val createdAtEpochMillis: Long = 0L,
     val updatedAtEpochMillis: Long = 0L,
+    val phase: String = "",
+    val diagnostics: AiDiagnosticsDto = AiDiagnosticsDto(),
 )
 
 @Serializable
@@ -189,4 +209,6 @@ data class AiChatActionsJobStatusResponseDto(
     val updatedAtEpochMillis: Long = 0L,
     val result: ChatWithActionsResponseDto? = null,
     val error: String = "",
+    val phase: String = "",
+    val diagnostics: AiDiagnosticsDto = AiDiagnosticsDto(),
 )

@@ -220,6 +220,8 @@ private data class ChatActionMetadataItemDto(
 @Serializable
 private data class ChatActionValidationMetadataDto(
     val actionIndex: Int? = null,
+    val actionType: String = "",
+    val actionDomain: String = "",
     val field: String = "",
     val code: String = "",
     val message: String = "",
@@ -296,6 +298,8 @@ private fun ChatActionMetadataItem.toDto(): ChatActionMetadataItemDto {
 private fun ChatActionValidationMetadataDto.toDomain(): ChatActionValidationMetadata {
     return ChatActionValidationMetadata(
         actionIndex = actionIndex,
+        actionType = actionType,
+        actionDomain = actionDomain,
         field = field,
         code = code,
         message = message,
@@ -305,6 +309,8 @@ private fun ChatActionValidationMetadataDto.toDomain(): ChatActionValidationMeta
 private fun ChatActionValidationMetadata.toDto(): ChatActionValidationMetadataDto {
     return ChatActionValidationMetadataDto(
         actionIndex = actionIndex,
+        actionType = actionType,
+        actionDomain = actionDomain,
         field = field,
         code = code,
         message = message,

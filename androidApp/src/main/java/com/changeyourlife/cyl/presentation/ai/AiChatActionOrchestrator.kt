@@ -7,6 +7,7 @@ import com.changeyourlife.cyl.domain.model.AiUndoCommandSummary
 import com.changeyourlife.cyl.domain.model.Page
 import com.changeyourlife.cyl.domain.repository.ChatAction
 import com.changeyourlife.cyl.domain.repository.ChatActionResult
+import com.changeyourlife.cyl.domain.repository.AiDiagnostics
 import java.util.UUID
 
 object AiChatActionOrchestrator {
@@ -40,8 +41,12 @@ object AiChatActionOrchestrator {
         }
         val proposedActions = backendResult.actions.ifEmpty { recoveredMarkdownActions }
         val backendValidationIssues = backendResult.validationIssues.map { issue ->
+            val trace = issue.actionIndex
+                ?.let { index -> proposedActions.getOrNull(index)?.let { action -> AiActionExecutionRegistry.trace(index, action) } }
             ChatActionValidationMetadata(
                 actionIndex = issue.actionIndex,
+                actionType = trace?.actionType.orEmpty(),
+                actionDomain = trace?.domain?.id.orEmpty(),
                 field = issue.field,
                 code = issue.code,
                 message = issue.message,
@@ -72,6 +77,7 @@ object AiChatActionOrchestrator {
 
             else -> backendReply
         }
+        val diagnosticMessages = backendResult.diagnostics.toUserDiagnosticMessages()
         val replyWithResults = listOf(
             assistantReply,
             actionResults.messages.joinToString("\n"),
@@ -101,13 +107,38 @@ object AiChatActionOrchestrator {
                 proposedActions = proposedActions.mapIndexed { index, action -> action.toMetadataItem(index) },
                 executedActions = appliedActionIndexes
                     .map { index -> proposedActions[index].toMetadataItem(index) },
-                executionMessages = actionResults.messages,
+                executionMessages = diagnosticMessages + actionResults.messages,
                 validationIssues = backendValidationIssues + actionDecision.validationIssues + actionResults.validationIssues.filterNot { issue ->
                     issue.actionIndex != null && issue.actionIndex in rejectedActionIndexes
                 },
             ),
         )
     }
+}
+
+private fun AiDiagnostics.toUserDiagnosticMessages(): List<String> {
+    if (!hasAttachmentContext) return emptyList()
+    val attachmentParts = buildList {
+        if (imageCount > 0) add("$imageCount image${if (imageCount == 1) "" else "s"}")
+        if (textFileCount > 0) add("$textFileCount file${if (textFileCount == 1) "" else "s"}")
+    }.joinToString(" + ")
+    val visionPart = when {
+        !visionAttempted -> ""
+        visionStatus.equals("succeeded", ignoreCase = true) -> {
+            val model = visionModel.ifBlank { visionProvider.ifBlank { "vision model" } }
+            "Vision: read by $model"
+        }
+        visionStatus.isNotBlank() -> "Vision: $visionStatus"
+        else -> "Vision: attempted"
+    }
+    return listOf(
+        listOf(
+            "Attachment: $attachmentParts".takeIf { attachmentParts.isNotBlank() },
+            visionPart.takeIf { it.isNotBlank() },
+        )
+            .filterNotNull()
+            .joinToString(" | "),
+    ).filter { message -> message.isNotBlank() }
 }
 
 data class AiChatActionOrchestrationResult(

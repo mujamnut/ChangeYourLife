@@ -172,6 +172,7 @@ import com.changeyourlife.cyl.domain.model.withColumnType
 import com.changeyourlife.cyl.presentation.ai.AiChatSheet
 import com.changeyourlife.cyl.presentation.ai.AiChatMessage
 import com.changeyourlife.cyl.presentation.ai.AiChatPageLink
+import com.changeyourlife.cyl.presentation.ai.AiPersonaUiState
 import com.changeyourlife.cyl.presentation.components.CylBottomCommandBar
 import com.changeyourlife.cyl.presentation.components.CylChromeIconButton
 import com.changeyourlife.cyl.presentation.components.CylFloatingChromeSurface
@@ -1913,6 +1914,7 @@ internal fun PageEditorScreenPreview() {
                 ),
             ),
             homeAiState = HomeUiState(),
+            aiPersona = AiPersonaUiState(),
             onBack = {},
             onOpenPage = { _, _, _ -> },
             onTitleChange = {},
@@ -1986,6 +1988,8 @@ internal fun PageEditorScreenPreview() {
             onSelectHomeChatSession = {},
             onDeleteHomeChatSession = {},
             onDismissHomeAiError = {},
+            onOpenAiHistory = {},
+            onOpenAiProfile = {},
         )
     }
 }

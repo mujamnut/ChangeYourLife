@@ -5,6 +5,7 @@ import com.changeyourlife.cyl.backend.model.ai.AiPageContext
 import com.changeyourlife.cyl.backend.model.ai.ChatMessage
 import com.changeyourlife.cyl.backend.service.AiService
 import java.time.LocalDate
+import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -305,7 +306,7 @@ class AiActionRecoveryTest {
     }
 
     @Test
-    fun chatWithActionsDoesNotRecoverActionWhenSandboxReplyHasNoStructuredActions() {
+    fun chatWithActionsDoesNotRecoverActionWhenSandboxReplyHasNoStructuredActions() = runBlocking {
         val sandboxService = AiService()
         val result = sandboxService.chatWithActions(
             messages = listOf(
@@ -340,7 +341,7 @@ class AiActionRecoveryTest {
     }
 
     @Test
-    fun chatWithActionsDoesNotInventHomeExpensePageWhenModelHasNoAction() {
+    fun chatWithActionsDoesNotInventHomeExpensePageWhenModelHasNoAction() = runBlocking {
         val sandboxService = AiService()
         val result = sandboxService.chatWithActions(
             messages = listOf(
@@ -356,7 +357,7 @@ class AiActionRecoveryTest {
     }
 
     @Test
-    fun chatWithActionsDoesNotInventHomeTableWhenModelHasNoAction() {
+    fun chatWithActionsDoesNotInventHomeTableWhenModelHasNoAction() = runBlocking {
         val sandboxService = AiService()
         val result = sandboxService.chatWithActions(
             messages = listOf(
@@ -372,7 +373,7 @@ class AiActionRecoveryTest {
     }
 
     @Test
-    fun chatWithActionsUsesModelActionBeforePromptFallback() {
+    fun chatWithActionsUsesModelActionBeforePromptFallback() = runBlocking {
         val aiFirstService = AiService(
             openRouterApiKey = "test-key",
             completionProvider = { messages, jsonMode, _ ->
@@ -410,6 +411,38 @@ class AiActionRecoveryTest {
         assertEquals("AI Planned Chicken Care", action.title)
         assertEquals("Care Schedule", action.tableTitle)
         assertEquals("Morning", action.tableRows.single()["When"])
+    }
+
+    @Test
+    fun chatWithActionsDoesNotLetPromptRecoveryTakeOverPlainModelReply() = runBlocking {
+        val conversationalService = AiService(
+            openRouterApiKey = "test-key",
+            completionProvider = { _, jsonMode, _ ->
+                assertTrue(jsonMode)
+                "Saya boleh bantu tambah row itu, tetapi saya belum menghantar action JSON."
+            },
+        )
+
+        val result = conversationalService.chatWithActions(
+            messages = listOf(ChatMessage(role = "user", content = "tambah row fuel dalam @Budget Tracker")),
+            pages = listOf(
+                AiPageContext(
+                    id = "page-budget",
+                    title = "Budget Tracker",
+                    blocks = listOf(
+                        AiBlockContext(
+                            id = "table-1",
+                            type = "DatabaseTable",
+                            text = "title=Budget; columns=Name Text, Amount Number; rows=",
+                            tableTitle = "Budget",
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        assertEquals(emptyList(), result.actions)
+        assertTrue(result.reply.contains("belum menghantar action JSON"))
     }
 
     @Test

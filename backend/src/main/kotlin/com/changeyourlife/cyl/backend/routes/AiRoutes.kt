@@ -8,7 +8,7 @@ import com.changeyourlife.cyl.backend.model.ai.AiChatActionsJobAcceptedResponse
 import com.changeyourlife.cyl.backend.model.ai.AiChatActionsJobStatusResponse
 import com.changeyourlife.cyl.backend.model.ai.AiAction
 import com.changeyourlife.cyl.backend.model.ai.AiTableColumn
-import com.changeyourlife.cyl.backend.service.AiChatActionsJob
+import com.changeyourlife.cyl.backend.domain.AiChatActionsJob
 import com.changeyourlife.cyl.backend.service.AiJobService
 import com.changeyourlife.cyl.backend.service.AiService
 import io.ktor.http.HttpStatusCode
@@ -81,7 +81,10 @@ fun Route.aiRoutes(
             post("/chat-actions/jobs") {
                 val userId = call.requireUserId() ?: return@post
                 val request = call.receive<ChatWithActionsRequest>()
-                val job = aiJobService.createChatActionsJob(ownerId = userId) {
+                val job = aiJobService.createChatActionsJob(
+                    ownerId = userId,
+                    diagnostics = aiService.initialDiagnosticsFor(request.images),
+                ) { progress ->
                     aiService.chatWithActions(
                         messages = request.messages,
                         pages = request.pages,
@@ -89,6 +92,7 @@ fun Route.aiRoutes(
                         clientDate = request.clientDate,
                         clientTimezone = request.clientTimezone,
                         images = request.images,
+                        progress = progress,
                     ).toResponse()
                 }
                 call.respond(HttpStatusCode.Accepted, job.toAcceptedResponse())
@@ -128,6 +132,8 @@ private fun AiChatActionsJob.toAcceptedResponse(): AiChatActionsJobAcceptedRespo
         status = status.wireValue,
         createdAtEpochMillis = createdAtEpochMillis,
         updatedAtEpochMillis = updatedAtEpochMillis,
+        phase = phase,
+        diagnostics = diagnostics,
     )
 
 private fun AiChatActionsJob.toStatusResponse(): AiChatActionsJobStatusResponse =
@@ -138,6 +144,8 @@ private fun AiChatActionsJob.toStatusResponse(): AiChatActionsJobStatusResponse 
         updatedAtEpochMillis = updatedAtEpochMillis,
         result = result,
         error = error,
+        phase = phase,
+        diagnostics = diagnostics,
     )
 
 private fun AiService.AiActionResult.toResponse(): ChatWithActionsResponse =
@@ -224,4 +232,5 @@ private fun AiService.AiActionResult.toResponse(): ChatWithActionsResponse =
                 delayMinutes = action.delayMinutes,
             )
         },
+        diagnostics = diagnostics,
     )

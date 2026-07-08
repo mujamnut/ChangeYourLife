@@ -2,10 +2,12 @@ package com.changeyourlife.cyl.backend
 
 import com.changeyourlife.cyl.backend.config.AppConfig
 import com.changeyourlife.cyl.backend.data.InMemoryAiActionLogRepository
+import com.changeyourlife.cyl.backend.data.InMemoryAiJobRepository
 import com.changeyourlife.cyl.backend.data.InMemoryChatSyncRepository
 import com.changeyourlife.cyl.backend.data.InMemoryContentRepository
 import com.changeyourlife.cyl.backend.data.InMemoryUserRepository
 import com.changeyourlife.cyl.backend.data.PostgresAiActionLogRepository
+import com.changeyourlife.cyl.backend.data.PostgresAiJobRepository
 import com.changeyourlife.cyl.backend.data.PostgresChatSyncRepository
 import com.changeyourlife.cyl.backend.data.PostgresContentRepository
 import com.changeyourlife.cyl.backend.data.PostgresUserRepository
@@ -97,7 +99,9 @@ fun Application.module(
     environment.log.info(
         "AI vision initialized: pipeline=${aiService.visionPipelineVersion}, maxDimension=${aiService.visionMaxImageDimension}, maxBytes=${aiService.visionMaxImageBytes}, lmStudioVisionModels=${aiService.lmStudioVisionModelLabel}",
     )
-    val aiJobService = AiJobService()
+    val aiJobRepository = dataSource?.let { PostgresAiJobRepository(it) }
+        ?: InMemoryAiJobRepository()
+    val aiJobService = AiJobService(aiJobRepository)
     val emailService = EmailService(appConfig.email)
     environment.log.info("Email provider initialized: resendConfigured=${appConfig.email.isConfigured}")
 

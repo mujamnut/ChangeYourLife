@@ -7,6 +7,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
@@ -17,6 +20,10 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.changeyourlife.cyl.domain.repository.AuthState
+import com.changeyourlife.cyl.presentation.ai.AiHistoryRoute
+import com.changeyourlife.cyl.presentation.ai.AiPersonaUiState
+import com.changeyourlife.cyl.presentation.ai.AiProfileRoute
+import com.changeyourlife.cyl.presentation.ai.DefaultAiAvatarIconKey
 import com.changeyourlife.cyl.presentation.auth.AuthRoute
 import com.changeyourlife.cyl.presentation.home.HomeRoute
 import com.changeyourlife.cyl.presentation.home.HomeSearchRoute
@@ -27,6 +34,8 @@ private object Routes {
     const val Auth = "auth"
     const val Home = "home"
     const val HomeSearch = "home/search"
+    const val AiHistory = "ai/history"
+    const val AiProfile = "ai/profile"
     const val PageEditor = "page"
 
     fun pageEditor(
@@ -56,6 +65,14 @@ fun CylNavHost(
     val homeViewModel: HomeViewModel = hiltViewModel()
     val authState by viewModel.authState.collectAsStateWithLifecycle()
     val homeUiState by homeViewModel.uiState.collectAsStateWithLifecycle()
+    var aiDisplayName by rememberSaveable { mutableStateOf("CYL AI") }
+    var aiAvatarColorIndex by rememberSaveable { mutableStateOf(0) }
+    var aiAvatarIconKey by rememberSaveable { mutableStateOf(DefaultAiAvatarIconKey) }
+    val aiPersona = AiPersonaUiState(
+        displayName = aiDisplayName,
+        avatarColorIndex = aiAvatarColorIndex,
+        avatarIconKey = aiAvatarIconKey,
+    )
     val startDestination = when (authState) {
         AuthState.Loading -> null
         is AuthState.SignedIn -> Routes.Home
@@ -93,12 +110,23 @@ fun CylNavHost(
         }
         composable(Routes.Home) {
             HomeRoute(
+                aiPersona = aiPersona,
                 onCreatePage = {},
                 onOpenPage = { pageId, targetType, targetId ->
                     navController.navigate(Routes.pageEditor(pageId, targetType, targetId))
                 },
                 onSearch = {
                     navController.navigate(Routes.HomeSearch) {
+                        launchSingleTop = true
+                    }
+                },
+                onOpenAiHistory = {
+                    navController.navigate(Routes.AiHistory) {
+                        launchSingleTop = true
+                    }
+                },
+                onOpenAiProfile = {
+                    navController.navigate(Routes.AiProfile) {
                         launchSingleTop = true
                     }
                 },
@@ -124,6 +152,26 @@ fun CylNavHost(
                 viewModel = homeViewModel,
             )
         }
+        composable(Routes.AiHistory) {
+            AiHistoryRoute(
+                sessions = homeUiState.chatSessions,
+                activeSessionId = homeUiState.activeChatSessionId,
+                previews = homeUiState.chatSessionPreviews,
+                onBack = { navController.popBackStack() },
+                onCreateChatSession = homeViewModel::createNewChatSession,
+                onSelectChatSession = homeViewModel::selectChatSession,
+                onDeleteChatSession = homeViewModel::deleteChatSession,
+            )
+        }
+        composable(Routes.AiProfile) {
+            AiProfileRoute(
+                persona = aiPersona,
+                onBack = { navController.popBackStack() },
+                onDisplayNameChange = { value -> aiDisplayName = value },
+                onAvatarColorIndexChange = { index -> aiAvatarColorIndex = index },
+                onAvatarIconKeyChange = { key -> aiAvatarIconKey = key },
+            )
+        }
         composable(
             route = "${Routes.PageEditor}/{pageId}?targetType={targetType}&targetId={targetId}",
             arguments = listOf(
@@ -141,6 +189,7 @@ fun CylNavHost(
             ),
         ) {
             PageEditorRoute(
+                aiPersona = aiPersona,
                 onBack = {
                     navController.popBackStack()
                 },
@@ -157,6 +206,16 @@ fun CylNavHost(
                 onSelectHomeChatSession = homeViewModel::selectChatSession,
                 onDeleteHomeChatSession = homeViewModel::deleteChatSession,
                 onDismissHomeAiError = homeViewModel::clearAiChatError,
+                onOpenAiHistory = {
+                    navController.navigate(Routes.AiHistory) {
+                        launchSingleTop = true
+                    }
+                },
+                onOpenAiProfile = {
+                    navController.navigate(Routes.AiProfile) {
+                        launchSingleTop = true
+                    }
+                },
             )
         }
     }

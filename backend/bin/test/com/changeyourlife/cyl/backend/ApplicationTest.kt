@@ -43,6 +43,7 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.HttpHeaders
 import io.ktor.http.contentType
 import io.ktor.server.testing.testApplication
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -89,7 +90,9 @@ class ApplicationTest {
             return
         }
         val service = AiService(geminiApiKey = apiKey)
-        val response = service.chatWithActions(listOf(ChatMessage(role = "user", content = "create a page called Vacation Plan")))
+        val response = runBlocking {
+            service.chatWithActions(listOf(ChatMessage(role = "user", content = "create a page called Vacation Plan")))
+        }
         println("Direct response from chatWithActions: reply='${response.reply}', actions=${response.actions}")
     }
 

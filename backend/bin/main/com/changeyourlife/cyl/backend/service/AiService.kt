@@ -1,7 +1,9 @@
 package com.changeyourlife.cyl.backend.service
 
+import com.changeyourlife.cyl.backend.domain.AiJobPhases
 import com.changeyourlife.cyl.backend.model.ai.AiActionValidationIssue
 import com.changeyourlife.cyl.backend.model.ai.AiImageInput
+import com.changeyourlife.cyl.backend.model.ai.AiDiagnostics
 import com.changeyourlife.cyl.backend.model.ai.AiPageContext
 import com.changeyourlife.cyl.backend.model.ai.AiTaskContext
 import com.changeyourlife.cyl.backend.model.ai.ChatMessage
@@ -229,17 +231,32 @@ class AiService(
         val reply: String,
         val actions: List<AiActionItem>,
         val validationIssues: List<AiActionValidationIssue> = emptyList(),
+        val diagnostics: AiDiagnostics = AiDiagnostics(),
     )
 
-    fun chatWithActions(
+    fun initialDiagnosticsFor(images: List<AiImageInput>): AiDiagnostics =
+        images.toAttachmentDiagnostics(phase = "queued")
+
+    suspend fun chatWithActions(
         messages: List<ChatMessage>,
         pages: List<AiPageContext> = emptyList(),
         tasks: List<AiTaskContext> = emptyList(),
         clientDate: String = "",
         clientTimezone: String = "",
         images: List<AiImageInput> = emptyList(),
+        progress: AiJobProgressSink? = null,
     ): AiActionResult {
-        val preparedMessages = messages.withImageContext(images)
+        if (images.isNotEmpty()) {
+            progress?.invoke(
+                AiJobPhases.VisionProcessing,
+                initialDiagnosticsFor(images).copy(phase = AiJobPhases.VisionProcessing),
+            )
+        }
+        val preparedMessages = messages.withAttachmentContext(images)
+        progress?.invoke(
+            AiJobPhases.Planning,
+            preparedMessages.diagnostics.copy(phase = AiJobPhases.Planning),
+        )
         val userMessage = messages.lastOrNull { message -> message.role.equals("user", ignoreCase = true) }
             ?.content
             .orEmpty()
@@ -248,7 +265,7 @@ class AiService(
             "[AI Sandbox Mode - No API Key]\nHere is a simulated response to your question: \"$userMessage\". Add LMSTUDIO_BASE_URL or OPENROUTER_API_KEY to enable live AI answers."
         } else {
             chatForActions(
-                messages = preparedMessages,
+                messages = preparedMessages.messages,
                 pages = pages,
                 tasks = tasks,
                 clientDate = clientDate,
@@ -256,13 +273,17 @@ class AiService(
             ).ifBlank { "I received your message, but the AI returned an empty reply." }
         }
 
+        progress?.invoke(
+            AiJobPhases.ExecutingAction,
+            preparedMessages.diagnostics.copy(phase = AiJobPhases.ExecutingAction),
+        )
         val modelResult = recoverActionFromModelReply(
             reply = reply,
             prompt = userMessage,
             pages = pages,
         )
 
-        val promptResult = if (reply.canUsePromptActionRecovery()) {
+        val promptResult = if (modelResult != null && reply.canUsePromptActionRecovery()) {
             recoverActionFromPrompt(prompt = userMessage, pages = pages)
         } else {
             null
@@ -271,9 +292,13 @@ class AiService(
             prompt = userMessage,
             modelResult = modelResult,
             promptResult = promptResult,
-        )?.let { result -> return result }
+        )?.let { result -> return result.copy(diagnostics = preparedMessages.diagnostics) }
 
-        return AiActionResult(reply = reply, actions = emptyList())
+        return AiActionResult(
+            reply = reply,
+            actions = emptyList(),
+            diagnostics = preparedMessages.diagnostics,
+        )
     }
 
     private fun chatForActions(
@@ -442,29 +467,60 @@ class AiService(
         pages = pages,
     )
 
-    private fun List<ChatMessage>.withImageContext(images: List<AiImageInput>): List<ChatMessage> {
-        val context = buildImageContext(images)
-        if (context.isBlank()) return this
-        val lastUserIndex = indexOfLast { message -> message.role.equals("user", ignoreCase = true) }
-        if (lastUserIndex < 0) {
-            return this + ChatMessage(role = "user", content = context)
-        }
-        return mapIndexed { index, message ->
-            if (index == lastUserIndex) {
-                message.copy(
-                    content = """
-                        ${message.content}
+    private data class PreparedAttachmentContext(
+        val messages: List<ChatMessage>,
+        val diagnostics: AiDiagnostics,
+    )
 
-                        $context
-                    """.trimIndent(),
-                )
-            } else {
-                message
+    private data class AttachmentContext(
+        val content: String,
+        val diagnostics: AiDiagnostics,
+    )
+
+    private data class VisionAnalysisResult(
+        val content: String = "",
+        val provider: String = "",
+        val model: String = "",
+        val status: String = "",
+        val warning: String = "",
+    )
+
+    private fun List<ChatMessage>.withImageContext(images: List<AiImageInput>): List<ChatMessage> =
+        withAttachmentContext(images).messages
+
+    private fun List<ChatMessage>.withAttachmentContext(images: List<AiImageInput>): PreparedAttachmentContext {
+        val context = buildAttachmentContext(images)
+        if (context.content.isBlank()) {
+            return PreparedAttachmentContext(
+                messages = this,
+                diagnostics = context.diagnostics,
+            )
+        }
+        val lastUserIndex = indexOfLast { message -> message.role.equals("user", ignoreCase = true) }
+        val prepared = if (lastUserIndex < 0) {
+            this + ChatMessage(role = "user", content = context.content)
+        } else {
+            mapIndexed { index, message ->
+                if (index == lastUserIndex) {
+                    message.copy(
+                        content = """
+                            ${message.content}
+
+                            ${context.content}
+                        """.trimIndent(),
+                    )
+                } else {
+                    message
+                }
             }
         }
+        return PreparedAttachmentContext(
+            messages = prepared,
+            diagnostics = context.diagnostics,
+        )
     }
 
-    private fun buildImageContext(images: List<AiImageInput>): String {
+    private fun buildAttachmentContext(images: List<AiImageInput>): AttachmentContext {
         val validImages = images
             .asSequence()
             .filter { image ->
@@ -478,10 +534,15 @@ class AiService(
             .filter { file -> file.textContent.isNotBlank() }
             .take(MaxTextContextFiles)
             .toList()
-        if (validImages.isEmpty() && textFiles.isEmpty()) return ""
+        if (validImages.isEmpty() && textFiles.isEmpty()) {
+            return AttachmentContext(
+                content = "",
+                diagnostics = images.toAttachmentDiagnostics(phase = "no_attachments"),
+            )
+        }
 
-        val imageSummary = when {
-            validImages.isEmpty() -> ""
+        val visionResult = when {
+            validImages.isEmpty() -> VisionAnalysisResult(status = "not_attempted")
             else -> analyzeImagesWithVisionFallback(validImages)
         }
         val textSummary = textFiles.joinToString(separator = "\n\n") { file ->
@@ -494,42 +555,94 @@ class AiService(
             """.trimIndent()
         }
 
-        return """
+        val content = """
             CYL_FILE_CONTEXT:
             The user attached ${validImages.size} image(s) and ${textFiles.size} readable text file(s).
             Use this extracted attachment context as user-provided evidence.
             If Image context says image reading failed or unavailable, tell the user the attachment reached CYL but CYL could not extract readable image context. Ask the user to retry or check the LM Studio vision model/tunnel. Do not mention provider status codes unless the user asks.
             Do not mention internal attachment pipeline details unless the user asks.
-            ${if (imageSummary.isNotBlank()) "Image context:\n$imageSummary" else ""}
+            ${if (visionResult.content.isNotBlank()) "Image context:\n${visionResult.content}" else ""}
             ${if (textSummary.isNotBlank()) "Text file context:\n$textSummary" else ""}
         """.trimIndent()
+        return AttachmentContext(
+            content = content,
+            diagnostics = AiDiagnostics(
+                phase = "attachments_prepared",
+                imageCount = validImages.size,
+                textFileCount = textFiles.size,
+                visionAttempted = validImages.isNotEmpty(),
+                visionProvider = visionResult.provider,
+                visionModel = visionResult.model,
+                visionStatus = visionResult.status,
+                visionPipelineVersion = VisionPipelineVersion,
+                warning = visionResult.warning,
+            ),
+        )
     }
 
-    private fun analyzeImagesWithVisionFallback(images: List<AiImageInput>): String {
+    private fun List<AiImageInput>.toAttachmentDiagnostics(phase: String): AiDiagnostics {
+        val imageCount = count { image ->
+            image.dataUrl.startsWith("data:image/", ignoreCase = true) ||
+                image.kind.equals("image", ignoreCase = true)
+        }
+        val textFileCount = count { file -> file.textContent.isNotBlank() }
+        return AiDiagnostics(
+            phase = phase,
+            imageCount = imageCount.coerceAtMost(MaxVisionImages),
+            textFileCount = textFileCount.coerceAtMost(MaxTextContextFiles),
+            visionAttempted = imageCount > 0,
+            visionProvider = when {
+                imageCount == 0 -> ""
+                !lmStudioBaseUrl.isNullOrBlank() -> "lmstudio"
+                !openRouterApiKey.isNullOrBlank() -> "openrouter"
+                else -> ""
+            },
+            visionModel = when {
+                imageCount == 0 -> ""
+                !lmStudioBaseUrl.isNullOrBlank() -> lmStudioVisionModels.firstOrNull().orEmpty()
+                !openRouterApiKey.isNullOrBlank() -> openRouterVisionModels.firstOrNull().orEmpty()
+                else -> ""
+            },
+            visionStatus = if (imageCount > 0) "queued" else "",
+            visionPipelineVersion = VisionPipelineVersion,
+        )
+    }
+
+    private fun analyzeImagesWithVisionFallback(images: List<AiImageInput>): VisionAnalysisResult {
         val failures = mutableListOf<String>()
 
         if (!lmStudioBaseUrl.isNullOrBlank()) {
             val lmStudioResult = analyzeImagesWithLmStudioFallback(images)
-            if (!lmStudioResult.isVisionFailure()) return lmStudioResult
-            failures += lmStudioResult
-            return failures.joinToString(separator = "\n\n")
+            if (lmStudioResult.status != "failed") return lmStudioResult
+            failures += lmStudioResult.content
+            return lmStudioResult
         }
 
         if (!openRouterApiKey.isNullOrBlank()) {
             val openRouterResult = analyzeImagesWithOpenRouterFallback(images)
-            if (!openRouterResult.isVisionFailure()) {
+            if (openRouterResult.status != "failed") {
                 return openRouterResult
             }
-            failures += openRouterResult
+            failures += openRouterResult.content
         }
 
         if (failures.isEmpty()) {
-            return "Image reading unavailable because LMSTUDIO_BASE_URL or OPENROUTER_API_KEY is not configured."
+            val warning = "Image reading unavailable because LMSTUDIO_BASE_URL or OPENROUTER_API_KEY is not configured."
+            return VisionAnalysisResult(
+                content = warning,
+                status = "unavailable",
+                warning = warning,
+            )
         }
-        return failures.joinToString(separator = "\n\n")
+        val warning = failures.joinToString(separator = "\n\n")
+        return VisionAnalysisResult(
+            content = warning,
+            status = "failed",
+            warning = warning,
+        )
     }
 
-    private fun analyzeImagesWithLmStudioFallback(images: List<AiImageInput>): String {
+    private fun analyzeImagesWithLmStudioFallback(images: List<AiImageInput>): VisionAnalysisResult {
         val baseUrl = lmStudioBaseUrl?.trim().orEmpty()
         val completionsUrl = baseUrl.toChatCompletionsUrl()
         val models = lmStudioVisionModels
@@ -552,10 +665,15 @@ class AiService(
                 )
             }.onSuccess { content ->
                 if (content.isNotBlank()) {
-                    return """
+                    return VisionAnalysisResult(
+                        content = """
                         Vision model used: $model
                         $content
-                    """.trimIndent()
+                        """.trimIndent(),
+                        provider = "lmstudio",
+                        model = model,
+                        status = "succeeded",
+                    )
                 }
                 failures += "$model: empty response"
             }.onFailure { error ->
@@ -563,16 +681,23 @@ class AiService(
             }
         }
 
-        return """
+        val warning = """
             Image reading failed after trying ${models.size} LM Studio vision model(s).
             CYL is configured to use LM Studio for image reading, so OpenRouter vision fallback was skipped.
             Endpoint: $completionsUrl
             Tried:
             ${failures.joinToString(separator = "\n") { failure -> "- $failure" }}
         """.trimIndent()
+        return VisionAnalysisResult(
+            content = warning,
+            provider = "lmstudio",
+            model = models.joinToString(","),
+            status = "failed",
+            warning = warning,
+        )
     }
 
-    private fun analyzeImagesWithOpenRouterFallback(images: List<AiImageInput>): String {
+    private fun analyzeImagesWithOpenRouterFallback(images: List<AiImageInput>): VisionAnalysisResult {
         val models = openRouterVisionModels
             .ifEmpty { DefaultVisionModels }
             .map { model -> model.trim() }
@@ -589,10 +714,15 @@ class AiService(
                 )
             }.onSuccess { content ->
                 if (content.isNotBlank()) {
-                    return """
+                    return VisionAnalysisResult(
+                        content = """
                         Vision model used: $model
                         $content
-                    """.trimIndent()
+                        """.trimIndent(),
+                        provider = "openrouter",
+                        model = model,
+                        status = "succeeded",
+                    )
                 }
                 failures += "$model: empty response"
             }.onFailure { error ->
@@ -600,11 +730,18 @@ class AiService(
             }
         }
 
-        return """
+        val warning = """
             Image reading failed after trying ${models.size} vision model(s).
             Tried:
             ${failures.joinToString(separator = "\n") { failure -> "- $failure" }}
         """.trimIndent()
+        return VisionAnalysisResult(
+            content = warning,
+            provider = "openrouter",
+            model = models.joinToString(","),
+            status = "failed",
+            warning = warning,
+        )
     }
 
     private fun analyzeImagesWithOpenRouter(

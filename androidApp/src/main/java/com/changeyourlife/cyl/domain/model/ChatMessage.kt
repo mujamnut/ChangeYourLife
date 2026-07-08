@@ -48,6 +48,8 @@ data class ChatActionMetadataItem(
 
 data class ChatActionValidationMetadata(
     val actionIndex: Int? = null,
+    val actionType: String = "",
+    val actionDomain: String = "",
     val field: String = "",
     val code: String = "",
     val message: String = "",

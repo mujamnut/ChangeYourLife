@@ -68,6 +68,8 @@ private data class ActionItemDto(
 @Serializable
 private data class ValidationIssueDto(
     val actionIndex: Int? = null,
+    val actionType: String = "",
+    val actionDomain: String = "",
     val field: String = "",
     val code: String = "",
     val message: String = "",
@@ -84,6 +86,8 @@ private fun ChatActionMetadataItem.toDto(): ActionItemDto {
 private fun ChatActionValidationMetadata.toDto(): ValidationIssueDto {
     return ValidationIssueDto(
         actionIndex = actionIndex,
+        actionType = actionType,
+        actionDomain = actionDomain,
         field = field,
         code = code,
         message = message,

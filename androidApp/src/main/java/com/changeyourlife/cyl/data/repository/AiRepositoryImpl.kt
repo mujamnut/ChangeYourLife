@@ -59,6 +59,10 @@ class AiRepositoryImpl @Inject constructor(
                 provider = response.provider,
                 model = response.model,
                 apiKeyConfigured = response.apiKeyConfigured,
+                visionPipelineVersion = response.visionPipelineVersion,
+                visionMaxImageDimension = response.visionMaxImageDimension,
+                visionMaxImageBytes = response.visionMaxImageBytes,
+                lmStudioVisionModels = response.lmStudioVisionModels,
             )
         }.mapAiFailure()
     }
@@ -166,7 +170,10 @@ class AiRepositoryImpl @Inject constructor(
                         AiError(
                             kind = AiErrorKind.ProviderError,
                             userMessage = "AI job failed before it could update the page. Please try again.",
-                            developerMessage = status.error.ifBlank { "AI job $jobId failed without an error message." },
+                            developerMessage = listOf(
+                                status.error.ifBlank { "AI job $jobId failed without an error message." },
+                                status.diagnostics.toDeveloperSummary(),
+                            ).filter { value -> value.isNotBlank() }.joinToString(" | "),
                             retryable = true,
                         ),
                     )
@@ -201,3 +208,15 @@ class AiRepositoryImpl @Inject constructor(
         private const val AiJobPollingTimeoutMillis = 10L * 60L * 1000L
     }
 }
+
+private fun com.changeyourlife.cyl.data.remote.ai.AiDiagnosticsDto.toDeveloperSummary(): String =
+    listOf(
+        phase.takeIf { it.isNotBlank() }?.let { "phase=$it" },
+        imageCount.takeIf { it > 0 }?.let { "images=$it" },
+        textFileCount.takeIf { it > 0 }?.let { "textFiles=$it" },
+        visionProvider.takeIf { it.isNotBlank() }?.let { "visionProvider=$it" },
+        visionModel.takeIf { it.isNotBlank() }?.let { "visionModel=$it" },
+        visionStatus.takeIf { it.isNotBlank() }?.let { "visionStatus=$it" },
+    )
+        .filterNotNull()
+        .joinToString(", ")

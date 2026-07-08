@@ -171,6 +171,7 @@ import com.changeyourlife.cyl.domain.repository.AiImageAttachment
 import com.changeyourlife.cyl.presentation.ai.AiChatSheet
 import com.changeyourlife.cyl.presentation.ai.AiChatMessage
 import com.changeyourlife.cyl.presentation.ai.AiChatPageLink
+import com.changeyourlife.cyl.presentation.ai.AiPersonaUiState
 import com.changeyourlife.cyl.presentation.components.CylBottomCommandBar
 import com.changeyourlife.cyl.presentation.components.CylChromeIconButton
 import com.changeyourlife.cyl.presentation.components.CylFloatingChromeSurface
@@ -183,6 +184,7 @@ import kotlinx.serialization.json.Json
 
 @Composable
 fun PageEditorRoute(
+    aiPersona: AiPersonaUiState,
     onBack: () -> Unit,
     homeAiState: HomeUiState,
     initialSearchTargetType: String = "",
@@ -195,6 +197,8 @@ fun PageEditorRoute(
     onSelectHomeChatSession: (String) -> Unit,
     onDeleteHomeChatSession: (String) -> Unit,
     onDismissHomeAiError: () -> Unit,
+    onOpenAiHistory: () -> Unit,
+    onOpenAiProfile: () -> Unit,
     modifier: Modifier = Modifier,
     viewModel: PageEditorViewModel = hiltViewModel(),
 ) {
@@ -203,6 +207,7 @@ fun PageEditorRoute(
     PageEditorScreen(
         uiState = uiState,
         homeAiState = homeAiState,
+        aiPersona = aiPersona,
         onBack = onBack,
         onOpenPage = onOpenPage,
         initialSearchTargetType = initialSearchTargetType,
@@ -282,6 +287,8 @@ fun PageEditorRoute(
         onSelectHomeChatSession = onSelectHomeChatSession,
         onDeleteHomeChatSession = onDeleteHomeChatSession,
         onDismissHomeAiError = onDismissHomeAiError,
+        onOpenAiHistory = onOpenAiHistory,
+        onOpenAiProfile = onOpenAiProfile,
         modifier = modifier,
     )
 }
@@ -291,6 +298,7 @@ fun PageEditorRoute(
 internal fun PageEditorScreen(
     uiState: PageEditorUiState,
     homeAiState: HomeUiState,
+    aiPersona: AiPersonaUiState,
     onBack: () -> Unit,
     onOpenPage: (String, String, String) -> Unit,
     initialSearchTargetType: String = "",
@@ -373,6 +381,8 @@ internal fun PageEditorScreen(
     onSelectHomeChatSession: (String) -> Unit,
     onDeleteHomeChatSession: (String) -> Unit,
     onDismissHomeAiError: () -> Unit,
+    onOpenAiHistory: () -> Unit,
+    onOpenAiProfile: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var isAiChatSheetOpen by rememberSaveable { mutableStateOf(false) }
@@ -524,19 +534,26 @@ internal fun PageEditorScreen(
             AiChatSheet(
                 messages = homeAiState.chatMessages,
                 mentionPages = homeAiState.allPages,
-                chatSessions = homeAiState.chatSessions,
-                activeChatSessionId = homeAiState.activeChatSessionId,
+                persona = aiPersona,
                 isGenerating = homeAiState.isAiGeneratingChat,
                 errorMessage = homeAiState.aiChatError,
                 modelLabel = homeAiState.aiModelLabel,
+                visionStatusLabel = homeAiState.aiVisionStatusLabel,
+                visionPipelineLabel = homeAiState.aiVisionPipelineLabel,
                 onSendMessage = { message, mentionedPageIds, images ->
                     onSendAiMessage(message, mentionedPageIds, uiState.page?.id, images)
                 },
                 onUndoAction = onUndoAiAction,
                 onClearHistory = onClearHomeAiHistory,
                 onCreateChatSession = onCreateHomeChatSession,
-                onSelectChatSession = onSelectHomeChatSession,
-                onDeleteChatSession = onDeleteHomeChatSession,
+                onOpenHistoryPage = {
+                    isAiChatSheetOpen = false
+                    onOpenAiHistory()
+                },
+                onOpenProfilePage = {
+                    isAiChatSheetOpen = false
+                    onOpenAiProfile()
+                },
                 onDismissError = onDismissHomeAiError,
                 onOpenPage = { pageId, targetType, targetId ->
                     isAiChatSheetOpen = false

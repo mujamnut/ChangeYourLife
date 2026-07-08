@@ -46,7 +46,7 @@ class AiPageActionExecutor @Inject constructor(
     private val applyEditorCommandUseCase: ApplyEditorCommandUseCase,
 ) {
     fun supports(action: ChatAction): Boolean {
-        return action.type.normalizedActionType() in supportedActions
+        return AiActionExecutionRegistry.supports(action)
     }
 
     suspend fun executeOnPage(
@@ -69,12 +69,13 @@ class AiPageActionExecutor @Inject constructor(
         val executedActionIndexes = mutableListOf<Int>()
 
         for ((actionIndex, action) in actions.withIndex()) {
-            val actionType = action.type.normalizedActionType()
+            val trace = AiActionExecutionRegistry.trace(actionIndex, action)
+            val actionType = trace.actionType
             val validationIssue = workingDocument.validateActionTarget(action, actionIndex)
             if (validationIssue != null) {
-                val issue = validationIssue
+                val issue = validationIssue.withTrace(trace)
                 validationIssues += issue
-                messages += "Rejected ${action.type}: ${issue.message}"
+                messages += "Rejected ${trace.messageLabel}: ${issue.message}"
                 continue
             }
             runCatching {
@@ -797,13 +798,16 @@ class AiPageActionExecutor @Inject constructor(
                 executedActionIndexes += actionIndex
                 messages += "Done: $message"
             }.onFailure { error ->
+                val errorMessage = error.localizedMessage ?: "Action failed before it could update the page."
                 validationIssues += AiPageActionValidationIssue(
                     actionIndex = actionIndex,
+                    actionType = trace.actionType,
+                    actionDomain = trace.domain.id,
                     field = "type",
                     code = "execution_failed",
-                    message = error.localizedMessage ?: "Action failed before it could update the page.",
+                    message = errorMessage,
                 )
-                messages += "Failed ${action.type}: ${error.localizedMessage ?: "Unknown error"}"
+                messages += "Failed ${trace.messageLabel}: $errorMessage"
             }
         }
 
@@ -985,81 +989,6 @@ class AiPageActionExecutor @Inject constructor(
         }
     }
 
-    companion object {
-        private val supportedActions = setOf(
-            "RENAME_CURRENT_PAGE",
-            "RENAME_PAGE",
-            "UPDATE_PAGE",
-            "APPEND_BLOCK",
-            "APPEND_PAGE_BLOCK",
-            "ADD_BLOCK",
-            "ADD_PROPERTY",
-            "UPDATE_PROPERTY",
-            "DELETE_PROPERTY",
-            "DELETE_ALL_BLOCKS",
-            "DELETE_BLOCK",
-            "FORMAT_BLOCK_TEXT",
-            "UPDATE_BLOCK",
-            "EDIT_BLOCK",
-            "UPDATE_TODO",
-            "CHECK_BLOCK",
-            "UNCHECK_BLOCK",
-            "CREATE_DATABASE",
-            "CREATE_TABLE",
-            "RENAME_TABLE",
-            "RENAME_DATABASE",
-            "UPDATE_TABLE_TITLE",
-            "ADD_TABLE_COLUMN",
-            "DELETE_TABLE_COLUMN",
-            "RENAME_TABLE_COLUMN",
-            "UPDATE_TABLE_COLUMN",
-            "UPDATE_TABLE_COLUMN_TYPE",
-            "CHANGE_TABLE_COLUMN_TYPE",
-            "SET_TABLE_COLUMN_TYPE",
-            "UPDATE_TABLE_COLUMN_CONFIG",
-            "SET_TABLE_COLUMN_CONFIG",
-            "UPDATE_FORMULA_COLUMN",
-            "UPDATE_RELATION_COLUMN",
-            "UPDATE_ROLLUP_COLUMN",
-            "REORDER_TABLE_COLUMN",
-            "MOVE_TABLE_COLUMN",
-            "ADD_TABLE_ROW",
-            "DELETE_TABLE_ROW",
-            "UPDATE_TABLE_ROW",
-            "RENAME_TABLE_ROW",
-            "REORDER_TABLE_ROW",
-            "MOVE_TABLE_ROW",
-            "ADD_ROW_PAGE_BLOCK",
-            "APPEND_ROW_PAGE_BLOCK",
-            "ADD_TABLE_ROW_BLOCK",
-            "UPDATE_ROW_PAGE_BLOCK",
-            "EDIT_ROW_PAGE_BLOCK",
-            "UPDATE_TABLE_ROW_BLOCK",
-            "CHECK_ROW_PAGE_BLOCK",
-            "UNCHECK_ROW_PAGE_BLOCK",
-            "DELETE_ROW_PAGE_BLOCK",
-            "DELETE_TABLE_ROW_BLOCK",
-            "UPDATE_TABLE_CELL",
-            "CHANGE_TABLE_VIEW",
-            "SET_TABLE_VIEW",
-            "SET_TABLE_VIEW_CONFIG",
-            "CONFIGURE_TABLE_VIEW",
-            "UPDATE_TABLE_VIEW_CONFIG",
-            "SORT_TABLE",
-            "SET_TABLE_SORT",
-            "CLEAR_TABLE_SORT",
-            "FILTER_TABLE",
-            "SET_TABLE_FILTER",
-            "CLEAR_TABLE_FILTER",
-            "GROUP_TABLE",
-            "SET_TABLE_GROUP",
-            "CLEAR_TABLE_GROUP",
-            "CREATE_SUBPAGE",
-            "CREATE_PAGE",
-            "CREATE_TASK",
-            "CREATE_REMINDER",
-        )
-    }
 }
 
 data class AiPageActionExecutionResult(
@@ -1077,10 +1006,21 @@ data class AiPageActionExecutionResult(
 
 data class AiPageActionValidationIssue(
     val actionIndex: Int? = null,
+    val actionType: String = "",
+    val actionDomain: String = "",
     val field: String = "",
     val code: String = "",
     val message: String = "",
 )
+
+private fun AiPageActionValidationIssue.withTrace(
+    trace: AiActionExecutionTrace,
+): AiPageActionValidationIssue {
+    return copy(
+        actionType = actionType.ifBlank { trace.actionType },
+        actionDomain = actionDomain.ifBlank { trace.domain.id },
+    )
+}
 
 private val FormulaColumnReferenceRegex by lazy { Regex("""\{([^}]+)\}""") }
 private val DateCellStartDateRegex by lazy { Regex(""""startDate"\s*:\s*"([^"]+)"""") }

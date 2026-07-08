@@ -18,7 +18,26 @@ data class AiStatus(
     val provider: String = "",
     val model: String = "",
     val apiKeyConfigured: Boolean = false,
+    val visionPipelineVersion: String = "",
+    val visionMaxImageDimension: Int = 0,
+    val visionMaxImageBytes: Int = 0,
+    val lmStudioVisionModels: String = "",
 )
+
+data class AiDiagnostics(
+    val phase: String = "",
+    val imageCount: Int = 0,
+    val textFileCount: Int = 0,
+    val visionAttempted: Boolean = false,
+    val visionProvider: String = "",
+    val visionModel: String = "",
+    val visionStatus: String = "",
+    val visionPipelineVersion: String = "",
+    val warning: String = "",
+) {
+    val hasAttachmentContext: Boolean
+        get() = imageCount > 0 || textFileCount > 0 || visionAttempted || warning.isNotBlank()
+}
 
 data class AiImageAttachment(
     val dataUrl: String = "",
@@ -35,6 +54,7 @@ data class ChatActionResult(
     val schemaName: String = "",
     val schemaVersion: Int = 1,
     val validationIssues: List<ChatActionValidationIssue> = emptyList(),
+    val diagnostics: AiDiagnostics = AiDiagnostics(),
 )
 
 data class ChatActionValidationIssue(

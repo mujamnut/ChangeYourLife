@@ -9,13 +9,20 @@ class AiActionPlanner {
         if (promptResult == null) return modelResult
 
         if (modelResult == null) {
-            if (promptResult.isCreativeCreationFallback()) return null
-            return promptResult.copy(
-                validationIssues = promptResult.validationIssues,
-            )
+            return null
         }
 
-        if (modelResult.actions.isEmpty()) return modelResult
+        if (modelResult.actions.isEmpty()) {
+            if (modelResult.validationIssues.isNotEmpty() &&
+                !promptResult.isCreativeCreationFallback() &&
+                promptResult.shouldRepairClearlyMalformedModelResult(modelResult, prompt)
+            ) {
+                return promptResult.copy(
+                    validationIssues = modelResult.validationIssues + promptResult.validationIssues,
+                )
+            }
+            return modelResult
+        }
 
         if (promptResult.shouldRepairClearlyMalformedModelResult(modelResult, prompt)) {
             return promptResult.copy(

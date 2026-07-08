@@ -7,6 +7,7 @@ import com.changeyourlife.cyl.domain.repository.ChatAction
 import com.changeyourlife.cyl.domain.repository.ChatActionResult
 import com.changeyourlife.cyl.domain.repository.ChatActionValidationIssue
 import com.changeyourlife.cyl.domain.repository.ChatTableColumn
+import com.changeyourlife.cyl.domain.repository.AiDiagnostics
 
 internal object AiActionContractMapper {
     fun toDomain(response: ChatWithActionsResponseDto): ChatActionResult {
@@ -33,6 +34,17 @@ internal object AiActionContractMapper {
             schemaVersion = response.schemaVersion,
             validationIssues = validationIssues,
             actions = actions,
+            diagnostics = AiDiagnostics(
+                phase = response.diagnostics.phase,
+                imageCount = response.diagnostics.imageCount,
+                textFileCount = response.diagnostics.textFileCount,
+                visionAttempted = response.diagnostics.visionAttempted,
+                visionProvider = response.diagnostics.visionProvider,
+                visionModel = response.diagnostics.visionModel,
+                visionStatus = response.diagnostics.visionStatus,
+                visionPipelineVersion = response.diagnostics.visionPipelineVersion,
+                warning = response.diagnostics.warning,
+            ),
         )
     }
 }

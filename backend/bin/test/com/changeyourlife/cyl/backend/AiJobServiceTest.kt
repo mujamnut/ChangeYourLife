@@ -1,9 +1,12 @@
 package com.changeyourlife.cyl.backend
 
+import com.changeyourlife.cyl.backend.data.InMemoryAiJobRepository
+import com.changeyourlife.cyl.backend.domain.AiChatActionsJob
+import com.changeyourlife.cyl.backend.domain.AiJobPhases
+import com.changeyourlife.cyl.backend.domain.AiJobStatus
+import com.changeyourlife.cyl.backend.model.ai.AiDiagnostics
 import com.changeyourlife.cyl.backend.model.ai.ChatWithActionsResponse
-import com.changeyourlife.cyl.backend.service.AiChatActionsJob
 import com.changeyourlife.cyl.backend.service.AiJobService
-import com.changeyourlife.cyl.backend.service.AiJobStatus
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
@@ -17,9 +20,9 @@ class AiJobServiceTest {
     @Test
     fun chatActionsJobCompletesWithResult() {
         runBlocking {
-            val service = AiJobService()
+            val service = AiJobService(InMemoryAiJobRepository())
 
-            val created = service.createChatActionsJob(ownerId = "owner-a") {
+            val created = service.createChatActionsJob(ownerId = "owner-a") { _ ->
                 ChatWithActionsResponse(reply = "Done")
             }
 
@@ -36,9 +39,9 @@ class AiJobServiceTest {
     @Test
     fun chatActionsJobIsOwnerScoped() {
         runBlocking {
-            val service = AiJobService()
+            val service = AiJobService(InMemoryAiJobRepository())
 
-            val created = service.createChatActionsJob(ownerId = "owner-a") {
+            val created = service.createChatActionsJob(ownerId = "owner-a") { _ ->
                 ChatWithActionsResponse(reply = "Private")
             }
 
@@ -50,9 +53,9 @@ class AiJobServiceTest {
     @Test
     fun chatActionsJobStoresFailureState() {
         runBlocking {
-            val service = AiJobService()
+            val service = AiJobService(InMemoryAiJobRepository())
 
-            val created = service.createChatActionsJob(ownerId = "owner-a") {
+            val created = service.createChatActionsJob(ownerId = "owner-a") { _ ->
                 error("Provider failed")
             }
 
@@ -63,6 +66,52 @@ class AiJobServiceTest {
             assertEquals(AiJobStatus.Failed, failed.status)
             assertTrue(failed.error.contains("Provider failed"), failed.error)
             assertNull(failed.result)
+        }
+    }
+
+    @Test
+    fun chatActionsJobPersistsProgressPhaseAndDiagnostics() {
+        runBlocking {
+            val service = AiJobService(InMemoryAiJobRepository())
+
+            val created = service.createChatActionsJob(
+                ownerId = "owner-a",
+                diagnostics = AiDiagnostics(imageCount = 1, visionAttempted = true),
+            ) { progress ->
+                progress(
+                    AiJobPhases.VisionProcessing,
+                    AiDiagnostics(
+                        phase = AiJobPhases.VisionProcessing,
+                        imageCount = 1,
+                        visionAttempted = true,
+                        visionProvider = "lmstudio",
+                        visionModel = "qwen/qwen3.5-9b",
+                    ),
+                )
+                delay(80)
+                ChatWithActionsResponse(
+                    reply = "Done",
+                    diagnostics = AiDiagnostics(
+                        imageCount = 1,
+                        visionAttempted = true,
+                        visionProvider = "lmstudio",
+                        visionModel = "qwen/qwen3.5-9b",
+                        visionStatus = "succeeded",
+                    ),
+                )
+            }
+
+            val inProgress = service.awaitJob(ownerId = "owner-a", jobId = created.jobId) { job ->
+                job.phase == AiJobPhases.VisionProcessing
+            }
+            assertEquals(AiJobStatus.Running, inProgress.status)
+            assertEquals("lmstudio", inProgress.diagnostics.visionProvider)
+
+            val completed = service.awaitJob(ownerId = "owner-a", jobId = created.jobId) { job ->
+                job.status == AiJobStatus.Succeeded
+            }
+            assertEquals(AiJobPhases.Succeeded, completed.phase)
+            assertEquals("succeeded", completed.diagnostics.visionStatus)
         }
     }
 

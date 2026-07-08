@@ -117,8 +117,11 @@ class AiActionExecutionUseCase @Inject constructor(
                 if (aiPageActionExecutor.supports(candidate.action)) {
                     supportedCandidates += candidate
                 } else {
+                    val trace = AiActionExecutionRegistry.trace(candidate.originalIndex, candidate.action)
                     unsupportedIssues += ChatActionValidationMetadata(
                         actionIndex = candidate.originalIndex,
+                        actionType = trace.actionType,
+                        actionDomain = trace.domain.id,
                         field = "type",
                         code = "unsupported_action_type",
                         message = "Unsupported action type: ${candidate.action.type}",
@@ -165,6 +168,8 @@ class AiActionExecutionUseCase @Inject constructor(
                             actionIndex = issue.actionIndex?.let { index ->
                                 supportedCandidates.getOrNull(index)?.originalIndex ?: index
                             },
+                            actionType = issue.actionType,
+                            actionDomain = issue.actionDomain,
                             field = issue.field,
                             code = issue.code,
                             message = issue.message,
@@ -237,13 +242,17 @@ class AiActionExecutionUseCase @Inject constructor(
 private fun AiActionExecutionCandidate.targetPageIssue(
     code: String,
     message: String,
-): ChatActionValidationMetadata =
-    ChatActionValidationMetadata(
+): ChatActionValidationMetadata {
+    val trace = AiActionExecutionRegistry.trace(originalIndex, action)
+    return ChatActionValidationMetadata(
         actionIndex = originalIndex,
+        actionType = trace.actionType,
+        actionDomain = trace.domain.id,
         field = "targetTitle",
         code = code,
         message = message,
     )
+}
 
 data class AiActionExecutionResult(
     val messages: List<String> = emptyList(),
