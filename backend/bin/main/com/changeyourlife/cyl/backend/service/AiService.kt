@@ -608,11 +608,13 @@ class AiService(
         apiKey: String,
     ): String {
         val prompt = buildString {
+            appendLine("/no_think")
             appendLine("Read the attached image(s) for the CYL app.")
             appendLine("Extract only useful facts for a Notion-like personal productivity app.")
-            appendLine("Return compact JSON with keys: summary, detectedText, tables, amounts, dates, people, places, suggestedPageTitle, suggestedProperties, confidence.")
+            appendLine("Return final answer only as compact JSON with keys: summary, detectedText, tables, amounts, dates, people, places, suggestedPageTitle, suggestedProperties, confidence.")
             appendLine("If the image is a receipt, bill, spreadsheet, screenshot, table, calendar, or note, preserve important rows and values.")
             appendLine("Do not invent data that is not visible.")
+            appendLine("Keep output short. No markdown. No analysis.")
             images.forEachIndexed { index, image ->
                 appendLine("Image ${index + 1}: name=${image.name.ifBlank { "image" }}, mime=${image.mimeType.ifBlank { "image/*" }}, bytes=${image.sizeBytes}")
             }
@@ -621,7 +623,7 @@ class AiService(
         val body = buildJsonObject {
             put("model", model.ifBlank { defaultModel })
             put("temperature", 0.0)
-            put("max_tokens", 900)
+            put("max_tokens", VisionMaxTokens)
             put(
                 "messages",
                 buildJsonArray {
@@ -645,6 +647,7 @@ class AiService(
                                                     "image_url",
                                                     buildJsonObject {
                                                         put("url", image.dataUrl)
+                                                        put("detail", "high")
                                                     },
                                                 )
                                             },
@@ -675,11 +678,18 @@ class AiService(
             val response = httpClient.send(request, HttpResponse.BodyHandlers.ofString())
             if (response.statusCode() == 200) {
                 val apiResponse = json.decodeFromString<ApiResponse>(response.body())
-                return apiResponse.choices.firstOrNull()
-                    ?.message
-                    ?.content
-                    ?.ifBlank { null }
-                    ?: throw Exception("Vision model returned an empty response.")
+                val message = apiResponse.choices.firstOrNull()?.message
+                    ?: throw Exception("Vision model returned no choices.")
+                val content = message.content.orEmpty().trim()
+                if (content.isNotBlank()) return content
+                val reasoning = message.reasoning_content.orEmpty().trim()
+                if (reasoning.containsImageBlindnessHint()) {
+                    throw Exception(
+                        "Vision model responded as if it did not receive image pixels. " +
+                            "In LM Studio, confirm the server model is the same vision-capable model used in chat and that OpenAI-compatible image input is enabled.",
+                    )
+                }
+                throw Exception("Vision model returned an empty response.")
             }
 
             val error = Exception("Vision HTTP ${response.statusCode()} - ${response.body()}")
@@ -694,6 +704,17 @@ class AiService(
 
     private fun Int.isRetryableVisionStatus(): Boolean =
         this == 408 || this == 409 || this == 425 || this == 429 || this >= 500
+
+    private fun String.containsImageBlindnessHint(): Boolean {
+        val lower = lowercase()
+        return lower.contains("cannot see") ||
+            lower.contains("can't see") ||
+            lower.contains("cannot actually see") ||
+            lower.contains("cannot process") && lower.contains("image") ||
+            lower.contains("no actual image") ||
+            lower.contains("image data accessible") ||
+            lower.contains("text-only")
+    }
 
     private fun Throwable.compactVisionError(): String {
         return (localizedMessage ?: message ?: this::class.simpleName.orEmpty())
@@ -822,6 +843,7 @@ class AiService(
     private data class ApiMessage(
         val role: String = "",
         val content: String? = "",
+        val reasoning_content: String? = null,
     )
 
     @Serializable
@@ -849,6 +871,7 @@ class AiService(
         const val MaxVisionFallbackModels = 5
         const val VisionRequestMaxAttempts = 2
         const val VisionRetryDelayMillis = 900L
+        const val VisionMaxTokens = 220
         const val MaxTextContextFiles = 4
         const val MaxTextContextChars = 16_000
         val AiRequestTimeout: Duration = Duration.ofMinutes(5)
