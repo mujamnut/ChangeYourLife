@@ -1979,10 +1979,12 @@ internal fun PageEditorScreenPreview() {
             onUndoEditorChange = {},
             onKeepLocalConflict = {},
             onUseRemoteConflict = {},
-            onSendAiMessage = { _, _, _ -> },
+            onSendAiMessage = { _, _, _, _ -> },
             onUndoAiAction = { _, _ -> },
             onClearHomeAiHistory = {},
             onCreateHomeChatSession = {},
+            onSelectHomeChatSession = {},
+            onDeleteHomeChatSession = {},
             onDismissHomeAiError = {},
         )
     }

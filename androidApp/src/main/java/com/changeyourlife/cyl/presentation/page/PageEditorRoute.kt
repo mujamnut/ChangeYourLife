@@ -167,6 +167,7 @@ import com.changeyourlife.cyl.domain.model.PageTableView
 import com.changeyourlife.cyl.domain.model.PageTableViewConfig
 import com.changeyourlife.cyl.domain.model.PageSyncState
 import com.changeyourlife.cyl.domain.model.PageTextSpan
+import com.changeyourlife.cyl.domain.repository.AiImageAttachment
 import com.changeyourlife.cyl.presentation.ai.AiChatSheet
 import com.changeyourlife.cyl.presentation.ai.AiChatMessage
 import com.changeyourlife.cyl.presentation.ai.AiChatPageLink
@@ -187,10 +188,12 @@ fun PageEditorRoute(
     initialSearchTargetType: String = "",
     initialSearchTargetId: String = "",
     onOpenPage: (String, String, String) -> Unit,
-    onSendAiMessage: (String, List<String>, String?) -> Unit,
+    onSendAiMessage: (String, List<String>, String?, List<AiImageAttachment>) -> Unit,
     onUndoAiAction: (String, String) -> Unit,
     onClearHomeAiHistory: () -> Unit,
     onCreateHomeChatSession: () -> Unit,
+    onSelectHomeChatSession: (String) -> Unit,
+    onDeleteHomeChatSession: (String) -> Unit,
     onDismissHomeAiError: () -> Unit,
     modifier: Modifier = Modifier,
     viewModel: PageEditorViewModel = hiltViewModel(),
@@ -276,6 +279,8 @@ fun PageEditorRoute(
         onUndoAiAction = onUndoAiAction,
         onClearHomeAiHistory = onClearHomeAiHistory,
         onCreateHomeChatSession = onCreateHomeChatSession,
+        onSelectHomeChatSession = onSelectHomeChatSession,
+        onDeleteHomeChatSession = onDeleteHomeChatSession,
         onDismissHomeAiError = onDismissHomeAiError,
         modifier = modifier,
     )
@@ -361,10 +366,12 @@ internal fun PageEditorScreen(
     onUndoEditorChange: () -> Unit,
     onKeepLocalConflict: () -> Unit,
     onUseRemoteConflict: () -> Unit,
-    onSendAiMessage: (String, List<String>, String?) -> Unit,
+    onSendAiMessage: (String, List<String>, String?, List<AiImageAttachment>) -> Unit,
     onUndoAiAction: (String, String) -> Unit,
     onClearHomeAiHistory: () -> Unit,
     onCreateHomeChatSession: () -> Unit,
+    onSelectHomeChatSession: (String) -> Unit,
+    onDeleteHomeChatSession: (String) -> Unit,
     onDismissHomeAiError: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -517,15 +524,19 @@ internal fun PageEditorScreen(
             AiChatSheet(
                 messages = homeAiState.chatMessages,
                 mentionPages = homeAiState.allPages,
+                chatSessions = homeAiState.chatSessions,
+                activeChatSessionId = homeAiState.activeChatSessionId,
                 isGenerating = homeAiState.isAiGeneratingChat,
                 errorMessage = homeAiState.aiChatError,
                 modelLabel = homeAiState.aiModelLabel,
-                onSendMessage = { message, mentionedPageIds ->
-                    onSendAiMessage(message, mentionedPageIds, uiState.page?.id)
+                onSendMessage = { message, mentionedPageIds, images ->
+                    onSendAiMessage(message, mentionedPageIds, uiState.page?.id, images)
                 },
                 onUndoAction = onUndoAiAction,
                 onClearHistory = onClearHomeAiHistory,
                 onCreateChatSession = onCreateHomeChatSession,
+                onSelectChatSession = onSelectHomeChatSession,
+                onDeleteChatSession = onDeleteHomeChatSession,
                 onDismissError = onDismissHomeAiError,
                 onOpenPage = { pageId, targetType, targetId ->
                     isAiChatSheetOpen = false

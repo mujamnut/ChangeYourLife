@@ -1162,6 +1162,7 @@ class ApplicationTest {
             geminiApiKey = null,
             openRouterApiKey = null,
             openRouterModel = "test-model",
+            openRouterVisionModel = "test-vision-model",
         )
     }
 }

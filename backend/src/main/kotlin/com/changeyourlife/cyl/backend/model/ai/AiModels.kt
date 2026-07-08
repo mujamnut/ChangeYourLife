@@ -12,8 +12,17 @@ data class ChatMessage(
 )
 
 @Serializable
+data class AiImageInput(
+    val dataUrl: String,
+    val mimeType: String = "",
+    val name: String = "",
+    val sizeBytes: Long = 0,
+)
+
+@Serializable
 data class ChatRequest(
-    val messages: List<ChatMessage>
+    val messages: List<ChatMessage>,
+    val images: List<AiImageInput> = emptyList(),
 )
 
 @Serializable
@@ -38,6 +47,7 @@ data class ChatWithActionsRequest(
     val tasks: List<AiTaskContext> = emptyList(),
     val clientDate: String = "",
     val clientTimezone: String = "",
+    val images: List<AiImageInput> = emptyList(),
 )
 
 @Serializable

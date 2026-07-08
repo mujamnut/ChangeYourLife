@@ -1,6 +1,7 @@
 package com.changeyourlife.cyl.backend.service
 
 import com.changeyourlife.cyl.backend.model.ai.AiActionValidationIssue
+import com.changeyourlife.cyl.backend.model.ai.AiImageInput
 import com.changeyourlife.cyl.backend.model.ai.AiPageContext
 import com.changeyourlife.cyl.backend.model.ai.AiTaskContext
 import com.changeyourlife.cyl.backend.model.ai.ChatMessage
@@ -12,12 +13,16 @@ import java.time.Duration
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 
 class AiService(
     private val glmApiKey: String? = null,
     private val geminiApiKey: String? = null,
     private val openRouterApiKey: String? = null,
     private val openRouterModel: String = "openai/gpt-oss-20b:free",
+    private val openRouterVisionModel: String = "google/gemma-3-4b-it",
     private val actionPlanner: AiActionPlanner = AiActionPlanner(),
     private val actionSchemaValidator: AiActionSchemaValidator = AiActionSchemaValidator(),
     private val modelActionNormalizer: AiModelActionNormalizer = AiModelActionNormalizer(actionSchemaValidator),
@@ -87,10 +92,14 @@ class AiService(
             else -> null
         }
 
-    fun chat(messages: List<ChatMessage>): String {
-        completionProvider?.invoke(messages, false, 0.7)?.let { reply -> return reply }
+    fun chat(
+        messages: List<ChatMessage>,
+        images: List<AiImageInput> = emptyList(),
+    ): String {
+        val preparedMessages = messages.withImageContext(images)
+        completionProvider?.invoke(preparedMessages, false, 0.7)?.let { reply -> return reply }
         if (isMockMode) {
-            val userMsg = messages.lastOrNull { it.role == "user" }?.content.orEmpty()
+            val userMsg = preparedMessages.lastOrNull { it.role == "user" }?.content.orEmpty()
             return "[AI Sandbox Mode - No API Key]\nHere is a simulated response to your question: \"$userMsg\". Add OPENROUTER_API_KEY to enable live AI answers."
         }
 
@@ -98,7 +107,7 @@ class AiService(
             val body = json.encodeToString(
                 ApiRequest(
                     model = activeModel,
-                    messages = messages.map { ApiMessage(it.role, it.content) }
+                    messages = preparedMessages.map { ApiMessage(it.role, it.content) }
                 )
             )
 
@@ -221,7 +230,9 @@ class AiService(
         tasks: List<AiTaskContext> = emptyList(),
         clientDate: String = "",
         clientTimezone: String = "",
+        images: List<AiImageInput> = emptyList(),
     ): AiActionResult {
+        val preparedMessages = messages.withImageContext(images)
         val userMessage = messages.lastOrNull { message -> message.role.equals("user", ignoreCase = true) }
             ?.content
             .orEmpty()
@@ -230,7 +241,7 @@ class AiService(
             "[AI Sandbox Mode - No API Key]\nHere is a simulated response to your question: \"$userMessage\". Add OPENROUTER_API_KEY to enable live AI answers."
         } else {
             chatForActions(
-                messages = messages,
+                messages = preparedMessages,
                 pages = pages,
                 tasks = tasks,
                 clientDate = clientDate,
@@ -423,6 +434,135 @@ class AiService(
         prompt = prompt,
         pages = pages,
     )
+
+    private fun List<ChatMessage>.withImageContext(images: List<AiImageInput>): List<ChatMessage> {
+        val context = buildImageContext(images)
+        if (context.isBlank()) return this
+        val lastUserIndex = indexOfLast { message -> message.role.equals("user", ignoreCase = true) }
+        if (lastUserIndex < 0) {
+            return this + ChatMessage(role = "user", content = context)
+        }
+        return mapIndexed { index, message ->
+            if (index == lastUserIndex) {
+                message.copy(
+                    content = """
+                        ${message.content}
+
+                        $context
+                    """.trimIndent(),
+                )
+            } else {
+                message
+            }
+        }
+    }
+
+    private fun buildImageContext(images: List<AiImageInput>): String {
+        val validImages = images
+            .asSequence()
+            .filter { image ->
+                image.dataUrl.startsWith("data:image/", ignoreCase = true) &&
+                    image.dataUrl.contains(";base64,", ignoreCase = true)
+            }
+            .take(MaxVisionImages)
+            .toList()
+        if (validImages.isEmpty()) return ""
+
+        if (openRouterApiKey.isNullOrBlank()) {
+            return """
+                CYL_IMAGE_CONTEXT:
+                The user attached ${validImages.size} image(s), but image reading is unavailable because OPENROUTER_API_KEY is not configured.
+            """.trimIndent()
+        }
+
+        val summary = runCatching {
+            analyzeImagesWithOpenRouter(validImages)
+        }.getOrElse { error ->
+            "Image reading failed: ${error.localizedMessage ?: error::class.simpleName.orEmpty()}"
+        }
+
+        return """
+            CYL_IMAGE_CONTEXT:
+            The user attached ${validImages.size} image(s). Use this extracted image context as user-provided evidence.
+            Do not mention internal image pipeline details unless the user asks.
+            $summary
+        """.trimIndent()
+    }
+
+    private fun analyzeImagesWithOpenRouter(images: List<AiImageInput>): String {
+        val prompt = buildString {
+            appendLine("Read the attached image(s) for the CYL app.")
+            appendLine("Extract only useful facts for a Notion-like personal productivity app.")
+            appendLine("Return compact JSON with keys: summary, detectedText, tables, amounts, dates, people, places, suggestedPageTitle, suggestedProperties, confidence.")
+            appendLine("If the image is a receipt, bill, spreadsheet, screenshot, table, calendar, or note, preserve important rows and values.")
+            appendLine("Do not invent data that is not visible.")
+            images.forEachIndexed { index, image ->
+                appendLine("Image ${index + 1}: name=${image.name.ifBlank { "image" }}, mime=${image.mimeType.ifBlank { "image/*" }}, bytes=${image.sizeBytes}")
+            }
+        }
+
+        val body = buildJsonObject {
+            put("model", openRouterVisionModel.ifBlank { "google/gemma-3-4b-it" })
+            put("temperature", 0.0)
+            put("max_tokens", 900)
+            put(
+                "messages",
+                buildJsonArray {
+                    add(
+                        buildJsonObject {
+                            put("role", "user")
+                            put(
+                                "content",
+                                buildJsonArray {
+                                    add(
+                                        buildJsonObject {
+                                            put("type", "text")
+                                            put("text", prompt)
+                                        },
+                                    )
+                                    images.forEach { image ->
+                                        add(
+                                            buildJsonObject {
+                                                put("type", "image_url")
+                                                put(
+                                                    "image_url",
+                                                    buildJsonObject {
+                                                        put("url", image.dataUrl)
+                                                    },
+                                                )
+                                            },
+                                        )
+                                    }
+                                },
+                            )
+                        },
+                    )
+                },
+            )
+        }.toString()
+
+        val request = HttpRequest.newBuilder()
+            .uri(URI.create("https://openrouter.ai/api/v1/chat/completions"))
+            .header("Content-Type", "application/json")
+            .header("Authorization", "Bearer $openRouterApiKey")
+            .header("HTTP-Referer", "https://changeyourlife.local")
+            .header("X-Title", "ChangeYourLife")
+            .timeout(Duration.ofSeconds(90))
+            .POST(HttpRequest.BodyPublishers.ofString(body))
+            .build()
+
+        val response = httpClient.send(request, HttpResponse.BodyHandlers.ofString())
+        if (response.statusCode() != 200) {
+            throw Exception("Vision HTTP ${response.statusCode()} - ${response.body()}")
+        }
+        val apiResponse = json.decodeFromString<ApiResponse>(response.body())
+        return apiResponse.choices.firstOrNull()
+            ?.message
+            ?.content
+            ?.ifBlank { null }
+            ?: throw Exception("Vision model returned an empty response.")
+    }
+
     private fun chatCompletionsJson(
         messages: List<ChatMessage>,
         temperature: Double = 0.2,
@@ -495,6 +635,7 @@ class AiService(
         const val MaxActionContextBlocksPerPage = 6
         const val MaxActionContextTasks = 20
         const val MaxActionContextBlockText = 260
+        const val MaxVisionImages = 4
     }
 }
 

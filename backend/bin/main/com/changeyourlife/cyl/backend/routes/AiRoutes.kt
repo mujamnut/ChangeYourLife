@@ -40,7 +40,12 @@ fun Route.aiRoutes(aiService: AiService) {
         route("/ai") {
             post("/chat") {
                 val request = call.receive<ChatRequest>()
-                val reply = withContext(Dispatchers.IO) { aiService.chat(request.messages) }
+                val reply = withContext(Dispatchers.IO) {
+                    aiService.chat(
+                        messages = request.messages,
+                        images = request.images,
+                    )
+                }
                 call.respond(ChatResponse(content = reply))
             }
 
@@ -53,6 +58,7 @@ fun Route.aiRoutes(aiService: AiService) {
                         tasks = request.tasks,
                         clientDate = request.clientDate,
                         clientTimezone = request.clientTimezone,
+                        images = request.images,
                     )
                 }
                 call.respond(

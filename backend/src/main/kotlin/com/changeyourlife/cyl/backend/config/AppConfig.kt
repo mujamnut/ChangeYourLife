@@ -14,9 +14,11 @@ data class AppConfig(
     val geminiApiKey: String?,
     val openRouterApiKey: String?,
     val openRouterModel: String,
+    val openRouterVisionModel: String,
 ) {
     companion object {
         private const val DefaultOpenRouterModel = "openai/gpt-oss-20b:free"
+        private const val DefaultOpenRouterVisionModel = "google/gemma-3-4b-it"
 
         fun fromEnvironment(environment: Map<String, String> = System.getenv()): AppConfig {
             return AppConfig(
@@ -43,6 +45,11 @@ data class AppConfig(
                     envNames = listOf("OPENROUTER_MODEL"),
                     propNames = listOf("openrouter.model", "OPENROUTER_MODEL"),
                 ) ?: DefaultOpenRouterModel,
+                openRouterVisionModel = loadSetting(
+                    environment = environment,
+                    envNames = listOf("OPENROUTER_VISION_MODEL", "AI_VISION_MODEL"),
+                    propNames = listOf("openrouter.vision.model", "OPENROUTER_VISION_MODEL", "AI_VISION_MODEL"),
+                ) ?: DefaultOpenRouterVisionModel,
             )
         }
 

@@ -3,6 +3,7 @@ package com.changeyourlife.cyl.data.repository
 import com.changeyourlife.cyl.data.local.session.AuthTokenStore
 import com.changeyourlife.cyl.data.remote.ai.AiApi
 import com.changeyourlife.cyl.data.remote.ai.AiBlockContextDto
+import com.changeyourlife.cyl.data.remote.ai.AiImageInputDto
 import com.changeyourlife.cyl.data.remote.ai.AiPageContextDto
 import com.changeyourlife.cyl.data.remote.ai.AiTaskContextDto
 import com.changeyourlife.cyl.data.remote.ai.ChatMessageDto
@@ -11,6 +12,7 @@ import com.changeyourlife.cyl.data.remote.ai.ChatWithActionsRequestDto
 import com.changeyourlife.cyl.domain.repository.AiStatus
 import com.changeyourlife.cyl.domain.repository.AiErrorKind
 import com.changeyourlife.cyl.domain.repository.AiException
+import com.changeyourlife.cyl.domain.repository.AiImageAttachment
 import com.changeyourlife.cyl.domain.repository.AiRepository
 import com.changeyourlife.cyl.domain.repository.AiPageContext
 import com.changeyourlife.cyl.domain.repository.ChatActionResult
@@ -75,6 +77,7 @@ class AiRepositoryImpl @Inject constructor(
         tasks: List<Pair<String, String>>,
         clientDate: String,
         clientTimezone: String,
+        images: List<AiImageAttachment>,
     ): Result<ChatActionResult> = withContext(Dispatchers.IO) {
         runCatching {
             val header = getAuthHeader()
@@ -103,6 +106,14 @@ class AiRepositoryImpl @Inject constructor(
                 tasks = tasks.map { AiTaskContextDto(id = it.first, title = it.second) },
                 clientDate = clientDate.ifBlank { LocalDate.now().toString() },
                 clientTimezone = clientTimezone.ifBlank { TimeZone.getDefault().id },
+                images = images.map { image ->
+                    AiImageInputDto(
+                        dataUrl = image.dataUrl,
+                        mimeType = image.mimeType,
+                        name = image.name,
+                        sizeBytes = image.sizeBytes,
+                    )
+                },
             )
             val response = aiApi.chatWithActions(header, request)
             if (response.reply.isBlank() && response.actions.isEmpty() && response.validationIssues.isEmpty()) {

@@ -10,6 +10,8 @@ sdk.dir=C\:/Users/<your-user>/AppData/Local/Android/Sdk
 # Do not commit your real key.
 # OPENROUTER_API_KEY=sk-or-v1-your-key-here
 # OPENROUTER_MODEL=openai/gpt-oss-20b:free
+# Optional image-reading model for AI chat attachments. Must support image input.
+# OPENROUTER_VISION_MODEL=google/gemma-4-26b-a4b-it:free
 
 # Backend PostgreSQL persistence.
 # Aiven PostgreSQL service URI normally needs sslmode=require.

@@ -32,6 +32,7 @@ import com.changeyourlife.cyl.domain.repository.WorkspaceRepository
 import com.changeyourlife.cyl.domain.repository.AiPageContext
 import com.changeyourlife.cyl.domain.repository.AiRepository
 import com.changeyourlife.cyl.domain.repository.AiException
+import com.changeyourlife.cyl.domain.repository.AiImageAttachment
 import com.changeyourlife.cyl.domain.repository.AiStatus
 import com.changeyourlife.cyl.domain.repository.AiActionLogRepository
 import com.changeyourlife.cyl.domain.usecase.ApplyAiActionUndoUseCase
@@ -430,11 +431,13 @@ class HomeViewModel @Inject constructor(
     fun sendChatMessage(
         prompt: String,
         mentionedPageIds: List<String> = emptyList(),
+        images: List<AiImageAttachment> = emptyList(),
     ) {
         sendChatMessageScoped(
             prompt = prompt,
             mentionedPageIds = mentionedPageIds,
             attachedPageId = null,
+            images = images,
         )
     }
 
@@ -442,11 +445,13 @@ class HomeViewModel @Inject constructor(
         prompt: String,
         mentionedPageIds: List<String>,
         attachedPageId: String?,
+        images: List<AiImageAttachment> = emptyList(),
     ) {
         sendChatMessageScoped(
             prompt = prompt,
             mentionedPageIds = mentionedPageIds,
             attachedPageId = attachedPageId,
+            images = images,
         )
     }
 
@@ -477,8 +482,9 @@ class HomeViewModel @Inject constructor(
         prompt: String,
         mentionedPageIds: List<String>,
         attachedPageId: String?,
+        images: List<AiImageAttachment>,
     ) {
-        if (prompt.isBlank() || isAiGeneratingChat.value) return
+        if ((prompt.isBlank() && images.isEmpty()) || isAiGeneratingChat.value) return
 
         isAiGeneratingChat.value = true
         viewModelScope.launch {
@@ -546,7 +552,12 @@ class HomeViewModel @Inject constructor(
             val messagesForAi = currentMessages + userMessage.copy(
                 content = prompt.withMentionContext(explicitlyMentionedPages),
             )
-            aiRepository.chatWithActions(messagesForAi.toRoleContentPairs(), pages = pageContext, tasks = taskContext)
+            aiRepository.chatWithActions(
+                messages = messagesForAi.toRoleContentPairs(),
+                pages = pageContext,
+                tasks = taskContext,
+                images = images,
+            )
                 .onSuccess { result ->
                     isAiGeneratingChat.value = false
                     val orchestration = AiChatActionOrchestrator.orchestrate(

@@ -9,6 +9,7 @@ interface AiRepository {
         tasks: List<Pair<String, String>> = emptyList(),
         clientDate: String = "",
         clientTimezone: String = "",
+        images: List<AiImageAttachment> = emptyList(),
     ): Result<ChatActionResult>
 }
 
@@ -17,6 +18,13 @@ data class AiStatus(
     val provider: String = "",
     val model: String = "",
     val apiKeyConfigured: Boolean = false,
+)
+
+data class AiImageAttachment(
+    val dataUrl: String,
+    val mimeType: String = "",
+    val name: String = "",
+    val sizeBytes: Long = 0,
 )
 
 data class ChatActionResult(

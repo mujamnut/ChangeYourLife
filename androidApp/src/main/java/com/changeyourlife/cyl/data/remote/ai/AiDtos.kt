@@ -9,8 +9,17 @@ data class ChatMessageDto(
 )
 
 @Serializable
+data class AiImageInputDto(
+    val dataUrl: String,
+    val mimeType: String = "",
+    val name: String = "",
+    val sizeBytes: Long = 0,
+)
+
+@Serializable
 data class ChatRequestDto(
-    val messages: List<ChatMessageDto>
+    val messages: List<ChatMessageDto>,
+    val images: List<AiImageInputDto> = emptyList(),
 )
 
 @Serializable
@@ -34,6 +43,7 @@ data class ChatWithActionsRequestDto(
     val tasks: List<AiTaskContextDto> = emptyList(),
     val clientDate: String = "",
     val clientTimezone: String = "",
+    val images: List<AiImageInputDto> = emptyList(),
 )
 
 @Serializable

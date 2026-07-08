@@ -154,6 +154,8 @@ fun CylNavHost(
                 onUndoAiAction = homeViewModel::undoAiAction,
                 onClearHomeAiHistory = homeViewModel::clearChatHistory,
                 onCreateHomeChatSession = homeViewModel::createNewChatSession,
+                onSelectHomeChatSession = homeViewModel::selectChatSession,
+                onDeleteHomeChatSession = homeViewModel::deleteChatSession,
                 onDismissHomeAiError = homeViewModel::clearAiChatError,
             )
         }

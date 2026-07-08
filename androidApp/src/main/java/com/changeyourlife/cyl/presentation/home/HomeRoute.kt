@@ -89,6 +89,7 @@ import com.changeyourlife.cyl.domain.model.ChatSession
 import com.changeyourlife.cyl.domain.model.Page
 import com.changeyourlife.cyl.domain.model.Reminder
 import com.changeyourlife.cyl.domain.model.SyncOverview
+import com.changeyourlife.cyl.domain.repository.AiImageAttachment
 import com.changeyourlife.cyl.presentation.ai.AiChatSheet
 import com.changeyourlife.cyl.presentation.ai.AiChatMessage
 import com.changeyourlife.cyl.presentation.ai.AiChatPageLink
@@ -188,7 +189,7 @@ private fun HomeScreen(
     onDismissCreateWorkspace: () -> Unit,
     onNewWorkspaceNameChange: (String) -> Unit,
     onCreateWorkspace: () -> Unit,
-    onSendChatMessage: (String, List<String>) -> Unit,
+    onSendChatMessage: (String, List<String>, List<AiImageAttachment>) -> Unit,
     onUndoAiAction: (String, String) -> Unit,
     onClearChatHistory: () -> Unit,
     onCreateChatSession: () -> Unit,
@@ -221,17 +222,21 @@ private fun HomeScreen(
     }
 
     if (isChatSheetOpen) {
-        AiChatSheet(
-            messages = uiState.chatMessages,
-            mentionPages = uiState.allPages,
-            isGenerating = uiState.isAiGeneratingChat,
-            errorMessage = uiState.aiChatError,
-            modelLabel = uiState.aiModelLabel,
-            onSendMessage = onSendChatMessage,
-            onUndoAction = onUndoAiAction,
-            onClearHistory = onClearChatHistory,
-            onCreateChatSession = onCreateChatSession,
-            onDismissError = onDismissChatError,
+            AiChatSheet(
+                messages = uiState.chatMessages,
+                mentionPages = uiState.allPages,
+                chatSessions = uiState.chatSessions,
+                activeChatSessionId = uiState.activeChatSessionId,
+                isGenerating = uiState.isAiGeneratingChat,
+                errorMessage = uiState.aiChatError,
+                modelLabel = uiState.aiModelLabel,
+                onSendMessage = onSendChatMessage,
+                onUndoAction = onUndoAiAction,
+                onClearHistory = onClearChatHistory,
+                onCreateChatSession = onCreateChatSession,
+                onSelectChatSession = onSelectChatSession,
+                onDeleteChatSession = onDeleteChatSession,
+                onDismissError = onDismissChatError,
             onOpenPage = { pageId, targetType, targetId ->
                 scope.launch { chatSheetState.hide() }.invokeOnCompletion {
                     isChatSheetOpen = false
@@ -1861,7 +1866,7 @@ private fun HomeRoutePreview() {
             onDismissCreateWorkspace = {},
             onNewWorkspaceNameChange = {},
             onCreateWorkspace = {},
-            onSendChatMessage = { _, _ -> },
+            onSendChatMessage = { _, _, _ -> },
             onUndoAiAction = { _, _ -> },
             onClearChatHistory = {},
             onCreateChatSession = {},

@@ -84,6 +84,7 @@ fun Application.module(
         geminiApiKey = appConfig.geminiApiKey,
         openRouterApiKey = appConfig.openRouterApiKey,
         openRouterModel = appConfig.openRouterModel,
+        openRouterVisionModel = appConfig.openRouterVisionModel,
     )
     environment.log.info(
         "AI provider initialized: provider=${aiService.activeProvider}, model=${aiService.activeModel}, apiKeyConfigured=${!aiService.isMockMode}",
