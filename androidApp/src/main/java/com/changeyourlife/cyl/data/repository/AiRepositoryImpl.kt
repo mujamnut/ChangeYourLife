@@ -24,6 +24,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import retrofit2.HttpException
 
 class AiRepositoryImpl @Inject constructor(
     private val aiApi: AiApi,
@@ -131,7 +132,14 @@ class AiRepositoryImpl @Inject constructor(
         header: String,
         request: ChatWithActionsRequestDto,
     ) = withContext(Dispatchers.IO) {
-        val accepted = aiApi.createChatWithActionsJob(header, request)
+        val accepted = try {
+            aiApi.createChatWithActionsJob(header, request)
+        } catch (error: HttpException) {
+            if (error.isMissingAiJobEndpoint()) {
+                return@withContext aiApi.chatWithActions(header, request)
+            }
+            throw error
+        }
         val jobId = accepted.jobId.ifBlank {
             throw AiErrorMapper.emptyResponse("chatWithActionsJob")
         }
@@ -140,7 +148,14 @@ class AiRepositoryImpl @Inject constructor(
         val startedAt = System.currentTimeMillis()
         while (System.currentTimeMillis() - startedAt < AiJobPollingTimeoutMillis) {
             delay(pollDelayMs)
-            val status = aiApi.chatWithActionsJobStatus(header, jobId)
+            val status = try {
+                aiApi.chatWithActionsJobStatus(header, jobId)
+            } catch (error: HttpException) {
+                if (error.isMissingAiJobEndpoint()) {
+                    return@withContext aiApi.chatWithActions(header, request)
+                }
+                throw error
+            }
             when (status.status.lowercase()) {
                 AiJobSucceeded -> {
                     return@withContext status.result
@@ -170,6 +185,10 @@ class AiRepositoryImpl @Inject constructor(
                 retryable = true,
             ),
         )
+    }
+
+    private fun HttpException.isMissingAiJobEndpoint(): Boolean {
+        return code() == 404 || code() == 405
     }
 
     private companion object {
