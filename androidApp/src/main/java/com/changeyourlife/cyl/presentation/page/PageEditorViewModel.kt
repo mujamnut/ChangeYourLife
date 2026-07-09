@@ -75,6 +75,7 @@ class PageEditorViewModel @Inject constructor(
     private val _pendingTitle = MutableStateFlow<String?>(null)
     private val _canUndoEditorChange = MutableStateFlow(false)
     private val reminderSyncedPageIds = mutableSetOf<String>()
+    private val budgetMigratedPageIds = mutableSetOf<String>()
     private val editorUndoSnapshots = ArrayDeque<PageBlockDocument>()
     private val editorCommandHistory = EditorCommandHistory(
         applyEditorCommandUseCase = applyEditorCommandUseCase,
@@ -93,6 +94,9 @@ class PageEditorViewModel @Inject constructor(
             )
         } else {
             val document = PageBlockCodec.decodeDocument(page.content)
+                .normalizedForEditor()
+                .withBudgetLedgerSummarySynced()
+                .normalizedForEditor()
             PageEditorUiState(
                 isLoading = false,
                 page = page,
@@ -167,10 +171,21 @@ class PageEditorViewModel @Inject constructor(
         viewModelScope.launch {
             pageRepository.observePage(pageId)
                 .collect { page ->
-                    if (page == null || !reminderSyncedPageIds.add(page.id)) return@collect
+                    if (page == null) return@collect
+                    val normalizedDocument = PageBlockCodec.decodeDocument(page.content).normalizedForEditor()
+                    val syncedDocument = normalizedDocument.withBudgetLedgerSummarySynced().normalizedForEditor()
+                    if (syncedDocument != normalizedDocument && budgetMigratedPageIds.add(page.id)) {
+                        pageRepository.upsertPage(
+                            page.copy(
+                                content = PageBlockCodec.encodeDocument(syncedDocument),
+                                updatedAt = System.currentTimeMillis(),
+                            ),
+                        )
+                    }
+                    if (!reminderSyncedPageIds.add(page.id)) return@collect
                     syncDateRemindersForDocument(
                         page = page,
-                        document = PageBlockCodec.decodeDocument(page.content).normalizedForEditor(),
+                        document = syncedDocument,
                     )
                 }
         }

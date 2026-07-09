@@ -25,6 +25,7 @@ import com.changeyourlife.cyl.domain.model.RichTextSpanEngine
 import com.changeyourlife.cyl.domain.model.TaskItem
 import com.changeyourlife.cyl.domain.model.normalizedForType
 import com.changeyourlife.cyl.domain.model.toAiUndoCommandSummary
+import com.changeyourlife.cyl.domain.model.toTypedCellValue
 import com.changeyourlife.cyl.domain.repository.ChatAction
 import com.changeyourlife.cyl.domain.repository.PageRepository
 import com.changeyourlife.cyl.domain.repository.ReminderRepository
@@ -2098,12 +2099,15 @@ private fun PageBlock.updateTableRow(
     val titleColumn = table.columns.firstOrNull()
     val resolvedCells = cellValues.toMutableMap()
     if (newRowTitle.isNotBlank() && titleColumn != null) resolvedCells[titleColumn.name] = newRowTitle
+    val rowPatch = table.columns.newRow(resolvedCells)
+    val nonBlankCells = rowPatch.cells.filterValues { value -> value.isNotBlank() }
     return copy(
         table = table.copy(
             rows = table.rows.map { existing ->
                 if (existing.id == row.id) {
                     existing.copy(
-                        cells = existing.cells + table.columns.newRow(resolvedCells).cells.filterValues { value -> value.isNotBlank() },
+                        cells = existing.cells + nonBlankCells,
+                        cellValues = existing.cellValues + rowPatch.cellValues.filterKeys { columnId -> columnId in nonBlankCells },
                     )
                 } else {
                     existing
@@ -2145,7 +2149,14 @@ private fun PageBlock.updateCellByNames(
     return copy(
         table = table.copy(
             rows = table.rows.map { existing ->
-                if (existing.id == row.id) existing.copy(cells = existing.cells + (column.id to value)) else existing
+                if (existing.id == row.id) {
+                    existing.copy(
+                        cells = existing.cells + (column.id to value),
+                        cellValues = existing.cellValues + (column.id to column.toTypedCellValue(value)),
+                    )
+                } else {
+                    existing
+                }
             },
         ),
     )
@@ -2275,8 +2286,13 @@ private fun PageTable.newRowFromAction(action: ChatAction): PageTableRow {
 
 private fun List<PageTableColumn>.newRow(valuesByColumnName: Map<String, String>): PageTableRow {
     val valuesByNormalizedName = valuesByColumnName.entries.associate { entry -> entry.key.normalizedAiKey() to entry.value }
+    val cellsByColumnId = associate { column -> column.id to valuesByNormalizedName[column.name.normalizedAiKey()].orEmpty() }
     return PageBlockCodec.newTableRow(this).copy(
-        cells = associate { column -> column.id to valuesByNormalizedName[column.name.normalizedAiKey()].orEmpty() },
+        cells = cellsByColumnId,
+        cellValues = associate { column ->
+            val displayValue = cellsByColumnId[column.id].orEmpty()
+            column.id to column.toTypedCellValue(displayValue)
+        },
     )
 }
 

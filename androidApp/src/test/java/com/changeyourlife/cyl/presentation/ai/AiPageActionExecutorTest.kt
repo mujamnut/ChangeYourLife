@@ -20,6 +20,8 @@ import com.changeyourlife.cyl.domain.repository.ReminderRepository
 import com.changeyourlife.cyl.domain.repository.TaskRepository
 import com.changeyourlife.cyl.domain.usecase.ApplyEditorCommandUseCase
 import com.changeyourlife.cyl.presentation.page.PageBlockCodec
+import com.changeyourlife.cyl.presentation.page.PageTableReference
+import com.changeyourlife.cyl.presentation.page.displayCellText
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.runBlocking
@@ -301,11 +303,25 @@ class AiPageActionExecutorTest {
         )
 
         assertEquals(0, result.validationIssues.size)
-        val row = requireNotNull(result.updatedDocument).table.rows.single()
-        assertEquals("makeup", row.cells[nameColumn.id])
-        assertEquals("29", row.cells[amountColumn.id])
-        assertEquals("2026-06-30", row.cells[dateColumn.id])
-        assertEquals("29 ringgit harini makeup", row.cells[notesColumn.id])
+        val table = requireNotNull(result.updatedDocument)
+            .blocks
+            .single { block -> block.id == "block-table" }
+            .table
+        val syncedNameColumn = table.columns.single { column -> column.name == "Name" }
+        val syncedAmountColumn = table.columns.single { column -> column.name == "Amount" }
+        val syncedDateColumn = table.columns.single { column -> column.name == "Date" }
+        val syncedNotesColumn = table.columns.single { column -> column.name == "Notes" }
+        val row = table
+            .rows
+            .single()
+        assertEquals("Makeup", row.cells[syncedNameColumn.id])
+        assertEquals("29", row.cells[syncedAmountColumn.id])
+        assertEquals("2026-06-30", row.cells[syncedDateColumn.id])
+        assertEquals("29 ringgit harini makeup", row.cells[syncedNotesColumn.id])
+        assertEquals("Makeup", row.cellValues[syncedNameColumn.id]?.text)
+        assertEquals("29", row.cellValues[syncedAmountColumn.id]?.number)
+        assertEquals("2026-06-30", row.cellValues[syncedDateColumn.id]?.date?.startDate)
+        assertEquals("29 ringgit harini makeup", row.cellValues[syncedNotesColumn.id]?.text)
         assertEquals(1, result.undoCommands.size)
         assertEquals(0, result.undoCommands.single().actionIndex)
         assertEquals("ReplaceTable", result.undoCommands.single().commandType)
@@ -462,16 +478,30 @@ class AiPageActionExecutorTest {
         assertEquals("Fuel", addedRow.cells[categoryColumn.id])
         assertEquals("Expense", addedRow.cells[typeColumn.id])
         assertEquals("Confirmed", addedRow.cells[statusColumn.id])
+        assertEquals("Fuel", addedRow.cellValues[nameColumn.id]?.text)
+        assertEquals("Fuel", addedRow.cellValues[categoryColumn.id]?.text)
+        assertEquals("Expense", addedRow.cellValues[typeColumn.id]?.text)
+        assertEquals("5", addedRow.cellValues[amountColumn.id]?.number)
+        assertEquals("Confirmed", addedRow.cellValues[statusColumn.id]?.text)
 
         val summary = updated.blocks.single { block -> block.id == "block-summary" }.table
-        fun summaryTotal(category: String): String {
-            val row = summary.rows.single { item -> item.cells[summaryCategoryColumn.id] == category }
-            return row.cells[summaryTotalColumn.id].orEmpty()
+        val tableReferences = updated.blocks
+            .filter { block -> block.type == PageBlockType.DatabaseTable }
+            .map { block -> PageTableReference(blockId = block.id, title = block.table.title, table = block.table) }
+        val monthColumn = summary.columns.single { column -> column.name == "Month" }
+        val monthRow = summary.rows.single { row -> row.cells[monthColumn.id] == "No month" }
+        fun summaryValue(columnName: String): String {
+            val column = summary.columns.single { item -> item.name == columnName }
+            return summary.displayCellText(monthRow, column, tableReferences)
         }
-        assertEquals("8", summaryTotal("Known Expenses"))
-        assertEquals("1488", summaryTotal("Income"))
-        assertEquals("1480", summaryTotal("Balance"))
-        assertTrue(summary.rows.any { row -> row.cells[summaryCategoryColumn.id] == "Fuel" && row.cells[summaryTotalColumn.id] == "5" })
+        assertEquals("8", summaryValue("Known Expenses"))
+        assertEquals("1488", summaryValue("Income"))
+        assertEquals("1480", summaryValue("Balance"))
+        assertTrue(
+            transactions.columns
+                .single { column -> column.name == "Month" }
+                .let { column -> transactions.rows.all { row -> row.cells.containsKey(column.id) } },
+        )
     }
 
     @Test

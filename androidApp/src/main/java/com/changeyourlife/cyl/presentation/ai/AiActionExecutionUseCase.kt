@@ -11,6 +11,7 @@ import com.changeyourlife.cyl.domain.model.PageTableColumn
 import com.changeyourlife.cyl.domain.model.PageTableColumnType
 import com.changeyourlife.cyl.domain.model.PageTableRow
 import com.changeyourlife.cyl.domain.model.PageTableView
+import com.changeyourlife.cyl.domain.model.toTypedCellValue
 import com.changeyourlife.cyl.domain.repository.ChatAction
 import com.changeyourlife.cyl.domain.repository.PageRepository
 import com.changeyourlife.cyl.presentation.page.PageBlockCodec
@@ -399,9 +400,14 @@ private fun List<PageTableColumn>.newRow(valuesByColumnName: Map<String, String>
     val valuesByNormalizedName = valuesByColumnName.entries.associate { entry ->
         entry.key.normalizedAiKey() to entry.value
     }
+    val cellsByColumnId = associate { column ->
+        column.id to valuesByNormalizedName[column.name.normalizedAiKey()].orEmpty()
+    }
     return PageBlockCodec.newTableRow(this).copy(
-        cells = associate { column ->
-            column.id to valuesByNormalizedName[column.name.normalizedAiKey()].orEmpty()
+        cells = cellsByColumnId,
+        cellValues = associate { column ->
+            val displayValue = cellsByColumnId[column.id].orEmpty()
+            column.id to column.toTypedCellValue(displayValue)
         },
     )
 }

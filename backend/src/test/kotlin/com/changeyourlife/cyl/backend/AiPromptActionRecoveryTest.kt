@@ -112,16 +112,18 @@ class AiPromptActionRecoveryTest {
         assertEquals("July Monthly Expenses", action.title)
         assertEquals("Transactions", action.tableTitle)
         assertEquals(
-            listOf("Name", "Date", "Category", "Type", "Amount", "Status", "Notes"),
+            listOf("Name", "Date", "Month", "Category", "Type", "Amount", "Status", "Notes"),
             action.tableColumns.map { column -> column.name },
         )
         assertEquals("Salary", action.tableRows.single()["Name"])
+        assertEquals("${java.time.LocalDate.now().year}-07", action.tableRows.single()["Month"])
         assertEquals("Income", action.tableRows.single()["Type"])
         assertEquals("1488", action.tableRows.single()["Amount"])
         assertEquals("CREATE_DATABASE", summary.type)
         assertEquals("July Monthly Expenses", summary.targetTitle)
         assertEquals("Monthly Summary", summary.tableTitle)
-        assertTrue(summary.tableRows.any { row -> row["Category"] == "Income" && row["Total"] == "1488" })
+        assertEquals(listOf("Month", "Status", "Notes"), summary.tableColumns.map { column -> column.name })
+        assertTrue(summary.tableRows.any { row -> row["Month"] == "${java.time.LocalDate.now().year}-07" })
     }
 
     @Test
@@ -136,6 +138,7 @@ class AiPromptActionRecoveryTest {
         assertEquals("July Monthly Expenses", action.title)
         assertEquals("Transactions", action.tableTitle)
         assertEquals("Salary", action.tableRows.single()["Name"])
+        assertEquals("${java.time.LocalDate.now().year}-07", action.tableRows.single()["Month"])
         assertEquals("1488", action.tableRows.single()["Amount"])
     }
 
@@ -252,6 +255,7 @@ class AiPromptActionRecoveryTest {
         assertEquals("July Monthly Expenses", action.title)
         assertEquals("Transactions", action.tableTitle)
         assertEquals("Salary", action.tableRows.single()["Name"])
+        assertEquals("${java.time.LocalDate.now().year}-07", action.tableRows.single()["Month"])
         assertEquals("1488", action.tableRows.single()["Amount"])
     }
 
@@ -266,6 +270,9 @@ class AiPromptActionRecoveryTest {
         assertEquals("CREATE_PAGE", action.type)
         assertEquals("July Monthly Expenses", action.title)
         assertEquals("Transactions", action.tableTitle)
+        val month = action.tableColumns.single { column -> column.name == "Month" }
+        assertEquals("Select", month.type)
+        assertEquals(listOf("${java.time.LocalDate.now().year}-07"), month.options)
 
         val category = action.tableColumns.single { column -> column.name == "Category" }
         assertEquals("Select", category.type)
@@ -307,13 +314,14 @@ class AiPromptActionRecoveryTest {
         assertEquals("CREATE_PAGE", transactions.type)
         assertEquals("July Monthly Expenses", transactions.title)
         assertEquals("Transactions", transactions.tableTitle)
-        assertEquals(listOf("Name", "Date", "Category", "Type", "Amount", "Status", "Notes"), transactions.tableColumns.map { it.name })
+        assertEquals(listOf("Name", "Date", "Month", "Category", "Type", "Amount", "Status", "Notes"), transactions.tableColumns.map { it.name })
 
         val category = transactions.tableColumns.single { column -> column.name == "Category" }
         assertEquals("Select", category.type)
         assertTrue(category.options.containsAll(listOf("Makan", "Minyak Moto", "Internet", "Letrik", "Barang Lain", "Spaylater", "Ttshop", "Kak Amani", "Mak", "Gaji")))
 
         val rows = transactions.tableRows
+        assertTrue(rows.all { row -> row["Month"] == "${java.time.LocalDate.now().year}-07" })
         assertTrue(rows.any { row -> row["Category"] == "Makan" && row["Amount"] == "8.9" && row["Status"] == "Incomplete" })
         assertTrue(rows.any { row -> row["Category"] == "Minyak Moto" && row["Amount"] == "5" && row["Type"] == "Expense" })
         assertTrue(rows.any { row -> row["Category"] == "Letrik" && row["Amount"] == "10" && row["Status"] == "Incomplete" })
@@ -324,9 +332,7 @@ class AiPromptActionRecoveryTest {
         assertEquals("CREATE_DATABASE", summary.type)
         assertEquals("July Monthly Expenses", summary.targetTitle)
         assertEquals("Monthly Summary", summary.tableTitle)
-        assertTrue(summary.tableRows.any { row -> row["Category"] == "Known Expenses" && row["Total"] == "195.12" })
-        assertTrue(summary.tableRows.any { row -> row["Category"] == "Debt" && row["Total"] == "600" })
-        assertTrue(summary.tableRows.any { row -> row["Category"] == "Income" && row["Total"] == "1488" })
-        assertTrue(summary.tableRows.any { row -> row["Category"] == "Balance" && row["Total"] == "692.88" })
+        assertEquals(listOf("Month", "Status", "Notes"), summary.tableColumns.map { it.name })
+        assertTrue(summary.tableRows.any { row -> row["Month"] == "${java.time.LocalDate.now().year}-07" && row["Status"] == "Incomplete" })
     }
 }

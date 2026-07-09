@@ -6,11 +6,14 @@ import com.changeyourlife.cyl.domain.model.PageBlockType
 import com.changeyourlife.cyl.domain.model.PagePropertyType
 import com.changeyourlife.cyl.domain.model.PageTable
 import com.changeyourlife.cyl.domain.model.PageTableColumn
+import com.changeyourlife.cyl.domain.model.PageTableColumnConfig
 import com.changeyourlife.cyl.domain.model.PageTableColumnType
 import com.changeyourlife.cyl.domain.model.PageTableOptionColor
+import com.changeyourlife.cyl.domain.model.PageTableRollupAggregation
 import com.changeyourlife.cyl.domain.model.PageTableSelectOption
 import com.changeyourlife.cyl.domain.model.PageTableView
 import com.changeyourlife.cyl.domain.model.PageTableViewConfig
+import com.changeyourlife.cyl.domain.model.normalizedForType
 
 enum class PageModuleType(
     val label: String,
@@ -156,6 +159,7 @@ object PageModuleTemplates {
                     columnSpecs = listOf(
                         "Name" to PageTableColumnType.Text,
                         "Date" to PageTableColumnType.Date,
+                        "Month" to PageTableColumnType.Select,
                         "Category" to PageTableColumnType.Select,
                         "Type" to PageTableColumnType.Select,
                         "Amount" to PageTableColumnType.Number,
@@ -165,13 +169,16 @@ object PageModuleTemplates {
                     rowValues = listOf(
                         mapOf(
                             "Name" to "Salary",
+                            "Month" to "2026-07",
                             "Category" to "Salary",
                             "Type" to "Income",
+                            "Amount" to "0",
                             "Status" to "Confirmed",
                         ),
                     ),
                     configureColumns = { columns ->
-                        columns.withOptions("Category", "Salary", "Food", "Fuel", "Makeup", "Transport", "Other")
+                        columns.withOptions("Month", "2026-07")
+                            .withOptions("Category", "Salary", "Food", "Fuel", "Makeup", "Transport", "Other")
                             .withOptions("Type", "Expense", "Income", "Debt")
                             .withOptions("Status", "Confirmed", "Incomplete", "Empty")
                     },
@@ -183,37 +190,65 @@ object PageModuleTemplates {
                         )
                     },
                 ),
-                tableBlock(
-                    title = "Monthly Summary",
-                    columnSpecs = listOf(
-                        "Category" to PageTableColumnType.Select,
-                        "Type" to PageTableColumnType.Select,
-                        "Total" to PageTableColumnType.Number,
-                        "Status" to PageTableColumnType.Status,
-                        "Notes" to PageTableColumnType.Text,
-                    ),
-                    rowValues = listOf(
-                        mapOf("Category" to "Income", "Type" to "Summary", "Total" to "0", "Status" to "Confirmed"),
-                        mapOf("Category" to "Known Expenses", "Type" to "Summary", "Total" to "0", "Status" to "Confirmed"),
-                        mapOf("Category" to "Debt", "Type" to "Summary", "Total" to "0", "Status" to "Confirmed"),
-                        mapOf("Category" to "Balance", "Type" to "Summary", "Total" to "0", "Status" to "Confirmed"),
-                    ),
-                    configureColumns = { columns ->
-                        columns.withOptions("Category", "Income", "Known Expenses", "Debt", "Balance")
-                            .withOptions("Type", "Expense", "Income", "Debt", "Summary")
-                            .withOptions("Status", "Confirmed", "Incomplete", "Empty")
-                    },
-                    viewConfig = { columns ->
-                        PageTableViewConfig(
-                            dashboardMetricColumnId = columns.idFor("Total"),
-                            dashboardGroupColumnId = columns.idFor("Category"),
-                        )
-                    },
-                ),
+                monthlySummaryTableBlock(),
             )
         }
-        return PageBlockDocument(properties = properties, blocks = blocks)
+        return PageBlockDocument(properties = properties, blocks = blocks).withBudgetLedgerSummarySynced()
     }
+
+    private fun monthlySummaryTableBlock(): PageBlock {
+        val month = PageBlockCodec.newTableColumn("Month", PageTableColumnType.Select)
+            .copy(config = PageTableColumnConfig(options = listOf("2026-07").toTemplateSelectOptions()))
+        val incomeRelation = hiddenRelationColumn("Income Transactions")
+        val expenseRelation = hiddenRelationColumn("Expense Transactions")
+        val debtRelation = hiddenRelationColumn("Debt Transactions")
+        val income = PageBlockCodec.newTableColumn("Income", PageTableColumnType.Rollup)
+            .copy(
+                rollupRelationColumnId = incomeRelation.id,
+                rollupAggregation = PageTableRollupAggregation.Sum,
+            )
+        val expenses = PageBlockCodec.newTableColumn("Known Expenses", PageTableColumnType.Rollup)
+            .copy(
+                rollupRelationColumnId = expenseRelation.id,
+                rollupAggregation = PageTableRollupAggregation.Sum,
+            )
+        val debt = PageBlockCodec.newTableColumn("Debt", PageTableColumnType.Rollup)
+            .copy(
+                rollupRelationColumnId = debtRelation.id,
+                rollupAggregation = PageTableRollupAggregation.Sum,
+            )
+        val balance = PageBlockCodec.newTableColumn("Balance", PageTableColumnType.Formula)
+            .copy(formula = "{Income} - {Known Expenses} - {Debt}")
+        val status = PageBlockCodec.newTableColumn("Status", PageTableColumnType.Status)
+        val notes = PageBlockCodec.newTableColumn("Notes", PageTableColumnType.Text)
+        val columns = listOf(month, incomeRelation, expenseRelation, debtRelation, income, expenses, debt, balance, status, notes)
+        return PageBlockCodec.newBlock(PageBlockType.DatabaseTable).copy(
+            table = PageTable(
+                title = "Monthly Summary",
+                view = PageTableView.Table,
+                viewConfig = PageTableViewConfig(
+                    dashboardMetricColumnId = balance.id,
+                    dashboardGroupColumnId = month.id,
+                ),
+                columns = columns,
+                rows = listOf(
+                    PageBlockCodec.newTableRow(columns).copy(
+                        id = "summary-2026-07",
+                        cells = mapOf(
+                            month.id to "2026-07",
+                            status.id to "Confirmed",
+                            notes.id to "Balance = Income - Known Expenses - Debt",
+                        ),
+                    ),
+                ),
+            ),
+        )
+    }
+
+    private fun hiddenRelationColumn(name: String): PageTableColumn =
+        PageBlockCodec.newTableColumn(name, PageTableColumnType.Relation).copy(
+            config = PageTableColumnConfig(isHidden = true).normalizedForType(PageTableColumnType.Relation),
+        )
 
     private fun heading(text: String): PageBlock {
         return PageBlockCodec.newBlock(PageBlockType.Heading).copy(text = text)

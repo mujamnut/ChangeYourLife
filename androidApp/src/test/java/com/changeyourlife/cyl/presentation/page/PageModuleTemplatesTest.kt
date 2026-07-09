@@ -17,9 +17,10 @@ class PageModuleTemplatesTest {
         val transactions = tables[0].table
         assertEquals("Transactions", transactions.title)
         assertEquals(
-            listOf("Name", "Date", "Category", "Type", "Amount", "Status", "Notes"),
+            listOf("Name", "Date", "Month", "Category", "Type", "Amount", "Status", "Notes"),
             transactions.columns.map { column -> column.name },
         )
+        assertEquals(PageTableColumnType.Select, transactions.columns.single { column -> column.name == "Month" }.type)
         assertEquals(PageTableColumnType.Select, transactions.columns.single { column -> column.name == "Category" }.type)
         assertTrue(
             transactions.columns.single { column -> column.name == "Category" }
@@ -34,11 +35,28 @@ class PageModuleTemplatesTest {
 
         val summary = tables[1].table
         assertEquals("Monthly Summary", summary.title)
-        assertEquals(listOf("Category", "Type", "Total", "Status", "Notes"), summary.columns.map { column -> column.name })
-        assertTrue(summary.rows.any { row ->
-            val categoryColumn = summary.columns.single { column -> column.name == "Category" }
-            val totalColumn = summary.columns.single { column -> column.name == "Total" }
-            row.cells[categoryColumn.id] == "Balance" && row.cells[totalColumn.id] == "0"
-        })
+        assertEquals(
+            listOf(
+                "Month",
+                "Income Transactions",
+                "Expense Transactions",
+                "Debt Transactions",
+                "Income",
+                "Known Expenses",
+                "Debt",
+                "Balance",
+                "Status",
+                "Notes",
+            ),
+            summary.columns.map { column -> column.name },
+        )
+        assertTrue(summary.columns.single { column -> column.name == "Income Transactions" }.config.isHidden)
+        assertEquals(PageTableColumnType.Rollup, summary.columns.single { column -> column.name == "Income" }.type)
+        assertEquals(PageTableColumnType.Rollup, summary.columns.single { column -> column.name == "Known Expenses" }.type)
+        assertEquals(PageTableColumnType.Formula, summary.columns.single { column -> column.name == "Balance" }.type)
+        assertEquals(
+            "{Income} - {Known Expenses} - {Debt}",
+            summary.columns.single { column -> column.name == "Balance" }.formula,
+        )
     }
 }

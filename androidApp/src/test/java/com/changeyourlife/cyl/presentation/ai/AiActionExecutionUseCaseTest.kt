@@ -58,6 +58,8 @@ class AiActionExecutionUseCaseTest {
         assertEquals("Budget", table.title)
         assertEquals(listOf("Item", "Amount"), table.columns.map { column -> column.name })
         assertEquals("4", table.rows.single().cells[table.columns[1].id])
+        assertEquals("Food", table.rows.single().cellValues[table.columns[0].id]?.text)
+        assertEquals("4", table.rows.single().cellValues[table.columns[1].id]?.number)
     }
 
     @Test

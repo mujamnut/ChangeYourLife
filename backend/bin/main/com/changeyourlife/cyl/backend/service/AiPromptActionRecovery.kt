@@ -3,7 +3,6 @@ package com.changeyourlife.cyl.backend.service
 import com.changeyourlife.cyl.backend.model.ai.AiBlockContext
 import com.changeyourlife.cyl.backend.model.ai.AiPageContext
 import com.changeyourlife.cyl.backend.model.ai.AiActionValidationIssue
-import java.math.BigDecimal
 import java.time.LocalDate
 
 private typealias AiActionItem = AiService.AiActionItem
@@ -266,6 +265,7 @@ class AiPromptActionRecovery(
         if (!isExplicitPageCreate && !isHomeTablePage) return null
         if (listOf("subpage", "sub page", "sub-page").any { token -> value.contains(token) }) return null
 
+        val requestedMonthKey = extractRequestedMonthKey()
         val pageTitle = when {
             isExpensePage -> listOfNotNull(extractRequestedMonthName(), "Monthly Expenses").joinToString(" ")
             isHomeTablePage -> extractHomeTablePageTitle().ifBlank { "Untitled page" }
@@ -278,6 +278,7 @@ class AiPromptActionRecovery(
                 pageTitle = pageTitle,
                 salaryAmount = salaryAmount,
                 explicitDropdownColumns = explicitDropdownColumns,
+                monthKey = requestedMonthKey,
             )
         }
         val baseTableColumns = when {
@@ -388,6 +389,39 @@ class AiPromptActionRecovery(
         }
     }
 
+    private fun String.extractRequestedMonthKey(): String {
+        val year = Regex("\\b(20\\d{2})\\b")
+            .find(this)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.toIntOrNull()
+            ?: java.time.LocalDate.now().year
+        val monthNumber = Regex("(?i)\\b(?:bulan|month)\\s*(\\d{1,2})\\b")
+            .find(this)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.toIntOrNull()
+            ?: extractRequestedMonthName()?.monthNameToNumber()
+            ?: return ""
+        return if (monthNumber in 1..12) "%04d-%02d".format(year, monthNumber) else ""
+    }
+
+    private fun String.monthNameToNumber(): Int? = when (lowercase()) {
+        "january", "januari" -> 1
+        "february", "februari" -> 2
+        "march", "mac" -> 3
+        "april" -> 4
+        "may", "mei" -> 5
+        "june", "jun" -> 6
+        "july", "julai" -> 7
+        "august", "ogos" -> 8
+        "september" -> 9
+        "october", "oktober" -> 10
+        "november" -> 11
+        "december", "disember" -> 12
+        else -> null
+    }
+
     private fun Int.toMonthNameOrNull(): String? = when (this) {
         1 -> "January"
         2 -> "February"
@@ -418,6 +452,7 @@ class AiPromptActionRecovery(
         pageTitle: String,
         salaryAmount: String?,
         explicitDropdownColumns: List<AiTableColumnItem>,
+        monthKey: String,
     ): List<AiActionItem> {
         val entries = extractMonthlyExpenseEntries(salaryAmount)
         val categoryOptions = explicitDropdownColumns
@@ -439,11 +474,12 @@ class AiPromptActionRecovery(
                 tableTitle = "Transactions",
                 tableView = "Table",
                 tableColumns = monthlyExpenseTransactionColumns(
+                    monthOptions = listOf(monthKey).filter { month -> month.isNotBlank() },
                     categoryOptions = categoryOptions,
                     typeOptions = typeOptions,
                     statusOptions = statusOptions,
                 ).withExplicitDropdownColumns(explicitDropdownColumns),
-                tableRows = entries.toTransactionRows(),
+                tableRows = entries.toTransactionRows(monthKey),
             ),
             AiActionItem(
                 type = "CREATE_DATABASE",
@@ -451,22 +487,23 @@ class AiPromptActionRecovery(
                 tableTitle = "Monthly Summary",
                 tableView = "Table",
                 tableColumns = monthlyExpenseSummaryColumns(
-                    categoryOptions = categoryOptions + listOf("Known Expenses", "Debt", "Income", "Balance"),
-                    typeOptions = typeOptions + "Summary",
+                    monthOptions = listOf(monthKey).filter { month -> month.isNotBlank() },
                     statusOptions = statusOptions,
                 ).withExplicitDropdownColumns(explicitDropdownColumns),
-                tableRows = entries.toSummaryRows(),
+                tableRows = entries.toSummaryRows(monthKey),
             ),
         )
     }
 
     private fun monthlyExpenseTransactionColumns(
+        monthOptions: List<String>,
         categoryOptions: List<String>,
         typeOptions: List<String>,
         statusOptions: List<String>,
     ): List<AiTableColumnItem> = listOf(
         AiTableColumnItem(name = "Name", type = "Text"),
         AiTableColumnItem(name = "Date", type = "Date"),
+        AiTableColumnItem(name = "Month", type = "Select", options = monthOptions.cleanOptions()),
         AiTableColumnItem(name = "Category", type = "Select", options = categoryOptions.cleanOptions()),
         AiTableColumnItem(name = "Type", type = "Select", options = typeOptions.cleanOptions()),
         AiTableColumnItem(name = "Amount", type = "Number"),
@@ -475,13 +512,10 @@ class AiPromptActionRecovery(
     )
 
     private fun monthlyExpenseSummaryColumns(
-        categoryOptions: List<String>,
-        typeOptions: List<String>,
+        monthOptions: List<String>,
         statusOptions: List<String>,
     ): List<AiTableColumnItem> = listOf(
-        AiTableColumnItem(name = "Category", type = "Select", options = categoryOptions.cleanOptions()),
-        AiTableColumnItem(name = "Type", type = "Select", options = typeOptions.cleanOptions()),
-        AiTableColumnItem(name = "Total", type = "Number"),
+        AiTableColumnItem(name = "Month", type = "Select", options = monthOptions.cleanOptions()),
         AiTableColumnItem(name = "Status", type = "Status", options = statusOptions.cleanOptions()),
         AiTableColumnItem(name = "Notes", type = "Text"),
     )
@@ -559,7 +593,7 @@ class AiPromptActionRecovery(
         }
     }
 
-    private fun List<MonthlyExpenseEntry>.toTransactionRows(): List<Map<String, String>> =
+    private fun List<MonthlyExpenseEntry>.toTransactionRows(monthKey: String): List<Map<String, String>> =
         flatMap { entry ->
             entry.amounts.mapIndexed { index, amount ->
                 val transactionName = if (entry.amounts.size > 1) {
@@ -569,6 +603,7 @@ class AiPromptActionRecovery(
                 }
                 buildMap {
                     put("Name", transactionName)
+                    if (monthKey.isNotBlank()) put("Month", monthKey)
                     put("Category", entry.name)
                     put("Type", entry.type)
                     put("Amount", amount)
@@ -580,68 +615,17 @@ class AiPromptActionRecovery(
             }
         }
 
-    private fun List<MonthlyExpenseEntry>.toSummaryRows(): List<Map<String, String>> {
-        val categoryRows = map { entry ->
+    private fun List<MonthlyExpenseEntry>.toSummaryRows(monthKey: String): List<Map<String, String>> {
+        if (isEmpty() && monthKey.isBlank()) return emptyList()
+        val hasIncomplete = any { entry -> entry.status == "Incomplete" }
+        return listOf(
             buildMap {
-                put("Category", entry.name)
-                put("Type", entry.type)
-                put("Total", entry.amounts.sumDecimalStrings())
-                put("Status", entry.status)
-                if (entry.amounts.isEmpty()) {
-                    put("Notes", "No amount yet")
-                } else if (entry.status == "Incomplete") {
-                    put("Notes", "Open amount expression: ${entry.rawValue}")
-                }
-            }
-        }
-        val expenseTotal = filter { entry -> entry.type == "Expense" }.flatMap { entry -> entry.amounts }.sumDecimal()
-        val debtTotal = filter { entry -> entry.type == "Debt" }.flatMap { entry -> entry.amounts }.sumDecimal()
-        val incomeTotal = filter { entry -> entry.type == "Income" }.flatMap { entry -> entry.amounts }.sumDecimal()
-        val aggregateRows = mutableListOf<Map<String, String>>()
-        if (expenseTotal > BigDecimal.ZERO) {
-            aggregateRows += mapOf(
-                "Category" to "Known Expenses",
-                "Type" to "Summary",
-                "Total" to expenseTotal.toPlainAmount(),
-                "Status" to "Confirmed",
-            )
-        }
-        if (debtTotal > BigDecimal.ZERO) {
-            aggregateRows += mapOf(
-                "Category" to "Debt",
-                "Type" to "Summary",
-                "Total" to debtTotal.toPlainAmount(),
-                "Status" to "Confirmed",
-            )
-        }
-        if (incomeTotal > BigDecimal.ZERO) {
-            aggregateRows += mapOf(
-                "Category" to "Income",
-                "Type" to "Summary",
-                "Total" to incomeTotal.toPlainAmount(),
-                "Status" to "Confirmed",
-            )
-            aggregateRows += mapOf(
-                "Category" to "Balance",
-                "Type" to "Summary",
-                "Total" to incomeTotal.subtract(expenseTotal).subtract(debtTotal).toPlainAmount(),
-                "Status" to "Confirmed",
-                "Notes" to "Income minus known expenses and debt",
-            )
-        }
-        return categoryRows + aggregateRows
+                if (monthKey.isNotBlank()) put("Month", monthKey)
+                put("Status", if (hasIncomplete) "Incomplete" else "Confirmed")
+                put("Notes", "Balance = Income - Known Expenses - Debt")
+            },
+        )
     }
-
-    private fun List<String>.sumDecimalStrings(): String =
-        sumDecimal().toPlainAmount()
-
-    private fun List<String>.sumDecimal(): BigDecimal =
-        fold(BigDecimal.ZERO) { total, value ->
-            runCatching { total.add(BigDecimal(value)) }.getOrElse { total }
-        }
-
-    private fun BigDecimal.toPlainAmount(): String =
-        stripTrailingZeros().toPlainString().takeUnless { value -> value == "0" }.orEmpty()
 
     private fun List<String>.cleanOptions(): List<String> =
         map { option -> option.trim() }
