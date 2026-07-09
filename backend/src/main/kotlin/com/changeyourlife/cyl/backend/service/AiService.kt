@@ -406,25 +406,30 @@ class AiService(
             Decision rules:
             - Home request to create a new tracker/jadual/table/page: use CREATE_PAGE with tableTitle, tableColumns, and tableRows when useful.
             - Request inside or mentioning an existing page to create a table: use CREATE_DATABASE with targetTitle.
-            - Request to add spending/expense/record to an existing table: use ADD_TABLE_ROW. Do not create a new table unless user asks for a new table/page.
+            - Request to add spending/expense/record to an existing budget/monthly expense page: use ADD_TABLE_ROW with tableTitle "Transactions", Category, Type, Amount, Status, and Date when known. Do not create a new table unless user asks for a new table/page.
             - If a page is mentioned in CYL_MENTION_CONTEXT, treat that as the exact target page.
             - If one current/mentioned page is clearly in context and user does not mention a page, use that page.
             - For date words like harini/today, use the client date.
             - For money like "29 ringgit", put the numeric value in an amount/price/cost column if such column exists or create a Number column.
             - For table creation, infer sensible columns and rows from the user's intent instead of using fixed templates.
+            - For monthly expenses/budget with salary and spending data, prefer a transaction ledger plus summary:
+              first CREATE_PAGE with tableTitle "Transactions" and columns Name, Date, Category Select, Type Select, Amount Number, Status, Notes;
+              then CREATE_DATABASE on that page with tableTitle "Monthly Summary" and category totals/balance.
+            - If a category has multiple amounts like "Makan: 3+8.9+4+5+", create separate transaction rows and mark Status "Incomplete" when the expression ends with +.
+            - Use Type "Income" for gaji/salary/income, "Debt" for hutang/debt, otherwise "Expense".
             - For Select, MultiSelect, or Status dropdown values, include options as a string array on the column or action.
             - If the user asks for a category dropdown, use columnType "Select" and include category options.
             - For multi-step requests, return multiple actions in order.
 
             Examples:
             User: buatkan page baru untuk bulan 7 punya monthly expenses,dengan gaji 1488
-            JSON: {"reply":"Siap - saya buat page monthly expenses bulan 7.","actions":[{"type":"CREATE_PAGE","title":"Monthly Expenses July","tableTitle":"Monthly Expenses","tableColumns":[{"name":"Category","type":"Select","options":["Income","Rent","Food","Transport","Makeup","Other"]},{"name":"Budget","type":"Number"},{"name":"Actual","type":"Number"},{"name":"Status","type":"Status","options":["Planned","Paid","Over budget"]},{"name":"Notes","type":"Text"}],"tableRows":[{"Category":"Income","Budget":"1488","Actual":"1488","Status":"Paid"}]}]}
+            JSON: {"reply":"Siap - saya buat page monthly expenses bulan 7.","actions":[{"type":"CREATE_PAGE","title":"July Monthly Expenses","tableTitle":"Transactions","tableColumns":[{"name":"Name","type":"Text"},{"name":"Date","type":"Date"},{"name":"Category","type":"Select","options":["Salary","Food","Fuel","Makeup","Transport","Other"]},{"name":"Type","type":"Select","options":["Expense","Income","Debt"]},{"name":"Amount","type":"Number"},{"name":"Status","type":"Status","options":["Confirmed","Incomplete","Empty"]},{"name":"Notes","type":"Text"}],"tableRows":[{"Name":"Salary","Category":"Salary","Type":"Income","Amount":"1488","Status":"Confirmed"}]},{"type":"CREATE_DATABASE","targetTitle":"July Monthly Expenses","tableTitle":"Monthly Summary","tableColumns":[{"name":"Category","type":"Select","options":["Income","Known Expenses","Debt","Balance"]},{"name":"Type","type":"Select","options":["Expense","Income","Debt","Summary"]},{"name":"Total","type":"Number"},{"name":"Status","type":"Status","options":["Confirmed","Incomplete","Empty"]},{"name":"Notes","type":"Text"}],"tableRows":[{"Category":"Income","Type":"Summary","Total":"1488","Status":"Confirmed"},{"Category":"Balance","Type":"Summary","Total":"1488","Status":"Confirmed"}]}]}
 
             User: tambah property Category dropdown dengan Food, Fuel, Makeup
             JSON: {"reply":"Siap - saya tambah dropdown Category.","actions":[{"type":"ADD_TABLE_COLUMN","columnName":"Category","columnType":"Select","options":["Food","Fuel","Makeup"]}]}
 
             User: saya guna 29 ringgit harini beli makeup
-            JSON: {"reply":"Siap - saya tambah rekod belanja itu.","actions":[{"type":"ADD_TABLE_ROW","rowTitle":"makeup","cellValues":{"Item":"makeup","Amount":"29","Date":"${clientDate.ifBlank { "today" }}"}}]}
+            JSON: {"reply":"Siap - saya tambah rekod belanja itu.","actions":[{"type":"ADD_TABLE_ROW","tableTitle":"Transactions","rowTitle":"makeup","cellValues":{"Name":"makeup","Category":"Makeup","Type":"Expense","Amount":"29","Status":"Confirmed","Date":"${clientDate.ifBlank { "today" }}"}}]}
 
             User: @Budget Tracker ubah nama table jadi Expenses
             JSON: {"reply":"Siap - saya rename table itu.","actions":[{"type":"RENAME_TABLE","targetTitle":"Budget Tracker","title":"Expenses"}]}

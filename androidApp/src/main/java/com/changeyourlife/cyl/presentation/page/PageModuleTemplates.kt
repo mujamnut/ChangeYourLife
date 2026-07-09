@@ -7,6 +7,8 @@ import com.changeyourlife.cyl.domain.model.PagePropertyType
 import com.changeyourlife.cyl.domain.model.PageTable
 import com.changeyourlife.cyl.domain.model.PageTableColumn
 import com.changeyourlife.cyl.domain.model.PageTableColumnType
+import com.changeyourlife.cyl.domain.model.PageTableOptionColor
+import com.changeyourlife.cyl.domain.model.PageTableSelectOption
 import com.changeyourlife.cyl.domain.model.PageTableView
 import com.changeyourlife.cyl.domain.model.PageTableViewConfig
 
@@ -149,29 +151,61 @@ object PageModuleTemplates {
 
             PageModuleType.Budget -> listOf(
                 heading("Budget Tracker"),
-                text("Track expenses, categories, due dates, and paid status with typed fields."),
                 tableBlock(
-                    title = "Budget",
+                    title = "Transactions",
                     columnSpecs = listOf(
-                        "Item" to PageTableColumnType.Text,
-                        "Category" to PageTableColumnType.Status,
+                        "Name" to PageTableColumnType.Text,
+                        "Date" to PageTableColumnType.Date,
+                        "Category" to PageTableColumnType.Select,
+                        "Type" to PageTableColumnType.Select,
                         "Amount" to PageTableColumnType.Number,
-                        "Due date" to PageTableColumnType.Date,
-                        "Paid" to PageTableColumnType.Checkbox,
+                        "Status" to PageTableColumnType.Status,
                         "Notes" to PageTableColumnType.Text,
                     ),
                     rowValues = listOf(
                         mapOf(
-                            "Item" to "Monthly savings",
-                            "Category" to "Savings",
-                            "Amount" to "0",
-                            "Paid" to "false",
+                            "Name" to "Salary",
+                            "Category" to "Salary",
+                            "Type" to "Income",
+                            "Status" to "Confirmed",
                         ),
                     ),
+                    configureColumns = { columns ->
+                        columns.withOptions("Category", "Salary", "Food", "Fuel", "Makeup", "Transport", "Other")
+                            .withOptions("Type", "Expense", "Income", "Debt")
+                            .withOptions("Status", "Confirmed", "Incomplete", "Empty")
+                    },
                     viewConfig = { columns ->
                         PageTableViewConfig(
-                            calendarDateColumnId = columns.idFor("Due date"),
+                            calendarDateColumnId = columns.idFor("Date"),
                             dashboardMetricColumnId = columns.idFor("Amount"),
+                            dashboardGroupColumnId = columns.idFor("Category"),
+                        )
+                    },
+                ),
+                tableBlock(
+                    title = "Monthly Summary",
+                    columnSpecs = listOf(
+                        "Category" to PageTableColumnType.Select,
+                        "Type" to PageTableColumnType.Select,
+                        "Total" to PageTableColumnType.Number,
+                        "Status" to PageTableColumnType.Status,
+                        "Notes" to PageTableColumnType.Text,
+                    ),
+                    rowValues = listOf(
+                        mapOf("Category" to "Income", "Type" to "Summary", "Total" to "0", "Status" to "Confirmed"),
+                        mapOf("Category" to "Known Expenses", "Type" to "Summary", "Total" to "0", "Status" to "Confirmed"),
+                        mapOf("Category" to "Debt", "Type" to "Summary", "Total" to "0", "Status" to "Confirmed"),
+                        mapOf("Category" to "Balance", "Type" to "Summary", "Total" to "0", "Status" to "Confirmed"),
+                    ),
+                    configureColumns = { columns ->
+                        columns.withOptions("Category", "Income", "Known Expenses", "Debt", "Balance")
+                            .withOptions("Type", "Expense", "Income", "Debt", "Summary")
+                            .withOptions("Status", "Confirmed", "Incomplete", "Empty")
+                    },
+                    viewConfig = { columns ->
+                        PageTableViewConfig(
+                            dashboardMetricColumnId = columns.idFor("Total"),
                             dashboardGroupColumnId = columns.idFor("Category"),
                         )
                     },
@@ -194,8 +228,9 @@ object PageModuleTemplates {
         columnSpecs: List<Pair<String, PageTableColumnType>>,
         rowValues: List<Map<String, String>>,
         viewConfig: (List<PageTableColumn>) -> PageTableViewConfig = { PageTableViewConfig() },
+        configureColumns: (List<PageTableColumn>) -> List<PageTableColumn> = { it },
     ): PageBlock {
-        val columns = columnSpecs.map { (name, type) -> PageBlockCodec.newTableColumn(name, type) }
+        val columns = configureColumns(columnSpecs.map { (name, type) -> PageBlockCodec.newTableColumn(name, type) })
         val rows = rowValues.ifEmpty { listOf(emptyMap()) }.map { valuesByName ->
             PageBlockCodec.newTableRow(columns).copy(
                 cells = columns.associate { column ->
@@ -216,6 +251,35 @@ object PageModuleTemplates {
 
     private fun List<PageTableColumn>.idFor(name: String): String {
         return firstOrNull { column -> column.name.equals(name, ignoreCase = true) }?.id.orEmpty()
+    }
+
+    private fun List<PageTableColumn>.withOptions(
+        columnName: String,
+        vararg options: String,
+    ): List<PageTableColumn> = map { column ->
+        if (!column.name.equals(columnName, ignoreCase = true)) return@map column
+        column.copy(
+            config = column.config.copy(
+                options = options.toList().toTemplateSelectOptions(),
+            ),
+        )
+    }
+
+    private fun List<String>.toTemplateSelectOptions(): List<PageTableSelectOption> {
+        val colors = listOf(
+            PageTableOptionColor.Gray,
+            PageTableOptionColor.Blue,
+            PageTableOptionColor.Green,
+            PageTableOptionColor.Yellow,
+            PageTableOptionColor.Orange,
+        )
+        return distinctBy { option -> option.lowercase() }.mapIndexed { index, option ->
+            PageTableSelectOption(
+                id = option.lowercase().replace(Regex("[^a-z0-9]+"), "-").trim('-').ifBlank { "option-$index" },
+                name = option,
+                color = colors[index % colors.size],
+            )
+        }
     }
 }
 

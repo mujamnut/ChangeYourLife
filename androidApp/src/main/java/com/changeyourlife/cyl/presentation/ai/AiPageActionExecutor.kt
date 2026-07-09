@@ -33,6 +33,8 @@ import com.changeyourlife.cyl.domain.usecase.ApplyEditorCommandUseCase
 import com.changeyourlife.cyl.presentation.page.PageBlockCodec
 import com.changeyourlife.cyl.presentation.page.PageModuleTemplates
 import com.changeyourlife.cyl.presentation.page.PageModuleType
+import com.changeyourlife.cyl.presentation.page.isTransactionLedgerTable
+import com.changeyourlife.cyl.presentation.page.withBudgetLedgerSummarySynced
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -809,6 +811,12 @@ class AiPageActionExecutor @Inject constructor(
                 )
                 messages += "Failed ${trace.messageLabel}: $errorMessage"
             }
+        }
+
+        val syncedDocument = workingDocument.withBudgetLedgerSummarySynced()
+        if (syncedDocument != workingDocument) {
+            workingDocument = syncedDocument
+            documentChanged = true
         }
 
         val pageLinks = buildList {
@@ -1792,6 +1800,9 @@ private fun List<PageBlock>.findMatchingTable(action: ChatAction): PageBlock? {
         firstOrNull { block ->
             block.type == PageBlockType.DatabaseTable && block.table.title.contains(tableName, ignoreCase = true)
         }?.let { return it }
+    }
+    if (action.type.trim().uppercase().replace(' ', '_') == "ADD_TABLE_ROW" && tableName.isBlank()) {
+        firstOrNull { block -> block.isTransactionLedgerTable() }?.let { return it }
     }
     return filter { block -> block.type == PageBlockType.DatabaseTable }.singleOrNull()
         ?: firstOrNull { block -> block.type == PageBlockType.DatabaseTable }

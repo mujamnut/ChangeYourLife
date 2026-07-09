@@ -421,7 +421,7 @@ class PageEditorViewModel @Inject constructor(
         previous: PageBlockDocument? = null,
         recordUndo: Boolean = false,
     ) {
-        val normalized = updated.normalizedForEditor()
+        val normalized = updated.normalizedForEditor().withBudgetLedgerSummarySynced().normalizedForEditor()
         _pendingGranularDocumentSave.value = null
         if (recordUndo && previous != null && previous.normalizedForEditor() != normalized) {
             pushEditorUndoSnapshot(previous)
@@ -434,6 +434,11 @@ class PageEditorViewModel @Inject constructor(
         pendingSave: (PageBlockDocument) -> PendingGranularDocumentSave,
     ) {
         val normalized = updated.normalizedForEditor()
+        val synced = normalized.withBudgetLedgerSummarySynced().normalizedForEditor()
+        if (synced != normalized) {
+            queueDocumentUpdate(synced)
+            return
+        }
         _pendingGranularDocumentSave.value = pendingSave(normalized)
         _pendingChanges.value = normalized
     }
@@ -445,6 +450,11 @@ class PageEditorViewModel @Inject constructor(
         recordUndo: Boolean = false,
     ) {
         val normalized = updated.normalizedForEditor()
+        val synced = normalized.withBudgetLedgerSummarySynced().normalizedForEditor()
+        if (synced != normalized) {
+            queueDocumentUpdate(synced, previous = previous, recordUndo = recordUndo)
+            return
+        }
         val block = normalized.findBlock(blockId)
         if (block == null) {
             queueDocumentUpdate(updated, previous = previous, recordUndo = recordUndo)
@@ -467,6 +477,11 @@ class PageEditorViewModel @Inject constructor(
         recordUndo: Boolean = false,
     ) {
         val normalized = updated.normalizedForEditor()
+        val synced = normalized.withBudgetLedgerSummarySynced().normalizedForEditor()
+        if (synced != normalized) {
+            queueDocumentUpdate(synced, previous = previous, recordUndo = recordUndo)
+            return
+        }
         val table = normalized.findTableBlock(tableBlockId)?.table
         if (table == null) {
             queueDocumentUpdate(updated, previous = previous, recordUndo = recordUndo)
@@ -491,6 +506,11 @@ class PageEditorViewModel @Inject constructor(
         recordUndo: Boolean = false,
     ) {
         val normalized = updated.normalizedForEditor()
+        val synced = normalized.withBudgetLedgerSummarySynced().normalizedForEditor()
+        if (synced != normalized) {
+            queueDocumentUpdate(synced, previous = previous, recordUndo = recordUndo)
+            return
+        }
         val column = normalized
             .findTableBlock(tableBlockId)
             ?.table
@@ -519,6 +539,11 @@ class PageEditorViewModel @Inject constructor(
         recordUndo: Boolean = false,
     ) {
         val normalized = updated.normalizedForEditor()
+        val synced = normalized.withBudgetLedgerSummarySynced().normalizedForEditor()
+        if (synced != normalized) {
+            queueDocumentUpdate(synced, previous = previous, recordUndo = recordUndo)
+            return
+        }
         val row = normalized
             .findTableBlock(tableBlockId)
             ?.table

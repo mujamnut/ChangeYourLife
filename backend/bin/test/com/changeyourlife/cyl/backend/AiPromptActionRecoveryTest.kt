@@ -7,6 +7,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class AiPromptActionRecoveryTest {
     private val recovery = AiPromptActionRecovery()
@@ -57,6 +58,43 @@ class AiPromptActionRecoveryTest {
         assertEquals("Budget Tracker", action.tableTitle)
         assertEquals("29", action.cellValues["Amount"])
         assertEquals("makeup", action.cellValues["Name"])
+        assertEquals("Makeup", action.cellValues["Category"])
+        assertEquals("Expense", action.cellValues["Type"])
+        assertEquals("Confirmed", action.cellValues["Status"])
+    }
+
+    @Test
+    fun recoversExpenseRowIntoTransactionsTableWhenBudgetPageHasSummaryToo() {
+        val result = recovery.recoverActionFromPrompt(
+            prompt = "saya guna 5 ringgit harini beli minyak moto",
+            pages = listOf(
+                AiPageContext(
+                    id = "page-july",
+                    title = "July Monthly Expenses",
+                    blocks = listOf(
+                        AiBlockContext(
+                            id = "table-transactions",
+                            type = "DatabaseTable",
+                            tableTitle = "Transactions",
+                        ),
+                        AiBlockContext(
+                            id = "table-summary",
+                            type = "DatabaseTable",
+                            tableTitle = "Monthly Summary",
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        val action = assertNotNull(result).actions.single()
+        assertEquals("ADD_TABLE_ROW", action.type)
+        assertEquals("July Monthly Expenses", action.targetTitle)
+        assertEquals("Transactions", action.tableTitle)
+        assertEquals("5", action.cellValues["Amount"])
+        assertEquals("Minyak Moto", action.cellValues["Category"])
+        assertEquals("Expense", action.cellValues["Type"])
+        assertEquals("Confirmed", action.cellValues["Status"])
     }
 
     @Test
@@ -66,18 +104,24 @@ class AiPromptActionRecoveryTest {
             pages = emptyList(),
         )
 
-        val action = assertNotNull(result).actions.single()
+        val actions = assertNotNull(result).actions
+        assertEquals(2, actions.size)
+        val action = actions[0]
+        val summary = actions[1]
         assertEquals("CREATE_PAGE", action.type)
         assertEquals("July Monthly Expenses", action.title)
-        assertEquals("Monthly Expenses", action.tableTitle)
+        assertEquals("Transactions", action.tableTitle)
         assertEquals(
-            listOf("Category", "Budget", "Actual", "Variance", "Notes"),
+            listOf("Name", "Date", "Category", "Type", "Amount", "Status", "Notes"),
             action.tableColumns.map { column -> column.name },
         )
-        assertEquals("Salary", action.tableRows.single()["Category"])
-        assertEquals("1488", action.tableRows.single()["Budget"])
-        assertEquals("1488", action.tableRows.single()["Actual"])
-        assertEquals("0", action.tableRows.single()["Variance"])
+        assertEquals("Salary", action.tableRows.single()["Name"])
+        assertEquals("Income", action.tableRows.single()["Type"])
+        assertEquals("1488", action.tableRows.single()["Amount"])
+        assertEquals("CREATE_DATABASE", summary.type)
+        assertEquals("July Monthly Expenses", summary.targetTitle)
+        assertEquals("Monthly Summary", summary.tableTitle)
+        assertTrue(summary.tableRows.any { row -> row["Category"] == "Income" && row["Total"] == "1488" })
     }
 
     @Test
@@ -87,12 +131,12 @@ class AiPromptActionRecoveryTest {
             pages = emptyList(),
         )
 
-        val action = assertNotNull(result).actions.single()
+        val action = assertNotNull(result).actions.first()
         assertEquals("CREATE_PAGE", action.type)
         assertEquals("July Monthly Expenses", action.title)
-        assertEquals("Monthly Expenses", action.tableTitle)
-        assertEquals("Salary", action.tableRows.single()["Category"])
-        assertEquals("1488", action.tableRows.single()["Budget"])
+        assertEquals("Transactions", action.tableTitle)
+        assertEquals("Salary", action.tableRows.single()["Name"])
+        assertEquals("1488", action.tableRows.single()["Amount"])
     }
 
     @Test
@@ -203,12 +247,12 @@ class AiPromptActionRecoveryTest {
             pages = emptyList(),
         )
 
-        val action = assertNotNull(result).actions.single()
+        val action = assertNotNull(result).actions.first()
         assertEquals("CREATE_PAGE", action.type)
         assertEquals("July Monthly Expenses", action.title)
-        assertEquals("Monthly Expenses", action.tableTitle)
-        assertEquals("Salary", action.tableRows.single()["Category"])
-        assertEquals("1488", action.tableRows.single()["Budget"])
+        assertEquals("Transactions", action.tableTitle)
+        assertEquals("Salary", action.tableRows.single()["Name"])
+        assertEquals("1488", action.tableRows.single()["Amount"])
     }
 
     @Test
@@ -218,10 +262,10 @@ class AiPromptActionRecoveryTest {
             pages = emptyList(),
         )
 
-        val action = assertNotNull(result).actions.single()
+        val action = assertNotNull(result).actions.first()
         assertEquals("CREATE_PAGE", action.type)
         assertEquals("July Monthly Expenses", action.title)
-        assertEquals("Monthly Expenses", action.tableTitle)
+        assertEquals("Transactions", action.tableTitle)
 
         val category = action.tableColumns.single { column -> column.name == "Category" }
         assertEquals("Select", category.type)
@@ -230,5 +274,59 @@ class AiPromptActionRecoveryTest {
         val status = action.tableColumns.single { column -> column.name == "Status" }
         assertEquals("Status", status.type)
         assertEquals(listOf("Planned", "Paid"), status.options)
+    }
+
+    @Test
+    fun recoversRawMonthlyExpenseLedgerAsTransactionsAndSummary() {
+        val result = recovery.recoverActionFromPrompt(
+            prompt = """
+                masukkan ini dalam table,Bulan 7
+                Makan : 3+8.9+4+5+
+                Minyak moto : 5
+                Internet :
+                Letrik: 10+
+                Barang lain :
+                Spaylater : 65.54
+                Ttshop : 93.68
+                =159.22
+                Hutang -
+                kak amani : 400
+                mak : 200
+                Gaji : 1488
+                -159.22
+                -
+            """.trimIndent(),
+            pages = emptyList(),
+        )
+
+        val actions = assertNotNull(result).actions
+        assertEquals(2, actions.size)
+        val transactions = actions[0]
+        val summary = actions[1]
+
+        assertEquals("CREATE_PAGE", transactions.type)
+        assertEquals("July Monthly Expenses", transactions.title)
+        assertEquals("Transactions", transactions.tableTitle)
+        assertEquals(listOf("Name", "Date", "Category", "Type", "Amount", "Status", "Notes"), transactions.tableColumns.map { it.name })
+
+        val category = transactions.tableColumns.single { column -> column.name == "Category" }
+        assertEquals("Select", category.type)
+        assertTrue(category.options.containsAll(listOf("Makan", "Minyak Moto", "Internet", "Letrik", "Barang Lain", "Spaylater", "Ttshop", "Kak Amani", "Mak", "Gaji")))
+
+        val rows = transactions.tableRows
+        assertTrue(rows.any { row -> row["Category"] == "Makan" && row["Amount"] == "8.9" && row["Status"] == "Incomplete" })
+        assertTrue(rows.any { row -> row["Category"] == "Minyak Moto" && row["Amount"] == "5" && row["Type"] == "Expense" })
+        assertTrue(rows.any { row -> row["Category"] == "Letrik" && row["Amount"] == "10" && row["Status"] == "Incomplete" })
+        assertTrue(rows.any { row -> row["Category"] == "Kak Amani" && row["Amount"] == "400" && row["Type"] == "Debt" })
+        assertTrue(rows.any { row -> row["Category"] == "Mak" && row["Amount"] == "200" && row["Type"] == "Debt" })
+        assertTrue(rows.any { row -> row["Category"] == "Gaji" && row["Amount"] == "1488" && row["Type"] == "Income" })
+
+        assertEquals("CREATE_DATABASE", summary.type)
+        assertEquals("July Monthly Expenses", summary.targetTitle)
+        assertEquals("Monthly Summary", summary.tableTitle)
+        assertTrue(summary.tableRows.any { row -> row["Category"] == "Known Expenses" && row["Total"] == "195.12" })
+        assertTrue(summary.tableRows.any { row -> row["Category"] == "Debt" && row["Total"] == "600" })
+        assertTrue(summary.tableRows.any { row -> row["Category"] == "Income" && row["Total"] == "1488" })
+        assertTrue(summary.tableRows.any { row -> row["Category"] == "Balance" && row["Total"] == "692.88" })
     }
 }

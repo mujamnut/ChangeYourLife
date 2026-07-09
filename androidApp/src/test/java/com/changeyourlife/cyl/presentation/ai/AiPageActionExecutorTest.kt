@@ -369,6 +369,112 @@ class AiPageActionExecutorTest {
     }
 
     @Test
+    fun addingBudgetTransactionUpdatesMonthlySummary() = runBlocking {
+        val nameColumn = PageTableColumn(id = "tx-name", name = "Name", type = PageTableColumnType.Text)
+        val categoryColumn = PageTableColumn(id = "tx-category", name = "Category", type = PageTableColumnType.Select)
+        val typeColumn = PageTableColumn(id = "tx-type", name = "Type", type = PageTableColumnType.Select)
+        val amountColumn = PageTableColumn(id = "tx-amount", name = "Amount", type = PageTableColumnType.Number)
+        val statusColumn = PageTableColumn(id = "tx-status", name = "Status", type = PageTableColumnType.Status)
+        val summaryCategoryColumn = PageTableColumn(id = "summary-category", name = "Category", type = PageTableColumnType.Select)
+        val summaryTypeColumn = PageTableColumn(id = "summary-type", name = "Type", type = PageTableColumnType.Select)
+        val summaryTotalColumn = PageTableColumn(id = "summary-total", name = "Total", type = PageTableColumnType.Number)
+        val summaryStatusColumn = PageTableColumn(id = "summary-status", name = "Status", type = PageTableColumnType.Status)
+        val document = PageBlockDocument(
+            blocks = listOf(
+                PageBlock(
+                    id = "block-transactions",
+                    type = PageBlockType.DatabaseTable,
+                    table = PageTable(
+                        title = "Transactions",
+                        columns = listOf(nameColumn, categoryColumn, typeColumn, amountColumn, statusColumn),
+                        rows = listOf(
+                            PageTableRow(
+                                id = "row-salary",
+                                cells = mapOf(
+                                    nameColumn.id to "Salary",
+                                    categoryColumn.id to "Salary",
+                                    typeColumn.id to "Income",
+                                    amountColumn.id to "1488",
+                                    statusColumn.id to "Confirmed",
+                                ),
+                            ),
+                            PageTableRow(
+                                id = "row-food",
+                                cells = mapOf(
+                                    nameColumn.id to "Makan",
+                                    categoryColumn.id to "Makan",
+                                    typeColumn.id to "Expense",
+                                    amountColumn.id to "3",
+                                    statusColumn.id to "Confirmed",
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+                PageBlock(
+                    id = "block-summary",
+                    type = PageBlockType.DatabaseTable,
+                    table = PageTable(
+                        title = "Monthly Summary",
+                        columns = listOf(summaryCategoryColumn, summaryTypeColumn, summaryTotalColumn, summaryStatusColumn),
+                        rows = emptyList(),
+                    ),
+                ),
+            ),
+        )
+        val page = Page(
+            id = "page-1",
+            workspaceId = "workspace-1",
+            parentPageId = null,
+            title = "July Monthly Expenses",
+            content = PageBlockCodec.encodeDocument(document),
+            sortOrder = 0,
+            createdAt = 1000,
+            updatedAt = 1000,
+            deletedAt = null,
+        )
+        val pageRepository = FakePageRepository(page, document)
+        val executor = AiPageActionExecutor(
+            pageRepository = pageRepository,
+            taskRepository = FakeTaskRepository(),
+            reminderRepository = FakeReminderRepository(),
+            applyEditorCommandUseCase = ApplyEditorCommandUseCase(),
+        )
+
+        val result = executor.executeOnPage(
+            page = page,
+            title = page.title,
+            document = document,
+            actions = listOf(
+                ChatAction(
+                    type = "ADD_TABLE_ROW",
+                    title = "Fuel",
+                    rowTitle = "Fuel",
+                    cellValues = mapOf("Amount" to "5"),
+                ),
+            ),
+        )
+
+        assertEquals(emptyList<AiPageActionValidationIssue>(), result.validationIssues)
+        val updated = requireNotNull(result.updatedDocument)
+        val transactions = updated.blocks.single { block -> block.id == "block-transactions" }.table
+        val addedRow = transactions.rows.single { row -> row.cells[nameColumn.id] == "Fuel" }
+        assertEquals("Fuel", addedRow.cells[categoryColumn.id])
+        assertEquals("Expense", addedRow.cells[typeColumn.id])
+        assertEquals("Confirmed", addedRow.cells[statusColumn.id])
+
+        val summary = updated.blocks.single { block -> block.id == "block-summary" }.table
+        fun summaryTotal(category: String): String {
+            val row = summary.rows.single { item -> item.cells[summaryCategoryColumn.id] == category }
+            return row.cells[summaryTotalColumn.id].orEmpty()
+        }
+        assertEquals("8", summaryTotal("Known Expenses"))
+        assertEquals("1488", summaryTotal("Income"))
+        assertEquals("1480", summaryTotal("Balance"))
+        assertTrue(summary.rows.any { row -> row.cells[summaryCategoryColumn.id] == "Fuel" && row.cells[summaryTotalColumn.id] == "5" })
+    }
+
+    @Test
     fun updatesFormulaColumnFromValuePayload() = runBlocking {
         val amountColumn = PageTableColumn(
             id = "column-amount",

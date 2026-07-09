@@ -3,6 +3,7 @@ package com.changeyourlife.cyl.backend.service
 import com.changeyourlife.cyl.backend.model.ai.AiBlockContext
 import com.changeyourlife.cyl.backend.model.ai.AiPageContext
 import com.changeyourlife.cyl.backend.model.ai.AiActionValidationIssue
+import java.math.BigDecimal
 import java.time.LocalDate
 
 private typealias AiActionItem = AiService.AiActionItem
@@ -15,6 +16,14 @@ class AiPromptActionRecovery(
     private data class AiActionSchemaValidation(
         val actions: List<AiActionItem>,
         val issues: List<AiActionValidationIssue>,
+    )
+
+    private data class MonthlyExpenseEntry(
+        val name: String,
+        val type: String,
+        val amounts: List<String>,
+        val rawValue: String,
+        val status: String,
     )
 
     private fun List<AiActionItem>.validatedForActionSchema(): AiActionSchemaValidation {
@@ -31,14 +40,14 @@ class AiPromptActionRecovery(
     ): AiActionResult? {
         if (prompt.isBlank()) return null
         val visiblePrompt = prompt.withoutMentionContext()
-        visiblePrompt.recoverCreatePageAction(
+        visiblePrompt.recoverCreatePageActions(
             allowHomeTablePage = !prompt.hasMentionContext(),
-        )?.let { action ->
-            val validation = listOf(action).validatedForActionSchema()
+        )?.let { actions ->
+            val validation = actions.validatedForActionSchema()
             return AiActionResult(
                 reply = visiblePrompt.recoveryReply(
-                    malay = validation.actions.ifEmpty { listOf(action) }.recoveredMalayReply(),
-                    english = validation.actions.ifEmpty { listOf(action) }.recoveredEnglishReply(),
+                    malay = validation.actions.ifEmpty { actions }.recoveredMalayReply(),
+                    english = validation.actions.ifEmpty { actions }.recoveredEnglishReply(),
                 ),
                 actions = validation.actions,
                 validationIssues = validation.issues,
@@ -242,11 +251,11 @@ class AiPromptActionRecovery(
         )
     }
 
-    private fun String.recoverCreatePageAction(
+    private fun String.recoverCreatePageActions(
         allowHomeTablePage: Boolean,
-    ): AiActionItem? {
+    ): List<AiActionItem>? {
         val value = lowercase()
-        val hasCreateIntent = listOf("buat", "buatkan", "create", "cipta", "add", "tambah").any { token ->
+        val hasCreateIntent = listOf("buat", "buatkan", "create", "cipta", "add", "tambah", "masukkan", "insert").any { token ->
             value.contains(token)
         }
         val hasPageIntent = listOf("page", "halaman").any { token -> value.contains(token) }
@@ -264,39 +273,31 @@ class AiPromptActionRecovery(
         }
         val salaryAmount = extractSalaryAmount()
         val explicitDropdownColumns = extractDropdownTableColumns()
+        if (isExpensePage) {
+            return buildMonthlyExpensePageActions(
+                pageTitle = pageTitle,
+                salaryAmount = salaryAmount,
+                explicitDropdownColumns = explicitDropdownColumns,
+            )
+        }
         val baseTableColumns = when {
-            isExpensePage -> monthlyExpenseTableColumns()
             isHomeTablePage -> pageTitle.defaultRecoveredTableColumns(value)
             else -> emptyList()
         }.withExplicitDropdownColumns(explicitDropdownColumns)
-        return AiActionItem(
-            type = "CREATE_PAGE",
-            title = pageTitle,
-            tableTitle = when {
-                isExpensePage -> "Monthly Expenses"
-                isHomeTablePage -> pageTitle
-                else -> ""
-            },
-            tableView = "Table",
-            tableColumns = baseTableColumns,
-            tableRows = if (isExpensePage && salaryAmount != null) {
-                listOf(
-                    mapOf(
-                        "Category" to "Salary",
-                        "Budget" to salaryAmount,
-                        "Actual" to salaryAmount,
-                        "Variance" to "0",
-                    ),
-                )
-            } else {
-                emptyList()
-            },
+        return listOf(
+            AiActionItem(
+                type = "CREATE_PAGE",
+                title = pageTitle,
+                tableTitle = if (isHomeTablePage) pageTitle else "",
+                tableView = "Table",
+                tableColumns = baseTableColumns,
+            ),
         )
     }
 
     private fun String.looksLikeHomeTablePageRequest(): Boolean {
         val value = lowercase()
-        val hasCreateIntent = listOf("buat", "buatkan", "create", "cipta", "add", "tambah").any { token ->
+        val hasCreateIntent = listOf("buat", "buatkan", "create", "cipta", "add", "tambah", "masukkan", "insert").any { token ->
             value.contains(token)
         }
         val hasTableIntent = listOf(
@@ -356,7 +357,10 @@ class AiPromptActionRecovery(
             "finance",
             "spending",
         ).any { token -> value.contains(token) }
-        return hasMonthly && hasExpense
+        val hasLedgerData = listOf("gaji", "salary", "hutang", "makan", "minyak", "spaylater", "ttshop").any { token ->
+            value.contains(token)
+        } || Regex("(?m)^\\s*[\\p{L}][\\p{L}0-9 _./-]*\\s*:\\s*(?:\\d|$)").containsMatchIn(this)
+        return hasMonthly && (hasExpense || hasLedgerData)
     }
 
     private fun String.extractRequestedMonthName(): String? {
@@ -401,7 +405,7 @@ class AiPromptActionRecovery(
     }
 
     private fun String.extractSalaryAmount(): String? {
-        return Regex("(?i)\\b(?:gaji|salary|income)\\s*(?:rm\\s*)?([0-9][0-9\\s.,_]*[0-9]|\\d)\\b")
+        return Regex("(?i)\\b(?:gaji|salary|income)\\s*(?::|=|-)?\\s*(?:rm\\s*)?([0-9][0-9\\s.,_]*[0-9]|\\d)\\b")
             .find(this)
             ?.groupValues
             ?.getOrNull(1)
@@ -410,13 +414,239 @@ class AiPromptActionRecovery(
             ?.takeIf { value -> value.isNotBlank() }
     }
 
-    private fun monthlyExpenseTableColumns(): List<AiTableColumnItem> = listOf(
-        AiTableColumnItem(name = "Category", type = "Text"),
-        AiTableColumnItem(name = "Budget", type = "Number"),
-        AiTableColumnItem(name = "Actual", type = "Number"),
-        AiTableColumnItem(name = "Variance", type = "Number"),
+    private fun String.buildMonthlyExpensePageActions(
+        pageTitle: String,
+        salaryAmount: String?,
+        explicitDropdownColumns: List<AiTableColumnItem>,
+    ): List<AiActionItem> {
+        val entries = extractMonthlyExpenseEntries(salaryAmount)
+        val categoryOptions = explicitDropdownColumns
+            .firstOrNull { column -> column.name.equals("Category", ignoreCase = true) }
+            ?.options
+            ?.takeIf { options -> options.isNotEmpty() }
+            ?: entries.map { entry -> entry.name }.distinctBy { name -> name.lowercase() }
+        val statusOptions = explicitDropdownColumns
+            .firstOrNull { column -> column.name.equals("Status", ignoreCase = true) }
+            ?.options
+            ?.takeIf { options -> options.isNotEmpty() }
+            ?: listOf("Confirmed", "Incomplete", "Empty")
+        val typeOptions = listOf("Expense", "Income", "Debt")
+
+        return listOf(
+            AiActionItem(
+                type = "CREATE_PAGE",
+                title = pageTitle,
+                tableTitle = "Transactions",
+                tableView = "Table",
+                tableColumns = monthlyExpenseTransactionColumns(
+                    categoryOptions = categoryOptions,
+                    typeOptions = typeOptions,
+                    statusOptions = statusOptions,
+                ).withExplicitDropdownColumns(explicitDropdownColumns),
+                tableRows = entries.toTransactionRows(),
+            ),
+            AiActionItem(
+                type = "CREATE_DATABASE",
+                targetTitle = pageTitle,
+                tableTitle = "Monthly Summary",
+                tableView = "Table",
+                tableColumns = monthlyExpenseSummaryColumns(
+                    categoryOptions = categoryOptions + listOf("Known Expenses", "Debt", "Income", "Balance"),
+                    typeOptions = typeOptions + "Summary",
+                    statusOptions = statusOptions,
+                ).withExplicitDropdownColumns(explicitDropdownColumns),
+                tableRows = entries.toSummaryRows(),
+            ),
+        )
+    }
+
+    private fun monthlyExpenseTransactionColumns(
+        categoryOptions: List<String>,
+        typeOptions: List<String>,
+        statusOptions: List<String>,
+    ): List<AiTableColumnItem> = listOf(
+        AiTableColumnItem(name = "Name", type = "Text"),
+        AiTableColumnItem(name = "Date", type = "Date"),
+        AiTableColumnItem(name = "Category", type = "Select", options = categoryOptions.cleanOptions()),
+        AiTableColumnItem(name = "Type", type = "Select", options = typeOptions.cleanOptions()),
+        AiTableColumnItem(name = "Amount", type = "Number"),
+        AiTableColumnItem(name = "Status", type = "Status", options = statusOptions.cleanOptions()),
         AiTableColumnItem(name = "Notes", type = "Text"),
     )
+
+    private fun monthlyExpenseSummaryColumns(
+        categoryOptions: List<String>,
+        typeOptions: List<String>,
+        statusOptions: List<String>,
+    ): List<AiTableColumnItem> = listOf(
+        AiTableColumnItem(name = "Category", type = "Select", options = categoryOptions.cleanOptions()),
+        AiTableColumnItem(name = "Type", type = "Select", options = typeOptions.cleanOptions()),
+        AiTableColumnItem(name = "Total", type = "Number"),
+        AiTableColumnItem(name = "Status", type = "Status", options = statusOptions.cleanOptions()),
+        AiTableColumnItem(name = "Notes", type = "Text"),
+    )
+
+    private fun String.extractMonthlyExpenseEntries(salaryAmount: String?): List<MonthlyExpenseEntry> {
+        val entries = mutableListOf<MonthlyExpenseEntry>()
+        var activeType = "Expense"
+        lineSequence().forEach { rawLine ->
+            val line = rawLine.trim()
+            if (line.isBlank()) return@forEach
+            val normalized = line.lowercase()
+            if (normalized.startsWith("=") || normalized.matches(Regex("^-+\\s*.*$"))) return@forEach
+            if (listOf("hutang", "debt").any { token -> normalized.contains(token) } && !line.contains(":")) {
+                activeType = "Debt"
+                return@forEach
+            }
+
+            val match = Regex("^([\\p{L}][\\p{L}0-9 _./'-]{0,60}?)\\s*:\\s*(.*)$")
+                .find(line)
+                ?: return@forEach
+            val rawName = match.groupValues.getOrNull(1).orEmpty()
+                .trim(' ', '-', ':')
+                .toReadableTitle()
+            val name = if (rawName.looksLikeInstructionWrappedIncomeName()) "Salary" else rawName
+            val rawValue = match.groupValues.getOrNull(2).orEmpty().trim()
+            if (name.isBlank()) return@forEach
+            val type = when {
+                name.lowercase().contains("gaji") || name.lowercase().contains("salary") || name.lowercase().contains("income") -> "Income"
+                activeType == "Debt" || name.lowercase().contains("hutang") -> "Debt"
+                else -> "Expense"
+            }
+            entries += MonthlyExpenseEntry(
+                name = name,
+                type = type,
+                amounts = rawValue.extractAmountParts(),
+                rawValue = rawValue,
+                status = rawValue.monthlyExpenseEntryStatus(),
+            )
+        }
+
+        val hasIncome = entries.any { entry -> entry.type == "Income" && entry.amounts.isNotEmpty() }
+        if (!hasIncome && salaryAmount != null) {
+            entries += MonthlyExpenseEntry(
+                name = "Salary",
+                type = "Income",
+                amounts = listOf(salaryAmount),
+                rawValue = salaryAmount,
+                status = "Confirmed",
+            )
+        }
+        return entries
+    }
+
+    private fun String.extractAmountParts(): List<String> =
+        Regex("\\d+(?:[.,]\\d+)?")
+            .findAll(this)
+            .map { match -> match.value.replace(',', '.') }
+            .toList()
+
+    private fun String.looksLikeInstructionWrappedIncomeName(): Boolean {
+        val value = lowercase()
+        return listOf("gaji", "salary", "income").any { token -> value.contains(token) } &&
+            listOf("buat", "create", "page", "halaman", "table", "database", "bulan", "monthly", "expense").any { token ->
+                value.contains(token)
+            }
+    }
+
+    private fun String.monthlyExpenseEntryStatus(): String {
+        if (isBlank()) return "Empty"
+        val trimmed = trim()
+        return if (trimmed.endsWith("+") || trimmed.endsWith("-") || trimmed.endsWith("*") || trimmed.endsWith("/")) {
+            "Incomplete"
+        } else {
+            "Confirmed"
+        }
+    }
+
+    private fun List<MonthlyExpenseEntry>.toTransactionRows(): List<Map<String, String>> =
+        flatMap { entry ->
+            entry.amounts.mapIndexed { index, amount ->
+                val transactionName = if (entry.amounts.size > 1) {
+                    "${entry.name} ${index + 1}"
+                } else {
+                    entry.name
+                }
+                buildMap {
+                    put("Name", transactionName)
+                    put("Category", entry.name)
+                    put("Type", entry.type)
+                    put("Amount", amount)
+                    put("Status", entry.status)
+                    if (entry.rawValue.isNotBlank()) {
+                        put("Notes", "Source: ${entry.rawValue}")
+                    }
+                }
+            }
+        }
+
+    private fun List<MonthlyExpenseEntry>.toSummaryRows(): List<Map<String, String>> {
+        val categoryRows = map { entry ->
+            buildMap {
+                put("Category", entry.name)
+                put("Type", entry.type)
+                put("Total", entry.amounts.sumDecimalStrings())
+                put("Status", entry.status)
+                if (entry.amounts.isEmpty()) {
+                    put("Notes", "No amount yet")
+                } else if (entry.status == "Incomplete") {
+                    put("Notes", "Open amount expression: ${entry.rawValue}")
+                }
+            }
+        }
+        val expenseTotal = filter { entry -> entry.type == "Expense" }.flatMap { entry -> entry.amounts }.sumDecimal()
+        val debtTotal = filter { entry -> entry.type == "Debt" }.flatMap { entry -> entry.amounts }.sumDecimal()
+        val incomeTotal = filter { entry -> entry.type == "Income" }.flatMap { entry -> entry.amounts }.sumDecimal()
+        val aggregateRows = mutableListOf<Map<String, String>>()
+        if (expenseTotal > BigDecimal.ZERO) {
+            aggregateRows += mapOf(
+                "Category" to "Known Expenses",
+                "Type" to "Summary",
+                "Total" to expenseTotal.toPlainAmount(),
+                "Status" to "Confirmed",
+            )
+        }
+        if (debtTotal > BigDecimal.ZERO) {
+            aggregateRows += mapOf(
+                "Category" to "Debt",
+                "Type" to "Summary",
+                "Total" to debtTotal.toPlainAmount(),
+                "Status" to "Confirmed",
+            )
+        }
+        if (incomeTotal > BigDecimal.ZERO) {
+            aggregateRows += mapOf(
+                "Category" to "Income",
+                "Type" to "Summary",
+                "Total" to incomeTotal.toPlainAmount(),
+                "Status" to "Confirmed",
+            )
+            aggregateRows += mapOf(
+                "Category" to "Balance",
+                "Type" to "Summary",
+                "Total" to incomeTotal.subtract(expenseTotal).subtract(debtTotal).toPlainAmount(),
+                "Status" to "Confirmed",
+                "Notes" to "Income minus known expenses and debt",
+            )
+        }
+        return categoryRows + aggregateRows
+    }
+
+    private fun List<String>.sumDecimalStrings(): String =
+        sumDecimal().toPlainAmount()
+
+    private fun List<String>.sumDecimal(): BigDecimal =
+        fold(BigDecimal.ZERO) { total, value ->
+            runCatching { total.add(BigDecimal(value)) }.getOrElse { total }
+        }
+
+    private fun BigDecimal.toPlainAmount(): String =
+        stripTrailingZeros().toPlainString().takeUnless { value -> value == "0" }.orEmpty()
+
+    private fun List<String>.cleanOptions(): List<String> =
+        map { option -> option.trim() }
+            .filter { option -> option.isNotBlank() }
+            .distinctBy { option -> option.lowercase() }
 
     private fun String.extractDropdownTableColumns(): List<AiTableColumnItem> {
         val matches = Regex(
@@ -547,7 +777,8 @@ class AiPromptActionRecovery(
         fallbackTableTitle: String? = null,
     ): AiActionItem? {
         if (!looksLikeTableRowRequest()) return null
-        val tableTitle = targetPage.defaultTableTitle()
+        val tableTitle = targetPage.transactionLedgerTableTitle()
+            ?: targetPage.defaultTableTitle()
             ?: fallbackTableTitle?.takeIf { title -> title.isNotBlank() }
         if (tableTitle == null && !targetPage.hasAnyTable()) return null
 
@@ -557,6 +788,7 @@ class AiPromptActionRecovery(
         val amount = rowText.extractMoneyAmount()
         val rowTitle = rowText.removeMoneyAmount().removeMetricRequestWords().removeDateRequestWords().ifBlank { rowText }
         val dateValue = rowPrompt.inferredDateValue()
+        val isBudgetLedgerRow = targetPage.looksLikeBudgetLedgerContext() || rowText.looksLikeExpenseText()
         val cellValues = buildMap {
             put("Name", rowTitle)
             put("Item", rowTitle)
@@ -574,6 +806,11 @@ class AiPromptActionRecovery(
             }
             if (amount != null && !rowText.equals(rowTitle, ignoreCase = true)) {
                 put("Notes", rowText)
+            }
+            if (isBudgetLedgerRow) {
+                put("Category", rowTitle.toReadableTitle().ifBlank { rowTitle })
+                put("Type", rowText.inferredBudgetLedgerType())
+                put("Status", if (amount == null) "Empty" else "Confirmed")
             }
         }
         return AiActionItem(
@@ -856,6 +1093,26 @@ class AiPromptActionRecovery(
         return blocks.firstOrNull { block -> block.tableTitle.isNotBlank() }?.tableTitle
     }
 
+    private fun AiPageContext.transactionLedgerTableTitle(): String? =
+        blocks.firstOrNull { block ->
+            block.type.equals("DatabaseTable", ignoreCase = true) &&
+                block.tableTitle.equals("Transactions", ignoreCase = true)
+        }?.tableTitle
+
+    private fun AiPageContext.looksLikeBudgetLedgerContext(): Boolean {
+        val pageValue = title.lowercase()
+        val pageLooksBudget = listOf("budget", "expense", "expenses", "belanja", "duit", "monthly").any { token ->
+            pageValue.contains(token)
+        }
+        val tableLooksBudget = blocks.any { block ->
+            val tableTitle = block.tableTitle.lowercase()
+            listOf("transactions", "monthly summary", "budget", "expense", "expenses", "belanja").any { token ->
+                tableTitle.contains(token)
+            }
+        }
+        return pageLooksBudget || tableLooksBudget
+    }
+
     private fun String.looksLikeTableRowRequest(): Boolean {
         val value = lowercase()
         val hasRowIntent = listOf("row", "baris", "rekod", "record")
@@ -929,6 +1186,15 @@ class AiPromptActionRecovery(
         replace(Regex("(?i)\\b(hari\\s*ini|harini|today|tarikh|date|sekali)\\b"), " ")
             .replace(Regex("\\s+"), " ")
             .trim(' ', '-', ':', ',')
+
+    private fun String.inferredBudgetLedgerType(): String {
+        val value = lowercase()
+        return when {
+            listOf("gaji", "salary", "income").any { token -> value.contains(token) } -> "Income"
+            listOf("hutang", "debt", "loan").any { token -> value.contains(token) } -> "Debt"
+            else -> "Expense"
+        }
+    }
 
     private fun String.inferredDateValue(): String? {
         val value = lowercase()
