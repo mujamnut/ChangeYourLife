@@ -182,6 +182,148 @@ class BudgetLedgerSummarySyncTest {
         assertEquals("5", summary.displayValue(monthRow, "Known Expenses", references))
     }
 
+    @Test
+    fun syncWithPreviousOnlyRebuildsAffectedSummaryMonths() {
+        val name = PageTableColumn("tx-name", "Name", PageTableColumnType.Text)
+        val date = PageTableColumn("tx-date", "Date", PageTableColumnType.Date)
+        val month = PageTableColumn("tx-month", "Month", PageTableColumnType.Select)
+        val category = PageTableColumn("tx-category", "Category", PageTableColumnType.Select)
+        val type = PageTableColumn("tx-type", "Type", PageTableColumnType.Select)
+        val amount = PageTableColumn("tx-amount", "Amount", PageTableColumnType.Number)
+        val status = PageTableColumn("tx-status", "Status", PageTableColumnType.Status)
+        val notes = PageTableColumn("tx-notes", "Notes", PageTableColumnType.Text)
+        val base = PageBlockDocument(
+            blocks = listOf(
+                PageBlock(
+                    id = "transactions",
+                    type = PageBlockType.DatabaseTable,
+                    table = PageTable(
+                        title = "Transactions",
+                        columns = listOf(name, date, month, category, type, amount, status, notes),
+                        rows = listOf(
+                            PageTableRow(
+                                "july-food",
+                                mapOf(
+                                    name.id to "Food",
+                                    date.id to "2026-07-08",
+                                    month.id to "2026-07",
+                                    category.id to "Food",
+                                    type.id to "Expense",
+                                    amount.id to "3",
+                                    status.id to "Confirmed",
+                                ),
+                            ),
+                            PageTableRow(
+                                "aug-fuel",
+                                mapOf(
+                                    name.id to "Fuel",
+                                    date.id to "2026-08-02",
+                                    month.id to "2026-08",
+                                    category.id to "Fuel",
+                                    type.id to "Expense",
+                                    amount.id to "5",
+                                    status.id to "Confirmed",
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        ).withBudgetLedgerSummarySynced()
+        val previousSummary = base.blocks.single { block -> block.table.title == "Monthly Summary" }.table
+        val previousAugustRow = previousSummary.rowWhere("Month", "2026-08")
+
+        val changed = base.copy(
+            blocks = base.blocks.map { block ->
+                if (block.id != "transactions") return@map block
+                block.copy(
+                    table = block.table.copy(
+                        rows = block.table.rows.map { row ->
+                            if (row.id == "july-food") {
+                                row.copy(cells = row.cells + (amount.id to "9"))
+                            } else {
+                                row
+                            }
+                        },
+                    ),
+                )
+            },
+        )
+
+        val synced = changed.withBudgetLedgerSummarySynced(previous = base)
+        val summary = synced.blocks.single { block -> block.table.title == "Monthly Summary" }.table
+        val references = synced.tableReferences()
+        val julyRow = summary.rowWhere("Month", "2026-07")
+        val augustRow = summary.rowWhere("Month", "2026-08")
+
+        assertEquals("9", summary.displayValue(julyRow, "Known Expenses", references))
+        assertEquals(previousAugustRow, augustRow)
+    }
+
+    @Test
+    fun syncWithPreviousRemovesStaleMonthWhenTransactionMovesMonth() {
+        val name = PageTableColumn("tx-name", "Name", PageTableColumnType.Text)
+        val date = PageTableColumn("tx-date", "Date", PageTableColumnType.Date)
+        val month = PageTableColumn("tx-month", "Month", PageTableColumnType.Select)
+        val category = PageTableColumn("tx-category", "Category", PageTableColumnType.Select)
+        val type = PageTableColumn("tx-type", "Type", PageTableColumnType.Select)
+        val amount = PageTableColumn("tx-amount", "Amount", PageTableColumnType.Number)
+        val status = PageTableColumn("tx-status", "Status", PageTableColumnType.Status)
+        val notes = PageTableColumn("tx-notes", "Notes", PageTableColumnType.Text)
+        val base = PageBlockDocument(
+            blocks = listOf(
+                PageBlock(
+                    id = "transactions",
+                    type = PageBlockType.DatabaseTable,
+                    table = PageTable(
+                        title = "Transactions",
+                        columns = listOf(name, date, month, category, type, amount, status, notes),
+                        rows = listOf(
+                            PageTableRow(
+                                "food",
+                                mapOf(
+                                    name.id to "Food",
+                                    date.id to "2026-07-08",
+                                    month.id to "2026-07",
+                                    category.id to "Food",
+                                    type.id to "Expense",
+                                    amount.id to "3",
+                                    status.id to "Confirmed",
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        ).withBudgetLedgerSummarySynced()
+
+        val changed = base.copy(
+            blocks = base.blocks.map { block ->
+                if (block.id != "transactions") return@map block
+                block.copy(
+                    table = block.table.copy(
+                        rows = block.table.rows.map { row ->
+                            row.copy(
+                                cells = row.cells +
+                                    (date.id to "2026-08-01") +
+                                    (month.id to "2026-08") +
+                                    (amount.id to "10"),
+                            )
+                        },
+                    ),
+                )
+            },
+        )
+
+        val synced = changed.withBudgetLedgerSummarySynced(previous = base)
+        val summary = synced.blocks.single { block -> block.table.title == "Monthly Summary" }.table
+        val references = synced.tableReferences()
+        val augustRow = summary.rowWhere("Month", "2026-08")
+
+        assertEquals(listOf("2026-08"), summary.rows.map { row -> summary.cell(row, "Month") })
+        assertEquals("10", summary.displayValue(augustRow, "Known Expenses", references))
+    }
+
     private fun PageTable.rowWhere(columnName: String, value: String): PageTableRow {
         val columnId = columnId(columnName)
         return rows.single { row -> row.cells[columnId] == value }

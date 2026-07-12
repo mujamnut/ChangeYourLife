@@ -55,6 +55,12 @@ android {
             buildConfigField("String", "CYL_API_BASE_URL", buildConfigString(normalizedBaseUrl(debugApiBaseUrl)))
         }
         release {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
             buildConfigField("String", "CYL_API_BASE_URL", "\"https://api.changeyourlife.app/\"")
         }
     }

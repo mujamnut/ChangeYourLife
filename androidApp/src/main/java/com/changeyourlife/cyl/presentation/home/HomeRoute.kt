@@ -154,6 +154,8 @@ fun HomeRoute(
         onChatHistorySearchQueryChange = viewModel::updateChatHistorySearchQuery,
         onClearChatHistorySearchQuery = viewModel::clearChatHistorySearchQuery,
         onRetrySync = viewModel::retrySyncNow,
+        onToggleAutoSync = viewModel::setAutoSyncEnabled,
+        onSyncNow = viewModel::syncNow,
         onDismissChatError = viewModel::clearAiChatError,
         onLogout = {
             viewModel.logout(onLoggedOut)
@@ -208,6 +210,8 @@ private fun HomeScreen(
     onChatHistorySearchQueryChange: (String) -> Unit,
     onClearChatHistorySearchQuery: () -> Unit,
     onRetrySync: () -> Unit,
+    onToggleAutoSync: (Boolean) -> Unit,
+    onSyncNow: () -> Unit,
     onDismissChatError: () -> Unit,
     onLogout: () -> Unit,
     modifier: Modifier = Modifier,
@@ -361,6 +365,9 @@ private fun HomeScreen(
             HomeHeader(
                 workspaceName = uiState.workspaceName,
                 syncOverview = uiState.syncOverview,
+                isAutoSyncEnabled = uiState.isAutoSyncEnabled,
+                onToggleAutoSync = onToggleAutoSync,
+                onSyncNow = onSyncNow,
                 selectedTab = selectedHomeTab,
                 onSelectTab = { tab -> selectedHomeTab = tab },
                 onRetrySync = onRetrySync,
@@ -640,6 +647,9 @@ private fun HomeSearchScreen(
 private fun HomeHeader(
     workspaceName: String,
     syncOverview: SyncOverview,
+    isAutoSyncEnabled: Boolean,
+    onToggleAutoSync: (Boolean) -> Unit,
+    onSyncNow: () -> Unit,
     selectedTab: HomeTab,
     onSelectTab: (HomeTab) -> Unit,
     onRetrySync: () -> Unit,
@@ -653,6 +663,9 @@ private fun HomeHeader(
         HomeProfileSheet(
             workspaceName = workspaceName,
             syncOverview = syncOverview,
+            isAutoSyncEnabled = isAutoSyncEnabled,
+            onToggleAutoSync = onToggleAutoSync,
+            onSyncNow = onSyncNow,
             onRetrySync = onRetrySync,
             onOpenTrash = {
                 isProfileSheetOpen = false
@@ -734,6 +747,9 @@ private fun HomeHeader(
 private fun HomeProfileSheet(
     workspaceName: String,
     syncOverview: SyncOverview,
+    isAutoSyncEnabled: Boolean,
+    onToggleAutoSync: (Boolean) -> Unit,
+    onSyncNow: () -> Unit,
     onRetrySync: () -> Unit,
     onOpenTrash: () -> Unit,
     onLogout: () -> Unit,
@@ -810,9 +826,26 @@ private fun HomeProfileSheet(
                     }
                 },
                 trailingContent = {
-                    TextButton(onClick = onRetrySync) {
-                        Text(text = "Retry")
+                    TextButton(onClick = onSyncNow) {
+                        Text(text = "Sync Now")
                     }
+                },
+            )
+
+            ListItem(
+                headlineContent = { Text(text = "Auto Sync (Background)") },
+                supportingContent = { Text(text = "Automatically push changes") },
+                leadingContent = {
+                    Icon(
+                        imageVector = Icons.Rounded.CheckCircle,
+                        contentDescription = null,
+                    )
+                },
+                trailingContent = {
+                    androidx.compose.material3.Switch(
+                        checked = isAutoSyncEnabled,
+                        onCheckedChange = onToggleAutoSync,
+                    )
                 },
             )
 
@@ -1899,6 +1932,8 @@ private fun HomeRoutePreview() {
             onChatHistorySearchQueryChange = {},
             onClearChatHistorySearchQuery = {},
             onRetrySync = {},
+            onToggleAutoSync = {},
+            onSyncNow = {},
             onDismissChatError = {},
             onLogout = {},
         )

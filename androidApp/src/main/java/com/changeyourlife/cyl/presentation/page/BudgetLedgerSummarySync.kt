@@ -23,9 +23,25 @@ import java.util.Locale
 
 private const val NoMonthLabel = "No month"
 
-internal fun PageBlockDocument.withBudgetLedgerSummarySynced(): PageBlockDocument {
+internal fun PageBlockDocument.withBudgetLedgerSummarySynced(previous: PageBlockDocument? = null): PageBlockDocument {
+    if (blocks.none { block -> block.type == PageBlockType.DatabaseTable }) return this
+    if (previous != null) {
+        val currentTables = blocks.filter { it.type == PageBlockType.DatabaseTable }
+        val previousTables = previous.blocks.filter { it.type == PageBlockType.DatabaseTable }
+        var tablesChanged = currentTables.size != previousTables.size
+        if (!tablesChanged) {
+            for (i in currentTables.indices) {
+                if (currentTables[i] !== previousTables[i]) {
+                    tablesChanged = true
+                    break
+                }
+            }
+        }
+        if (!tablesChanged) return this
+    }
     val migrated = withLegacyBudgetTablesMigrated()
     val transactionBlock = migrated.blocks.firstOrNull { block -> block.isTransactionLedgerTable() } ?: return migrated
+    val previousLedger = previous?.previousSyncedLedgerFor(transactionBlock.id)
     val normalizedTransactionTable = transactionBlock.table.normalizedTransactionTable(emptyList())
     val ledger = normalizedTransactionTable.toLedgerRows()
     val syncedTransactionTable = normalizedTransactionTable.normalizedTransactionTable(ledger)
@@ -48,6 +64,7 @@ internal fun PageBlockDocument.withBudgetLedgerSummarySynced(): PageBlockDocumen
         transactionBlockId = transactionBlock.id,
         transactionTable = syncedTransactionTable,
         ledger = ledger,
+        previousLedger = previousLedger,
     )
     if (
         syncedTransactionTable == transactionBlock.table &&
@@ -66,6 +83,17 @@ internal fun PageBlockDocument.withBudgetLedgerSummarySynced(): PageBlockDocumen
             }
         },
     )
+}
+
+private fun PageBlockDocument.previousSyncedLedgerFor(transactionBlockId: String): List<LedgerRow>? {
+    val previousTransactionBlock = blocks.firstOrNull { block ->
+        block.id == transactionBlockId && block.isTransactionLedgerTable()
+    } ?: blocks.firstOrNull { block -> block.isTransactionLedgerTable() } ?: return null
+    val normalizedTransactionTable = previousTransactionBlock.table.normalizedTransactionTable(emptyList())
+    val ledger = normalizedTransactionTable.toLedgerRows()
+    return normalizedTransactionTable
+        .normalizedTransactionTable(ledger)
+        .toLedgerRows()
 }
 
 internal fun PageBlock.isTransactionLedgerTable(): Boolean {
@@ -323,6 +351,7 @@ private fun PageTable.rebuiltMonthlySummary(
     transactionBlockId: String,
     transactionTable: PageTable,
     ledger: List<LedgerRow>,
+    previousLedger: List<LedgerRow>? = null,
 ): PageTable {
     val monthGroups = ledger.groupBy { row -> row.month.ifBlank { NoMonthLabel } }
     val monthOptions = monthGroups.keys.toList()
@@ -334,17 +363,20 @@ private fun PageTable.rebuiltMonthlySummary(
     val existingRowsByMonth = rows.associateBy { row ->
         row.valueByColumnName(this, "Month").normalizedBudgetKey()
     }
-    val nextRows = monthGroups.entries
-        .sortedWith { left, right -> compareBudgetMonths(left.key, right.key) }
-        .map { (month, rowsForMonth) ->
-            val existing = existingRowsByMonth[month.normalizedBudgetKey()]
-            summaryRowForMonth(
-                existing = existing,
-                columns = nextColumns,
-                month = month,
-                rowsForMonth = rowsForMonth,
-            )
-        }
+    val nextRows = if (previousLedger == null) {
+        rebuildAllMonthlySummaryRows(
+            monthGroups = monthGroups,
+            existingRowsByMonth = existingRowsByMonth,
+            columns = nextColumns,
+        )
+    } else {
+        rebuildAffectedMonthlySummaryRows(
+            monthGroups = monthGroups,
+            existingRowsByMonth = existingRowsByMonth,
+            columns = nextColumns,
+            affectedMonths = previousLedger.affectedSummaryMonths(ledger),
+        )
+    }
     return copy(
         columns = nextColumns,
         rows = nextRows,
@@ -353,6 +385,69 @@ private fun PageTable.rebuiltMonthlySummary(
             dashboardGroupColumnId = nextColumns.firstOrNull { column -> column.name.normalizedBudgetKey() == "month" }?.id.orEmpty(),
         ),
     )
+}
+
+private fun rebuildAllMonthlySummaryRows(
+    monthGroups: Map<String, List<LedgerRow>>,
+    existingRowsByMonth: Map<String, PageTableRow>,
+    columns: List<PageTableColumn>,
+): List<PageTableRow> {
+    return monthGroups.entries
+        .sortedWith { left, right -> compareBudgetMonths(left.key, right.key) }
+        .map { (month, rowsForMonth) ->
+            summaryRowForMonth(
+                existing = existingRowsByMonth[month.normalizedBudgetKey()],
+                columns = columns,
+                month = month,
+                rowsForMonth = rowsForMonth,
+            )
+        }
+}
+
+private fun rebuildAffectedMonthlySummaryRows(
+    monthGroups: Map<String, List<LedgerRow>>,
+    existingRowsByMonth: Map<String, PageTableRow>,
+    columns: List<PageTableColumn>,
+    affectedMonths: Set<String>,
+): List<PageTableRow> {
+    val currentMonthKeys = monthGroups.keys.map { month -> month.normalizedBudgetKey() }.toSet()
+    val existingMonthKeys = existingRowsByMonth.keys
+    val repairMonthKeys = (currentMonthKeys - existingMonthKeys) + (existingMonthKeys - currentMonthKeys)
+    val affectedMonthKeys = affectedMonths
+        .map { month -> month.ifBlank { NoMonthLabel }.normalizedBudgetKey() }
+        .toSet() + repairMonthKeys
+
+    return monthGroups.entries
+        .sortedWith { left, right -> compareBudgetMonths(left.key, right.key) }
+        .map { (month, rowsForMonth) ->
+            val monthKey = month.normalizedBudgetKey()
+            val existing = existingRowsByMonth[monthKey]
+            if (monthKey !in affectedMonthKeys && existing != null) {
+                existing
+            } else {
+                summaryRowForMonth(
+                    existing = existing,
+                    columns = columns,
+                    month = month,
+                    rowsForMonth = rowsForMonth,
+                )
+            }
+        }
+}
+
+private fun List<LedgerRow>.affectedSummaryMonths(current: List<LedgerRow>): Set<String> {
+    val previousById = associateBy { row -> row.rowId }
+    val currentById = current.associateBy { row -> row.rowId }
+    val rowIds = previousById.keys + currentById.keys
+    return rowIds.flatMap { rowId ->
+        val previous = previousById[rowId]
+        val next = currentById[rowId]
+        if (previous == next) {
+            emptyList()
+        } else {
+            listOfNotNull(previous?.month, next?.month).map { month -> month.ifBlank { NoMonthLabel } }
+        }
+    }.toSet()
 }
 
 private fun PageTable.budgetTransactionColumns(ledger: List<LedgerRow>): List<PageTableColumn> {

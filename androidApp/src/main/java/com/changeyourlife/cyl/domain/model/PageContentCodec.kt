@@ -144,6 +144,17 @@ object PageContentCodec {
             listOf(newTableColumn("Name"))
         }
         val validColumnIds = normalizedColumns.map { column -> column.id }.toSet()
+
+        // Resolve a stored column reference (which may be a name from AI) to its real UUID.
+        fun resolveColumnId(candidateId: String): String? {
+            if (candidateId.isBlank()) return null
+            if (candidateId in validColumnIds) return candidateId
+            // Try matching by name (case-insensitive) — AI may store column names as IDs.
+            return normalizedColumns.firstOrNull { col ->
+                col.name.equals(candidateId, ignoreCase = true)
+            }?.id
+        }
+
         val normalizedRows = rows.map { row ->
             val nextRowId = row.id.takeIf { id ->
                 id.isNotBlank() && usedRowIds.add(id)
@@ -163,16 +174,22 @@ object PageContentCodec {
                 blocks = row.blocks.normalizedChildBlocks(usedRowIds),
             )
         }
+
+        // Canonicalize sort/filter/group to real UUIDs so future lookups are reliable.
+        val resolvedSortColumnId = resolveColumnId(sort.columnId)
+        val resolvedFilterColumnId = resolveColumnId(filter.columnId)
+        val resolvedGroupColumnId = resolveColumnId(groupByColumnId)
+
         return copy(
             columns = normalizedColumns,
             rows = normalizedRows,
-            sort = if (sort.columnId in validColumnIds) sort else PageTableSort(),
-            filter = if (filter.columnId in validColumnIds && filter.isActive()) {
-                filter
+            sort = if (resolvedSortColumnId != null) sort.copy(columnId = resolvedSortColumnId) else PageTableSort(),
+            filter = if (resolvedFilterColumnId != null && filter.isActive()) {
+                filter.copy(columnId = resolvedFilterColumnId)
             } else {
                 PageTableFilter()
             },
-            groupByColumnId = groupByColumnId.takeIf { columnId -> columnId in validColumnIds }.orEmpty(),
+            groupByColumnId = resolvedGroupColumnId.orEmpty(),
             viewConfig = viewConfig.copy(
                 calendarDateColumnId = viewConfig.calendarDateColumnId.takeIf { columnId -> columnId in validColumnIds }.orEmpty(),
                 timelineStartColumnId = viewConfig.timelineStartColumnId.takeIf { columnId -> columnId in validColumnIds }.orEmpty(),

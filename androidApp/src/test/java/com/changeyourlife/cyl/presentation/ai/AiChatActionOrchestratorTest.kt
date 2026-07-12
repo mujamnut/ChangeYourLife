@@ -39,7 +39,7 @@ class AiChatActionOrchestratorTest {
         }
 
         assertTrue(executorCalled)
-        assertEquals("Siap.\n\nDone: Deleted block lama", result.reply)
+        assertEquals("Siap.", result.reply)
         assertEquals("audit-planning", result.actionMetadata.auditId)
         assertEquals("user-message-planning", result.actionMetadata.requestMessageId)
         assertEquals(2000L, result.actionMetadata.executedAt)
@@ -95,7 +95,7 @@ class AiChatActionOrchestratorTest {
         assertEquals("workspace-1", capturedWorkspaceId)
         assertEquals("page-1", capturedTargetPage?.id)
         assertEquals(listOf("ADD_TABLE_ROW"), capturedActions.map { it.type })
-        assertEquals("Siap.\n\nDone: Added row to Budget", result.reply)
+        assertEquals("Siap.", result.reply)
         assertEquals("audit-edit", result.actionMetadata.auditId)
         assertEquals("user-message-edit", result.actionMetadata.requestMessageId)
         assertEquals(3000L, result.actionMetadata.executedAt)
@@ -141,7 +141,7 @@ class AiChatActionOrchestratorTest {
 
         assertEquals(listOf("CREATE_PAGE"), capturedActions.map { it.type })
         assertEquals("Budget", capturedActions.single().tableTitle)
-        assertEquals("Siap - saya tukar jadual itu kepada data CYL.\n\nDone: Created page Budget", result.reply)
+        assertEquals("Siap - saya tukar jadual itu kepada data CYL.", result.reply)
         assertEquals(listOf("CREATE_PAGE"), result.actionMetadata.proposedActions.map { it.type })
         assertEquals(listOf("CREATE_PAGE"), result.actionMetadata.executedActions.map { it.type })
         assertEquals(listOf("Budget"), result.pageLinks.map { it.title })
@@ -232,6 +232,7 @@ class AiChatActionOrchestratorTest {
         }
 
         assertEquals(listOf("ADD_TABLE_ROW", "UPDATE_BLOCK"), result.actionMetadata.proposedActions.map { it.type })
+        assertEquals("Siap.\n\nFailed UPDATE_BLOCK: Could not find block", result.reply)
         assertEquals(listOf("ADD_TABLE_ROW"), result.actionMetadata.executedActions.map { it.type })
         assertEquals(listOf(1), result.actionMetadata.validationIssues.map { it.actionIndex })
     }

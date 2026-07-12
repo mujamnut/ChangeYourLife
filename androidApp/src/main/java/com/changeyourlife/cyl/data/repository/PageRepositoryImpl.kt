@@ -770,7 +770,7 @@ class PageRepositoryImpl @Inject constructor(
             updatedAt = updatedAt,
             syncStatus = SyncStatus.PendingPush,
         )
-        persistPage(updatedPage)
+        pageDao.upsertPage(updatedPage)
         enqueueRemotePageMutation(
             name = "mutateProjectedPage:$pageId",
             policy = remoteSyncPolicy,

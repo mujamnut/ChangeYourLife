@@ -766,8 +766,6 @@ internal fun TableRowPageSheet(
                     }
                 }
             }
-
-            Spacer(modifier = Modifier.height(4.dp))
         }
 
             if (showRowController) {

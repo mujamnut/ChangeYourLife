@@ -4,7 +4,6 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
-import android.graphics.BitmapFactory
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.widget.Toast
@@ -113,8 +112,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
@@ -174,10 +173,15 @@ import com.changeyourlife.cyl.presentation.components.CylChromeIconButton
 import com.changeyourlife.cyl.presentation.components.CylFloatingChromeSurface
 import com.changeyourlife.cyl.presentation.home.HomeUiState
 import com.changeyourlife.cyl.presentation.theme.ChangeYourLifeTheme
+import com.changeyourlife.cyl.presentation.utility.decodeImageBytesToImageBitmap
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+
+private const val PageAttachmentPreviewMaxDimensionPx = 1024
 
 @Composable
 internal fun PageEditorBlock(
@@ -187,6 +191,7 @@ internal fun PageEditorBlock(
     syncState: PageSyncState = PageSyncState(),
     isSaving: Boolean = false,
     isFirstBlock: Boolean = false,
+    isFullPage: Boolean = false,
     indentLevel: Int = 0,
     onTextChange: (String, String) -> Unit,
     onRichTextChange: (String, String, List<PageTextSpan>) -> Unit,
@@ -271,13 +276,17 @@ internal fun PageEditorBlock(
     }
     var isToggleExpanded by rememberSaveable(block.id) { mutableStateOf(true) }
 
-    val blockModifier = Modifier
-        .fillMaxWidth()
-        .padding(start = (indentLevel * 16).dp)
+    val blockModifier = if (isFullPage) {
+        Modifier.fillMaxSize().padding(start = (indentLevel * 16).dp)
+    } else {
+        Modifier.fillMaxWidth().padding(start = (indentLevel * 16).dp)
+    }
 
     val blockContent: @Composable () -> Unit = {
-        Column(
-            modifier = Modifier
+        val contentModifier = if (isFullPage) {
+            Modifier.fillMaxSize()
+        } else {
+            Modifier
                 .fillMaxWidth()
                 .padding(
                     horizontal = if (isFlushBlock) {
@@ -290,7 +299,10 @@ internal fun PageEditorBlock(
                     } else {
                         8.dp
                     },
-                ),
+                )
+        }
+        Column(
+            modifier = contentModifier,
             verticalArrangement = Arrangement.spacedBy(
                 if (isFlushBlock) 0.dp else 6.dp,
             ),
@@ -322,6 +334,7 @@ internal fun PageEditorBlock(
                     pageUpdatedAt = pageUpdatedAt,
                     syncState = syncState,
                     isSaving = isSaving,
+                    isFullPage = isFullPage,
                     table = block.table,
                     tableReferences = tableReferences,
                     onTitleChange = { title -> onTableTitleChange(block.id, title) },
@@ -670,7 +683,11 @@ internal fun PageEditorBlock(
         }
     }
 
-    if (isTextLikeBlock) {
+    if (isFullPage && block.type == PageBlockType.DatabaseTable) {
+        Box(modifier = blockModifier) {
+            blockContent()
+        }
+    } else if (isTextLikeBlock) {
         PlainTextBlockRow(
             modifier = blockModifier,
             isSearchHighlighted = isSearchHighlighted,
@@ -1214,18 +1231,33 @@ internal fun MediaAttachmentCard(
 }
 
 @Composable
-internal fun rememberAttachmentBitmap(attachment: PageMediaAttachment): androidx.compose.ui.graphics.ImageBitmap? {
+internal fun rememberAttachmentBitmap(attachment: PageMediaAttachment): ImageBitmap? {
     val context = LocalContext.current
-    return remember(attachment.uri, attachment.mimeType) {
-        if (!attachment.mimeType.startsWith("image/")) {
-            null
-        } else {
+    var imageBitmap by remember(attachment.uri, attachment.mimeType) {
+        mutableStateOf<ImageBitmap?>(null)
+    }
+
+    LaunchedEffect(attachment.uri, attachment.mimeType) {
+        imageBitmap = null
+        if (!attachment.mimeType.startsWith("image/")) return@LaunchedEffect
+
+        val bytes = withContext(Dispatchers.IO) {
             runCatching {
                 context.contentResolver.openInputStream(Uri.parse(attachment.uri))?.use { stream ->
-                    BitmapFactory.decodeStream(stream)?.asImageBitmap()
+                    stream.readBytes()
                 }
             }.getOrNull()
         }
+        imageBitmap = bytes?.let { imageBytes ->
+            withContext(Dispatchers.Default) {
+                decodeImageBytesToImageBitmap(
+                    bytes = imageBytes,
+                    maxDimensionPx = PageAttachmentPreviewMaxDimensionPx,
+                )
+            }
+        }
     }
+
+    return imageBitmap
 }
 

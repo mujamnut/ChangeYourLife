@@ -20,6 +20,7 @@ import kotlinx.coroutines.launch
 class BackgroundSyncQueue @Inject constructor(
     private val syncCoordinator: SessionSyncCoordinator,
     private val persistentSyncScheduler: PersistentSyncScheduler,
+    private val syncSettingsStore: com.changeyourlife.cyl.data.local.session.SyncSettingsStore,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val operations = Channel<SyncOperation>(capacity = Channel.UNLIMITED)
@@ -78,6 +79,7 @@ class BackgroundSyncQueue @Inject constructor(
     }
 
     fun enqueuePendingPushDebounced() {
+        if (!syncSettingsStore.isAutoSyncEnabled.value) return
         enqueueDebounced(
             name = "pushPendingChangesDebounced",
             delayMs = RemoteMutationDebounceMs,

@@ -1,7 +1,4 @@
 package com.changeyourlife.cyl.presentation.ai
-
-import android.graphics.BitmapFactory
-import android.util.Base64
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -60,6 +57,7 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -69,8 +67,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
@@ -80,6 +78,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.changeyourlife.cyl.domain.model.AiActionUndoState
 import com.changeyourlife.cyl.presentation.page.RichTextCommandPaletteItem
+import com.changeyourlife.cyl.presentation.utility.decodeBase64ImageDataUrlToImageBitmap
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+
+private const val AiAttachmentThumbnailMaxDimensionPx = 192
 
 internal data class AiMentionChipUi(
     val pageId: String,
@@ -453,8 +456,17 @@ private fun AiAttachmentChip(
     onRemove: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val thumbnail = remember(attachment.dataUrl) {
-        attachment.dataUrl.toAiAttachmentImageBitmap()
+    var thumbnail by remember(attachment.dataUrl) {
+        mutableStateOf<ImageBitmap?>(null)
+    }
+    LaunchedEffect(attachment.dataUrl) {
+        thumbnail = null
+        thumbnail = withContext(Dispatchers.Default) {
+            decodeBase64ImageDataUrlToImageBitmap(
+                dataUrl = attachment.dataUrl,
+                maxDimensionPx = AiAttachmentThumbnailMaxDimensionPx,
+            )
+        }
     }
     Row(
         modifier = modifier
@@ -483,9 +495,10 @@ private fun AiAttachmentChip(
                 ),
             contentAlignment = Alignment.Center,
         ) {
-            if (thumbnail != null) {
+            val thumbnailBitmap = thumbnail
+            if (thumbnailBitmap != null) {
                 Image(
-                    bitmap = thumbnail,
+                    bitmap = thumbnailBitmap,
                     contentDescription = null,
                     modifier = Modifier.size(32.dp),
                     contentScale = ContentScale.Crop,
@@ -1086,17 +1099,6 @@ private fun String.compactAiModelLabel(): String {
         .replace(":free", " free", ignoreCase = true)
         .trim()
     return model.ifBlank { clean }
-}
-
-private fun String.toAiAttachmentImageBitmap(): androidx.compose.ui.graphics.ImageBitmap? {
-    if (isBlank() || !startsWith("data:image/", ignoreCase = true)) return null
-    val base64Payload = substringAfter("base64,", missingDelimiterValue = "")
-        .takeIf { payload -> payload.isNotBlank() }
-        ?: return null
-    return runCatching {
-        val bytes = Base64.decode(base64Payload, Base64.DEFAULT)
-        BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
-    }.getOrNull()
 }
 
 private fun String.prettyActionType(): String {

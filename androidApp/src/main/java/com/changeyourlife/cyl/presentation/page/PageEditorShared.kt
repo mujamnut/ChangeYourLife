@@ -1,4 +1,4 @@
-package com.changeyourlife.cyl.presentation.page
+﻿package com.changeyourlife.cyl.presentation.page
 
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -152,6 +152,7 @@ import com.changeyourlife.cyl.domain.model.PagePropertyType
 import com.changeyourlife.cyl.domain.model.DefaultPageTableStatusOptions
 import com.changeyourlife.cyl.domain.model.PageTable
 import com.changeyourlife.cyl.domain.model.PageTableColumn
+import com.changeyourlife.cyl.domain.model.matchesIdOrName
 import com.changeyourlife.cyl.domain.model.PageTableColumnType
 import com.changeyourlife.cyl.domain.model.PageTableDateFormat
 import com.changeyourlife.cyl.domain.model.PageTableDateReminder
@@ -556,7 +557,7 @@ internal data class TableViewOption(
     }
 }
 
-internal data class PageTableReference(
+data class PageTableReference(
     val blockId: String,
     val title: String,
     val table: PageTable,
@@ -859,7 +860,7 @@ internal fun PageTable.visibleRows(
     tableReferences: List<PageTableReference> = emptyList(),
     searchQuery: String = "",
 ): List<PageTableRow> {
-    val filterColumn = columns.firstOrNull { column -> column.id == filter.columnId }
+    val filterColumn = columns.firstOrNull { column -> column.matchesIdOrName(filter.columnId) }
     val filteredRows = if (filterColumn != null && filter.isActive()) {
         rows.filter { row -> row.matchesTableFilter(this, filterColumn, filter, tableReferences) }
     } else {
@@ -870,7 +871,7 @@ internal fun PageTable.visibleRows(
     } else {
         filteredRows.filter { row -> row.matchesTableSearch(this, searchQuery, tableReferences) }
     }
-    val sortColumn = columns.firstOrNull { column -> column.id == sort.columnId } ?: return searchedRows
+    val sortColumn = columns.firstOrNull { column -> column.matchesIdOrName(sort.columnId) } ?: return searchedRows
     val sortedRows = searchedRows.sortedWith { left, right ->
         compareRowsByColumn(left, right, sortColumn, tableReferences, sort.direction)
     }
@@ -878,7 +879,7 @@ internal fun PageTable.visibleRows(
 }
 
 internal fun PageTable.groupColumn(): PageTableColumn? {
-    return columns.firstOrNull { column -> column.id == groupByColumnId }
+    return columns.firstOrNull { column -> column.matchesIdOrName(groupByColumnId) }
 }
 
 internal fun PageTable.groupedSummaries(
@@ -1080,14 +1081,17 @@ private fun String.containsSearchText(query: String): Boolean {
     return normalizedSearchText().contains(query.normalizedSearchText())
 }
 
+private val whitespaceRegex = Regex("\\s+")
+private val nonAlphanumericRegex = Regex("[^a-z0-9]")
+
 private fun String.normalizedSearchText(): String {
     return trim()
         .lowercase(Locale.US)
-        .replace(Regex("\\s+"), " ")
+        .replace(whitespaceRegex, " ")
 }
 
 private fun String.searchKey(): String {
-    return normalizedSearchText().replace(Regex("[^a-z0-9]"), "")
+    return normalizedSearchText().replace(nonAlphanumericRegex, "")
 }
 
 private fun String.toSearchBooleanOrNull(): Boolean? {
@@ -1391,10 +1395,12 @@ private fun String.groupSortKey(column: PageTableColumn): TableSortKey {
     }
 }
 
+private val numericFormatRegex = Regex("[^0-9+\\-.]")
+
 private fun String.toTableNumberOrNull(): Double? {
     val normalized = trim()
         .replace(",", "")
-        .replace(Regex("[^0-9+\\-.]"), "")
+        .replace(numericFormatRegex, "")
     if (normalized.isBlank() || normalized == "-" || normalized == "." || normalized == "+") return null
     return normalized.toDoubleOrNull()
 }
@@ -1544,8 +1550,13 @@ internal fun PageTable.evaluateFormula(
     if (formula.isBlank()) return ""
     var expression = formula
     var hasCircularDependency = false
+    val referencedColumnNames = formulaVariableRegex.findAll(expression)
+        .map { match -> match.groupValues[1].lowercase() }
+        .toSet()
+
     columns
         .filterNot { column -> column.id == sourceColumn.id }
+        .filter { column -> column.name.lowercase() in referencedColumnNames }
         .sortedByDescending { column -> column.name.length }
         .forEach { column ->
             val displayValue = displayCellText(row, column, tableReferences, depth, evaluationPath)
@@ -1629,6 +1640,7 @@ internal fun PageTable.rollupDisplayText(
 private const val CircularDependencyText = "Circular dependency"
 private const val MissingSourceText = "Missing source"
 private const val MissingPropertyText = "Missing property"
+private val formulaVariableRegex = Regex("\\{([^}]+)\\}")
 
 private fun PageTable.evaluationKey(
     row: PageTableRow,
@@ -1644,11 +1656,13 @@ private fun PageTable.evaluationKey(
 internal fun PageTableRow.cellText(column: PageTableColumn?): String {
     if (column == null) return ""
     val fallback = cells[column.id].orEmpty()
-    return (cellValues[column.id]
-        ?.withColumnType(column.type, fallback)
-        ?.displayValue(fallback)
-        ?: fallback)
-        .trim()
+    val cellValue = cellValues[column.id] ?: return fallback
+    val valueToDisplay = if (cellValue.type == column.type) {
+        cellValue
+    } else {
+        cellValue.withColumnType(column.type, fallback)
+    }
+    return valueToDisplay.displayValue(fallback).trim()
 }
 
 internal fun PageTable.rowTitle(row: PageTableRow): String {

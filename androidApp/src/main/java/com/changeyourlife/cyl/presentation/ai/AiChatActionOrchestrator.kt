@@ -78,9 +78,11 @@ object AiChatActionOrchestrator {
             else -> backendReply
         }
         val diagnosticMessages = backendResult.diagnostics.toUserDiagnosticMessages()
+        val visibleExecutionMessages = actionResults.messages.visibleInChat()
         val replyWithResults = listOf(
             assistantReply,
-            actionResults.messages.joinToString("\n"),
+            diagnosticMessages.joinToString("\n"),
+            visibleExecutionMessages.joinToString("\n"),
         )
             .filter { message -> message.isNotBlank() }
             .joinToString("\n\n")
@@ -113,6 +115,12 @@ object AiChatActionOrchestrator {
                 },
             ),
         )
+    }
+}
+
+private fun List<String>.visibleInChat(): List<String> {
+    return filter { message ->
+        !message.trimStart().startsWith("Done:", ignoreCase = true)
     }
 }
 

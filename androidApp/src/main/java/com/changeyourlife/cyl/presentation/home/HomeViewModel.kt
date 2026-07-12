@@ -48,8 +48,11 @@ import com.changeyourlife.cyl.presentation.ai.toRoleContentPairs
 import com.changeyourlife.cyl.presentation.page.PageBlockCodec
 import com.changeyourlife.cyl.presentation.page.PageModuleTemplates
 import com.changeyourlife.cyl.presentation.page.PageModuleType
+import com.changeyourlife.cyl.presentation.page.PageTableReference
+import com.changeyourlife.cyl.presentation.page.tableReferences
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -60,9 +63,11 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @HiltViewModel
 class HomeViewModel @Inject constructor(
@@ -78,6 +83,8 @@ class HomeViewModel @Inject constructor(
     private val aiActionLogRepository: AiActionLogRepository,
     private val chatHistoryRepository: ChatHistoryRepository,
     private val syncStatusRepository: SyncStatusRepository,
+    private val syncSettingsStore: com.changeyourlife.cyl.data.local.session.SyncSettingsStore,
+    private val backgroundSyncQueue: com.changeyourlife.cyl.data.sync.BackgroundSyncQueue,
 ) : ViewModel() {
     private val workspaceFormState = MutableStateFlow(WorkspaceFormState())
     private val activeChatSessionId = MutableStateFlow<String?>(null)
@@ -198,25 +205,33 @@ class HomeViewModel @Inject constructor(
                 ),
             )
         } else {
+            val pagesOverview = pageRepository.observePages(activeWorkspace.id)
+                .mapLatest { pages ->
+                    val sortedPages = pages.sortedByDescending { page -> page.updatedAt }
+                    HomePagesOverview(
+                        sortedPages = sortedPages,
+                        tableReferences = buildPageTableReferences(sortedPages),
+                    )
+                }
             combine(
-                pageRepository.observePages(activeWorkspace.id),
+                pagesOverview,
                 pageRepository.observeDeletedPages(activeWorkspace.id),
                 taskRepository.observeOpenTaskCount(activeWorkspace.id),
                 taskRepository.observeOpenTasks(activeWorkspace.id),
                 reminderRepository.observePendingReminders(activeWorkspace.id),
-            ) { pages, deletedPages, openTaskCount, openTasks, reminders ->
-                val sortedPages = pages.sortedByDescending { page -> page.updatedAt }
+            ) { pagesOverview, deletedPages, openTaskCount, openTasks, reminders ->
                 HomeUiState(
                     isLoading = false,
                     activeWorkspaceId = activeWorkspace.id,
                     workspaceName = activeWorkspace.name,
                     workspaceCount = workspaceState.workspaces.size,
                     workspaces = workspaceState.workspaces,
-                    pageCount = pages.size,
+                    pageCount = pagesOverview.sortedPages.size,
                     openTaskCount = openTaskCount,
                     pendingReminderCount = reminders.size,
-                    allPages = sortedPages,
-                    recentPages = sortedPages.take(5),
+                    allPages = pagesOverview.sortedPages,
+                    allTableReferences = pagesOverview.tableReferences,
+                    recentPages = pagesOverview.sortedPages.take(5),
                     deletedPages = deletedPages,
                     openTasks = openTasks,
                     reminders = reminders,
@@ -224,6 +239,27 @@ class HomeViewModel @Inject constructor(
             }
         }
     }
+
+    private suspend fun buildPageTableReferences(pages: List<Page>): List<PageTableReference> =
+        withContext(Dispatchers.Default) {
+            pages
+                .asSequence()
+                .filter { page -> page.deletedAt == null }
+                .flatMap { page ->
+                    PageBlockCodec.decodeDocument(page.content)
+                        .blocks
+                        .tableReferences()
+                        .asSequence()
+                        .map { reference ->
+                            reference.copy(
+                                pageId = page.id,
+                                pageTitle = page.title.ifBlank { "Untitled page" },
+                            )
+                        }
+                }
+                .distinctBy { reference -> reference.blockId }
+                .toList()
+        }
 
     val uiState: StateFlow<HomeUiState> = combine(
         dashboardState,
@@ -244,10 +280,11 @@ class HomeViewModel @Inject constructor(
             aiChatError = chat.error,
         )
     }.let { baseState ->
-        combine(baseState, chatHistorySearchQuery, chatHistorySearchResults) { state, chatSearchQuery, chatSearchResults ->
+        combine(baseState, chatHistorySearchQuery, chatHistorySearchResults, syncSettingsStore.isAutoSyncEnabled) { state, chatSearchQuery, chatSearchResults, isAutoSyncEnabled ->
             state.copy(
                 chatHistorySearchQuery = chatSearchQuery,
                 chatHistorySearchResults = chatSearchResults,
+                isAutoSyncEnabled = isAutoSyncEnabled,
             )
         }
     }.let { baseState ->
@@ -394,6 +431,14 @@ class HomeViewModel @Inject constructor(
 
     fun retrySyncNow() {
         syncStatusRepository.retryNow()
+    }
+
+    fun setAutoSyncEnabled(enabled: Boolean) {
+        syncSettingsStore.setAutoSyncEnabled(enabled)
+    }
+
+    fun syncNow() {
+        backgroundSyncQueue.syncSessionSoon()
     }
 
     fun updateChatHistorySearchQuery(query: String) {
@@ -1465,6 +1510,11 @@ private data class WorkspaceDashboardState(
     val activeWorkspace: Workspace?,
 )
 
+private data class HomePagesOverview(
+    val sortedPages: List<Page>,
+    val tableReferences: List<PageTableReference>,
+)
+
 private data class WorkspaceFormState(
     val isCreateWorkspaceDialogVisible: Boolean = false,
     val newWorkspaceName: String = "",
@@ -1576,6 +1626,7 @@ data class HomeUiState(
     val openTaskCount: Int = 0,
     val pendingReminderCount: Int = 0,
     val allPages: List<Page> = emptyList(),
+    val allTableReferences: List<PageTableReference> = emptyList(),
     val recentPages: List<Page> = emptyList(),
     val deletedPages: List<Page> = emptyList(),
     val searchQuery: String = "",
@@ -1597,6 +1648,7 @@ data class HomeUiState(
     val aiVisionStatusLabel: String = "",
     val aiVisionPipelineLabel: String = "",
     val syncOverview: SyncOverview = SyncOverview(),
+    val isAutoSyncEnabled: Boolean = false,
 )
 
 private data class HomeTableUpdateResult(

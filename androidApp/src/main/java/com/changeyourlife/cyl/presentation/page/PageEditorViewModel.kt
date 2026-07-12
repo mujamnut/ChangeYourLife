@@ -40,6 +40,7 @@ import com.changeyourlife.cyl.domain.usecase.TableMutationResult
 import com.changeyourlife.cyl.domain.usecase.TableMutationUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -47,10 +48,12 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import java.util.UUID
 
 private const val MaxEditorUndoSnapshots = 40
@@ -81,31 +84,59 @@ class PageEditorViewModel @Inject constructor(
         applyEditorCommandUseCase = applyEditorCommandUseCase,
         maxEntries = MaxEditorUndoSnapshots,
     )
+    private var documentUpdateGeneration = 0L
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private val loadedPageState: StateFlow<LoadedEditorPageState> = pageRepository
+        .observePage(pageId)
+        .mapLatest { page ->
+            if (page == null) {
+                LoadedEditorPageState.Missing
+            } else {
+                LoadedEditorPageState.Ready(
+                    page = page,
+                    processed = processEditorDocument(page.content),
+                )
+            }
+        }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = LoadedEditorPageState.Loading,
+        )
 
     private val _dbState = combine(
-        pageRepository.observePage(pageId),
+        loadedPageState,
         pageRepository.observeChildPages(pageId),
         pageRepository.observePageSyncState(pageId),
-    ) { page, childPages, syncState ->
-        if (page == null) {
-            PageEditorUiState(
-                isLoading = false,
-                syncState = syncState,
-            )
-        } else {
-            val document = PageBlockCodec.decodeDocument(page.content)
-                .normalizedForEditor()
-                .withBudgetLedgerSummarySynced()
-                .normalizedForEditor()
-            PageEditorUiState(
-                isLoading = false,
-                page = page,
-                title = page.title,
-                properties = document.properties,
-                blocks = document.blocks,
-                childPages = childPages,
-                syncState = syncState,
-            )
+    ) { loadedPage, childPages, syncState ->
+        when (loadedPage) {
+            LoadedEditorPageState.Loading -> {
+                PageEditorUiState(
+                    isLoading = true,
+                    syncState = syncState,
+                )
+            }
+
+            LoadedEditorPageState.Missing -> {
+                PageEditorUiState(
+                    isLoading = false,
+                    syncState = syncState,
+                )
+            }
+
+            is LoadedEditorPageState.Ready -> {
+                val document = loadedPage.processed.synced
+                PageEditorUiState(
+                    isLoading = false,
+                    page = loadedPage.page,
+                    title = loadedPage.page.title,
+                    properties = document.properties,
+                    blocks = document.blocks,
+                    childPages = childPages,
+                    syncState = syncState,
+                )
+            }
         }
     }
 
@@ -169,25 +200,74 @@ class PageEditorViewModel @Inject constructor(
 
     private fun setupLoadedPageReminderSync() {
         viewModelScope.launch {
-            pageRepository.observePage(pageId)
-                .collect { page ->
-                    if (page == null) return@collect
-                    val normalizedDocument = PageBlockCodec.decodeDocument(page.content).normalizedForEditor()
-                    val syncedDocument = normalizedDocument.withBudgetLedgerSummarySynced().normalizedForEditor()
-                    if (syncedDocument != normalizedDocument && budgetMigratedPageIds.add(page.id)) {
-                        pageRepository.upsertPage(
-                            page.copy(
-                                content = PageBlockCodec.encodeDocument(syncedDocument),
-                                updatedAt = System.currentTimeMillis(),
-                            ),
-                        )
-                    }
-                    if (!reminderSyncedPageIds.add(page.id)) return@collect
-                    syncDateRemindersForDocument(
-                        page = page,
-                        document = syncedDocument,
+            loadedPageState.collect { loaded ->
+                val ready = loaded as? LoadedEditorPageState.Ready ?: return@collect
+                val page = ready.page
+                val processed = ready.processed
+                if (processed.synced != processed.normalized && budgetMigratedPageIds.add(page.id)) {
+                    val syncedContent = encodeEditorDocument(processed.synced)
+                    pageRepository.upsertPage(
+                        page.copy(
+                            content = syncedContent,
+                            updatedAt = System.currentTimeMillis(),
+                        ),
                     )
                 }
+                if (!reminderSyncedPageIds.add(page.id)) return@collect
+                syncDateRemindersForDocument(
+                    page = page,
+                    document = processed.synced,
+                )
+            }
+        }
+    }
+
+    private suspend fun processEditorDocument(content: String): ProcessedEditorDocument =
+        withContext(Dispatchers.Default) {
+            val normalized = PageBlockCodec.decodeDocument(content).normalizedForEditor()
+            ProcessedEditorDocument(
+                normalized = normalized,
+                synced = normalized.withBudgetLedgerSummarySynced().normalizedForEditor(),
+            )
+        }
+
+    private suspend fun normalizeEditorDocument(document: PageBlockDocument): PageBlockDocument =
+        withContext(Dispatchers.Default) {
+            document.normalizedForEditor()
+        }
+
+    private suspend fun encodeEditorDocument(document: PageBlockDocument): String =
+        withContext(Dispatchers.Default) {
+            PageBlockCodec.encodeDocument(document)
+        }
+
+    private suspend fun syncBudgetAndNormalize(
+        document: PageBlockDocument,
+        previous: PageBlockDocument?,
+    ): PageBlockDocument =
+        withContext(Dispatchers.Default) {
+            document.withBudgetLedgerSummarySynced(previous).normalizedForEditor()
+        }
+
+    private fun nextDocumentUpdateGeneration(): Long {
+        documentUpdateGeneration += 1
+        return documentUpdateGeneration
+    }
+
+    private fun syncBudgetSummaryInBackground(
+        generation: Long,
+        updated: PageBlockDocument,
+        previous: PageBlockDocument?,
+        pendingSave: PendingGranularDocumentSave?,
+    ) {
+        if (!updated.hasDatabaseTable()) return
+        viewModelScope.launch {
+            val synced = syncBudgetAndNormalize(updated, previous)
+            if (synced == updated || generation != documentUpdateGeneration) return@launch
+            if (_pendingGranularDocumentSave.value == pendingSave || _pendingChanges.value == updated) {
+                _pendingGranularDocumentSave.value = null
+                _pendingChanges.value = synced
+            }
         }
     }
 
@@ -211,10 +291,11 @@ class PageEditorViewModel @Inject constructor(
         if (savePendingGranularDocument(pendingDoc)) return
 
         val page = pageRepository.getPage(pageId) ?: return
-        val normalizedDoc = pendingDoc.normalizedForEditor()
+        val normalizedDoc = normalizeEditorDocument(pendingDoc)
+        val encodedContent = encodeEditorDocument(normalizedDoc)
         pageRepository.upsertPage(
             page.copy(
-                content = PageBlockCodec.encodeDocument(normalizedDoc),
+                content = encodedContent,
                 updatedAt = System.currentTimeMillis(),
             ),
         )
@@ -226,12 +307,13 @@ class PageEditorViewModel @Inject constructor(
 
     private suspend fun savePendingGranularDocument(pendingDoc: PageBlockDocument): Boolean {
         val pendingSave = _pendingGranularDocumentSave.value ?: return false
-        val normalizedDoc = pendingDoc.normalizedForEditor()
+        val normalizedDoc = normalizeEditorDocument(pendingDoc)
         if (pendingSave.document != normalizedDoc) return false
 
         val page = pageRepository.getPage(pageId) ?: return false
-        val baseDocument = PageBlockCodec.decodeDocument(page.content).normalizedForEditor()
-        if (pendingSave.applyTo(baseDocument).normalizedForEditor() != normalizedDoc) {
+        val baseDocument = processEditorDocument(page.content).normalized
+        val expectedDocument = normalizeEditorDocument(pendingSave.applyTo(baseDocument))
+        if (expectedDocument != normalizedDoc) {
             return false
         }
 
@@ -436,26 +518,37 @@ class PageEditorViewModel @Inject constructor(
         previous: PageBlockDocument? = null,
         recordUndo: Boolean = false,
     ) {
-        val normalized = updated.normalizedForEditor().withBudgetLedgerSummarySynced().normalizedForEditor()
+        val normalized = updated.normalizedForEditor()
+        val generation = nextDocumentUpdateGeneration()
         _pendingGranularDocumentSave.value = null
         if (recordUndo && previous != null && previous.normalizedForEditor() != normalized) {
             pushEditorUndoSnapshot(previous)
         }
         _pendingChanges.value = normalized
+        syncBudgetSummaryInBackground(
+            generation = generation,
+            updated = normalized,
+            previous = previous,
+            pendingSave = null,
+        )
     }
 
     private fun queueGranularPendingDocument(
         updated: PageBlockDocument,
+        previous: PageBlockDocument? = null,
         pendingSave: (PageBlockDocument) -> PendingGranularDocumentSave,
     ) {
         val normalized = updated.normalizedForEditor()
-        val synced = normalized.withBudgetLedgerSummarySynced().normalizedForEditor()
-        if (synced != normalized) {
-            queueDocumentUpdate(synced)
-            return
-        }
-        _pendingGranularDocumentSave.value = pendingSave(normalized)
+        val generation = nextDocumentUpdateGeneration()
+        val granularSave = pendingSave(normalized)
+        _pendingGranularDocumentSave.value = granularSave
         _pendingChanges.value = normalized
+        syncBudgetSummaryInBackground(
+            generation = generation,
+            updated = normalized,
+            previous = previous,
+            pendingSave = granularSave,
+        )
     }
 
     private fun queueBlockPatchPendingDocument(
@@ -465,24 +558,27 @@ class PageEditorViewModel @Inject constructor(
         recordUndo: Boolean = false,
     ) {
         val normalized = updated.normalizedForEditor()
-        val synced = normalized.withBudgetLedgerSummarySynced().normalizedForEditor()
-        if (synced != normalized) {
-            queueDocumentUpdate(synced, previous = previous, recordUndo = recordUndo)
-            return
-        }
         val block = normalized.findBlock(blockId)
         if (block == null) {
             queueDocumentUpdate(updated, previous = previous, recordUndo = recordUndo)
             return
         }
+        val generation = nextDocumentUpdateGeneration()
         if (recordUndo && previous != null && previous.normalizedForEditor() != normalized) {
             pushEditorUndoSnapshot(previous)
         }
-        _pendingGranularDocumentSave.value = PendingGranularDocumentSave.BlockPatch(
+        val pendingSave = PendingGranularDocumentSave.BlockPatch(
             document = normalized,
             block = block,
         )
+        _pendingGranularDocumentSave.value = pendingSave
         _pendingChanges.value = normalized
+        syncBudgetSummaryInBackground(
+            generation = generation,
+            updated = normalized,
+            previous = previous,
+            pendingSave = pendingSave,
+        )
     }
 
     private fun queueTablePatchPendingDocument(
@@ -492,25 +588,28 @@ class PageEditorViewModel @Inject constructor(
         recordUndo: Boolean = false,
     ) {
         val normalized = updated.normalizedForEditor()
-        val synced = normalized.withBudgetLedgerSummarySynced().normalizedForEditor()
-        if (synced != normalized) {
-            queueDocumentUpdate(synced, previous = previous, recordUndo = recordUndo)
-            return
-        }
         val table = normalized.findTableBlock(tableBlockId)?.table
         if (table == null) {
             queueDocumentUpdate(updated, previous = previous, recordUndo = recordUndo)
             return
         }
+        val generation = nextDocumentUpdateGeneration()
         if (recordUndo && previous != null && previous.normalizedForEditor() != normalized) {
             pushEditorUndoSnapshot(previous)
         }
-        _pendingGranularDocumentSave.value = PendingGranularDocumentSave.TablePatch(
+        val pendingSave = PendingGranularDocumentSave.TablePatch(
             document = normalized,
             tableBlockId = tableBlockId,
             table = table,
         )
+        _pendingGranularDocumentSave.value = pendingSave
         _pendingChanges.value = normalized
+        syncBudgetSummaryInBackground(
+            generation = generation,
+            updated = normalized,
+            previous = previous,
+            pendingSave = pendingSave,
+        )
     }
 
     private fun queueTableColumnPatchPendingDocument(
@@ -521,11 +620,6 @@ class PageEditorViewModel @Inject constructor(
         recordUndo: Boolean = false,
     ) {
         val normalized = updated.normalizedForEditor()
-        val synced = normalized.withBudgetLedgerSummarySynced().normalizedForEditor()
-        if (synced != normalized) {
-            queueDocumentUpdate(synced, previous = previous, recordUndo = recordUndo)
-            return
-        }
         val column = normalized
             .findTableBlock(tableBlockId)
             ?.table
@@ -535,15 +629,23 @@ class PageEditorViewModel @Inject constructor(
             queueDocumentUpdate(updated, previous = previous, recordUndo = recordUndo)
             return
         }
+        val generation = nextDocumentUpdateGeneration()
         if (recordUndo && previous != null && previous.normalizedForEditor() != normalized) {
             pushEditorUndoSnapshot(previous)
         }
-        _pendingGranularDocumentSave.value = PendingGranularDocumentSave.TableColumnPatch(
+        val pendingSave = PendingGranularDocumentSave.TableColumnPatch(
             document = normalized,
             tableBlockId = tableBlockId,
             column = column,
         )
+        _pendingGranularDocumentSave.value = pendingSave
         _pendingChanges.value = normalized
+        syncBudgetSummaryInBackground(
+            generation = generation,
+            updated = normalized,
+            previous = previous,
+            pendingSave = pendingSave,
+        )
     }
 
     private fun queueTableRowPatchPendingDocument(
@@ -554,11 +656,6 @@ class PageEditorViewModel @Inject constructor(
         recordUndo: Boolean = false,
     ) {
         val normalized = updated.normalizedForEditor()
-        val synced = normalized.withBudgetLedgerSummarySynced().normalizedForEditor()
-        if (synced != normalized) {
-            queueDocumentUpdate(synced, previous = previous, recordUndo = recordUndo)
-            return
-        }
         val row = normalized
             .findTableBlock(tableBlockId)
             ?.table
@@ -568,15 +665,23 @@ class PageEditorViewModel @Inject constructor(
             queueDocumentUpdate(updated, previous = previous, recordUndo = recordUndo)
             return
         }
+        val generation = nextDocumentUpdateGeneration()
         if (recordUndo && previous != null && previous.normalizedForEditor() != normalized) {
             pushEditorUndoSnapshot(previous)
         }
-        _pendingGranularDocumentSave.value = PendingGranularDocumentSave.TableRowPatch(
+        val pendingSave = PendingGranularDocumentSave.TableRowPatch(
             document = normalized,
             tableBlockId = tableBlockId,
             row = row,
         )
+        _pendingGranularDocumentSave.value = pendingSave
         _pendingChanges.value = normalized
+        syncBudgetSummaryInBackground(
+            generation = generation,
+            updated = normalized,
+            previous = previous,
+            pendingSave = pendingSave,
+        )
     }
 
     private fun syncDateRemindersForColumn(
@@ -815,7 +920,7 @@ class PageEditorViewModel @Inject constructor(
                 text = text,
             )
             if (!result.changed) return
-            queueGranularPendingDocument(result.document) { normalized ->
+            queueGranularPendingDocument(result.document, document) { normalized ->
                 PendingGranularDocumentSave.BlockText(
                     document = normalized,
                     blockId = blockId,
@@ -1426,7 +1531,7 @@ class PageEditorViewModel @Inject constructor(
                     columnId = columnId,
                     value = nextValue,
                 )
-                queueGranularPendingDocument(result.document) { normalized ->
+                queueGranularPendingDocument(result.document, document) { normalized ->
                     PendingGranularDocumentSave.TableCellValue(
                         document = normalized,
                         tableBlockId = blockId,
@@ -1458,7 +1563,7 @@ class PageEditorViewModel @Inject constructor(
             result.coercedValue?.let { nextValue ->
                 if (!result.changed) return
                 recordTableUndo(result.mutation)
-                queueGranularPendingDocument(result.document) { normalized ->
+                queueGranularPendingDocument(result.document, document) { normalized ->
                     PendingGranularDocumentSave.TableCellValue(
                         document = normalized,
                         tableBlockId = blockId,
@@ -2194,7 +2299,7 @@ class PageEditorViewModel @Inject constructor(
             )
             if (!result.changed) return
             recordEditorUndo(result.applied)
-            queueGranularPendingDocument(result.document) { normalized ->
+            queueGranularPendingDocument(result.document, document) { normalized ->
                 PendingGranularDocumentSave.PropertyValue(
                     document = normalized,
                     propertyId = propertyId,
@@ -2340,6 +2445,24 @@ class PageEditorViewModel @Inject constructor(
         )
     }
 
+    private fun PageBlockDocument.hasDatabaseTable(): Boolean {
+        return blocks.any { block -> block.type == PageBlockType.DatabaseTable }
+    }
+
+}
+
+private data class ProcessedEditorDocument(
+    val normalized: PageBlockDocument,
+    val synced: PageBlockDocument,
+)
+
+private sealed interface LoadedEditorPageState {
+    data object Loading : LoadedEditorPageState
+    data object Missing : LoadedEditorPageState
+    data class Ready(
+        val page: Page,
+        val processed: ProcessedEditorDocument,
+    ) : LoadedEditorPageState
 }
 
 private sealed interface PendingGranularDocumentSave {

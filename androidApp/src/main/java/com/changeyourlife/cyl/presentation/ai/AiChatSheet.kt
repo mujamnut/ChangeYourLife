@@ -28,8 +28,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
@@ -52,6 +52,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -59,6 +60,7 @@ import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.unit.dp
@@ -68,7 +70,10 @@ import com.changeyourlife.cyl.presentation.page.EditorSuggestionController
 import com.changeyourlife.cyl.presentation.page.RichTextCommandPaletteKind
 import com.changeyourlife.cyl.presentation.page.paletteItemId
 import com.changeyourlife.cyl.presentation.page.richTextMentionPaletteItems
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class, ExperimentalComposeUiApi::class)
@@ -111,36 +116,62 @@ fun AiChatSheet(
     }
     val listState = rememberLazyListState()
     val context = LocalContext.current
+    val configuration = LocalConfiguration.current
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
+    val composerScope = rememberCoroutineScope()
+    val stableSheetMaxHeight = remember(configuration.screenHeightDp) {
+        configuration.screenHeightDp.dp * 0.90f
+    }
+    fun stageAttachmentResult(
+        result: AiAttachmentReadResult,
+        successMessage: String? = null,
+    ) {
+        result.attachment?.let { attachment ->
+            stagedImageAttachments = (stagedImageAttachments + attachment).takeLast(MaxAiChatImages)
+            if (!successMessage.isNullOrBlank()) {
+                Toast.makeText(context, successMessage, Toast.LENGTH_SHORT).show()
+            }
+            return
+        }
+        if (!result.userMessage.isNullOrBlank()) {
+            Toast.makeText(context, result.userMessage, Toast.LENGTH_SHORT).show()
+        }
+    }
     val photoPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent(),
     ) { uri ->
         if (uri != null) {
-            context.toAiImageAttachment(uri, fallbackName = "Photo")
-                ?.let { attachment ->
-                    stagedImageAttachments = (stagedImageAttachments + attachment).takeLast(MaxAiChatImages)
+            composerScope.launch {
+                val result = withContext(Dispatchers.IO) {
+                    context.readAiImageAttachment(uri, fallbackName = "Photo")
                 }
+                stageAttachmentResult(result)
+            }
         }
     }
     val filePicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent(),
     ) { uri ->
         if (uri != null) {
-            context.toAiImageAttachment(uri, fallbackName = "Image file")
-                ?.let { attachment ->
-                    stagedImageAttachments = (stagedImageAttachments + attachment).takeLast(MaxAiChatImages)
+            composerScope.launch {
+                val result = withContext(Dispatchers.IO) {
+                    context.readAiImageAttachment(uri, fallbackName = "Image file")
                 }
+                stageAttachmentResult(result)
+            }
         }
     }
     val cameraPreview = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.TakePicturePreview(),
     ) { bitmap ->
         if (bitmap != null) {
-            bitmap.toAiImageAttachment(context, name = "Camera")
-                ?.let { attachment ->
-                    stagedImageAttachments = (stagedImageAttachments + attachment).takeLast(MaxAiChatImages)
+            composerScope.launch {
+                val result = withContext(Dispatchers.Default) {
+                    bitmap.toAiImageAttachmentResult(name = "Camera")
                 }
+                stageAttachmentResult(result)
+            }
         }
     }
     val pastedImageReceiver = ReceiveContentListener { transferableContent ->
@@ -148,29 +179,45 @@ fun AiChatSheet(
             return@ReceiveContentListener transferableContent
         }
 
-        var attachedCount = 0
         var usedPlatformUri = false
+        val queuedUris = mutableListOf<Uri>()
         val platformUri = transferableContent.platformTransferableContent?.linkUri
         val remainingContent = transferableContent.consume { item ->
             val uri = item.uri ?: platformUri?.takeIf { !usedPlatformUri }
-            val attachment = uri?.let { imageUri ->
-                context.toPastedImageAttachment(imageUri, fallbackName = "Pasted image")
-            }
-            if (attachment != null) {
+            if (uri != null) {
                 if (item.uri == null) usedPlatformUri = true
-                stagedImageAttachments = (stagedImageAttachments + attachment).takeLast(MaxAiChatImages)
-                attachedCount += 1
+                queuedUris += uri
                 true
             } else {
                 false
             }
         }
-        if (attachedCount > 0) {
-            Toast.makeText(
-                context,
-                if (attachedCount == 1) "Image pasted" else "$attachedCount images pasted",
-                Toast.LENGTH_SHORT,
-            ).show()
+        if (queuedUris.isNotEmpty()) {
+            composerScope.launch {
+                val results = withContext(Dispatchers.IO) {
+                    queuedUris.map { imageUri ->
+                        context.readPastedImageAttachment(imageUri, fallbackName = "Pasted image")
+                    }
+                }
+                var attachedCount = 0
+                results.forEach { result ->
+                    result.attachment?.let { attachment ->
+                        stagedImageAttachments = (stagedImageAttachments + attachment).takeLast(MaxAiChatImages)
+                        attachedCount += 1
+                    }
+                }
+                if (attachedCount > 0) {
+                    Toast.makeText(
+                        context,
+                        if (attachedCount == 1) "Image pasted" else "$attachedCount images pasted",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                } else {
+                    results.lastOrNull()?.userMessage?.takeIf { it.isNotBlank() }?.let { message ->
+                        Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
         }
         remainingContent
     }
@@ -260,6 +307,24 @@ fun AiChatSheet(
             isKeyboardReplacementVisible = false
         }
     }
+    fun openComposerPanel(panel: AiComposerPanel) {
+        val nextPanel = if (activePanel == panel) null else panel
+        focusManager.clearFocus(force = true)
+        keyboardController?.hide()
+        isMentionPickerOpen = false
+        isKeyboardReplacementVisible = false
+        activePanel = null
+        if (nextPanel == null) return
+        composerScope.launch {
+            delay(80)
+            focusManager.clearFocus(force = true)
+            keyboardController?.hide()
+            activePanel = nextPanel
+            delay(120)
+            focusManager.clearFocus(force = true)
+            keyboardController?.hide()
+        }
+    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -268,7 +333,7 @@ fun AiChatSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .fillMaxHeight(0.92f)
+                .heightIn(max = stableSheetMaxHeight)
                 .padding(bottom = 12.dp),
         ) {
             AiSheetHeader(
@@ -384,13 +449,6 @@ fun AiChatSheet(
                                     onOpenPage = onOpenPage,
                                 )
                             }
-                            if (!isUser && message.actionMetadata?.hasDetails == true) {
-                                AiChatActionDetails(
-                                    metadata = message.actionMetadata,
-                                    pageId = message.pageLinks.firstOrNull()?.pageId.orEmpty(),
-                                    onUndoAction = onUndoAction,
-                                )
-                            }
                         }
                     }
                 }
@@ -453,24 +511,10 @@ fun AiChatSheet(
                     keyboardController?.show()
                 },
                 onOpenAttachments = {
-                    keyboardController?.hide()
-                    focusManager.clearFocus(force = true)
-                    activePanel = if (activePanel == AiComposerPanel.Attachments) {
-                        null
-                    } else {
-                        AiComposerPanel.Attachments
-                    }
-                    isMentionPickerOpen = false
+                    openComposerPanel(AiComposerPanel.Attachments)
                 },
                 onOpenSettings = {
-                    keyboardController?.hide()
-                    focusManager.clearFocus(force = true)
-                    activePanel = if (activePanel == AiComposerPanel.Settings) {
-                        null
-                    } else {
-                        AiComposerPanel.Settings
-                    }
-                    isMentionPickerOpen = false
+                    openComposerPanel(AiComposerPanel.Settings)
                 },
                 onSend = sendCurrentPrompt,
                 isGenerating = isGenerating,
@@ -547,10 +591,15 @@ private const val MaxAiChatImages = 4
 private const val MaxAiChatImageBytes = 4L * 1024L * 1024L
 private const val MaxAiChatTextFileBytes = 256L * 1024L
 
-private fun Context.toAiImageAttachment(
+private data class AiAttachmentReadResult(
+    val attachment: AiImageAttachment? = null,
+    val userMessage: String? = null,
+)
+
+private fun Context.readAiImageAttachment(
     uri: Uri,
     fallbackName: String,
-): AiImageAttachment? {
+): AiAttachmentReadResult {
     val rawMimeType = contentResolver.getType(uri).orEmpty()
     val name = queryOpenableName(uri).ifBlank { fallbackName }
     val bytes = runCatching {
@@ -560,8 +609,7 @@ private fun Context.toAiImageAttachment(
     }.getOrNull()
 
     if (bytes == null || bytes.isEmpty()) {
-        Toast.makeText(this, "Could not read that file.", Toast.LENGTH_SHORT).show()
-        return null
+        return AiAttachmentReadResult(userMessage = "Could not read that file.")
     }
     val mimeType = inferAttachmentMimeType(
         rawMimeType = rawMimeType,
@@ -572,52 +620,50 @@ private fun Context.toAiImageAttachment(
     return when {
         mimeType.startsWith("image/", ignoreCase = true) -> {
             if (bytes.size.toLong() > MaxAiChatImageBytes) {
-                Toast.makeText(this, "Image is too large. Use an image under 4 MB.", Toast.LENGTH_SHORT).show()
-                null
+                AiAttachmentReadResult(userMessage = "Image is too large. Use an image under 4 MB.")
             } else {
-                AiImageAttachment(
-                    dataUrl = "data:$mimeType;base64,${Base64.encodeToString(bytes, Base64.NO_WRAP)}",
-                    mimeType = mimeType,
-                    name = name,
-                    sizeBytes = bytes.size.toLong(),
-                    kind = "image",
+                AiAttachmentReadResult(
+                    attachment = AiImageAttachment(
+                        dataUrl = "data:$mimeType;base64,${Base64.encodeToString(bytes, Base64.NO_WRAP)}",
+                        mimeType = mimeType,
+                        name = name,
+                        sizeBytes = bytes.size.toLong(),
+                        kind = "image",
+                    ),
                 )
             }
         }
         isReadableTextAttachment(mimeType = mimeType, name = name) -> {
             if (bytes.size.toLong() > MaxAiChatTextFileBytes) {
-                Toast.makeText(this, "Text file is too large. Use a file under 256 KB.", Toast.LENGTH_SHORT).show()
-                null
+                AiAttachmentReadResult(userMessage = "Text file is too large. Use a file under 256 KB.")
             } else {
-                AiImageAttachment(
-                    textContent = bytes.toString(Charsets.UTF_8).cleanTextFileForAi(),
-                    mimeType = mimeType,
-                    name = name,
-                    sizeBytes = bytes.size.toLong(),
-                    kind = "text",
+                AiAttachmentReadResult(
+                    attachment = AiImageAttachment(
+                        textContent = bytes.toString(Charsets.UTF_8).cleanTextFileForAi(),
+                        mimeType = mimeType,
+                        name = name,
+                        sizeBytes = bytes.size.toLong(),
+                        kind = "text",
+                    ),
                 )
             }
         }
-        else -> {
-            Toast.makeText(
-                this,
-                "This file type is not readable yet. Use image, TXT, CSV, Markdown, or JSON.",
-                Toast.LENGTH_LONG,
-            ).show()
-            null
-        }
+        else -> AiAttachmentReadResult(
+            userMessage = "This file type is not readable yet. Use image, TXT, CSV, Markdown, or JSON.",
+        )
     }
 }
 
-private fun Context.toPastedImageAttachment(
+private fun Context.readPastedImageAttachment(
     uri: Uri,
     fallbackName: String,
-): AiImageAttachment? {
-    val attachment = toAiImageAttachment(uri = uri, fallbackName = fallbackName) ?: return null
+): AiAttachmentReadResult {
+    val result = readAiImageAttachment(uri = uri, fallbackName = fallbackName)
+    val attachment = result.attachment ?: return result
     return if (attachment.kind == "image" || attachment.mimeType.startsWith("image/", ignoreCase = true)) {
-        attachment.copy(name = attachment.name.ifBlank { fallbackName })
+        AiAttachmentReadResult(attachment = attachment.copy(name = attachment.name.ifBlank { fallbackName }))
     } else {
-        null
+        AiAttachmentReadResult(userMessage = "Only images can be pasted into the chat composer.")
     }
 }
 
@@ -689,23 +735,23 @@ private fun Context.queryOpenableName(uri: Uri): String {
     }.getOrDefault("")
 }
 
-private fun Bitmap.toAiImageAttachment(
-    context: Context,
+private fun Bitmap.toAiImageAttachmentResult(
     name: String,
-): AiImageAttachment? {
+): AiAttachmentReadResult {
     val output = ByteArrayOutputStream()
     compress(Bitmap.CompressFormat.JPEG, 86, output)
     val bytes = output.toByteArray()
     if (bytes.size.toLong() > MaxAiChatImageBytes) {
-        Toast.makeText(context, "Camera image is too large. Try a smaller image.", Toast.LENGTH_SHORT).show()
-        return null
+        return AiAttachmentReadResult(userMessage = "Camera image is too large. Try a smaller image.")
     }
-    return AiImageAttachment(
-        dataUrl = "data:image/jpeg;base64,${Base64.encodeToString(bytes, Base64.NO_WRAP)}",
-        mimeType = "image/jpeg",
-        name = "$name.jpg",
-        sizeBytes = bytes.size.toLong(),
-        kind = "image",
+    return AiAttachmentReadResult(
+        attachment = AiImageAttachment(
+            dataUrl = "data:image/jpeg;base64,${Base64.encodeToString(bytes, Base64.NO_WRAP)}",
+            mimeType = "image/jpeg",
+            name = "$name.jpg",
+            sizeBytes = bytes.size.toLong(),
+            kind = "image",
+        ),
     )
 }
 

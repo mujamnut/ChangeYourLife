@@ -120,8 +120,8 @@ class EditorSuggestionControllerTest {
         assertTrue(RichTextFormat.Italic in formats)
         assertTrue(RichTextFormat.Code in formats)
         assertTrue("link" in ids)
-        assertTrue("color:blue" in ids)
-        assertTrue("highlight:yellow" in ids)
+        assertTrue("color:graphite" in ids)
+        assertTrue("highlight:neutral" in ids)
     }
 
     private fun paletteItem(id: String): RichTextCommandPaletteItem {

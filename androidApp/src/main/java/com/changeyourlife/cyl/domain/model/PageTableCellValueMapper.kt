@@ -73,7 +73,16 @@ private fun String.toPageTableDateCellValue(): PageTableDateCellValue {
     if (isBlank()) return PageTableDateCellValue()
     if (startsWith("{") && endsWith("}")) {
         return runCatching {
-            pageTableCellValueJson.decodeFromString<PageTableDateCellValue>(this)
+            val json = org.json.JSONObject(this)
+            PageTableDateCellValue(
+                startDate = json.optString("startDate", ""),
+                includeTime = json.optBoolean("includeTime", false),
+                startTime = json.optString("startTime", ""),
+                includeEndDate = json.optBoolean("includeEndDate", false),
+                endDate = json.optString("endDate", ""),
+                endTime = json.optString("endTime", ""),
+                timezoneLabel = json.optString("timezoneLabel", "Local"),
+            )
         }.getOrDefault(PageTableDateCellValue(startDate = this))
     }
     return PageTableDateCellValue(startDate = this)
@@ -104,6 +113,6 @@ private fun PageTableDateCellValue.toStorageValue(): String {
     return if (isPlainDate) {
         startDate
     } else {
-        pageTableCellValueJson.encodeToString(this)
+        """{"startDate":"$startDate","includeTime":$includeTime,"startTime":"$startTime","includeEndDate":$includeEndDate,"endDate":"$endDate","endTime":"$endTime","timezoneLabel":"$timezoneLabel"}"""
     }
 }

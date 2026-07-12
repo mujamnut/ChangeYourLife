@@ -1,7 +1,9 @@
 package com.changeyourlife.cyl.domain.model
 
+import androidx.compose.runtime.Stable
 import kotlinx.serialization.Serializable
 
+@Stable
 @Serializable
 data class PageBlockDocument(
     val version: Int = 1,
@@ -9,6 +11,7 @@ data class PageBlockDocument(
     val blocks: List<PageBlock> = emptyList(),
 )
 
+@Stable
 @Serializable
 data class PageProperty(
     val id: String,
@@ -49,6 +52,7 @@ enum class PagePropertyType {
     ZendeskTicket,
 }
 
+@Stable
 @Serializable
 data class PageBlock(
     val id: String,
@@ -61,6 +65,7 @@ data class PageBlock(
     val children: List<PageBlock> = emptyList(),
 )
 
+@Stable
 @Serializable
 data class PageTextSpan(
     val start: Int,
@@ -77,6 +82,7 @@ data class PageTextSpan(
     val mentionLabel: String = "",
 )
 
+@Stable
 @Serializable
 data class PageMediaAttachment(
     val id: String,
@@ -104,6 +110,7 @@ enum class PageBlockType {
     DatabaseTable,
 }
 
+@Stable
 @Serializable
 data class PageTable(
     val title: String = "",
@@ -116,6 +123,7 @@ data class PageTable(
     val groupByColumnId: String = "",
 )
 
+@Stable
 @Serializable
 data class PageTableViewConfig(
     val calendarDateColumnId: String = "",
@@ -128,6 +136,7 @@ data class PageTableViewConfig(
     val dataSourceTitle: String = "",
 )
 
+@Stable
 @Serializable
 data class PageTableSort(
     val columnId: String = "",
@@ -140,6 +149,7 @@ enum class PageTableSortDirection {
     Descending,
 }
 
+@Stable
 @Serializable
 data class PageTableFilter(
     val columnId: String = "",
@@ -169,6 +179,7 @@ fun PageTableFilter.isActive(): Boolean {
         query.isNotBlank()
 }
 
+@Stable
 @Serializable
 data class PageTableColumn(
     val id: String,
@@ -186,6 +197,12 @@ data class PageTableColumn(
     val rollupAggregation: PageTableRollupAggregation = PageTableRollupAggregation.Count,
 )
 
+fun PageTableColumn.matchesIdOrName(targetId: String): Boolean {
+    if (targetId.isBlank()) return false
+    return id == targetId || name.equals(targetId, ignoreCase = true)
+}
+
+@Stable
 @Serializable
 data class PageTableColumnConfig(
     val options: List<PageTableSelectOption> = emptyList(),
@@ -197,6 +214,7 @@ data class PageTableColumnConfig(
     val description: String = "",
 )
 
+@Stable
 @Serializable
 data class PageTableSelectOption(
     val id: String,
@@ -300,6 +318,7 @@ enum class PageTableRollupAggregation {
     Max,
 }
 
+@Stable
 @Serializable
 data class PageTableRow(
     val id: String,
@@ -309,6 +328,7 @@ data class PageTableRow(
     val blocks: List<PageBlock> = emptyList(),
 )
 
+@Stable
 @Serializable
 data class PageTableRowMetadata(
     val icon: String = "",
@@ -319,6 +339,7 @@ data class PageTableRowMetadata(
     val lastEditedBy: String = "",
 )
 
+@Stable
 @Serializable
 data class PageTableCellValue(
     val type: PageTableColumnType = PageTableColumnType.Text,
@@ -330,6 +351,7 @@ data class PageTableCellValue(
     val relationRowIds: List<String> = emptyList(),
 )
 
+@Stable
 @Serializable
 data class PageTableDateCellValue(
     val startDate: String = "",

@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
@@ -34,6 +35,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
@@ -180,35 +182,49 @@ internal fun TableListView(
     table: PageTable,
     tableReferences: List<PageTableReference>,
     searchQuery: String = "",
+    isFullPage: Boolean = false,
 ) {
     val groupedSummaries = table.groupedSummaries(
         tableReferences = tableReferences,
         searchQuery = searchQuery,
     )
 
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    val listModifier = if (isFullPage) Modifier.fillMaxHeight() else Modifier.heightIn(max = 560.dp)
+
+    LazyColumn(
+        modifier = listModifier,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
         if (groupedSummaries.all { group -> group.second.isEmpty() }) {
-            EmptyTableMessage()
+            item { EmptyTableMessage() }
         } else {
             groupedSummaries.forEach { (group, rows) ->
                 if (group.isNotBlank()) {
-                    Text(
-                        text = "$group (${rows.size})",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
+                    item(key = "group_$group", contentType = "group") {
+                        Text(
+                            text = "$group (${rows.size})",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
                 }
-                rows.forEach { summary ->
-                    ListItem(
-                        headlineContent = { Text(text = summary.title) },
-                        supportingContent = {
-                            if (summary.details.isNotBlank()) {
-                                Text(text = summary.details)
-                            }
-                        },
-                    )
-                    HorizontalDivider()
+                items(
+                    items = rows,
+                    key = { summary -> summary.row.id },
+                    contentType = { "row" },
+                ) { summary ->
+                    Column {
+                        ListItem(
+                            headlineContent = { Text(text = summary.title) },
+                            supportingContent = {
+                                if (summary.details.isNotBlank()) {
+                                    Text(text = summary.details)
+                                }
+                            },
+                        )
+                        HorizontalDivider()
+                    }
                 }
             }
         }
@@ -220,6 +236,7 @@ internal fun TableBoardView(
     table: PageTable,
     tableReferences: List<PageTableReference>,
     searchQuery: String = "",
+    isFullPage: Boolean = false,
 ) {
     val groupedRows = table.groupedSummaries(
         tableReferences = tableReferences,
@@ -232,30 +249,42 @@ internal fun TableBoardView(
         return
     }
 
-    LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+    val rowModifier = if (isFullPage) Modifier.fillMaxHeight() else Modifier
+    LazyRow(
+        modifier = rowModifier,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
         items(
             items = groupedRows.toList(),
             key = { group -> group.first },
         ) { (status, rows) ->
-            Column(
-                modifier = Modifier.width(BoardColumnWidth),
+            val listModifier = if (isFullPage) Modifier.width(BoardColumnWidth).fillMaxHeight() else Modifier.width(BoardColumnWidth).heightIn(max = 560.dp)
+            LazyColumn(
+                modifier = listModifier,
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text(
-                    text = "$status (${rows.size})",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                rows.forEach { summary ->
-                    ListItem(
-                        headlineContent = { Text(text = summary.title) },
-                        supportingContent = {
-                            if (summary.details.isNotBlank()) {
-                                Text(text = summary.details)
-                            }
-                        },
+                item {
+                    Text(
+                        text = "$status (${rows.size})",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
                     )
-                    HorizontalDivider()
+                }
+                items(
+                    items = rows,
+                    key = { summary -> summary.row.id },
+                ) { summary ->
+                    Column {
+                        ListItem(
+                            headlineContent = { Text(text = summary.title) },
+                            supportingContent = {
+                                if (summary.details.isNotBlank()) {
+                                    Text(text = summary.details)
+                                }
+                            },
+                        )
+                        HorizontalDivider()
+                    }
                 }
             }
         }
@@ -267,6 +296,7 @@ internal fun TableCalendarView(
     table: PageTable,
     tableReferences: List<PageTableReference>,
     searchQuery: String = "",
+    isFullPage: Boolean = false,
 ) {
     val summaries = table.rowSummaries(
         tableReferences = tableReferences,
@@ -283,30 +313,42 @@ internal fun TableCalendarView(
         return
     }
 
-    LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+    val rowModifier = if (isFullPage) Modifier.fillMaxHeight() else Modifier
+    LazyRow(
+        modifier = rowModifier,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
         items(
             items = groupedRows,
             key = { group -> group.first },
         ) { (date, rows) ->
-            Column(
-                modifier = Modifier.width(CalendarDayWidth),
+            val listModifier = if (isFullPage) Modifier.width(CalendarDayWidth).fillMaxHeight() else Modifier.width(CalendarDayWidth).heightIn(max = 560.dp)
+            LazyColumn(
+                modifier = listModifier,
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text(
-                    text = "$date (${rows.size})",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                rows.forEach { summary ->
-                    ListItem(
-                        headlineContent = { Text(text = summary.title) },
-                        supportingContent = {
-                            if (summary.details.isNotBlank()) {
-                                Text(text = summary.details)
-                            }
-                        },
+                item {
+                    Text(
+                        text = "$date (${rows.size})",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
                     )
-                    HorizontalDivider()
+                }
+                items(
+                    items = rows,
+                    key = { summary -> summary.row.id },
+                ) { summary ->
+                    Column {
+                        ListItem(
+                            headlineContent = { Text(text = summary.title) },
+                            supportingContent = {
+                                if (summary.details.isNotBlank()) {
+                                    Text(text = summary.details)
+                                }
+                            },
+                        )
+                        HorizontalDivider()
+                    }
                 }
             }
         }
@@ -318,6 +360,7 @@ internal fun TableGalleryView(
     table: PageTable,
     tableReferences: List<PageTableReference>,
     searchQuery: String = "",
+    isFullPage: Boolean = false,
 ) {
     val summaries = table.rowSummaries(
         tableReferences = tableReferences,
@@ -329,7 +372,11 @@ internal fun TableGalleryView(
         return
     }
 
-    LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+    val rowModifier = if (isFullPage) Modifier.fillMaxHeight() else Modifier
+    LazyRow(
+        modifier = rowModifier,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
         items(
             items = summaries,
             key = { summary -> summary.row.id },
@@ -366,6 +413,7 @@ internal fun TableTimelineView(
     table: PageTable,
     tableReferences: List<PageTableReference>,
     searchQuery: String = "",
+    isFullPage: Boolean = false,
 ) {
     val summaries = if (table.sort.columnId.isBlank()) {
         table.rowSummaries(
@@ -391,49 +439,58 @@ internal fun TableTimelineView(
         return
     }
 
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        summaries.forEach { summary ->
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalAlignment = Alignment.Top,
-            ) {
-                val dateLabel = if (summary.endDate.isNotBlank() && summary.endDate != NoDateLabel) {
-                    "${summary.date} - ${summary.endDate}"
-                } else {
-                    summary.date
-                }
-                Text(
-                    text = dateLabel,
-                    modifier = Modifier.width(TimelineDateWidth),
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(2.dp),
+    val listModifier = if (isFullPage) Modifier.fillMaxHeight() else Modifier.heightIn(max = 560.dp)
+    LazyColumn(
+        modifier = listModifier,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        items(
+            items = summaries,
+            key = { summary -> summary.row.id },
+        ) { summary ->
+            Column {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.Top,
                 ) {
+                    val dateLabel = if (summary.endDate.isNotBlank() && summary.endDate != NoDateLabel) {
+                        "${summary.date} - ${summary.endDate}"
+                    } else {
+                        summary.date
+                    }
                     Text(
-                        text = summary.title,
-                        style = MaterialTheme.typography.titleSmall,
+                        text = dateLabel,
+                        modifier = Modifier.width(TimelineDateWidth),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary,
                         fontWeight = FontWeight.SemiBold,
                     )
-                    Text(
-                        text = summary.status,
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    if (summary.timelineDetails.isNotBlank()) {
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
                         Text(
-                            text = summary.timelineDetails,
-                            style = MaterialTheme.typography.bodyMedium,
+                            text = summary.title,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            text = summary.status,
+                            style = MaterialTheme.typography.labelLarge,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                        if (summary.timelineDetails.isNotBlank()) {
+                            Text(
+                                text = summary.timelineDetails,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
                 }
+                HorizontalDivider()
             }
-            HorizontalDivider()
         }
     }
 }
@@ -443,6 +500,7 @@ internal fun TableDashboardView(
     table: PageTable,
     tableReferences: List<PageTableReference>,
     searchQuery: String = "",
+    isFullPage: Boolean = false,
 ) {
     val summaries = table.rowSummaries(
         tableReferences = tableReferences,
@@ -478,7 +536,15 @@ internal fun TableDashboardView(
         return
     }
 
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    val columnModifier = if (isFullPage) {
+        Modifier.fillMaxHeight().verticalScroll(rememberScrollState())
+    } else {
+        Modifier
+    }
+    Column(
+        modifier = columnModifier,
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
         LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             items(
                 items = buildList {
@@ -502,7 +568,7 @@ internal fun TableDashboardView(
             style = MaterialTheme.typography.titleSmall,
             fontWeight = FontWeight.SemiBold,
         )
-        groupCounts.forEach { (status, count) ->
+        groupCounts.take(50).forEach { (status, count) ->
             DashboardBar(
                 label = status,
                 count = count,
@@ -522,7 +588,7 @@ internal fun TableDashboardView(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         } else {
-            dateCounts.forEach { (date, count) ->
+            dateCounts.take(50).forEach { (date, count) ->
                 DashboardBar(
                     label = date,
                     count = count,
