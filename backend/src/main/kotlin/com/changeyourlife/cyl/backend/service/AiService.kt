@@ -412,6 +412,7 @@ class AiService(
             - For date words like harini/today, use the client date.
             - For money like "29 ringgit", put the numeric value in an amount/price/cost column if such column exists or create a Number column.
             - For table creation, infer sensible columns and rows from the user's intent instead of using fixed templates.
+            - Do not set table sort, filter, group, hidden columns, or view rules when creating a page/table unless the user explicitly asks for those controls. A normal monthly expenses request should create data/schema only; user can filter/sort/group manually later.
             - For monthly expenses/budget with salary and spending data, prefer a transaction ledger plus summary:
               first CREATE_PAGE with tableTitle "Transactions" and columns Name, Date, Month Select, Category Select, Type Select, Amount Number, Status, Notes;
               then CREATE_DATABASE on that page with tableTitle "Monthly Summary" and columns Month Select, Status, Notes only. The app will wire monthly Income/Known Expenses/Debt rollups and Balance formula.

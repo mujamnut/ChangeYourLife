@@ -51,6 +51,9 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
@@ -72,6 +75,8 @@ class PageEditorViewModel @Inject constructor(
     private val scheduleTableDateReminderUseCase: ScheduleTableDateReminderUseCase,
 ) : ViewModel() {
     private val pageId: String = checkNotNull(savedStateHandle["pageId"])
+    private val initialSearchTargetType: String = savedStateHandle["targetType"] ?: ""
+    private val initialSearchTargetId: String = savedStateHandle["targetId"] ?: ""
 
     private val _pendingChanges = MutableStateFlow<PageBlockDocument?>(null)
     private val _pendingGranularDocumentSave = MutableStateFlow<PendingGranularDocumentSave?>(null)
@@ -140,7 +145,7 @@ class PageEditorViewModel @Inject constructor(
         }
     }
 
-    val uiState: StateFlow<PageEditorUiState> = combine(
+    private val baseUiState: StateFlow<PageEditorUiState> = combine(
         _dbState,
         _pendingChanges,
         _pendingTitle,
@@ -158,6 +163,68 @@ class PageEditorViewModel @Inject constructor(
             dbState.copy(
                 isSaving = pendingDoc != null || pendingTitle != null,
                 canUndoEditorChange = canUndoEditorChange,
+            )
+        }
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5_000),
+        initialValue = PageEditorUiState(isLoading = true),
+    )
+
+    private val _tableSearchInputs = MutableStateFlow<Map<String, String>>(emptyMap())
+
+    fun updateTableSearchQuery(tableBlockId: String, query: String) {
+        _tableSearchInputs.update { current ->
+            current + (tableBlockId to query)
+        }
+    }
+
+    private val workspaceIdFlow: Flow<String?> = loadedPageState.map { loaded ->
+        (loaded as? LoadedEditorPageState.Ready)?.page?.workspaceId
+    }
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private val allWorkspacePagesFlow: Flow<List<Page>> = workspaceIdFlow.flatMapLatest { workspaceId ->
+        if (workspaceId == null) {
+            flowOf(emptyList())
+        } else {
+            pageRepository.observePages(workspaceId)
+        }
+    }
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private val allTableReferencesFlow: StateFlow<List<PageTableReference>> = allWorkspacePagesFlow.mapLatest { pages ->
+        buildPageTableReferences(pages)
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5_000),
+        initialValue = emptyList(),
+    )
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    internal val uiState: StateFlow<PageEditorUiState> = combine(
+        baseUiState,
+        _tableSearchInputs,
+        allTableReferencesFlow,
+    ) { baseState, searchInputs, tableReferences ->
+        if (baseState.page == null) {
+            baseState
+        } else {
+            val renderStates = withContext(Dispatchers.Default) {
+                baseState.blocks
+                    .filter { it.type == PageBlockType.DatabaseTable }
+                    .associate { block ->
+                        val searchInput = searchInputs[block.id] ?: ""
+                        block.id to block.table.buildInlineDatabaseTableRenderState(
+                            tableReferences = tableReferences,
+                            tableSearchInput = searchInput,
+                            searchTargetType = initialSearchTargetType,
+                            searchTargetId = initialSearchTargetId,
+                        )
+                    }
+            }
+            baseState.copy(
+                databaseRenderStates = renderStates
             )
         }
     }.stateIn(
@@ -2449,6 +2516,27 @@ class PageEditorViewModel @Inject constructor(
         return blocks.any { block -> block.type == PageBlockType.DatabaseTable }
     }
 
+    private suspend fun buildPageTableReferences(pages: List<Page>): List<PageTableReference> =
+        withContext(Dispatchers.Default) {
+            pages
+                .asSequence()
+                .filter { page -> page.deletedAt == null }
+                .flatMap { page ->
+                    PageBlockCodec.decodeDocument(page.content)
+                        .blocks
+                        .tableReferences()
+                        .asSequence()
+                        .map { reference ->
+                            reference.copy(
+                                pageId = page.id,
+                                pageTitle = page.title.ifBlank { "Untitled page" },
+                            )
+                        }
+                }
+                .distinctBy { reference -> reference.blockId }
+                .toList()
+        }
+
 }
 
 private data class ProcessedEditorDocument(
@@ -2543,7 +2631,7 @@ private fun PageBlock.duplicatedForTableRow(): PageBlock {
     )
 }
 
-data class PageEditorUiState(
+internal data class PageEditorUiState(
     val isLoading: Boolean = true,
     val page: Page? = null,
     val title: String = "",
@@ -2555,4 +2643,5 @@ data class PageEditorUiState(
     val aiError: String? = null,
     val canUndoEditorChange: Boolean = false,
     val syncState: PageSyncState = PageSyncState(),
+    val databaseRenderStates: Map<String, InlineDatabaseTableRenderState> = emptyMap(),
 )

@@ -48,10 +48,10 @@ internal object TableGridTokens {
         val colorScheme = MaterialTheme.colorScheme
         return TableGridColors(
             cellBackground = colorScheme.surface,
-            headerBackground = colorScheme.surfaceContainerHigh,
+            headerBackground = colorScheme.surface,
             highlightedRowBackground = colorScheme.primaryContainer.copy(alpha = 0.35f),
             draggedRowBackground = colorScheme.surfaceContainerHigh.copy(alpha = 0.92f),
-            divider = colorScheme.outlineVariant.copy(alpha = 0.72f),
+            divider = colorScheme.outlineVariant.copy(alpha = 0.40f),
             propertyDivider = colorScheme.outlineVariant.copy(alpha = 0.48f),
             propertyIcon = colorScheme.onSurfaceVariant.copy(alpha = 0.76f),
             emptyValue = colorScheme.onSurfaceVariant.copy(alpha = 0.58f),

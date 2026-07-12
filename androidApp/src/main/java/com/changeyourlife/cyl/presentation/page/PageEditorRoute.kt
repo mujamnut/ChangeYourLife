@@ -1,4 +1,4 @@
-﻿package com.changeyourlife.cyl.presentation.page
+package com.changeyourlife.cyl.presentation.page
 
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -397,6 +397,7 @@ internal fun PageEditorScreen(
     val tableHorizontalScrollStates = remember { androidx.compose.runtime.mutableStateMapOf<String, androidx.compose.foundation.ScrollState>() }
     val tableSearchInputs = remember { androidx.compose.runtime.mutableStateMapOf<String, String>() }
     val tableOpenRowIds = remember { androidx.compose.runtime.mutableStateMapOf<String, String?>() }
+    val tableActiveEditingCellKeys = remember { androidx.compose.runtime.mutableStateMapOf<String, String?>() }
     val density = LocalDensity.current
     val collapsedTitleThresholdPx = with(density) { 56.dp.toPx().toInt() }
     val showTopBarTitle by remember(pageListState, collapsedTitleThresholdPx) {
@@ -407,6 +408,15 @@ internal fun PageEditorScreen(
     }
     val hasDatabaseBlock = remember(uiState.blocks) {
         uiState.blocks.containsDatabaseTableBlock()
+    }
+    val pageBlocks = remember(uiState.blocks, hasDatabaseBlock) {
+        if (hasDatabaseBlock) {
+            uiState.blocks
+                .filter { block -> block.type == PageBlockType.DatabaseTable }
+                .take(1)
+        } else {
+            uiState.blocks
+        }
     }
 
     fun requestEditorFocus(
@@ -455,154 +465,270 @@ internal fun PageEditorScreen(
         }
     }
 
-    Scaffold(
-        modifier = modifier,
-        containerColor = MaterialTheme.colorScheme.surface,
-        topBar = {
-            PageEditorTopBar(
-                pageTitle = if (showTopBarTitle) uiState.title else "",
-                isSaving = uiState.isSaving,
-                isAiGenerating = homeAiState.isAiGeneratingChat,
-                syncState = uiState.syncState,
-                onBack = onBack,
-            )
-        },
-        bottomBar = {
-            PageEditorBottomBar(
-                activeBlockId = activeBlockId,
-                focusScope = editorFocusScope,
-                canAddDatabaseFromHeader = !hasDatabaseBlock,
-                canUndoEditorChange = uiState.canUndoEditorChange,
-                richTextToolbarState = richTextToolbarState,
-                onAddBlock = onAddBlock,
-                onAddDatabaseFromHeader = {
-                    if (!hasDatabaseBlock) {
-                        val emptyBodyBlockId = uiState.blocks.firstOrNull { block ->
-                            block.type == PageBlockType.Text &&
-                                block.text.isBlank() &&
-                                block.richTextSpans.isEmpty() &&
-                                block.mediaAttachments.isEmpty() &&
-                                block.children.isEmpty()
-                        }?.id
-                        emptyBodyBlockId?.let { blockId ->
-                            onBlockTypeChange(blockId, PageBlockType.DatabaseTable)
-                        } ?: onAddBlock(PageBlockType.DatabaseTable)
-                    }
-                },
-                onChangeActiveBlockType = { type ->
-                    activeBlockId?.let { blockId -> onBlockTypeChange(blockId, type) } ?: onAddBlock(type)
-                },
-                onAddChildToActiveBlock = { type ->
-                    activeBlockId?.let { blockId -> onAddChildBlock(blockId, type) }
-                },
-                onInsertTextAboveActiveBlock = {
-                    activeBlockId?.let { blockId -> onInsertBlockNear(blockId, PageBlockType.Text, PageBlockInsertPosition.Above) }
-                },
-                onInsertTextBelowActiveBlock = {
-                    activeBlockId?.let { blockId -> onInsertBlockNear(blockId, PageBlockType.Text, PageBlockInsertPosition.Below) }
-                },
-                onMoveActiveBlockUp = {
-                    activeBlockId?.let(onMoveBlockUp)
-                },
-                onMoveActiveBlockDown = {
-                    activeBlockId?.let(onMoveBlockDown)
-                },
-                onIndentActiveBlock = {
-                    activeBlockId?.let(onIndentBlock)
-                },
-                onOutdentActiveBlock = {
-                    activeBlockId?.let(onOutdentBlock)
-                },
-                onCreateLinkedPageFromActiveBlock = {
-                    activeBlockId?.let(onCreateLinkedChildPageFromBlock)
-                },
-                onDeleteActiveBlock = {
-                    activeBlockId?.let(::deleteBlockAndFocusSibling)
-                },
-                onUndoEditorChange = onUndoEditorChange,
-                onSearch = { isPageSearchSheetOpen = true },
-                onOpenAi = {
-                    isAiChatSheetOpen = true
-                },
-                onCreateBlock = { isBlockPickerSheetOpen = true },
-                onClearEditorFocus = {
-                    activeBlockId = null
-                    richTextToolbarState = null
-                    editorFocusScope = PageEditorFocusScope.None
-                },
-            )
-        },
-    ) { innerPadding ->
-        if (isAiChatSheetOpen) {
-            AiChatSheet(
-                messages = homeAiState.chatMessages,
-                mentionPages = homeAiState.allPages,
-                persona = aiPersona,
-                isGenerating = homeAiState.isAiGeneratingChat,
-                errorMessage = homeAiState.aiChatError,
-                modelLabel = homeAiState.aiModelLabel,
-                visionStatusLabel = homeAiState.aiVisionStatusLabel,
-                visionPipelineLabel = homeAiState.aiVisionPipelineLabel,
-                onSendMessage = { message, mentionedPageIds, images ->
-                    onSendAiMessage(message, mentionedPageIds, uiState.page?.id, images)
-                },
-                onUndoAction = onUndoAiAction,
-                onClearHistory = onClearHomeAiHistory,
-                onCreateChatSession = onCreateHomeChatSession,
-                onOpenHistoryPage = {
-                    isAiChatSheetOpen = false
-                    onOpenAiHistory()
-                },
-                onOpenProfilePage = {
-                    isAiChatSheetOpen = false
-                    onOpenAiProfile()
-                },
-                onDismissError = onDismissHomeAiError,
-                onOpenPage = { pageId, targetType, targetId ->
-                    isAiChatSheetOpen = false
-                    onOpenPage(pageId, targetType, targetId)
-                },
-                onDismiss = { isAiChatSheetOpen = false },
-                sheetState = aiChatSheetState,
-                attachedPageId = uiState.page?.id,
-                attachedPageTitle = uiState.title.ifBlank { "Untitled page" },
-            )
-        }
-        if (isPageSearchSheetOpen) {
-            PageSearchSheet(
-                pageTitle = uiState.title.ifBlank { "Untitled page" },
-                properties = uiState.properties,
-                blocks = uiState.blocks,
-                onDismiss = { isPageSearchSheetOpen = false },
-                sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-            )
-        }
-        if (isBlockPickerSheetOpen) {
-            PageBlockPickerSheet(
-                onAddBlock = { type ->
-                    onAddBlock(type)
-                    isBlockPickerSheetOpen = false
-                },
-                onDismiss = { isBlockPickerSheetOpen = false },
-                sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-            )
-        }
-        when {
-            uiState.isLoading -> {
+    when {
+        uiState.isLoading -> {
+            Scaffold(
+                modifier = modifier,
+                containerColor = MaterialTheme.colorScheme.surface,
+                topBar = {
+                    PageEditorTopBar(
+                        pageTitle = "",
+                        isSaving = uiState.isSaving,
+                        isAiGenerating = homeAiState.isAiGeneratingChat,
+                        syncState = uiState.syncState,
+                        onBack = onBack,
+                    )
+                }
+            ) { innerPadding ->
                 CenterMessage(
                     text = "Loading page",
                     contentPadding = innerPadding,
                 )
             }
+        }
 
-            uiState.page == null -> {
+        uiState.page == null -> {
+            Scaffold(
+                modifier = modifier,
+                containerColor = MaterialTheme.colorScheme.surface,
+                topBar = {
+                    PageEditorTopBar(
+                        pageTitle = "",
+                        isSaving = uiState.isSaving,
+                        isAiGenerating = homeAiState.isAiGeneratingChat,
+                        syncState = uiState.syncState,
+                        onBack = onBack,
+                    )
+                }
+            ) { innerPadding ->
                 CenterMessage(
                     text = "Page not found",
                     contentPadding = innerPadding,
                 )
             }
+        }
 
-            else -> {
+        hasDatabaseBlock -> {
+            val databaseBlock = remember(uiState.blocks) {
+                uiState.blocks.first { block -> block.type == PageBlockType.DatabaseTable }
+            }
+            val currentPage = uiState.page
+            val tableReferences = remember(currentPage.id, uiState.title, uiState.blocks, homeAiState.allTableReferences) {
+                val currentPageId = currentPage.id
+                val currentPageTitle = uiState.title.ifBlank { "Untitled page" }
+                val currentPageTables = uiState.blocks.tableReferences().map { reference ->
+                    reference.copy(
+                        pageId = currentPageId,
+                        pageTitle = currentPageTitle,
+                    )
+                }
+                val otherPageTables = homeAiState.allTableReferences
+                    .filter { reference -> reference.pageId != currentPageId }
+                (currentPageTables + otherPageTables).distinctBy { reference -> reference.blockId }
+            }
+            PageDatabaseSurface(
+                databaseBlock = databaseBlock,
+                uiState = uiState,
+                homeAiState = homeAiState,
+                tableReferences = tableReferences,
+                databaseRenderStates = uiState.databaseRenderStates,
+                tableHorizontalScrollStates = tableHorizontalScrollStates,
+                onSearchQueryChange = { tableBlockId, query -> tableSearchInputs[tableBlockId] = query },
+                tableOpenRowIds = tableOpenRowIds,
+                tableActiveEditingCellKeys = tableActiveEditingCellKeys,
+                onBack = onBack,
+                onTitleChange = onTitleChange,
+                onTableTitleChange = onTableTitleChange,
+                onTableViewChange = onTableViewChange,
+                onTableViewConfigChange = onTableViewConfigChange,
+                onTableDataSourceChange = onTableDataSourceChange,
+                onTableSortChange = onTableSortChange,
+                onTableFilterChange = onTableFilterChange,
+                onTableGroupChange = onTableGroupChange,
+                onTableColumnNameChange = onTableColumnNameChange,
+                onTableColumnTypeChange = onTableColumnTypeChange,
+                onTableColumnConfigChange = onTableColumnConfigChange,
+                onTableColumnDateSettingsChange = onTableColumnDateSettingsChange,
+                onTableColumnFormulaChange = onTableColumnFormulaChange,
+                onTableColumnRelationTargetChange = onTableColumnRelationTargetChange,
+                onTableColumnRollupChange = onTableColumnRollupChange,
+                onTableCellChange = onTableCellChange,
+                onTableRelationCellChange = onTableRelationCellChange,
+                onAddTableColumn = onAddTableColumn,
+                onInsertTableColumn = onInsertTableColumn,
+                onDuplicateTableColumn = onDuplicateTableColumn,
+                onDeleteTableColumn = onDeleteTableColumn,
+                onAddTableRow = onAddTableRow,
+                onDeleteTableRow = onDeleteTableRow,
+                onDuplicateTableRow = onDuplicateTableRow,
+                onMoveTableRow = onMoveTableRow,
+                onTableRowBlockTextChange = onTableRowBlockTextChange,
+                onTableRowBlockRichTextChange = onTableRowBlockRichTextChange,
+                onTableRowBlockPasteBlocks = onTableRowBlockPasteBlocks,
+                onTableRowBlockTypeChange = onTableRowBlockTypeChange,
+                onTableRowBlockMediaAdd = onTableRowBlockMediaAdd,
+                onTableRowBlockMediaRemove = onTableRowBlockMediaRemove,
+                onToggleTableRowTodoBlock = onToggleTableRowTodoBlock,
+                onAddTableRowPageBlock = onAddTableRowPageBlock,
+                onInsertTableRowPageBlockNear = onInsertTableRowPageBlockNear,
+                onCreateLinkedChildPageFromTableRowBlock = onCreateLinkedChildPageFromTableRowBlock,
+                onDeleteTableRowPageBlock = onDeleteTableRowPageBlock,
+                onMoveTableRowPageBlockUp = onMoveTableRowPageBlockUp,
+                onMoveTableRowPageBlockDown = onMoveTableRowPageBlockDown,
+                onIndentTableRowPageBlock = onIndentTableRowPageBlock,
+                onOutdentTableRowPageBlock = onOutdentTableRowPageBlock,
+                onKeepLocalConflict = onKeepLocalConflict,
+                onUseRemoteConflict = onUseRemoteConflict,
+                onSendAiMessage = onSendAiMessage,
+                onUndoAiAction = onUndoAiAction,
+                onClearHomeAiHistory = onClearHomeAiHistory,
+                onCreateHomeChatSession = onCreateHomeChatSession,
+                onSelectHomeChatSession = onSelectHomeChatSession,
+                onDeleteHomeChatSession = onDeleteHomeChatSession,
+                onDismissHomeAiError = onDismissHomeAiError,
+                onOpenAiHistory = onOpenAiHistory,
+                onOpenAiProfile = onOpenAiProfile,
+                onDismissHomeAiErrorClick = onDismissHomeAiError,
+                initialSearchTargetType = initialSearchTargetType,
+                initialSearchTargetId = initialSearchTargetId,
+                aiPersona = aiPersona,
+                modifier = modifier
+            )
+        }
+
+        else -> {
+            Scaffold(
+                modifier = modifier,
+                containerColor = MaterialTheme.colorScheme.surface,
+                topBar = {
+                    PageEditorTopBar(
+                        pageTitle = if (showTopBarTitle) uiState.title else "",
+                        isSaving = uiState.isSaving,
+                        isAiGenerating = homeAiState.isAiGeneratingChat,
+                        syncState = uiState.syncState,
+                        onBack = onBack,
+                    )
+                },
+                bottomBar = {
+                    PageEditorBottomBar(
+                        activeBlockId = activeBlockId,
+                        focusScope = editorFocusScope,
+                        canAddDatabaseFromHeader = !hasDatabaseBlock,
+                        canUndoEditorChange = uiState.canUndoEditorChange,
+                        richTextToolbarState = richTextToolbarState,
+                        onAddBlock = onAddBlock,
+                        onAddDatabaseFromHeader = {
+                            if (!hasDatabaseBlock) {
+                                val emptyBodyBlockId = uiState.blocks.firstOrNull { block ->
+                                    block.type == PageBlockType.Text &&
+                                        block.text.isBlank() &&
+                                        block.richTextSpans.isEmpty() &&
+                                        block.mediaAttachments.isEmpty() &&
+                                        block.children.isEmpty()
+                                }?.id
+                                emptyBodyBlockId?.let { blockId ->
+                                    onBlockTypeChange(blockId, PageBlockType.DatabaseTable)
+                                } ?: onAddBlock(PageBlockType.DatabaseTable)
+                            }
+                        },
+                        onChangeActiveBlockType = { type ->
+                            activeBlockId?.let { blockId -> onBlockTypeChange(blockId, type) } ?: onAddBlock(type)
+                        },
+                        onAddChildToActiveBlock = { type ->
+                            activeBlockId?.let { blockId -> onAddChildBlock(blockId, type) }
+                        },
+                        onInsertTextAboveActiveBlock = {
+                            activeBlockId?.let { blockId -> onInsertBlockNear(blockId, PageBlockType.Text, PageBlockInsertPosition.Above) }
+                        },
+                        onInsertTextBelowActiveBlock = {
+                            activeBlockId?.let { blockId -> onInsertBlockNear(blockId, PageBlockType.Text, PageBlockInsertPosition.Below) }
+                        },
+                        onMoveActiveBlockUp = {
+                            activeBlockId?.let(onMoveBlockUp)
+                        },
+                        onMoveActiveBlockDown = {
+                            activeBlockId?.let(onMoveBlockDown)
+                        },
+                        onIndentActiveBlock = {
+                            activeBlockId?.let(onIndentBlock)
+                        },
+                        onOutdentActiveBlock = {
+                            activeBlockId?.let(onOutdentBlock)
+                        },
+                        onCreateLinkedPageFromActiveBlock = {
+                            activeBlockId?.let(onCreateLinkedChildPageFromBlock)
+                        },
+                        onDeleteActiveBlock = {
+                            activeBlockId?.let(::deleteBlockAndFocusSibling)
+                        },
+                        onUndoEditorChange = onUndoEditorChange,
+                        onSearch = { isPageSearchSheetOpen = true },
+                        onOpenAi = {
+                            isAiChatSheetOpen = true
+                        },
+                        onCreateBlock = { isBlockPickerSheetOpen = true },
+                        onClearEditorFocus = {
+                            activeBlockId = null
+                            richTextToolbarState = null
+                            editorFocusScope = PageEditorFocusScope.None
+                        },
+                    )
+                },
+            ) { innerPadding ->
+                if (isAiChatSheetOpen) {
+                    AiChatSheet(
+                        messages = homeAiState.chatMessages,
+                        mentionPages = homeAiState.allPages,
+                        persona = aiPersona,
+                        isGenerating = homeAiState.isAiGeneratingChat,
+                        errorMessage = homeAiState.aiChatError,
+                        modelLabel = homeAiState.aiModelLabel,
+                        visionStatusLabel = homeAiState.aiVisionStatusLabel,
+                        visionPipelineLabel = homeAiState.aiVisionPipelineLabel,
+                        onSendMessage = { message, mentionedPageIds, images ->
+                            onSendAiMessage(message, mentionedPageIds, uiState.page.id, images)
+                        },
+                        onUndoAction = onUndoAiAction,
+                        onClearHistory = onClearHomeAiHistory,
+                        onCreateChatSession = onCreateHomeChatSession,
+                        onOpenHistoryPage = {
+                            isAiChatSheetOpen = false
+                            onOpenAiHistory()
+                        },
+                        onOpenProfilePage = {
+                            isAiChatSheetOpen = false
+                            onOpenAiProfile()
+                        },
+                        onDismissError = onDismissHomeAiError,
+                        onOpenPage = { pageId, targetType, targetId ->
+                            isAiChatSheetOpen = false
+                            onOpenPage(pageId, targetType, targetId)
+                        },
+                        onDismiss = { isAiChatSheetOpen = false },
+                        sheetState = aiChatSheetState,
+                        attachedPageId = uiState.page.id,
+                        attachedPageTitle = uiState.title.ifBlank { "Untitled page" },
+                    )
+                }
+                if (isPageSearchSheetOpen) {
+                    PageSearchSheet(
+                        pageTitle = uiState.title.ifBlank { "Untitled page" },
+                        properties = uiState.properties,
+                        blocks = uiState.blocks,
+                        onDismiss = { isPageSearchSheetOpen = false },
+                        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+                    )
+                }
+                if (isBlockPickerSheetOpen) {
+                    PageBlockPickerSheet(
+                        onAddBlock = { type ->
+                            onAddBlock(type)
+                            isBlockPickerSheetOpen = false
+                        },
+                        onDismiss = { isBlockPickerSheetOpen = false },
+                        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+                    )
+                }
                 val currentPage = uiState.page
                 val isSubpage = currentPage.parentPageId != null
                 val tableReferences = remember(currentPage.id, uiState.title, uiState.blocks, homeAiState.allTableReferences) {
@@ -618,12 +744,13 @@ internal fun PageEditorScreen(
                         .filter { reference -> reference.pageId != currentPageId }
                     (currentPageTables + otherPageTables).distinctBy { reference -> reference.blockId }
                 }
+                val databaseRenderStates = uiState.databaseRenderStates
                 val searchTargetIndex = remember(
-                    uiState.blocks,
+                    pageBlocks,
                     initialSearchTargetType,
                     initialSearchTargetId,
                 ) {
-                    uiState.blocks.indexOfSearchTarget(
+                    pageBlocks.indexOfSearchTarget(
                         targetType = initialSearchTargetType,
                         targetId = initialSearchTargetId,
                     )
@@ -642,215 +769,226 @@ internal fun PageEditorScreen(
                     }
                 }
 
+                androidx.compose.foundation.lazy.LazyColumn(
+                    state = pageListState,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(innerPadding),
+                    contentPadding = PaddingValues(
+                        start = 22.dp,
+                        top = 8.dp,
+                        end = 22.dp,
+                        bottom = 18.dp,
+                    ),
+                    verticalArrangement = Arrangement.spacedBy(0.dp),
+                ) {
+                    item {
+                        PageTitleEditor(
+                            title = uiState.title,
+                            onTitleChange = onTitleChange,
+                            onFocusChanged = { isFocused ->
+                                if (isFocused) {
+                                    activeBlockId = null
+                                    richTextToolbarState = null
+                                    editorFocusScope = PageEditorFocusScope.Header
+                                }
+                            },
+                        )
+                    }
 
-                    androidx.compose.foundation.lazy.LazyColumn(
-                        state = pageListState,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(innerPadding),
-                        contentPadding = PaddingValues(
-                            start = 22.dp,
-                            top = 8.dp,
-                            end = 22.dp,
-                            bottom = 18.dp,
-                        ),
-                        verticalArrangement = Arrangement.spacedBy(0.dp),
-                    ) {
-                        item {
-                            PageTitleEditor(
-                                title = uiState.title,
-                                onTitleChange = onTitleChange,
-                                onFocusChanged = { isFocused ->
-                                    if (isFocused) {
-                                        activeBlockId = null
-                                        richTextToolbarState = null
-                                        editorFocusScope = PageEditorFocusScope.Header
-                                    }
-                                },
+                    if (uiState.syncState.hasConflict) {
+                        item(key = "page-sync-conflict") {
+                            PageSyncConflictBanner(
+                                onKeepLocal = onKeepLocalConflict,
+                                onUseRemote = onUseRemoteConflict,
                             )
                         }
+                    }
 
-                        if (uiState.syncState.hasConflict) {
-                            item(key = "page-sync-conflict") {
-                                PageSyncConflictBanner(
-                                    onKeepLocal = onKeepLocalConflict,
-                                    onUseRemote = onUseRemoteConflict,
-                                )
-                            }
-                        }
-
-                        uiState.blocks.forEach { block ->
-                            if (block.type == PageBlockType.DatabaseTable) {
-                                val scrollState = tableHorizontalScrollStates.getOrPut(block.id) { androidx.compose.foundation.ScrollState(0) }
-                                val searchInput = tableSearchInputs[block.id] ?: ""
-                                val openRowId = tableOpenRowIds[block.id]
-                                inlineDatabaseTableBlockEditor(
-                                    horizontalScrollState = scrollState,
-                                    tableSearchInput = searchInput,
-                                    onSearchQueryChange = { query -> tableSearchInputs[block.id] = query },
-                                    openRowId = openRowId,
-                                    onOpenRowIdChange = { rowId -> tableOpenRowIds[block.id] = rowId },
-                                    tableBlockId = block.id,
+                    pageBlocks.forEach { block ->
+                        if (block.type == PageBlockType.DatabaseTable) {
+                            val scrollState = tableHorizontalScrollStates.getOrPut(block.id) { androidx.compose.foundation.ScrollState(0) }
+                            val searchInput = tableSearchInputs[block.id] ?: ""
+                            val openRowId = tableOpenRowIds[block.id]
+                            val activeEditingCellKey = tableActiveEditingCellKeys[block.id]
+                            val renderState = databaseRenderStates[block.id] ?: block.table.buildInlineDatabaseTableRenderState(
+                                tableReferences = tableReferences,
+                                tableSearchInput = searchInput,
+                                searchTargetType = initialSearchTargetType,
+                                searchTargetId = initialSearchTargetId,
+                            )
+                            inlineDatabaseTableBlockEditor(
+                                horizontalScrollState = scrollState,
+                                tableSearchInput = searchInput,
+                                onSearchQueryChange = { query -> tableSearchInputs[block.id] = query },
+                                openRowId = openRowId,
+                                onOpenRowIdChange = { rowId -> tableOpenRowIds[block.id] = rowId },
+                                tableBlockId = block.id,
+                                pageId = uiState.page.id,
+                                pageUpdatedAt = uiState.page.updatedAt,
+                                syncState = uiState.syncState,
+                                isSaving = uiState.isSaving,
+                                table = block.table,
+                                tableReferences = tableReferences,
+                                renderState = renderState,
+                                activeEditingCellKey = activeEditingCellKey,
+                                onActiveEditingCellKeyChange = { cellKey ->
+                                    tableActiveEditingCellKeys[block.id] = cellKey
+                                },
+                                onTitleChange = { title -> onTableTitleChange(block.id, title) },
+                                onViewChange = { view -> onTableViewChange(block.id, view) },
+                                onViewConfigChange = { config -> onTableViewConfigChange(block.id, config) },
+                                onDataSourceChange = { source -> onTableDataSourceChange(block.id, source) },
+                                onSortChange = { columnId, direction -> onTableSortChange(block.id, columnId, direction) },
+                                onFilterChange = { filter -> onTableFilterChange(block.id, filter) },
+                                onGroupChange = { columnId -> onTableGroupChange(block.id, columnId) },
+                                onColumnNameChange = { columnId, name -> onTableColumnNameChange(block.id, columnId, name) },
+                                onColumnTypeChange = { columnId, type -> onTableColumnTypeChange(block.id, columnId, type) },
+                                onColumnConfigChange = { columnId, config -> onTableColumnConfigChange(block.id, columnId, config) },
+                                onColumnDateSettingsChange = { columnId, dateFormat, timeFormat, reminder, timezoneLabel ->
+                                    onTableColumnDateSettingsChange(block.id, columnId, dateFormat, timeFormat, reminder, timezoneLabel)
+                                },
+                                onColumnFormulaChange = { columnId, formula -> onTableColumnFormulaChange(block.id, columnId, formula) },
+                                onColumnRelationTargetChange = { columnId, targetTableId -> onTableColumnRelationTargetChange(block.id, columnId, targetTableId) },
+                                onColumnRollupChange = { columnId, relationColumnId, targetColumnId, aggregation -> onTableColumnRollupChange(block.id, columnId, relationColumnId, targetColumnId, aggregation) },
+                                onCellChange = { rowId, columnId, value -> onTableCellChange(block.id, rowId, columnId, value) },
+                                onRelationCellChange = { rowId, columnId, relationRowIds -> onTableRelationCellChange(block.id, rowId, columnId, relationRowIds) },
+                                onAddRelationTargetRow = { targetTableBlockId -> onAddTableRow(targetTableBlockId) },
+                                onAddColumn = { name, type -> onAddTableColumn(block.id, name, type) },
+                                onInsertColumn = { columnId, side -> onInsertTableColumn(block.id, columnId, side) },
+                                onDuplicateColumn = { columnId -> onDuplicateTableColumn(block.id, columnId) },
+                                onDeleteColumn = { columnId -> onDeleteTableColumn(block.id, columnId) },
+                                onAddRow = { onAddTableRow(block.id) },
+                                onDeleteRow = { rowId -> onDeleteTableRow(block.id, rowId) },
+                                onDuplicateRow = { rowId -> onDuplicateTableRow(block.id, rowId) },
+                                onMoveRow = { rowId, targetIndex -> onMoveTableRow(block.id, rowId, targetIndex) },
+                                onRowBlockTextChange = { rowId, rowBlockId, text -> onTableRowBlockTextChange(block.id, rowId, rowBlockId, text) },
+                                onRowBlockRichTextChange = { rowId, rowBlockId, text, spans -> onTableRowBlockRichTextChange(block.id, rowId, rowBlockId, text, spans) },
+                                onRowBlockPasteBlocks = { rowId, rowBlockId, pasteBlocks -> onTableRowBlockPasteBlocks(block.id, rowId, rowBlockId, pasteBlocks) },
+                                onRowBlockTypeChange = { rowId, rowBlockId, type -> onTableRowBlockTypeChange(block.id, rowId, rowBlockId, type) },
+                                onRowBlockMediaAdd = { rowId, rowBlockId, attachments -> onTableRowBlockMediaAdd(block.id, rowId, rowBlockId, attachments) },
+                                onRowBlockMediaRemove = { rowId, rowBlockId, attachmentId -> onTableRowBlockMediaRemove(block.id, rowId, rowBlockId, attachmentId) },
+                                onToggleRowTodoBlock = { rowId, rowBlockId -> onToggleTableRowTodoBlock(block.id, rowId, rowBlockId) },
+                                onAddRowPageBlock = { rowId, type -> onAddTableRowPageBlock(block.id, rowId, type) },
+                                onInsertRowPageBlockNear = { rowId, rowBlockId, type, position -> onInsertTableRowPageBlockNear(block.id, rowId, rowBlockId, type, position) },
+                                onCreateRowLinkedPage = { rowId, rowBlockId -> onCreateLinkedChildPageFromTableRowBlock(block.id, rowId, rowBlockId) },
+                                onDeleteRowPageBlock = { rowId, rowBlockId -> onDeleteTableRowPageBlock(block.id, rowId, rowBlockId) },
+                                onMoveRowPageBlockUp = { rowId, rowBlockId -> onMoveTableRowPageBlockUp(block.id, rowId, rowBlockId) },
+                                onMoveRowPageBlockDown = { rowId, rowBlockId -> onMoveTableRowPageBlockDown(block.id, rowId, rowBlockId) },
+                                onIndentRowPageBlock = { rowId, rowBlockId -> onIndentTableRowPageBlock(block.id, rowId, rowBlockId) },
+                                onOutdentRowPageBlock = { rowId, rowBlockId -> onOutdentTableRowPageBlock(block.id, rowId, rowBlockId) },
+                                mentionPages = homeAiState.allPages,
+                                searchTargetType = initialSearchTargetType,
+                                searchTargetId = initialSearchTargetId,
+                            )
+                        } else {
+                            item(
+                                key = block.id,
+                                contentType = block.editorLazyContentType(),
+                            ) {
+                                PageEditorBlock(
+                                    block = block,
                                     pageId = uiState.page.id,
                                     pageUpdatedAt = uiState.page.updatedAt,
                                     syncState = uiState.syncState,
                                     isSaving = uiState.isSaving,
-                                    table = block.table,
-                                    tableReferences = tableReferences,
-                                    onTitleChange = { title -> onTableTitleChange(block.id, title) },
-                                    onViewChange = { view -> onTableViewChange(block.id, view) },
-                                    onViewConfigChange = { config -> onTableViewConfigChange(block.id, config) },
-                                    onDataSourceChange = { source -> onTableDataSourceChange(block.id, source) },
-                                    onSortChange = { columnId, direction -> onTableSortChange(block.id, columnId, direction) },
-                                    onFilterChange = { filter -> onTableFilterChange(block.id, filter) },
-                                    onGroupChange = { columnId -> onTableGroupChange(block.id, columnId) },
-                                    onColumnNameChange = { columnId, name -> onTableColumnNameChange(block.id, columnId, name) },
-                                    onColumnTypeChange = { columnId, type -> onTableColumnTypeChange(block.id, columnId, type) },
-                                    onColumnConfigChange = { columnId, config -> onTableColumnConfigChange(block.id, columnId, config) },
-                                    onColumnDateSettingsChange = { columnId, dateFormat, timeFormat, reminder, timezoneLabel ->
-                                        onTableColumnDateSettingsChange(block.id, columnId, dateFormat, timeFormat, reminder, timezoneLabel)
+                                    isFirstBlock = uiState.blocks.firstOrNull()?.id == block.id,
+                                    isFullPage = false,
+                                    indentLevel = 0,
+                                    onTextChange = onBlockTextChange,
+                                    onRichTextChange = onBlockRichTextChange,
+                                    onPasteBlocks = onPasteBlocks,
+                                    onRichTextToolbarChange = { toolbarState ->
+                                        richTextToolbarState = toolbarState
                                     },
-                                    onColumnFormulaChange = { columnId, formula -> onTableColumnFormulaChange(block.id, columnId, formula) },
-                                    onColumnRelationTargetChange = { columnId, targetTableId -> onTableColumnRelationTargetChange(block.id, columnId, targetTableId) },
-                                    onColumnRollupChange = { columnId, relationColumnId, targetColumnId, aggregation -> onTableColumnRollupChange(block.id, columnId, relationColumnId, targetColumnId, aggregation) },
-                                    onCellChange = { rowId, columnId, value -> onTableCellChange(block.id, rowId, columnId, value) },
-                                    onRelationCellChange = { rowId, columnId, relationRowIds -> onTableRelationCellChange(block.id, rowId, columnId, relationRowIds) },
-                                    onAddRelationTargetRow = { targetTableBlockId -> onAddTableRow(targetTableBlockId) },
-                                    onAddColumn = { name, type -> onAddTableColumn(block.id, name, type) },
-                                    onInsertColumn = { columnId, side -> onInsertTableColumn(block.id, columnId, side) },
-                                    onDuplicateColumn = { columnId -> onDuplicateTableColumn(block.id, columnId) },
-                                    onDeleteColumn = { columnId -> onDeleteTableColumn(block.id, columnId) },
-                                    onAddRow = { onAddTableRow(block.id) },
-                                    onDeleteRow = { rowId -> onDeleteTableRow(block.id, rowId) },
-                                    onDuplicateRow = { rowId -> onDuplicateTableRow(block.id, rowId) },
-                                    onMoveRow = { rowId, targetIndex -> onMoveTableRow(block.id, rowId, targetIndex) },
-                                    onRowBlockTextChange = { rowId, rowBlockId, text -> onTableRowBlockTextChange(block.id, rowId, rowBlockId, text) },
-                                    onRowBlockRichTextChange = { rowId, rowBlockId, text, spans -> onTableRowBlockRichTextChange(block.id, rowId, rowBlockId, text, spans) },
-                                    onRowBlockPasteBlocks = { rowId, rowBlockId, pasteBlocks -> onTableRowBlockPasteBlocks(block.id, rowId, rowBlockId, pasteBlocks) },
-                                    onRowBlockTypeChange = { rowId, rowBlockId, type -> onTableRowBlockTypeChange(block.id, rowId, rowBlockId, type) },
-                                    onRowBlockMediaAdd = { rowId, rowBlockId, attachments -> onTableRowBlockMediaAdd(block.id, rowId, rowBlockId, attachments) },
-                                    onRowBlockMediaRemove = { rowId, rowBlockId, attachmentId -> onTableRowBlockMediaRemove(block.id, rowId, rowBlockId, attachmentId) },
-                                    onToggleRowTodoBlock = { rowId, rowBlockId -> onToggleTableRowTodoBlock(block.id, rowId, rowBlockId) },
-                                    onAddRowPageBlock = { rowId, type -> onAddTableRowPageBlock(block.id, rowId, type) },
-                                    onInsertRowPageBlockNear = { rowId, rowBlockId, type, position -> onInsertTableRowPageBlockNear(block.id, rowId, rowBlockId, type, position) },
-                                    onCreateRowLinkedPage = { rowId, rowBlockId -> onCreateLinkedChildPageFromTableRowBlock(block.id, rowId, rowBlockId) },
-                                    onDeleteRowPageBlock = { rowId, rowBlockId -> onDeleteTableRowPageBlock(block.id, rowId, rowBlockId) },
-                                    onMoveRowPageBlockUp = { rowId, rowBlockId -> onMoveTableRowPageBlockUp(block.id, rowId, rowBlockId) },
-                                    onMoveRowPageBlockDown = { rowId, rowBlockId -> onMoveTableRowPageBlockDown(block.id, rowId, rowBlockId) },
-                                    onIndentRowPageBlock = { rowId, rowBlockId -> onIndentTableRowPageBlock(block.id, rowId, rowBlockId) },
-                                    onOutdentRowPageBlock = { rowId, rowBlockId -> onOutdentTableRowPageBlock(block.id, rowId, rowBlockId) },
+                                    onBlockTypeChange = onBlockTypeChange,
+                                    onMediaAdd = onBlockMediaAdd,
+                                    onMediaRemove = onBlockMediaRemove,
+                                    onToggleTodo = onToggleTodo,
+                                    onDelete = ::deleteBlockAndFocusSibling,
+                                    onMoveUp = onMoveBlockUp,
+                                    onMoveDown = onMoveBlockDown,
+                                    onIndentBlock = onIndentBlock,
+                                    onOutdentBlock = onOutdentBlock,
+                                    onBlockFocused = { blockId ->
+                                        activeBlockId = blockId
+                                        editorFocusScope = PageEditorFocusScope.Body
+                                    },
+                                    focusRequest = editorFocusRequest,
+                                    activeBlockId = activeBlockId,
+                                    onAddChildBlock = onAddChildBlock,
+                                    onInsertBlockNear = onInsertBlockNear,
+                                    onCreateLinkedChildPageFromBlock = onCreateLinkedChildPageFromBlock,
                                     mentionPages = homeAiState.allPages,
+                                    onTableTitleChange = onTableTitleChange,
+                                    onTableViewChange = onTableViewChange,
+                                    onTableViewConfigChange = onTableViewConfigChange,
+                                    onTableDataSourceChange = onTableDataSourceChange,
+                                    onTableSortChange = onTableSortChange,
+                                    onTableFilterChange = onTableFilterChange,
+                                    onTableGroupChange = onTableGroupChange,
+                                    onTableColumnNameChange = onTableColumnNameChange,
+                                    onTableColumnTypeChange = onTableColumnTypeChange,
+                                    onTableColumnConfigChange = onTableColumnConfigChange,
+                                    onTableColumnDateSettingsChange = onTableColumnDateSettingsChange,
+                                    onTableColumnFormulaChange = onTableColumnFormulaChange,
+                                    onTableColumnRelationTargetChange = onTableColumnRelationTargetChange,
+                                    onTableColumnRollupChange = onTableColumnRollupChange,
+                                    onTableCellChange = onTableCellChange,
+                                    onTableRelationCellChange = onTableRelationCellChange,
+                                    onAddTableColumn = onAddTableColumn,
+                                    onInsertTableColumn = onInsertTableColumn,
+                                    onDuplicateTableColumn = onDuplicateTableColumn,
+                                    onDeleteTableColumn = onDeleteTableColumn,
+                                    onAddTableRow = onAddTableRow,
+                                    onDeleteTableRow = onDeleteTableRow,
+                                    onDuplicateTableRow = onDuplicateTableRow,
+                                    onMoveTableRow = onMoveTableRow,
+                                    onTableRowBlockTextChange = onTableRowBlockTextChange,
+                                    onTableRowBlockRichTextChange = onTableRowBlockRichTextChange,
+                                    onTableRowBlockPasteBlocks = onTableRowBlockPasteBlocks,
+                                    onTableRowBlockTypeChange = onTableRowBlockTypeChange,
+                                    onTableRowBlockMediaAdd = onTableRowBlockMediaAdd,
+                                    onTableRowBlockMediaRemove = onTableRowBlockMediaRemove,
+                                    onToggleTableRowTodoBlock = onToggleTableRowTodoBlock,
+                                    onAddTableRowPageBlock = onAddTableRowPageBlock,
+                                    onInsertTableRowPageBlockNear = onInsertTableRowPageBlockNear,
+                                    onCreateLinkedChildPageFromTableRowBlock = onCreateLinkedChildPageFromTableRowBlock,
+                                    onDeleteTableRowPageBlock = onDeleteTableRowPageBlock,
+                                    onMoveTableRowPageBlockUp = onMoveTableRowPageBlockUp,
+                                    onMoveTableRowPageBlockDown = onMoveTableRowPageBlockDown,
+                                    onIndentTableRowPageBlock = onIndentTableRowPageBlock,
+                                    onOutdentTableRowPageBlock = onOutdentTableRowPageBlock,
+                                    tableReferences = tableReferences,
                                     searchTargetType = initialSearchTargetType,
                                     searchTargetId = initialSearchTargetId,
                                 )
-                            } else {
-                                item(
-                                    key = block.id,
-                                    contentType = block.editorLazyContentType(),
-                                ) {
-                                    PageEditorBlock(
-                                        block = block,
-                                        pageId = uiState.page.id,
-                                        pageUpdatedAt = uiState.page.updatedAt,
-                                        syncState = uiState.syncState,
-                                        isSaving = uiState.isSaving,
-                                        isFirstBlock = uiState.blocks.firstOrNull()?.id == block.id,
-                                        isFullPage = false,
-                                        indentLevel = 0,
-                                        onTextChange = onBlockTextChange,
-                                        onRichTextChange = onBlockRichTextChange,
-                                        onPasteBlocks = onPasteBlocks,
-                                        onRichTextToolbarChange = { toolbarState ->
-                                            richTextToolbarState = toolbarState
-                                        },
-                                        onBlockTypeChange = onBlockTypeChange,
-                                        onMediaAdd = onBlockMediaAdd,
-                                        onMediaRemove = onBlockMediaRemove,
-                                        onToggleTodo = onToggleTodo,
-                                        onDelete = ::deleteBlockAndFocusSibling,
-                                        onMoveUp = onMoveBlockUp,
-                                        onMoveDown = onMoveBlockDown,
-                                        onIndentBlock = onIndentBlock,
-                                        onOutdentBlock = onOutdentBlock,
-                                        onBlockFocused = { blockId ->
-                                            activeBlockId = blockId
-                                            editorFocusScope = PageEditorFocusScope.Body
-                                        },
-                                        focusRequest = editorFocusRequest,
-                                        activeBlockId = activeBlockId,
-                                        onAddChildBlock = onAddChildBlock,
-                                        onInsertBlockNear = onInsertBlockNear,
-                                        onCreateLinkedChildPageFromBlock = onCreateLinkedChildPageFromBlock,
-                                        mentionPages = homeAiState.allPages,
-                                        onTableTitleChange = onTableTitleChange,
-                                        onTableViewChange = onTableViewChange,
-                                        onTableViewConfigChange = onTableViewConfigChange,
-                                        onTableDataSourceChange = onTableDataSourceChange,
-                                        onTableSortChange = onTableSortChange,
-                                        onTableFilterChange = onTableFilterChange,
-                                        onTableGroupChange = onTableGroupChange,
-                                        onTableColumnNameChange = onTableColumnNameChange,
-                                        onTableColumnTypeChange = onTableColumnTypeChange,
-                                        onTableColumnConfigChange = onTableColumnConfigChange,
-                                        onTableColumnDateSettingsChange = onTableColumnDateSettingsChange,
-                                        onTableColumnFormulaChange = onTableColumnFormulaChange,
-                                        onTableColumnRelationTargetChange = onTableColumnRelationTargetChange,
-                                        onTableColumnRollupChange = onTableColumnRollupChange,
-                                        onTableCellChange = onTableCellChange,
-                                        onTableRelationCellChange = onTableRelationCellChange,
-                                        onAddTableColumn = onAddTableColumn,
-                                        onInsertTableColumn = onInsertTableColumn,
-                                        onDuplicateTableColumn = onDuplicateTableColumn,
-                                        onDeleteTableColumn = onDeleteTableColumn,
-                                        onAddTableRow = onAddTableRow,
-                                        onDeleteTableRow = onDeleteTableRow,
-                                        onDuplicateTableRow = onDuplicateTableRow,
-                                        onMoveTableRow = onMoveTableRow,
-                                        onTableRowBlockTextChange = onTableRowBlockTextChange,
-                                        onTableRowBlockRichTextChange = onTableRowBlockRichTextChange,
-                                        onTableRowBlockPasteBlocks = onTableRowBlockPasteBlocks,
-                                        onTableRowBlockTypeChange = onTableRowBlockTypeChange,
-                                        onTableRowBlockMediaAdd = onTableRowBlockMediaAdd,
-                                        onTableRowBlockMediaRemove = onTableRowBlockMediaRemove,
-                                        onToggleTableRowTodoBlock = onToggleTableRowTodoBlock,
-                                        onAddTableRowPageBlock = onAddTableRowPageBlock,
-                                        onInsertTableRowPageBlockNear = onInsertTableRowPageBlockNear,
-                                        onCreateLinkedChildPageFromTableRowBlock = onCreateLinkedChildPageFromTableRowBlock,
-                                        onDeleteTableRowPageBlock = onDeleteTableRowPageBlock,
-                                        onMoveTableRowPageBlockUp = onMoveTableRowPageBlockUp,
-                                        onMoveTableRowPageBlockDown = onMoveTableRowPageBlockDown,
-                                        onIndentTableRowPageBlock = onIndentTableRowPageBlock,
-                                        onOutdentTableRowPageBlock = onOutdentTableRowPageBlock,
-                                        tableReferences = tableReferences,
-                                        searchTargetType = initialSearchTargetType,
-                                        searchTargetId = initialSearchTargetId,
-                                    )
-                                }
                             }
                         }
+                    }
 
-                        item(key = "page-body-tap-target") {
-                            val bodyTapInteractionSource = remember { MutableInteractionSource() }
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(160.dp)
-                                    .clickable(
-                                        interactionSource = bodyTapInteractionSource,
-                                        indication = null,
-                                    ) {
-                                        richTextToolbarState = null
-                                        uiState.blocks.firstFocusableEditorBlockId()?.let { blockId ->
-                                            requestEditorFocus(blockId, PageEditorFocusScope.Body)
+                    item(key = "page-body-tap-target") {
+                        val bodyTapInteractionSource = remember { MutableInteractionSource() }
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(160.dp)
+                                .clickable(
+                                    interactionSource = bodyTapInteractionSource,
+                                    indication = null,
+                                ) {
+                                    richTextToolbarState = null
+                                    uiState.blocks.firstFocusableEditorBlockId()?.let { blockId ->
+                                        requestEditorFocus(blockId, PageEditorFocusScope.Body)
+                                    }
+                                        ?: run {
+                                            activeBlockId = null
+                                            editorFocusScope = PageEditorFocusScope.Body
+                                            onAddBlock(PageBlockType.Text)
                                         }
-                                            ?: run {
-                                                activeBlockId = null
-                                                editorFocusScope = PageEditorFocusScope.Body
-                                                onAddBlock(PageBlockType.Text)
-                                            }
-                                    },
-                            )
-                        }
+                                },
+                        )
+                    }
                 }
             }
         }

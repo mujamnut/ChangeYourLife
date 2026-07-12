@@ -147,7 +147,7 @@ object PageContentJsonMutator {
             var updatedTable = table
             title?.let { updatedTable = updatedTable.withString("title", it) }
             view?.let { updatedTable = updatedTable.withString("view", it) }
-            groupByColumnId?.let { updatedTable = updatedTable.withString("groupByColumnId", it) }
+            groupByColumnId?.let { updatedTable = updatedTable.withString("groupByColumnId", it.trim()) }
 
             if (
                 calendarDateColumnId != null ||
@@ -166,20 +166,41 @@ object PageContentJsonMutator {
             }
 
             if (sortColumnId != null || sortDirection != null) {
-                var sort = updatedTable["sort"] as? JsonObject ?: JsonObject(emptyMap())
-                sortColumnId?.let { sort = sort.withString("columnId", it) }
-                sortDirection?.let { sort = sort.withString("direction", it) }
-                updatedTable = updatedTable.withElement("sort", sort)
+                val normalizedSortColumnId = sortColumnId?.trim()
+                if (normalizedSortColumnId != null && normalizedSortColumnId.isBlank()) {
+                    updatedTable = updatedTable.withElement("sort", JsonObject(emptyMap()))
+                } else {
+                    var sort = updatedTable["sort"] as? JsonObject ?: JsonObject(emptyMap())
+                    normalizedSortColumnId?.let { sort = sort.withString("columnId", it) }
+                    sortDirection
+                        ?.trim()
+                        ?.takeIf { direction -> direction.isNotBlank() }
+                        ?.let { sort = sort.withString("direction", it) }
+                    updatedTable = updatedTable.withElement("sort", sort)
+                }
             }
 
             if (filterColumnId != null || filterQuery != null || filterOperator != null) {
-                var filter = updatedTable["filter"] as? JsonObject ?: JsonObject(emptyMap())
-                filterColumnId?.let { filter = filter.withString("columnId", it) }
-                filterQuery?.let { filter = filter.withString("query", it) }
-                filterOperator
-                    ?.takeIf { operator -> operator in ValidTableFilterOperators }
-                    ?.let { filter = filter.withString("operator", it) }
-                updatedTable = updatedTable.withElement("filter", filter)
+                val normalizedFilterColumnId = filterColumnId?.trim()
+                val normalizedFilterQuery = filterQuery?.trim()
+                val shouldClearFilter =
+                    normalizedFilterColumnId != null &&
+                        normalizedFilterColumnId.isBlank() &&
+                        normalizedFilterQuery != null &&
+                        normalizedFilterQuery.isBlank()
+
+                if (shouldClearFilter) {
+                    updatedTable = updatedTable.withElement("filter", JsonObject(emptyMap()))
+                } else {
+                    var filter = updatedTable["filter"] as? JsonObject ?: JsonObject(emptyMap())
+                    normalizedFilterColumnId?.let { filter = filter.withString("columnId", it) }
+                    normalizedFilterQuery?.let { filter = filter.withString("query", it) }
+                    filterOperator
+                        ?.trim()
+                        ?.takeIf { operator -> operator in ValidTableFilterOperators }
+                        ?.let { filter = filter.withString("operator", it) }
+                    updatedTable = updatedTable.withElement("filter", filter)
+                }
             }
 
             updatedTable.takeUnless { it == table }

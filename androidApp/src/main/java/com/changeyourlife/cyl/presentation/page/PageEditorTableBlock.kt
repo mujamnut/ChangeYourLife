@@ -15,6 +15,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
@@ -4442,6 +4443,8 @@ internal fun TableDataRow(
     columnRenderWindow: TableColumnRenderWindow,
     tableReferences: List<PageTableReference>,
     relationTitleCache: TableRelationTitleCache,
+    activeEditingCellKey: String? = null,
+    onActiveEditingCellKeyChange: (String?) -> Unit = {},
     onColumnDateSettingsChange: (
         String,
         PageTableDateFormat,
@@ -4521,11 +4524,12 @@ internal fun TableDataRow(
         )
     }
 
-    Row(
-        modifier = Modifier
-            .then(dragModifier)
-            .background(rowBackground)
-            .tableRowHoldGesture(
+    Column {
+        Row(
+            modifier = Modifier
+                .then(dragModifier)
+                .background(rowBackground)
+                .tableRowHoldGesture(
                 rowId = row.id,
                 totalRows = totalRows,
                 rowIndexProvider = { latestRowIndex },
@@ -4548,8 +4552,9 @@ internal fun TableDataRow(
                 onClick = onPrimaryOpenRowNoCol,
             )
         }
-        columnRenderWindow.columns.forEach { column ->
+        columnRenderWindow.columns.forEachIndexed { index, column ->
             val columnWidth = columnWidths[column.id] ?: TableCellWidth
+            val cellKey = tableCellKey(row.id, column.id)
             val onCellValueChange = remember(row.id, column.id, onCellChange) {
                 { value: String -> onCellChange(row.id, column.id, value) }
             }
@@ -4577,10 +4582,15 @@ internal fun TableDataRow(
                     currentPageId = pageId,
                     onCreateTargetRow = onAddRelationTargetRow,
                     onDateSettingsChange = onCellDateSettingsChange,
+                    isEditing = activeEditingCellKey == cellKey,
+                    onEditingChange = { isEditing ->
+                        onActiveEditingCellKeyChange(if (isEditing) cellKey else null)
+                    },
                     width = columnWidth,
                     onOpenRow = onPrimaryOpenRow,
                 )
             } else {
+                val isRequiredEmpty = column.config.isRequired && row.cellText(column).isBlank()
                 TableCellEditor(
                     column = column,
                     row = row,
@@ -4593,9 +4603,27 @@ internal fun TableDataRow(
                     currentPageId = pageId,
                     onCreateTargetRow = onAddRelationTargetRow,
                     onDateSettingsChange = onCellDateSettingsChange,
+                    isEditing = activeEditingCellKey == cellKey,
+                    onEditingChange = { isEditing ->
+                        onActiveEditingCellKeyChange(if (isEditing) cellKey else null)
+                    },
                     modifier = Modifier
                         .width(columnWidth)
-                        .background(tableColors.cellBackground),
+                        .background(tableColors.cellBackground)
+                        .then(
+                            if (isRequiredEmpty) Modifier.border(
+                                width = 1.5.dp,
+                                color = MaterialTheme.colorScheme.error.copy(alpha = 0.55f),
+                            ) else Modifier
+                        ),
+                )
+            }
+            if (index < columnRenderWindow.columns.size - 1) {
+                Box(
+                    modifier = Modifier
+                        .width(0.5.dp)
+                        .height(TableRowHeight)
+                        .background(tableColors.divider)
                 )
             }
         }
@@ -4609,7 +4637,11 @@ internal fun TableDataRow(
                 .background(tableColors.cellBackground),
         )
     }
-    HorizontalDivider(color = tableColors.divider)
+    HorizontalDivider(
+        modifier = Modifier.width(columnRenderWindow.totalWidth + TableAddColumnWidth),
+        color = tableColors.divider
+    )
+}
 }
 
 @Composable
@@ -4835,6 +4867,8 @@ private fun Long.toTableRowActionDateTime(): String {
         .format(DateTimeFormatter.ofPattern("MMM d, h:mm a", Locale.US))
 }
 
+private fun tableCellKey(rowId: String, columnId: String): String = "$rowId:$columnId"
+
 @Composable
 internal fun PrimaryTableCellEditor(
     column: PageTableColumn,
@@ -4853,6 +4887,8 @@ internal fun PrimaryTableCellEditor(
         PageTableDateReminder,
         String,
     ) -> Unit,
+    isEditing: Boolean = false,
+    onEditingChange: (Boolean) -> Unit = {},
     width: Dp,
     onOpenRow: () -> Unit,
 ) {
@@ -4874,6 +4910,8 @@ internal fun PrimaryTableCellEditor(
             currentPageId = currentPageId,
             onCreateTargetRow = onCreateTargetRow,
             onDateSettingsChange = onDateSettingsChange,
+            isEditing = isEditing,
+            onEditingChange = onEditingChange,
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(end = TableInlineOpenWidth - 4.dp),
@@ -4951,7 +4989,6 @@ internal fun TableAddRowRow(
                 .background(MaterialTheme.colorScheme.surface),
         )
     }
-    HorizontalDivider()
 }
 
 @Composable
@@ -5829,6 +5866,8 @@ internal fun TableCellEditor(
         PageTableDateReminder,
         String,
     ) -> Unit,
+    isEditing: Boolean = false,
+    onEditingChange: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     when (column.type) {
@@ -6024,12 +6063,24 @@ internal fun String.toSingleLineTableCellValue(): String {
 internal fun TableChoiceCellEditor(
     column: PageTableColumn,
     value: String,
-    onValueChange: (String) -> Unit,
+    onValueChange: (String) ->
+ Unit,
+    onColumnConfigChange: ((PageTableColumnConfig) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     var isExpanded by remember { mutableStateOf(false) }
+    var searchText by remember(isExpanded) { mutableStateOf("") }
     val selectedValues = remember(value) { value.selectedChoiceValues() }
     val options = column.choiceOptions
+    val filteredOptions = remember(options, searchText) {
+        if (searchText.isBlank()) options
+        else options.filter { option ->
+            option.name.contains(searchText, ignoreCase = true)
+        }
+    }
+    val canCreateNew = searchText.isNotBlank() &&
+        options.none { option -> option.name.equals(searchText.trim(), ignoreCase = true) } &&
+        onColumnConfigChange != null
 
     Box(modifier = modifier) {
         Row(
@@ -6072,20 +6123,70 @@ internal fun TableChoiceCellEditor(
         if (isExpanded) {
             DropdownMenu(
                 expanded = true,
-                onDismissRequest = { isExpanded = false },
+                onDismissRequest = {
+                    isExpanded = false
+                    searchText = ""
+                },
             ) {
+                // Search field
+                Box(
+                    modifier = Modifier
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                        .fillMaxWidth()
+                ) {
+                    BasicTextField(
+                        value = searchText,
+                        onValueChange = { searchText = it },
+                        singleLine = true,
+                        textStyle = MaterialTheme.typography.bodyMedium.copy(
+                            color = MaterialTheme.colorScheme.onSurface,
+                        ),
+                        decorationBox = { inner ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(34.dp)
+                                    .clip(RoundedCornerShape(17.dp))
+                                    .background(MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.72f))
+                                    .padding(horizontal = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Search,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(15.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                Box(modifier = Modifier.weight(1f)) {
+                                    if (searchText.isBlank()) {
+                                        Text(
+                                            text = "Search or create option",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                        )
+                                    }
+                                    inner()
+                                }
+                            }
+                        },
+                    )
+                }
+                // Clear selection
                 DropdownMenuItem(
                     text = { Text(text = "Clear") },
                     onClick = {
                         isExpanded = false
+                        searchText = ""
                         onValueChange("")
                     },
                 )
-                if (options.isEmpty()) {
+                // Empty state
+                if (filteredOptions.isEmpty() && !canCreateNew) {
                     DropdownMenuItem(
                         text = {
                             Text(
-                                text = "No options yet",
+                                text = "No options found",
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         },
@@ -6093,7 +6194,8 @@ internal fun TableChoiceCellEditor(
                         enabled = false,
                     )
                 }
-                options.forEach { option ->
+                // Existing options
+                filteredOptions.forEach { option ->
                     val selected = option.name in selectedValues
                     DropdownMenuItem(
                         text = {
@@ -6132,8 +6234,51 @@ internal fun TableChoiceCellEditor(
                                 onValueChange(nextValues.toChoiceCellValue())
                             } else {
                                 isExpanded = false
+                                searchText = ""
                                 onValueChange(option.name)
                             }
+                        },
+                    )
+                }
+                // Inline create new option
+                if (canCreateNew) {
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                    DropdownMenuItem(
+                        text = {
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Add,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp),
+                                    tint = MaterialTheme.colorScheme.primary,
+                                )
+                                Text(
+                                    text = "Create \"${searchText.trim()}\"",
+                                    color = MaterialTheme.colorScheme.primary,
+                                    fontWeight = FontWeight.Medium,
+                                )
+                            }
+                        },
+                        onClick = {
+                            val newOptionName = searchText.trim()
+                            val newOption = PageTableSelectOption(
+                                id = UUID.randomUUID().toString(),
+                                name = newOptionName,
+                            )
+                            val updatedConfig = column.config.copy(
+                                options = column.config.options + newOption,
+                            )
+                            onColumnConfigChange!!(updatedConfig)
+                            if (column.type == PageTableColumnType.MultiSelect) {
+                                onValueChange((selectedValues + newOptionName).toChoiceCellValue())
+                            } else {
+                                onValueChange(newOptionName)
+                                isExpanded = false
+                            }
+                            searchText = ""
                         },
                     )
                 }
@@ -6599,6 +6744,59 @@ private fun List<String>.toRelationCellValue(): String {
         .joinToString(",")
 }
 
+internal data class InlineDatabaseTableRenderState(
+    val visibleColumns: List<PageTableColumn>,
+    val columnWidths: Map<String, Dp>,
+    val tableSearchQuery: String,
+    val visibleRows: List<PageTableRow>,
+    val groupColumn: PageTableColumn?,
+    val groupedRows: List<Pair<String, List<PageTableRow>>>,
+    val rowIndexById: Map<String, Int>,
+    val relationTitleCache: TableRelationTitleCache,
+    val isStarterEmptyDatabase: Boolean,
+    val highlightedRowId: String?,
+)
+
+internal fun PageTable.buildInlineDatabaseTableRenderState(
+    tableReferences: List<PageTableReference>,
+    tableSearchInput: String,
+    searchTargetType: String,
+    searchTargetId: String,
+): InlineDatabaseTableRenderState {
+    val tableSearchQuery = tableSearchInput.trim()
+    val visibleColumns = columns.filterNot { column -> column.config.isHidden }
+    val columnWidths = tableColumnWidths(
+        tableReferences = tableReferences,
+        rowSampleLimit = TableWidthMeasurementRowLimit,
+    )
+    val visibleRows = visibleRows(
+        tableReferences = tableReferences,
+        searchQuery = tableSearchQuery,
+    )
+    val groupColumn = groupColumn()
+    val groupedRows = groupColumn
+        ?.let { column ->
+            visibleRows.groupBy { row ->
+                groupLabel(row, column, tableReferences)
+            }.toSortedMap(compareBy { it })
+                .toList()
+        }
+        .orEmpty()
+
+    return InlineDatabaseTableRenderState(
+        visibleColumns = visibleColumns,
+        columnWidths = columnWidths,
+        tableSearchQuery = tableSearchQuery,
+        visibleRows = visibleRows,
+        groupColumn = groupColumn,
+        groupedRows = groupedRows,
+        rowIndexById = rows.mapIndexed { index, row -> row.id to index }.toMap(),
+        relationTitleCache = tableReferences.toRelationTitleCache(),
+        isStarterEmptyDatabase = isStarterEmptyDatabase(tableSearchQuery),
+        highlightedRowId = highlightedRowId(searchTargetType, searchTargetId),
+    )
+}
+
 internal fun androidx.compose.foundation.lazy.LazyListScope.inlineDatabaseTableBlockEditor(
 
     horizontalScrollState: androidx.compose.foundation.ScrollState,
@@ -6615,6 +6813,9 @@ internal fun androidx.compose.foundation.lazy.LazyListScope.inlineDatabaseTableB
     
     table: PageTable,
     tableReferences: List<PageTableReference>,
+    renderState: InlineDatabaseTableRenderState,
+    activeEditingCellKey: String?,
+    onActiveEditingCellKeyChange: (String?) -> Unit,
     onTitleChange: (String) -> Unit,
     onViewChange: (PageTableView) -> Unit,
     onViewConfigChange: (PageTableViewConfig) -> Unit,
@@ -6661,64 +6862,58 @@ internal fun androidx.compose.foundation.lazy.LazyListScope.inlineDatabaseTableB
     onMoveRowPageBlockDown: (String, String) -> Unit,
     onIndentRowPageBlock: (String, String) -> Unit,
     onOutdentRowPageBlock: (String, String) -> Unit,
+    isFullPage: Boolean = false,
     mentionPages: List<Page> = emptyList(),
     searchTargetType: String = "",
     searchTargetId: String = "",
 
 ) {
-    val visibleColumns = table.columns.filterNot { column -> column.config.isHidden }
-    val columnWidths = table.tableColumnWidths(
-        tableReferences = tableReferences,
-        rowSampleLimit = TableWidthMeasurementRowLimit,
-    )
-    
-    // Derived state - in LazyListScope we can't use remember, so we compute directly.
-    // It's reasonably fast for UI thread.
-    val tableSearchQuery = tableSearchInput.trim()
-    val visibleRows = table.visibleRows(
-        tableReferences = tableReferences,
-        searchQuery = tableSearchQuery,
-    )
-    val groupColumn = table.groupColumn()
-    val rowIndexById = table.rows.mapIndexed { index, row -> row.id to index }.toMap()
-    val relationTitleCache = tableReferences.toRelationTitleCache()
-    val isStarterEmptyDatabase = table.isStarterEmptyDatabase(tableSearchQuery)
-    
-    val highlightedRowId = table.highlightedRowId(searchTargetType, searchTargetId)
+    val visibleColumns = renderState.visibleColumns
+    val columnWidths = renderState.columnWidths
+    val tableSearchQuery = renderState.tableSearchQuery
+    val visibleRows = renderState.visibleRows
+    val groupColumn = renderState.groupColumn
+    val groupedRows = renderState.groupedRows
+    val rowIndexById = renderState.rowIndexById
+    val relationTitleCache = renderState.relationTitleCache
+    val isStarterEmptyDatabase = renderState.isStarterEmptyDatabase
+    val highlightedRowId = renderState.highlightedRowId
 
-    item(key = "$tableBlockId-toolbar") {
-        Column {
-            TableToolbar(
-                table = table,
-                tableBlockId = tableBlockId,
-                syncState = syncState,
-                isSaving = isSaving,
-                tableReferences = tableReferences,
-                onTitleChange = onTitleChange,
-                onViewChange = onViewChange,
-                onViewConfigChange = onViewConfigChange,
-                onDataSourceChange = onDataSourceChange,
-                onColumnConfigChange = onColumnConfigChange,
-                onSortChange = onSortChange,
-                onFilterChange = onFilterChange,
-                onGroupChange = onGroupChange,
-                searchQuery = tableSearchInput,
-                onSearchQueryChange = onSearchQueryChange,
-            )
-            TableActiveControlsRow(
-                table = table,
-                searchQuery = tableSearchInput,
-                onClearSort = { onSortChange("", PageTableSortDirection.Ascending) },
-                onClearFilter = { onFilterChange(PageTableFilter()) },
-                onClearGroup = { onGroupChange("") },
-                onClearSearch = { onSearchQueryChange("") },
-                onClearAll = {
-                    onSearchQueryChange("")
-                    onSortChange("", PageTableSortDirection.Ascending)
-                    onFilterChange(PageTableFilter())
-                    onGroupChange("")
-                },
-            )
+    if (!isFullPage) {
+        item(key = "$tableBlockId-toolbar") {
+            Column {
+                TableToolbar(
+                    table = table,
+                    tableBlockId = tableBlockId,
+                    syncState = syncState,
+                    isSaving = isSaving,
+                    tableReferences = tableReferences,
+                    onTitleChange = onTitleChange,
+                    onViewChange = onViewChange,
+                    onViewConfigChange = onViewConfigChange,
+                    onDataSourceChange = onDataSourceChange,
+                    onColumnConfigChange = onColumnConfigChange,
+                    onSortChange = onSortChange,
+                    onFilterChange = onFilterChange,
+                    onGroupChange = onGroupChange,
+                    searchQuery = tableSearchInput,
+                    onSearchQueryChange = onSearchQueryChange,
+                )
+                TableActiveControlsRow(
+                    table = table,
+                    searchQuery = tableSearchInput,
+                    onClearSort = { onSortChange("", PageTableSortDirection.Ascending) },
+                    onClearFilter = { onFilterChange(PageTableFilter()) },
+                    onClearGroup = { onGroupChange("") },
+                    onClearSearch = { onSearchQueryChange("") },
+                    onClearAll = {
+                        onSearchQueryChange("")
+                        onSortChange("", PageTableSortDirection.Ascending)
+                        onFilterChange(PageTableFilter())
+                        onGroupChange("")
+                    },
+                )
+            }
         }
     }
 
@@ -6762,44 +6957,55 @@ internal fun androidx.compose.foundation.lazy.LazyListScope.inlineDatabaseTableB
                     searchQuery = tableSearchQuery,
                     isFullPage = false,
                 )
-                else -> {}
+                PageTableView.Table -> {}
             }
         }
         return
     }
 
-    // Flattened Table Grid
-    item(key = "$tableBlockId-header") {
-        Box(modifier = Modifier.horizontalScroll(horizontalScrollState)) {
-            TableHeaderRow(
-                tableBlockId = tableBlockId,
-                table = table,
-                columns = visibleColumns,
-                columnWidths = columnWidths,
-                tableReferences = tableReferences,
-                onSortChange = onSortChange,
-                onFilterChange = onFilterChange,
-                onGroupChange = onGroupChange,
-                onColumnNameChange = onColumnNameChange,
-                onColumnTypeChange = onColumnTypeChange,
-                onColumnConfigChange = onColumnConfigChange,
-                onColumnDateSettingsChange = onColumnDateSettingsChange,
-                onColumnFormulaChange = onColumnFormulaChange,
-                onColumnRelationTargetChange = onColumnRelationTargetChange,
-                onColumnRollupChange = onColumnRollupChange,
-                onDeleteColumn = onDeleteColumn,
-                onAddColumn = onAddColumn,
-                onInsertColumn = onInsertColumn,
-                onDuplicateColumn = onDuplicateColumn,
-            )
+    if (!isFullPage) {
+        // Flattened Table Grid
+        item(
+            key = "$tableBlockId-header",
+            contentType = "database-header",
+        ) {
+            Box(modifier = Modifier.horizontalScroll(horizontalScrollState)) {
+                TableHeaderRow(
+                    tableBlockId = tableBlockId,
+                    table = table,
+                    columns = visibleColumns,
+                    columnWidths = columnWidths,
+                    tableReferences = tableReferences,
+                    onSortChange = onSortChange,
+                    onFilterChange = onFilterChange,
+                    onGroupChange = onGroupChange,
+                    onColumnNameChange = onColumnNameChange,
+                    onColumnTypeChange = onColumnTypeChange,
+                    onColumnConfigChange = onColumnConfigChange,
+                    onColumnDateSettingsChange = onColumnDateSettingsChange,
+                    onColumnFormulaChange = onColumnFormulaChange,
+                    onColumnRelationTargetChange = onColumnRelationTargetChange,
+                    onColumnRollupChange = onColumnRollupChange,
+                    onDeleteColumn = onDeleteColumn,
+                    onAddColumn = onAddColumn,
+                    onInsertColumn = onInsertColumn,
+                    onDuplicateColumn = onDuplicateColumn,
+                )
+            }
         }
-    }
-    item(key = "$tableBlockId-divider") {
-        HorizontalDivider()
+        item(
+            key = "$tableBlockId-divider",
+            contentType = "database-divider",
+        ) {
+            HorizontalDivider()
+        }
     }
 
     if (isStarterEmptyDatabase) {
-        item(key = "$tableBlockId-starter-empty") {
+        item(
+            key = "$tableBlockId-starter-empty",
+            contentType = "database-empty",
+        ) {
             Box(modifier = Modifier.horizontalScroll(horizontalScrollState)) {
                 TableStarterEmptyState(
                     columns = visibleColumns,
@@ -6809,7 +7015,10 @@ internal fun androidx.compose.foundation.lazy.LazyListScope.inlineDatabaseTableB
             }
         }
     } else if (visibleRows.isEmpty()) {
-        item(key = "$tableBlockId-add-row-empty") {
+        item(
+            key = "$tableBlockId-add-row-empty",
+            contentType = "database-add-row",
+        ) {
             Box(modifier = Modifier.horizontalScroll(horizontalScrollState)) {
                 TableAddRowRow(
                     columns = visibleColumns,
@@ -6819,44 +7028,52 @@ internal fun androidx.compose.foundation.lazy.LazyListScope.inlineDatabaseTableB
             }
         }
     } else if (groupColumn != null) {
-        val groupedRows = visibleRows.groupBy { row ->
-            table.displayCellText(row, groupColumn, tableReferences)
-        }.toSortedMap(compareBy { it })
-
         groupedRows.forEach { (group, rows) ->
-            item(key = "$tableBlockId-group-$group") {
+            item(
+                key = "$tableBlockId-group-$group",
+                contentType = "database-group-header",
+            ) {
                 TableGroupHeader(label = group, count = rows.size)
             }
             items(
                 items = rows,
                 key = { row -> row.id },
+                contentType = { "database-row" },
             ) { row ->
-                Box(modifier = Modifier.horizontalScroll(horizontalScrollState)) {
-                    TableDataRowWrapper(
-                        row = row,
-                        rowIndex = rowIndexById[row.id] ?: -1,
-                        totalRows = table.rows.size,
-                        pageId = pageId,
-                        pageUpdatedAt = pageUpdatedAt,
-                        table = table,
-                        columns = visibleColumns,
-                        columnWidths = columnWidths,
-                        tableReferences = tableReferences,
-                        relationTitleCache = relationTitleCache,
-                        onColumnDateSettingsChange = onColumnDateSettingsChange,
-                        onCellChange = onCellChange,
-                        onRelationCellChange = onRelationCellChange,
-                        onAddRelationTargetRow = onAddRelationTargetRow,
-                        onDeleteRow = onDeleteRow,
-                        onDuplicateRow = onDuplicateRow,
-                        onMoveRow = onMoveRow,
-                        onOpenRow = { onOpenRowIdChange(row.id) },
-                        isHighlighted = row.id == highlightedRowId,
-                    )
+                Column {
+                    Box(modifier = Modifier.horizontalScroll(horizontalScrollState, enabled = false)) {
+                        TableDataRowWrapper(
+                            row = row,
+                            rowIndex = rowIndexById[row.id] ?: -1,
+                            totalRows = table.rows.size,
+                            pageId = pageId,
+                            pageUpdatedAt = pageUpdatedAt,
+                            table = table,
+                            columns = visibleColumns,
+                            columnWidths = columnWidths,
+                            tableReferences = tableReferences,
+                            relationTitleCache = relationTitleCache,
+                            activeEditingCellKey = activeEditingCellKey,
+                            onActiveEditingCellKeyChange = onActiveEditingCellKeyChange,
+                            onColumnDateSettingsChange = onColumnDateSettingsChange,
+                            onCellChange = onCellChange,
+                            onRelationCellChange = onRelationCellChange,
+                            onAddRelationTargetRow = onAddRelationTargetRow,
+                            onDeleteRow = onDeleteRow,
+                            onDuplicateRow = onDuplicateRow,
+                            onMoveRow = onMoveRow,
+                            onOpenRow = { onOpenRowIdChange(row.id) },
+                            isHighlighted = row.id == highlightedRowId,
+                        )
+                    }
+                    HorizontalDivider()
                 }
             }
         }
-        item(key = "$tableBlockId-add-row-group") {
+        item(
+            key = "$tableBlockId-add-row-group",
+            contentType = "database-add-row",
+        ) {
             Box(modifier = Modifier.horizontalScroll(horizontalScrollState)) {
                 TableAddRowRow(
                     columns = visibleColumns,
@@ -6869,33 +7086,42 @@ internal fun androidx.compose.foundation.lazy.LazyListScope.inlineDatabaseTableB
         items(
             items = visibleRows,
             key = { row -> row.id },
+            contentType = { "database-row" },
         ) { row ->
-            Box(modifier = Modifier.horizontalScroll(horizontalScrollState)) {
-                TableDataRowWrapper(
-                    row = row,
-                    rowIndex = rowIndexById[row.id] ?: -1,
-                    totalRows = table.rows.size,
-                    pageId = pageId,
-                    pageUpdatedAt = pageUpdatedAt,
-                    table = table,
-                    columns = visibleColumns,
-                    columnWidths = columnWidths,
-                    tableReferences = tableReferences,
-                    relationTitleCache = relationTitleCache,
-                    onColumnDateSettingsChange = onColumnDateSettingsChange,
-                    onCellChange = onCellChange,
-                    onRelationCellChange = onRelationCellChange,
-                    onAddRelationTargetRow = onAddRelationTargetRow,
-                    onDeleteRow = onDeleteRow,
-                    onDuplicateRow = onDuplicateRow,
-                    onMoveRow = onMoveRow,
-                    onOpenRow = { onOpenRowIdChange(row.id) },
-                    isHighlighted = row.id == highlightedRowId,
-                )
+            Column {
+                Box(modifier = Modifier.horizontalScroll(horizontalScrollState, enabled = false)) {
+                    TableDataRowWrapper(
+                        row = row,
+                        rowIndex = rowIndexById[row.id] ?: -1,
+                        totalRows = table.rows.size,
+                        pageId = pageId,
+                        pageUpdatedAt = pageUpdatedAt,
+                        table = table,
+                        columns = visibleColumns,
+                        columnWidths = columnWidths,
+                        tableReferences = tableReferences,
+                        relationTitleCache = relationTitleCache,
+                        activeEditingCellKey = activeEditingCellKey,
+                        onActiveEditingCellKeyChange = onActiveEditingCellKeyChange,
+                        onColumnDateSettingsChange = onColumnDateSettingsChange,
+                        onCellChange = onCellChange,
+                        onRelationCellChange = onRelationCellChange,
+                        onAddRelationTargetRow = onAddRelationTargetRow,
+                        onDeleteRow = onDeleteRow,
+                        onDuplicateRow = onDuplicateRow,
+                        onMoveRow = onMoveRow,
+                        onOpenRow = { onOpenRowIdChange(row.id) },
+                        isHighlighted = row.id == highlightedRowId,
+                    )
+                }
+                HorizontalDivider()
             }
         }
-        item(key = "$tableBlockId-add-row") {
-            Box(modifier = Modifier.horizontalScroll(horizontalScrollState)) {
+        item(
+            key = "$tableBlockId-add-row",
+            contentType = "database-add-row",
+        ) {
+            Box(modifier = Modifier.horizontalScroll(horizontalScrollState, enabled = false)) {
                 TableAddRowRow(
                     columns = visibleColumns,
                     columnWidths = columnWidths,
@@ -6906,7 +7132,10 @@ internal fun androidx.compose.foundation.lazy.LazyListScope.inlineDatabaseTableB
     }
     
     // Handle the open row sheet as a separate item
-    item(key = "$tableBlockId-sheet") {
+    item(
+        key = "$tableBlockId-sheet",
+        contentType = "database-row-sheet-host",
+    ) {
         val currentOpenRowId = openRowId
         if (currentOpenRowId != null) {
             val openRow = table.rows.firstOrNull { row -> row.id == currentOpenRowId }
@@ -6991,6 +7220,8 @@ internal fun TableDataRowWrapper(
     columnWidths: Map<String, Dp>,
     tableReferences: List<PageTableReference>,
     relationTitleCache: TableRelationTitleCache,
+    activeEditingCellKey: String? = null,
+    onActiveEditingCellKeyChange: (String?) -> Unit = {},
     onColumnDateSettingsChange: (
         String,
         PageTableDateFormat,
@@ -7024,6 +7255,8 @@ internal fun TableDataRowWrapper(
         ),
         tableReferences = tableReferences,
         relationTitleCache = relationTitleCache,
+        activeEditingCellKey = activeEditingCellKey,
+        onActiveEditingCellKeyChange = onActiveEditingCellKeyChange,
         onColumnDateSettingsChange = onColumnDateSettingsChange,
         onCellChange = onCellChange,
         onRelationCellChange = onRelationCellChange,

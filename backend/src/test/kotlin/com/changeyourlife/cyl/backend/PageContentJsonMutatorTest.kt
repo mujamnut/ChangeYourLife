@@ -171,6 +171,43 @@ class PageContentJsonMutatorTest {
         assertEquals(null, moveIntoPrimarySlot)
     }
 
+    @Test
+    fun updateTableClearsSortFilterAndGroupWhenPatchValuesAreBlank() {
+        val content = relationContent.replace(
+            "\"rows\": [",
+            """
+            "sort": { "columnId": "name", "direction": "Descending" },
+                "filter": { "columnId": "name", "query": "food", "operator": "Contains" },
+                "groupByColumnId": "project",
+                "rows": [
+            """.trimIndent(),
+        )
+
+        val updated = PageContentJsonMutator.updateTable(
+            content = content,
+            tableBlockId = "table-1",
+            title = null,
+            view = null,
+            calendarDateColumnId = null,
+            timelineStartColumnId = null,
+            timelineEndColumnId = null,
+            dashboardMetricColumnId = null,
+            dashboardGroupColumnId = null,
+            sortColumnId = "",
+            sortDirection = "Ascending",
+            filterColumnId = "",
+            filterQuery = "",
+            filterOperator = "Contains",
+            groupByColumnId = "",
+        )
+
+        val table = requireNotNull(updated).tableObject()
+
+        assertEquals("", table.stringValue("groupByColumnId"))
+        assertEquals(emptySet(), table["sort"]!!.jsonObject.keys)
+        assertEquals(emptySet(), table["filter"]!!.jsonObject.keys)
+    }
+
     private val relationContent = """
         {
           "blocks": [
