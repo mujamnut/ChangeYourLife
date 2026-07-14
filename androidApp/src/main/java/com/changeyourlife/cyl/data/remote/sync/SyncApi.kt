@@ -51,6 +51,20 @@ interface SyncApi {
         @Body page: PageSyncDto,
     ): PageSyncDto
 
+    @GET("api/v1/ai-skills")
+    suspend fun listAiSkills(
+        @Header("Authorization") authorization: String,
+        @Query("workspaceId") workspaceId: String,
+        @Query("includeDeleted") includeDeleted: Boolean = false,
+    ): AiSkillListResponseDto
+
+    @PUT("api/v1/ai-skills/{id}")
+    suspend fun upsertAiSkill(
+        @Header("Authorization") authorization: String,
+        @Path("id") id: String,
+        @Body skill: AiSkillSyncDto,
+    ): AiSkillSyncDto
+
     @GET("api/v1/ai-action-logs")
     suspend fun listAiActionLogs(
         @Header("Authorization") authorization: String,

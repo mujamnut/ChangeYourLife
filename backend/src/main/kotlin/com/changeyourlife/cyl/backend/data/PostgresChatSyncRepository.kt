@@ -82,6 +82,7 @@ class PostgresChatSyncRepository(
                        chat_messages.content,
                        chat_messages.page_links_json,
                        chat_messages.action_metadata_json,
+                       chat_messages.attachments_json,
                        chat_messages.created_at,
                        chat_messages.updated_at
                 FROM chat_messages
@@ -137,10 +138,11 @@ class PostgresChatSyncRepository(
                         content,
                         page_links_json,
                         action_metadata_json,
+                        attachments_json,
                         created_at,
                         updated_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT (user_id, id) DO UPDATE SET
                         session_id = EXCLUDED.session_id,
                         scope_id = EXCLUDED.scope_id,
@@ -148,6 +150,7 @@ class PostgresChatSyncRepository(
                         content = EXCLUDED.content,
                         page_links_json = EXCLUDED.page_links_json,
                         action_metadata_json = EXCLUDED.action_metadata_json,
+                        attachments_json = EXCLUDED.attachments_json,
                         updated_at = EXCLUDED.updated_at
                     RETURNING id,
                               user_id,
@@ -157,6 +160,7 @@ class PostgresChatSyncRepository(
                               content,
                               page_links_json,
                               action_metadata_json,
+                              attachments_json,
                               created_at,
                               updated_at
                     """.trimIndent(),
@@ -193,8 +197,9 @@ private fun PreparedStatement.bind(message: ChatMessageRecord) {
     setString(6, message.content)
     setString(7, message.pageLinksJson)
     setString(8, message.actionMetadataJson)
-    setLong(9, message.createdAt)
-    setLong(10, message.updatedAt)
+    setString(9, message.attachmentsJson)
+    setLong(10, message.createdAt)
+    setLong(11, message.updatedAt)
 }
 
 private fun ResultSet.toChatSessionRecord(): ChatSessionRecord {
@@ -219,6 +224,7 @@ private fun ResultSet.toChatMessageRecord(): ChatMessageRecord {
         content = getString("content"),
         pageLinksJson = getString("page_links_json"),
         actionMetadataJson = getString("action_metadata_json"),
+        attachmentsJson = getString("attachments_json"),
         createdAt = getLong("created_at"),
         updatedAt = getLong("updated_at"),
     )

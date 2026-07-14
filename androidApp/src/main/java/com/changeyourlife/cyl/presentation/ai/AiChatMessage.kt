@@ -1,13 +1,28 @@
 package com.changeyourlife.cyl.presentation.ai
 
+import androidx.compose.runtime.Immutable
+
+@Immutable
 data class AiChatMessage(
     val id: String = "",
     val role: String,
     val content: String,
     val pageLinks: List<AiChatPageLink> = emptyList(),
+    val attachments: List<AiChatAttachment> = emptyList(),
     val actionMetadata: AiChatActionMetadata? = null,
 )
 
+@Immutable
+data class AiChatAttachment(
+    val id: String,
+    val name: String,
+    val mimeType: String,
+    val kind: String,
+    val sizeBytes: Long,
+    val previewDataUrl: String = "",
+)
+
+@Immutable
 data class AiChatPageLink(
     val pageId: String,
     val title: String,
@@ -15,6 +30,7 @@ data class AiChatPageLink(
     val targetId: String = "",
 )
 
+@Immutable
 data class AiChatActionMetadata(
     val auditId: String = "",
     val requestMessageId: String = "",
@@ -37,12 +53,14 @@ data class AiChatActionMetadata(
             validationIssues.isNotEmpty()
 }
 
+@Immutable
 data class AiChatActionMetadataItem(
     val type: String,
     val target: String = "",
     val actionIndex: Int? = null,
 )
 
+@Immutable
 data class AiChatActionValidationIssue(
     val actionIndex: Int? = null,
     val field: String = "",

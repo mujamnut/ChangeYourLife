@@ -134,7 +134,12 @@ class PageRepositoryImpl @Inject constructor(
     }
 
     override suspend fun upsertPage(page: Page) {
-        val entity = page.toEntity().copy(syncStatus = SyncStatus.PendingPush)
+        val requestedEntity = page.toEntity()
+        val currentEntity = pageDao.getPage(page.id)
+        val entity = requestedEntity.copy(
+            updatedAt = currentEntity?.nextUpdatedAt(requestedEntity.updatedAt) ?: requestedEntity.updatedAt,
+            syncStatus = SyncStatus.PendingPush,
+        )
         persistPage(entity)
         backgroundSyncQueue.enqueuePendingPushDebounced()
     }
@@ -761,7 +766,7 @@ class PageRepositoryImpl @Inject constructor(
         val currentPage = pageDao.getPage(pageId) ?: return false
         ensureProjectionForPage(currentPage)
 
-        val updatedAt = System.currentTimeMillis()
+        val updatedAt = currentPage.nextUpdatedAt()
         if (!mutation(updatedAt)) return false
 
         val updatedDocument = pageContentDao.getPageContentSnapshot(pageId).toDocument()
@@ -789,7 +794,7 @@ class PageRepositoryImpl @Inject constructor(
         val currentPage = pageDao.getPage(pageId) ?: return false
         val currentDocument = PageContentCodec.decodeDocument(currentPage.content)
         val updatedDocument = mutation(currentDocument) ?: return false
-        val updatedAt = System.currentTimeMillis()
+        val updatedAt = currentPage.nextUpdatedAt()
         val updatedPage = currentPage.copy(
             content = PageContentCodec.encodeDocument(updatedDocument),
             updatedAt = updatedAt,
@@ -838,6 +843,11 @@ class PageRepositoryImpl @Inject constructor(
 
     private fun PageTableRow.withStableId(): PageTableRow {
         return if (id.isBlank()) copy(id = UUID.randomUUID().toString()) else this
+    }
+
+    private fun PageEntity.nextUpdatedAt(proposed: Long = System.currentTimeMillis()): Long {
+        val minimumNext = if (updatedAt == Long.MAX_VALUE) Long.MAX_VALUE else updatedAt + 1L
+        return maxOf(proposed, minimumNext)
     }
 
     private fun List<PageBlock>.addBlock(

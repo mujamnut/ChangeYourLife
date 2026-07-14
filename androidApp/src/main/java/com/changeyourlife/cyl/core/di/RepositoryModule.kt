@@ -9,6 +9,7 @@ import com.changeyourlife.cyl.data.repository.SyncStatusRepositoryImpl
 import com.changeyourlife.cyl.data.repository.TaskRepositoryImpl
 import com.changeyourlife.cyl.data.repository.WorkspaceRepositoryImpl
 import com.changeyourlife.cyl.data.repository.AiRepositoryImpl
+import com.changeyourlife.cyl.data.repository.AiSkillRepositoryImpl
 import com.changeyourlife.cyl.data.sync.BackgroundChatSyncScheduler
 import com.changeyourlife.cyl.data.sync.ChatSyncScheduler
 import com.changeyourlife.cyl.domain.repository.AuthRepository
@@ -20,6 +21,7 @@ import com.changeyourlife.cyl.domain.repository.SyncStatusRepository
 import com.changeyourlife.cyl.domain.repository.TaskRepository
 import com.changeyourlife.cyl.domain.repository.WorkspaceRepository
 import com.changeyourlife.cyl.domain.repository.AiRepository
+import com.changeyourlife.cyl.domain.repository.AiSkillRepository
 import dagger.Binds
 import dagger.Module
 import dagger.hilt.InstallIn
@@ -64,6 +66,12 @@ abstract class RepositoryModule {
     abstract fun bindAiRepository(
         implementation: AiRepositoryImpl,
     ): AiRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindAiSkillRepository(
+        implementation: AiSkillRepositoryImpl,
+    ): AiSkillRepository
 
     @Binds
     @Singleton

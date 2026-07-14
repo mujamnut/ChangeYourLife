@@ -14,14 +14,16 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.awaitLongPressOrCancellation
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -39,10 +41,12 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
@@ -115,6 +119,7 @@ import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -125,6 +130,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -150,6 +158,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
@@ -1949,6 +1958,16 @@ private fun PageTableFilter.labelForColumn(column: PageTableColumn): String {
     }
 }
 
+internal fun PageTable.hasActiveTableControls(searchQuery: String): Boolean {
+    val hasSort = sort.columnId.isNotBlank() &&
+        columns.any { column -> column.matchesIdOrName(sort.columnId) }
+    val hasFilter = filter.isActive() &&
+        columns.any { column -> column.matchesIdOrName(filter.columnId) }
+    val hasGroup = groupByColumnId.isNotBlank() &&
+        columns.any { column -> column.matchesIdOrName(groupByColumnId) }
+    return hasSort || hasFilter || hasGroup || searchQuery.isNotBlank()
+}
+
 @Composable
 internal fun TableActiveControlsRow(
     table: PageTable,
@@ -2224,10 +2243,18 @@ internal fun TableGridEditor(
         val useColumnWindowing = useLazyRows &&
             visibleColumns.size >= TableLargeDatasetColumnThreshold &&
             viewportWidthPx > 0f
+        val columnWindowScrollOffsetPx by remember(horizontalScrollState, density) {
+            derivedStateOf {
+                val bucketPx = with(density) { TableColumnScrollBucket.toPx() }
+                    .toInt()
+                    .coerceAtLeast(1)
+                (horizontalScrollState.value / bucketPx) * bucketPx
+            }
+        }
         val columnRenderWindow = remember(
             visibleColumns,
             columnWidths,
-            horizontalScrollState.value,
+            columnWindowScrollOffsetPx,
             viewportWidthPx,
             density,
             useColumnWindowing,
@@ -2235,7 +2262,7 @@ internal fun TableGridEditor(
             tableColumnRenderWindow(
                 columns = visibleColumns,
                 columnWidths = columnWidths,
-                scrollOffsetPx = horizontalScrollState.value,
+                scrollOffsetPx = columnWindowScrollOffsetPx,
                 viewportWidthPx = viewportWidthPx,
                 density = density,
                 enabled = useColumnWindowing,
@@ -2452,6 +2479,7 @@ internal fun TableGridEditor(
 
 @Composable
 internal fun TableHeaderRow(
+    modifier: Modifier = Modifier,
     tableBlockId: String,
     table: PageTable,
     columns: List<PageTableColumn>,
@@ -2478,6 +2506,8 @@ internal fun TableHeaderRow(
     onInsertColumn: (String, TableColumnInsertSide) -> Unit,
     onDuplicateColumn: (String) -> Unit,
 ) {
+    RecompositionProbe("table.header")
+
     @Composable
     fun HeaderColumn(column: PageTableColumn) {
         var isColumnSheetOpen by remember(column.id) { mutableStateOf(false) }
@@ -2541,7 +2571,10 @@ internal fun TableHeaderRow(
     val primaryColumn = columns.firstOrNull()
     val remainingColumns = columns.drop(1)
 
-    Row(horizontalArrangement = Arrangement.spacedBy(0.dp)) {
+    Row(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.spacedBy(0.dp),
+    ) {
         if (primaryColumn != null) {
             HeaderColumn(primaryColumn)
         }
@@ -4267,9 +4300,15 @@ private const val TableLargeDatasetRowThreshold = 12
 private const val TableWidthMeasurementRowLimit = 80
 private const val TableColumnMinWidthDp = 72
 private const val TableColumnMaxWidthDp = 360
-private const val TableLargeDatasetColumnThreshold = 5
-private val TableColumnWindowBuffer = 180.dp
+internal const val TableLargeDatasetColumnThreshold = 12
+internal val TableColumnScrollBucket = 120.dp
+private val TableColumnWindowBuffer = 96.dp
+internal const val TableSingleHorizontalBodyRowLimit = 8
 private val TableLargeDatasetBodyMaxHeight = 560.dp
+private val ReadOnlyTableColumnTypes = setOf(
+    PageTableColumnType.Formula,
+    PageTableColumnType.Rollup,
+)
 
 internal data class TableRelationTitleCache(
     val targetTablesById: Map<String, PageTableReference>,
@@ -4312,7 +4351,7 @@ internal fun tableColumnRenderWindow(
 ): TableColumnRenderWindow {
     val totalWidth = columns.fold(0.dp) { total, column ->
         total + (columnWidths[column.id] ?: TableCellWidth)
-    } + TableAddColumnWidth
+    }
 
     if (!enabled || columns.isEmpty()) {
         return TableColumnRenderWindow(
@@ -4441,6 +4480,7 @@ internal fun TableDataRow(
     columns: List<PageTableColumn>,
     columnWidths: Map<String, Dp>,
     columnRenderWindow: TableColumnRenderWindow,
+    horizontalScrollState: ScrollState? = null,
     tableReferences: List<PageTableReference>,
     relationTitleCache: TableRelationTitleCache,
     activeEditingCellKey: String? = null,
@@ -4461,16 +4501,29 @@ internal fun TableDataRow(
     onOpenRow: (String) -> Unit,
     isHighlighted: Boolean = false,
 ) {
+    RecompositionProbe("table.row")
+
     val primaryColumnId = columns.firstOrNull()?.id
     var isActionSheetOpen by remember(row.id) { mutableStateOf(false) }
     var isDragging by remember(row.id) { mutableStateOf(false) }
     val tableColors = TableGridTokens.colors()
     val context = LocalContext.current
+    val density = LocalDensity.current
+    val windowLeadingOffsetPx = with(density) { columnRenderWindow.leadingWidth.roundToPx() }
     val latestRowIndex by rememberUpdatedState(rowIndex)
     val rowBackground = when {
         isDragging -> tableColors.draggedRowBackground
         isHighlighted -> tableColors.highlightedRowBackground
         else -> tableColors.cellBackground
+    }
+    val verticalDividerOffsets = remember(columnRenderWindow.columns, columnWidths) {
+        var offset = 0.dp
+        buildList {
+            columnRenderWindow.columns.dropLast(1).forEach { column ->
+                offset += columnWidths[column.id] ?: TableCellWidth
+                add(offset)
+            }
+        }
     }
     val dragModifier = if (isDragging) {
         Modifier
@@ -4527,32 +4580,51 @@ internal fun TableDataRow(
     Column {
         Row(
             modifier = Modifier
+                .wrapContentWidth(
+                    align = Alignment.Start,
+                    unbounded = true,
+                )
+                .graphicsLayer {
+                    translationX = (
+                        windowLeadingOffsetPx - (horizontalScrollState?.value ?: 0)
+                    ).toFloat()
+                }
                 .then(dragModifier)
                 .background(rowBackground)
+                .drawWithContent {
+                    drawContent()
+                    val dividerWidth = 0.5.dp.toPx().coerceAtLeast(1f)
+                    verticalDividerOffsets.forEach { offset ->
+                        val x = offset.toPx()
+                        drawLine(
+                            color = tableColors.divider,
+                            start = Offset(x, 0f),
+                            end = Offset(x, size.height),
+                            strokeWidth = dividerWidth,
+                        )
+                    }
+                }
                 .tableRowHoldGesture(
-                rowId = row.id,
-                totalRows = totalRows,
-                rowIndexProvider = { latestRowIndex },
-                onDragActiveChange = { isActive -> isDragging = isActive },
-                onStationaryLongPress = { isActionSheetOpen = true },
-                onMoveRow = onMoveRow,
-            ),
-        horizontalArrangement = Arrangement.spacedBy(0.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (columnRenderWindow.leadingWidth > 0.dp) {
-            TableVirtualColumnSpacer(width = columnRenderWindow.leadingWidth)
-        }
-        if (columnRenderWindow.columns.isEmpty() && primaryColumnId == null) {
-            val onPrimaryOpenRowNoCol = remember(row.id, onOpenRow) {
-                { onOpenRow(row.id) }
+                    rowId = row.id,
+                    totalRows = totalRows,
+                    rowIndexProvider = { latestRowIndex },
+                    onDragActiveChange = { isActive -> isDragging = isActive },
+                    onStationaryLongPress = { isActionSheetOpen = true },
+                    onMoveRow = onMoveRow,
+                ),
+            horizontalArrangement = Arrangement.spacedBy(0.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (columnRenderWindow.columns.isEmpty() && primaryColumnId == null) {
+                val onPrimaryOpenRowNoCol = remember(row.id, onOpenRow) {
+                    { onOpenRow(row.id) }
+                }
+                TableOpenRowCell(
+                    modifier = Modifier.width(TableInlineOpenWidth),
+                    onClick = onPrimaryOpenRowNoCol,
+                )
             }
-            TableOpenRowCell(
-                modifier = Modifier.width(TableInlineOpenWidth),
-                onClick = onPrimaryOpenRowNoCol,
-            )
-        }
-        columnRenderWindow.columns.forEachIndexed { index, column ->
+            columnRenderWindow.columns.forEach { column ->
             val columnWidth = columnWidths[column.id] ?: TableCellWidth
             val cellKey = tableCellKey(row.id, column.id)
             val onCellValueChange = remember(row.id, column.id, onCellChange) {
@@ -4570,88 +4642,122 @@ internal fun TableDataRow(
                 val onPrimaryOpenRow = remember(row.id, onOpenRow) {
                     { onOpenRow(row.id) }
                 }
-                PrimaryTableCellEditor(
-                    column = column,
-                    row = row,
-                    table = table,
-                    tableReferences = tableReferences,
-                    relationTitleCache = relationTitleCache,
-                    value = row.cellText(column),
-                    onValueChange = onCellValueChange,
-                    onRelationValueChange = onCellRelationValueChange,
-                    currentPageId = pageId,
-                    onCreateTargetRow = onAddRelationTargetRow,
-                    onDateSettingsChange = onCellDateSettingsChange,
-                    isEditing = activeEditingCellKey == cellKey,
-                    onEditingChange = { isEditing ->
-                        onActiveEditingCellKeyChange(if (isEditing) cellKey else null)
-                    },
-                    width = columnWidth,
-                    onOpenRow = onPrimaryOpenRow,
-                )
+                if (activeEditingCellKey != cellKey) {
+                    LightweightPrimaryTableCell(
+                        table = table,
+                        row = row,
+                        column = column,
+                        tableReferences = tableReferences,
+                        width = columnWidth,
+                        onEdit = {
+                            when (column.type) {
+                                PageTableColumnType.Checkbox -> {
+                                    onCellValueChange(
+                                        if (row.cellText(column) == CheckboxValueChecked) ""
+                                        else CheckboxValueChecked,
+                                    )
+                                }
+                                in ReadOnlyTableColumnTypes -> Unit
+                                else -> onActiveEditingCellKeyChange(cellKey)
+                            }
+                        },
+                        onOpenRow = onPrimaryOpenRow,
+                    )
+                } else {
+                    PrimaryTableCellEditor(
+                        column = column,
+                        row = row,
+                        table = table,
+                        tableReferences = tableReferences,
+                        relationTitleCache = relationTitleCache,
+                        value = row.cellText(column),
+                        onValueChange = onCellValueChange,
+                        onRelationValueChange = onCellRelationValueChange,
+                        currentPageId = pageId,
+                        onCreateTargetRow = onAddRelationTargetRow,
+                        onDateSettingsChange = onCellDateSettingsChange,
+                        isEditing = activeEditingCellKey == cellKey,
+                        onEditingChange = { isEditing ->
+                            onActiveEditingCellKeyChange(if (isEditing) cellKey else null)
+                        },
+                        width = columnWidth,
+                        onOpenRow = onPrimaryOpenRow,
+                    )
+                }
             } else {
                 val isRequiredEmpty = column.config.isRequired && row.cellText(column).isBlank()
-                TableCellEditor(
-                    column = column,
-                    row = row,
-                    table = table,
-                    tableReferences = tableReferences,
-                    relationTitleCache = relationTitleCache,
-                    value = row.cellText(column),
-                    onValueChange = onCellValueChange,
-                    onRelationValueChange = onCellRelationValueChange,
-                    currentPageId = pageId,
-                    onCreateTargetRow = onAddRelationTargetRow,
-                    onDateSettingsChange = onCellDateSettingsChange,
-                    isEditing = activeEditingCellKey == cellKey,
-                    onEditingChange = { isEditing ->
-                        onActiveEditingCellKeyChange(if (isEditing) cellKey else null)
-                    },
-                    modifier = Modifier
-                        .width(columnWidth)
-                        .background(tableColors.cellBackground)
-                        .then(
-                            if (isRequiredEmpty) Modifier.border(
-                                width = 1.5.dp,
-                                color = MaterialTheme.colorScheme.error.copy(alpha = 0.55f),
-                            ) else Modifier
-                        ),
-                )
+                if (activeEditingCellKey != cellKey) {
+                    LightweightTableCell(
+                        table = table,
+                        row = row,
+                        column = column,
+                        tableReferences = tableReferences,
+                        onClick = when (column.type) {
+                            PageTableColumnType.Checkbox -> {
+                                {
+                                    onCellValueChange(
+                                        if (row.cellText(column) == CheckboxValueChecked) ""
+                                        else CheckboxValueChecked,
+                                    )
+                                }
+                            }
+                            in ReadOnlyTableColumnTypes -> null
+                            else -> {
+                                { onActiveEditingCellKeyChange(cellKey) }
+                            }
+                        },
+                        modifier = Modifier
+                            .width(columnWidth)
+                            .then(
+                                if (isRequiredEmpty) Modifier.border(
+                                    width = 1.5.dp,
+                                    color = MaterialTheme.colorScheme.error.copy(alpha = 0.55f),
+                                ) else Modifier
+                            ),
+                    )
+                } else {
+                    TableCellEditor(
+                        column = column,
+                        row = row,
+                        table = table,
+                        tableReferences = tableReferences,
+                        relationTitleCache = relationTitleCache,
+                        value = row.cellText(column),
+                        onValueChange = onCellValueChange,
+                        onRelationValueChange = onCellRelationValueChange,
+                        currentPageId = pageId,
+                        onCreateTargetRow = onAddRelationTargetRow,
+                        onDateSettingsChange = onCellDateSettingsChange,
+                        isEditing = activeEditingCellKey == cellKey,
+                        onEditingChange = { isEditing ->
+                            onActiveEditingCellKeyChange(if (isEditing) cellKey else null)
+                        },
+                        modifier = Modifier
+                            .width(columnWidth)
+                            .background(tableColors.cellBackground)
+                            .then(
+                                if (isRequiredEmpty) Modifier.border(
+                                    width = 1.5.dp,
+                                    color = MaterialTheme.colorScheme.error.copy(alpha = 0.55f),
+                                ) else Modifier
+                            ),
+                    )
+                }
             }
-            if (index < columnRenderWindow.columns.size - 1) {
+            }
+            if (columnRenderWindow.trailingWidth == 0.dp) {
                 Box(
                     modifier = Modifier
-                        .width(0.5.dp)
-                        .height(TableRowHeight)
-                        .background(tableColors.divider)
+                        .width(TableAddColumnWidth)
+                        .height(TableRowHeight),
                 )
             }
         }
-        if (columnRenderWindow.trailingWidth > 0.dp) {
-            TableVirtualColumnSpacer(width = columnRenderWindow.trailingWidth)
-        }
-        Box(
-            modifier = Modifier
-                .width(TableAddColumnWidth)
-                .height(TableRowHeight)
-                .background(tableColors.cellBackground),
+        HorizontalDivider(
+            modifier = Modifier.fillMaxWidth(),
+            color = tableColors.divider,
         )
     }
-    HorizontalDivider(
-        modifier = Modifier.width(columnRenderWindow.totalWidth + TableAddColumnWidth),
-        color = tableColors.divider
-    )
-}
-}
-
-@Composable
-private fun TableVirtualColumnSpacer(width: Dp) {
-    Box(
-        modifier = Modifier
-            .width(width)
-            .height(TableRowHeight)
-            .background(TableGridTokens.colors().cellBackground),
-    )
 }
 
 private fun Modifier.tableRowHoldGesture(
@@ -4895,8 +5001,7 @@ internal fun PrimaryTableCellEditor(
     Box(
         modifier = Modifier
             .width(width)
-            .height(TableRowHeight)
-            .background(MaterialTheme.colorScheme.surface),
+            .height(TableRowHeight),
     ) {
         TableCellEditor(
             column = column,
@@ -4953,6 +5058,98 @@ internal fun TableOpenRowCell(
             ),
             fontWeight = FontWeight.SemiBold,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun LightweightPrimaryTableCell(
+    table: PageTable,
+    row: PageTableRow,
+    column: PageTableColumn,
+    tableReferences: List<PageTableReference>,
+    width: Dp,
+    onEdit: () -> Unit,
+    onOpenRow: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .width(width)
+            .height(TableRowHeight)
+            .background(MaterialTheme.colorScheme.surface),
+    ) {
+        LightweightTableCell(
+            table = table,
+            row = row,
+            column = column,
+            tableReferences = tableReferences,
+            onClick = onEdit,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(end = TableInlineOpenWidth - 4.dp),
+        )
+        TableOpenRowCell(
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .width(TableInlineOpenWidth),
+            onClick = onOpenRow,
+        )
+    }
+}
+
+@Composable
+private fun LightweightTableCell(
+    table: PageTable,
+    row: PageTableRow,
+    column: PageTableColumn,
+    tableReferences: List<PageTableReference>,
+    onClick: (() -> Unit)? = null,
+    modifier: Modifier = Modifier,
+) {
+    val displayText = remember(row, column, tableReferences) {
+        table.displayCellText(row, column, tableReferences)
+    }
+    val baseStyle = MaterialTheme.typography.bodyMedium
+    val textColor = MaterialTheme.colorScheme.onSurface
+    val textStyle = remember(column.type, baseStyle, textColor) {
+        baseStyle.copy(
+            color = textColor,
+            lineHeight = 22.sp,
+            fontFamily = if (column.type == PageTableColumnType.Number) FontFamily.Monospace else FontFamily.Default,
+            textAlign = if (column.type == PageTableColumnType.Number) TextAlign.End else TextAlign.Start,
+        )
+    }
+    val cellHeightModifier = remember(column.config.wrapContent) {
+        if (column.config.wrapContent) {
+            Modifier.heightIn(min = TableRowHeight, max = 112.dp)
+        } else {
+            Modifier.height(TableRowHeight)
+        }
+    }
+    val interactionSource = remember { MutableInteractionSource() }
+
+    Box(
+        modifier = modifier
+            .then(cellHeightModifier)
+            .then(
+                if (onClick != null) {
+                    Modifier.clickable(
+                        interactionSource = interactionSource,
+                        indication = null,
+                        onClick = onClick,
+                    )
+                } else {
+                    Modifier
+                },
+            )
+            .padding(horizontal = TableCellHorizontalPadding, vertical = 4.dp),
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        Text(
+            text = displayText,
+            style = textStyle,
+            maxLines = if (column.config.wrapContent) 4 else 1,
+            overflow = TextOverflow.Ellipsis,
         )
     }
 }
@@ -5031,11 +5228,21 @@ internal fun TableDateCellEditor(
         PageTableDateReminder,
         String,
     ) -> Unit,
+    isEditing: Boolean = false,
+    onEditingChange: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
-    var isSheetOpen by remember { mutableStateOf(false) }
+    var isSheetOpen by remember { mutableStateOf(isEditing) }
     val displayText = remember(value, column.dateFormat, column.timeFormat) {
         column.displayDateCellValue(value)
+    }
+    val dismissEditor = {
+        isSheetOpen = false
+        onEditingChange(false)
+    }
+
+    LaunchedEffect(isEditing) {
+        if (isEditing) isSheetOpen = true
     }
 
     if (isSheetOpen) {
@@ -5044,14 +5251,17 @@ internal fun TableDateCellEditor(
             value = value,
             onValueChange = onValueChange,
             onDateSettingsChange = onDateSettingsChange,
-            onDismiss = { isSheetOpen = false },
+            onDismiss = dismissEditor,
         )
     }
 
     Row(
         modifier = modifier
             .height(TableRowHeight)
-            .clickable { isSheetOpen = true }
+            .clickable {
+                isSheetOpen = true
+                onEditingChange(true)
+            }
             .padding(horizontal = TableCellHorizontalPadding),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -5892,6 +6102,8 @@ internal fun TableCellEditor(
                 onRelationValueChange = onRelationValueChange,
                 currentPageId = currentPageId,
                 onCreateTargetRow = onCreateTargetRow,
+                isEditing = isEditing,
+                onEditingChange = onEditingChange,
                 modifier = modifier,
             )
         }
@@ -5930,6 +6142,8 @@ internal fun TableCellEditor(
                 value = value,
                 onValueChange = onValueChange,
                 onDateSettingsChange = onDateSettingsChange,
+                isEditing = isEditing,
+                onEditingChange = onEditingChange,
                 modifier = modifier,
             )
         }
@@ -5940,6 +6154,8 @@ internal fun TableCellEditor(
             column = column,
             value = value,
             onValueChange = onValueChange,
+            isEditing = isEditing,
+            onEditingChange = onEditingChange,
             modifier = modifier,
         )
         PageTableColumnType.FilesMedia -> {
@@ -5947,6 +6163,8 @@ internal fun TableCellEditor(
                 column = column,
                 value = value,
                 onValueChange = onValueChange,
+                isEditing = isEditing,
+                onEditingChange = onEditingChange,
                 modifier = modifier,
             )
         }
@@ -5959,6 +6177,8 @@ internal fun TableCellEditor(
                 onValueChange = { nextValue ->
                     onValueChange(nextValue.toSingleLineTableCellValue())
                 },
+                isEditing = isEditing,
+                onEditingChange = onEditingChange,
                 modifier = modifier,
             )
         }
@@ -5970,10 +6190,12 @@ private fun TablePlainTextCellEditor(
     column: PageTableColumn,
     value: String,
     onValueChange: (String) -> Unit,
+    isEditing: Boolean = false,
+    onEditingChange: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
-    var isEditing by remember { mutableStateOf(false) }
     val focusRequester = remember { FocusRequester() }
+    var hasReceivedFocus by remember { mutableStateOf(false) }
 
     val baseStyle = MaterialTheme.typography.bodyMedium
     val onSurfaceColor = MaterialTheme.colorScheme.onSurface
@@ -6001,8 +6223,11 @@ private fun TablePlainTextCellEditor(
                 .then(cellHeightModifier)
                 .focusRequester(focusRequester)
                 .onFocusChanged { focusState ->
-                    if (!focusState.isFocused) {
-                        isEditing = false
+                    if (focusState.isFocused) {
+                        hasReceivedFocus = true
+                    } else if (hasReceivedFocus) {
+                        hasReceivedFocus = false
+                        onEditingChange(false)
                     }
                 },
             singleLine = !column.config.wrapContent,
@@ -6016,6 +6241,12 @@ private fun TablePlainTextCellEditor(
                 },
                 imeAction = ImeAction.Done,
             ),
+            keyboardActions = KeyboardActions(
+                onDone = {
+                    hasReceivedFocus = false
+                    onEditingChange(false)
+                },
+            ),
             decorationBox = { innerTextField ->
                 Box(
                     modifier = Modifier
@@ -6028,8 +6259,11 @@ private fun TablePlainTextCellEditor(
                 }
             },
         )
-        LaunchedEffect(Unit) {
-            focusRequester.requestFocus()
+        LaunchedEffect(isEditing) {
+            if (isEditing) {
+                hasReceivedFocus = false
+                focusRequester.requestFocus()
+            }
         }
     } else {
         Box(
@@ -6038,7 +6272,7 @@ private fun TablePlainTextCellEditor(
                 .clickable(
                     interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
                     indication = null,
-                    onClick = { isEditing = true },
+                    onClick = { onEditingChange(true) },
                 )
                 .padding(horizontal = TableCellHorizontalPadding, vertical = 4.dp),
             contentAlignment = Alignment.CenterStart,
@@ -6066,9 +6300,11 @@ internal fun TableChoiceCellEditor(
     onValueChange: (String) ->
  Unit,
     onColumnConfigChange: ((PageTableColumnConfig) -> Unit)? = null,
+    isEditing: Boolean = false,
+    onEditingChange: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
-    var isExpanded by remember { mutableStateOf(false) }
+    var isExpanded by remember { mutableStateOf(isEditing) }
     var searchText by remember(isExpanded) { mutableStateOf("") }
     val selectedValues = remember(value) { value.selectedChoiceValues() }
     val options = column.choiceOptions
@@ -6081,13 +6317,25 @@ internal fun TableChoiceCellEditor(
     val canCreateNew = searchText.isNotBlank() &&
         options.none { option -> option.name.equals(searchText.trim(), ignoreCase = true) } &&
         onColumnConfigChange != null
+    val closePicker = {
+        isExpanded = false
+        searchText = ""
+        onEditingChange(false)
+    }
+
+    LaunchedEffect(isEditing) {
+        if (isEditing) isExpanded = true
+    }
 
     Box(modifier = modifier) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(TableRowHeight)
-                .clickable { isExpanded = true }
+                .clickable {
+                    isExpanded = true
+                    onEditingChange(true)
+                }
                 .padding(horizontal = TableCellHorizontalPadding),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -6123,10 +6371,7 @@ internal fun TableChoiceCellEditor(
         if (isExpanded) {
             DropdownMenu(
                 expanded = true,
-                onDismissRequest = {
-                    isExpanded = false
-                    searchText = ""
-                },
+                onDismissRequest = closePicker,
             ) {
                 // Search field
                 Box(
@@ -6176,9 +6421,8 @@ internal fun TableChoiceCellEditor(
                 DropdownMenuItem(
                     text = { Text(text = "Clear") },
                     onClick = {
-                        isExpanded = false
-                        searchText = ""
                         onValueChange("")
+                        closePicker()
                     },
                 )
                 // Empty state
@@ -6233,9 +6477,8 @@ internal fun TableChoiceCellEditor(
                                 }
                                 onValueChange(nextValues.toChoiceCellValue())
                             } else {
-                                isExpanded = false
-                                searchText = ""
                                 onValueChange(option.name)
+                                closePicker()
                             }
                         },
                     )
@@ -6271,14 +6514,16 @@ internal fun TableChoiceCellEditor(
                             val updatedConfig = column.config.copy(
                                 options = column.config.options + newOption,
                             )
-                            onColumnConfigChange!!(updatedConfig)
+                            onColumnConfigChange(updatedConfig)
                             if (column.type == PageTableColumnType.MultiSelect) {
                                 onValueChange((selectedValues + newOptionName).toChoiceCellValue())
                             } else {
                                 onValueChange(newOptionName)
-                                isExpanded = false
+                                closePicker()
                             }
-                            searchText = ""
+                            if (column.type == PageTableColumnType.MultiSelect) {
+                                searchText = ""
+                            }
                         },
                     )
                 }
@@ -6353,11 +6598,17 @@ internal fun TableMediaCellEditor(
     column: PageTableColumn,
     value: String,
     onValueChange: (String) -> Unit,
+    isEditing: Boolean = false,
+    onEditingChange: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
-    var isSheetOpen by remember { mutableStateOf(false) }
+    var isSheetOpen by remember { mutableStateOf(isEditing) }
     val attachments = remember(value) { value.toTableMediaAttachments() }
+    val dismissEditor = {
+        isSheetOpen = false
+        onEditingChange(false)
+    }
     val filePicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments(),
     ) { uris ->
@@ -6371,8 +6622,12 @@ internal fun TableMediaCellEditor(
         }
     }
 
+    LaunchedEffect(isEditing) {
+        if (isEditing) isSheetOpen = true
+    }
+
     if (isSheetOpen) {
-        ModalBottomSheet(onDismissRequest = { isSheetOpen = false }) {
+        ModalBottomSheet(onDismissRequest = dismissEditor) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -6423,7 +6678,10 @@ internal fun TableMediaCellEditor(
     Row(
         modifier = modifier
             .height(TableRowHeight)
-            .clickable { isSheetOpen = true }
+            .clickable {
+                isSheetOpen = true
+                onEditingChange(true)
+            }
             .padding(horizontal = TableCellHorizontalPadding),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -6463,9 +6721,11 @@ internal fun RelationCellEditor(
     onRelationValueChange: (List<String>) -> Unit = { ids -> onValueChange(ids.toRelationCellValue()) },
     currentPageId: String = "",
     onCreateTargetRow: ((String) -> Unit)? = null,
+    isEditing: Boolean = false,
+    onEditingChange: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
-    var isPickerOpen by remember { mutableStateOf(false) }
+    var isPickerOpen by remember { mutableStateOf(isEditing) }
     val targetTable = relationTitleCache.targetTable(column)
     val selectedIds = remember(value) { value.relatedRowIdList() }
     val selectedTitles = remember(selectedIds, column.relationTargetTableId, relationTitleCache) {
@@ -6477,6 +6737,14 @@ internal fun RelationCellEditor(
         selectedTitles.isNotEmpty() -> selectedTitles.joinToString()
         else -> ""
     }
+    val dismissEditor = {
+        isPickerOpen = false
+        onEditingChange(false)
+    }
+
+    LaunchedEffect(isEditing) {
+        if (isEditing && targetTable != null) isPickerOpen = true
+    }
 
     if (isPickerOpen && targetTable != null) {
         RelationRowPickerSheet(
@@ -6486,10 +6754,10 @@ internal fun RelationCellEditor(
             currentPageId = currentPageId,
             onCreateTargetRow = onCreateTargetRow,
             onSave = { nextIds ->
-                isPickerOpen = false
                 onRelationValueChange(nextIds)
+                dismissEditor()
             },
-            onDismiss = { isPickerOpen = false },
+            onDismiss = dismissEditor,
         )
     }
 
@@ -6498,7 +6766,10 @@ internal fun RelationCellEditor(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(TableRowHeight)
-                .clickable(enabled = targetTable != null) { isPickerOpen = true }
+                .clickable(enabled = targetTable != null) {
+                    isPickerOpen = true
+                    onEditingChange(true)
+                }
                 .padding(horizontal = TableCellHorizontalPadding),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -6800,6 +7071,10 @@ internal fun PageTable.buildInlineDatabaseTableRenderState(
 internal fun androidx.compose.foundation.lazy.LazyListScope.inlineDatabaseTableBlockEditor(
 
     horizontalScrollState: androidx.compose.foundation.ScrollState,
+    horizontalViewportWidthPx: Float = 0f,
+    horizontalViewportDensity: androidx.compose.ui.unit.Density? = null,
+    horizontalWindowScrollOffsetPx: Int = 0,
+    onHorizontalScrollActiveChange: (Boolean) -> Unit = {},
     tableSearchInput: String,
     onSearchQueryChange: (String) -> Unit,
     openRowId: String?,
@@ -6878,7 +7153,17 @@ internal fun androidx.compose.foundation.lazy.LazyListScope.inlineDatabaseTableB
     val relationTitleCache = renderState.relationTitleCache
     val isStarterEmptyDatabase = renderState.isStarterEmptyDatabase
     val highlightedRowId = renderState.highlightedRowId
-
+    val bodyColumnRenderWindow = tableColumnRenderWindow(
+        columns = visibleColumns,
+        columnWidths = columnWidths,
+        scrollOffsetPx = horizontalWindowScrollOffsetPx,
+        viewportWidthPx = horizontalViewportWidthPx,
+        density = horizontalViewportDensity ?: androidx.compose.ui.unit.Density(1f),
+        enabled = isFullPage &&
+            horizontalViewportDensity != null &&
+            horizontalViewportWidthPx > 0f &&
+            visibleColumns.size >= TableLargeDatasetColumnThreshold,
+    )
     if (!isFullPage) {
         item(key = "$tableBlockId-toolbar") {
             Column {
@@ -7006,7 +7291,10 @@ internal fun androidx.compose.foundation.lazy.LazyListScope.inlineDatabaseTableB
             key = "$tableBlockId-starter-empty",
             contentType = "database-empty",
         ) {
-            Box(modifier = Modifier.horizontalScroll(horizontalScrollState)) {
+            TableSyncedHorizontalViewport(
+                horizontalScrollState = horizontalScrollState,
+                horizontalDragEnabled = !isFullPage,
+            ) {
                 TableStarterEmptyState(
                     columns = visibleColumns,
                     columnWidths = columnWidths,
@@ -7019,12 +7307,58 @@ internal fun androidx.compose.foundation.lazy.LazyListScope.inlineDatabaseTableB
             key = "$tableBlockId-add-row-empty",
             contentType = "database-add-row",
         ) {
-            Box(modifier = Modifier.horizontalScroll(horizontalScrollState)) {
+            TableSyncedHorizontalViewport(
+                horizontalScrollState = horizontalScrollState,
+                horizontalDragEnabled = !isFullPage,
+            ) {
                 TableAddRowRow(
                     columns = visibleColumns,
                     columnWidths = columnWidths,
                     onAddRow = onAddRow,
                 )
+            }
+        }
+    } else if (isFullPage && groupColumn == null && visibleRows.size <= TableSingleHorizontalBodyRowLimit) {
+        item(
+            key = "$tableBlockId-body",
+            contentType = "database-body",
+        ) {
+            Box(modifier = Modifier.horizontalScroll(horizontalScrollState, enabled = !isFullPage)) {
+                Column {
+                    visibleRows.forEach { row ->
+                        key(row.id) {
+                            TableDataRowWrapper(
+                                row = row,
+                                rowIndex = rowIndexById[row.id] ?: -1,
+                                totalRows = table.rows.size,
+                                pageId = pageId,
+                                pageUpdatedAt = pageUpdatedAt,
+                                table = table,
+                                columns = visibleColumns,
+                                columnWidths = columnWidths,
+                                columnRenderWindow = bodyColumnRenderWindow,
+                                tableReferences = tableReferences,
+                                relationTitleCache = relationTitleCache,
+                                activeEditingCellKey = activeEditingCellKey,
+                                onActiveEditingCellKeyChange = onActiveEditingCellKeyChange,
+                                onColumnDateSettingsChange = onColumnDateSettingsChange,
+                                onCellChange = onCellChange,
+                                onRelationCellChange = onRelationCellChange,
+                                onAddRelationTargetRow = onAddRelationTargetRow,
+                                onDeleteRow = onDeleteRow,
+                                onDuplicateRow = onDuplicateRow,
+                                onMoveRow = onMoveRow,
+                                onOpenRow = { onOpenRowIdChange(row.id) },
+                                isHighlighted = row.id == highlightedRowId,
+                            )
+                        }
+                    }
+                    TableAddRowRow(
+                        columns = visibleColumns,
+                        columnWidths = columnWidths,
+                        onAddRow = onAddRow,
+                    )
+                }
             }
         }
     } else if (groupColumn != null) {
@@ -7040,9 +7374,13 @@ internal fun androidx.compose.foundation.lazy.LazyListScope.inlineDatabaseTableB
                 key = { row -> row.id },
                 contentType = { "database-row" },
             ) { row ->
-                Column {
-                    Box(modifier = Modifier.horizontalScroll(horizontalScrollState, enabled = false)) {
-                        TableDataRowWrapper(
+                TableSyncedHorizontalViewport(
+                    horizontalScrollState = horizontalScrollState,
+                    contentPositionsItself = true,
+                    horizontalDragEnabled = !isFullPage,
+                    onScrollActiveChange = onHorizontalScrollActiveChange,
+                ) {
+                    TableDataRowWrapper(
                             row = row,
                             rowIndex = rowIndexById[row.id] ?: -1,
                             totalRows = table.rows.size,
@@ -7051,6 +7389,8 @@ internal fun androidx.compose.foundation.lazy.LazyListScope.inlineDatabaseTableB
                             table = table,
                             columns = visibleColumns,
                             columnWidths = columnWidths,
+                            columnRenderWindow = bodyColumnRenderWindow,
+                            horizontalScrollState = horizontalScrollState,
                             tableReferences = tableReferences,
                             relationTitleCache = relationTitleCache,
                             activeEditingCellKey = activeEditingCellKey,
@@ -7064,9 +7404,7 @@ internal fun androidx.compose.foundation.lazy.LazyListScope.inlineDatabaseTableB
                             onMoveRow = onMoveRow,
                             onOpenRow = { onOpenRowIdChange(row.id) },
                             isHighlighted = row.id == highlightedRowId,
-                        )
-                    }
-                    HorizontalDivider()
+                    )
                 }
             }
         }
@@ -7074,7 +7412,10 @@ internal fun androidx.compose.foundation.lazy.LazyListScope.inlineDatabaseTableB
             key = "$tableBlockId-add-row-group",
             contentType = "database-add-row",
         ) {
-            Box(modifier = Modifier.horizontalScroll(horizontalScrollState)) {
+            TableSyncedHorizontalViewport(
+                horizontalScrollState = horizontalScrollState,
+                horizontalDragEnabled = !isFullPage,
+            ) {
                 TableAddRowRow(
                     columns = visibleColumns,
                     columnWidths = columnWidths,
@@ -7088,9 +7429,13 @@ internal fun androidx.compose.foundation.lazy.LazyListScope.inlineDatabaseTableB
             key = { row -> row.id },
             contentType = { "database-row" },
         ) { row ->
-            Column {
-                Box(modifier = Modifier.horizontalScroll(horizontalScrollState, enabled = false)) {
-                    TableDataRowWrapper(
+            TableSyncedHorizontalViewport(
+                horizontalScrollState = horizontalScrollState,
+                contentPositionsItself = true,
+                horizontalDragEnabled = !isFullPage,
+                onScrollActiveChange = onHorizontalScrollActiveChange,
+            ) {
+                TableDataRowWrapper(
                         row = row,
                         rowIndex = rowIndexById[row.id] ?: -1,
                         totalRows = table.rows.size,
@@ -7099,6 +7444,8 @@ internal fun androidx.compose.foundation.lazy.LazyListScope.inlineDatabaseTableB
                         table = table,
                         columns = visibleColumns,
                         columnWidths = columnWidths,
+                        columnRenderWindow = bodyColumnRenderWindow,
+                        horizontalScrollState = horizontalScrollState,
                         tableReferences = tableReferences,
                         relationTitleCache = relationTitleCache,
                         activeEditingCellKey = activeEditingCellKey,
@@ -7112,16 +7459,17 @@ internal fun androidx.compose.foundation.lazy.LazyListScope.inlineDatabaseTableB
                         onMoveRow = onMoveRow,
                         onOpenRow = { onOpenRowIdChange(row.id) },
                         isHighlighted = row.id == highlightedRowId,
-                    )
-                }
-                HorizontalDivider()
+                )
             }
         }
         item(
             key = "$tableBlockId-add-row",
             contentType = "database-add-row",
         ) {
-            Box(modifier = Modifier.horizontalScroll(horizontalScrollState, enabled = false)) {
+            TableSyncedHorizontalViewport(
+                horizontalScrollState = horizontalScrollState,
+                horizontalDragEnabled = !isFullPage,
+            ) {
                 TableAddRowRow(
                     columns = visibleColumns,
                     columnWidths = columnWidths,
@@ -7130,7 +7478,7 @@ internal fun androidx.compose.foundation.lazy.LazyListScope.inlineDatabaseTableB
             }
         }
     }
-    
+
     // Handle the open row sheet as a separate item
     item(
         key = "$tableBlockId-sheet",
@@ -7209,6 +7557,67 @@ internal fun androidx.compose.foundation.lazy.LazyListScope.inlineDatabaseTableB
 }
 
 @Composable
+private fun TableSyncedHorizontalViewport(
+    horizontalScrollState: ScrollState,
+    contentPositionsItself: Boolean = false,
+    horizontalDragEnabled: Boolean = true,
+    onScrollActiveChange: (Boolean) -> Unit = {},
+    content: @Composable () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clipToBounds()
+            .then(
+                if (horizontalDragEnabled) {
+                    Modifier.tableHorizontalDrag(
+                        horizontalScrollState = horizontalScrollState,
+                        onScrollActiveChange = onScrollActiveChange,
+                    )
+                } else {
+                    Modifier
+                },
+            ),
+    ) {
+        if (contentPositionsItself) {
+            content()
+        } else {
+            Box(
+                modifier = Modifier
+                    .wrapContentWidth(
+                        align = Alignment.Start,
+                        unbounded = true,
+                    )
+                    .offset {
+                        IntOffset(x = -horizontalScrollState.value, y = 0)
+                    },
+            ) {
+                content()
+            }
+        }
+    }
+}
+
+private fun Modifier.tableHorizontalDrag(
+    horizontalScrollState: ScrollState,
+    onScrollActiveChange: (Boolean) -> Unit,
+): Modifier {
+    return pointerInput(horizontalScrollState) {
+        detectHorizontalDragGestures(
+            onDragStart = { onScrollActiveChange(true) },
+            onDragEnd = { onScrollActiveChange(false) },
+            onDragCancel = { onScrollActiveChange(false) },
+            onHorizontalDrag = { change, dragAmount ->
+                val consumed = horizontalScrollState.dispatchRawDelta(-dragAmount)
+                if (consumed != 0f) {
+                    change.consume()
+                }
+            },
+        )
+    }
+}
+
+@Composable
 internal fun TableDataRowWrapper(
     row: PageTableRow,
     rowIndex: Int,
@@ -7218,6 +7627,8 @@ internal fun TableDataRowWrapper(
     table: PageTable,
     columns: List<PageTableColumn>,
     columnWidths: Map<String, Dp>,
+    columnRenderWindow: TableColumnRenderWindow? = null,
+    horizontalScrollState: ScrollState? = null,
     tableReferences: List<PageTableReference>,
     relationTitleCache: TableRelationTitleCache,
     activeEditingCellKey: String? = null,
@@ -7238,6 +7649,12 @@ internal fun TableDataRowWrapper(
     onOpenRow: () -> Unit,
     isHighlighted: Boolean = false,
 ) {
+    val resolvedColumnRenderWindow = columnRenderWindow ?: TableColumnRenderWindow(
+        columns = columns,
+        leadingWidth = 0.dp,
+        trailingWidth = 0.dp,
+        totalWidth = columns.fold(0.dp) { acc, column -> acc + (columnWidths[column.id] ?: TableCellWidth) },
+    )
     TableDataRow(
         row = row,
         rowIndex = rowIndex,
@@ -7247,12 +7664,8 @@ internal fun TableDataRowWrapper(
         table = table,
         columns = columns,
         columnWidths = columnWidths,
-        columnRenderWindow = TableColumnRenderWindow(
-            columns = columns,
-            leadingWidth = 0.dp,
-            trailingWidth = 0.dp,
-            totalWidth = columns.fold(0.dp) { acc, c -> acc + (columnWidths[c.id] ?: 120.dp) }
-        ),
+        columnRenderWindow = resolvedColumnRenderWindow,
+        horizontalScrollState = horizontalScrollState,
         tableReferences = tableReferences,
         relationTitleCache = relationTitleCache,
         activeEditingCellKey = activeEditingCellKey,

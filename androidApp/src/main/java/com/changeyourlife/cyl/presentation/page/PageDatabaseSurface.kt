@@ -2,6 +2,8 @@ package com.changeyourlife.cyl.presentation.page
 
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.scrollable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -10,7 +12,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Search
@@ -20,12 +25,19 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import com.changeyourlife.cyl.domain.model.Page
 import com.changeyourlife.cyl.domain.model.PageBlock
@@ -124,6 +136,7 @@ internal fun PageDatabaseSurface(
     onDismissHomeAiError: () -> Unit,
     onOpenAiHistory: () -> Unit,
     onOpenAiProfile: () -> Unit,
+    onOpenAiSkills: () -> Unit,
     onDismissHomeAiErrorClick: () -> Unit,
     initialSearchTargetType: String = "",
     initialSearchTargetId: String = "",
@@ -136,27 +149,96 @@ internal fun PageDatabaseSurface(
 
     val table = databaseBlock.table
     val tableBlockId = databaseBlock.id
-    val scrollState = tableHorizontalScrollStates[tableBlockId] ?: ScrollState(0).also { tableHorizontalScrollStates[tableBlockId] = it }
-    val openRowId = tableOpenRowIds[tableBlockId]
-    val activeEditingCellKey = tableActiveEditingCellKeys[tableBlockId]
+    val pageId = uiState.page?.id.orEmpty()
+    val tableUiStateKey = remember(pageId, tableBlockId) {
+        "$pageId::$tableBlockId"
+    }
+    val scrollState = tableHorizontalScrollStates[tableUiStateKey]
+        ?: ScrollState(0).also { tableHorizontalScrollStates[tableUiStateKey] = it }
+    val openRowId = tableOpenRowIds[tableUiStateKey]
+    val activeEditingCellKey = tableActiveEditingCellKeys[tableUiStateKey]
 
-    val renderState = databaseRenderStates[tableBlockId] ?: table.buildInlineDatabaseTableRenderState(
-        tableReferences = tableReferences,
-        tableSearchInput = "",
-        searchTargetType = initialSearchTargetType,
-        searchTargetId = initialSearchTargetId,
-    )
+    LaunchedEffect(tableUiStateKey) {
+        scrollState.scrollTo(0)
+    }
+
+    val fallbackRenderState = remember(
+        table,
+        tableReferences,
+        initialSearchTargetType,
+        initialSearchTargetId,
+    ) {
+        table.buildInlineDatabaseTableRenderState(
+            tableReferences = tableReferences,
+            tableSearchInput = "",
+            searchTargetType = initialSearchTargetType,
+            searchTargetId = initialSearchTargetId,
+        )
+    }
+    val renderState = databaseRenderStates[tableBlockId] ?: fallbackRenderState
     val searchInput = renderState.tableSearchQuery
-
+    val databaseListState = rememberLazyListState()
+    val showTopBarTitle by remember {
+        derivedStateOf {
+            databaseListState.firstVisibleItemIndex > 0 ||
+                databaseListState.firstVisibleItemScrollOffset > 36
+        }
+    }
+    val density = LocalDensity.current
+    val configuration = LocalConfiguration.current
+    val horizontalViewportWidthPx = with(density) {
+        (configuration.screenWidthDp.dp - 44.dp).coerceAtLeast(0.dp).toPx()
+    }
+    val horizontalWindowScrollOffsetPx by remember(
+        scrollState,
+        density,
+        renderState.visibleColumns.size,
+    ) {
+        derivedStateOf {
+            if (renderState.visibleColumns.size < TableLargeDatasetColumnThreshold) {
+                0
+            } else {
+                val bucketPx = with(density) { TableColumnScrollBucket.toPx() }.toInt().coerceAtLeast(1)
+                (scrollState.value / bucketPx) * bucketPx
+            }
+        }
+    }
     val visibleColumns = renderState.visibleColumns
     val columnWidths = renderState.columnWidths
+    val tableHorizontalContentWidth = remember(visibleColumns, columnWidths) {
+        visibleColumns.fold(TableAddColumnWidth) { width, column ->
+            width + (columnWidths[column.id] ?: TableCellWidth)
+        }
+    }
+
+    PageFramePerformanceProbe(
+        label = "DatabasePage:${tableBlockId.take(8)}",
+        detailProvider = {
+            val bodyMode = when {
+                table.view != PageTableView.Table -> "view:${table.view.name}"
+                renderState.isStarterEmptyDatabase -> "starterEmpty"
+                renderState.visibleRows.isEmpty() -> "emptyRows"
+                renderState.groupColumn != null -> "grouped"
+                renderState.visibleRows.size <= TableSingleHorizontalBodyRowLimit -> "singleBody"
+                else -> "lazyRows"
+            }
+            "rows=${renderState.visibleRows.size}/${table.rows.size} " +
+                "cols=${renderState.visibleColumns.size}/${table.columns.size} " +
+                "bodyMode=$bodyMode " +
+                "hActive=${scrollState.isScrollInProgress} " +
+                "hScroll=${scrollState.value} " +
+                "v=${databaseListState.firstVisibleItemIndex}:${databaseListState.firstVisibleItemScrollOffset} " +
+                "search=${searchInput.isNotBlank()}"
+        },
+    )
+    RecompositionProbe("database.surface")
 
     Scaffold(
         modifier = modifier,
         containerColor = MaterialTheme.colorScheme.surface,
         topBar = {
             PageEditorTopBar(
-                pageTitle = "",
+                pageTitle = if (showTopBarTitle) uiState.title.ifBlank { "Untitled page" } else "",
                 isSaving = uiState.isSaving,
                 isAiGenerating = homeAiState.isAiGeneratingChat,
                 syncState = uiState.syncState,
@@ -192,6 +274,8 @@ internal fun PageDatabaseSurface(
                 modelLabel = homeAiState.aiModelLabel,
                 visionStatusLabel = homeAiState.aiVisionStatusLabel,
                 visionPipelineLabel = homeAiState.aiVisionPipelineLabel,
+                enabledSkillsCount = homeAiState.aiSkills.count { skill -> skill.isEnabled },
+                totalSkillsCount = homeAiState.aiSkills.size,
                 onSendMessage = { message, mentionedPageIds, images ->
                     onSendAiMessage(message, mentionedPageIds, currentPageId, images)
                 },
@@ -205,6 +289,10 @@ internal fun PageDatabaseSurface(
                 onOpenProfilePage = {
                     isAiChatSheetOpen = false
                     onOpenAiProfile()
+                },
+                onOpenSkillsPage = {
+                    isAiChatSheetOpen = false
+                    onOpenAiSkills()
                 },
                 onDismissError = onDismissHomeAiError,
                 onOpenPage = { pageId, _, _ ->
@@ -228,10 +316,16 @@ internal fun PageDatabaseSurface(
         }
 
         LazyColumn(
+            state = databaseListState,
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .padding(horizontal = 22.dp, vertical = 8.dp),
+                .padding(horizontal = 22.dp, vertical = 8.dp)
+                .scrollable(
+                    state = scrollState,
+                    orientation = Orientation.Horizontal,
+                    reverseDirection = true,
+                ),
             verticalArrangement = Arrangement.spacedBy(0.dp),
         ) {
             item(
@@ -281,25 +375,27 @@ internal fun PageDatabaseSurface(
                 )
             }
 
-            item(
-                key = "database-active-controls",
-                contentType = "database-active-controls",
-            ) {
-                TableActiveControlsRow(
-                    table = table,
-                    searchQuery = searchInput,
-                    onClearSort = { onTableSortChange(tableBlockId, "", PageTableSortDirection.Ascending) },
-                    onClearFilter = { onTableFilterChange(tableBlockId, PageTableFilter()) },
-                    onClearGroup = { onTableGroupChange(tableBlockId, "") },
-                    onClearSearch = { onSearchQueryChange(tableBlockId, "") },
-                    onClearAll = {
-                        onSearchQueryChange(tableBlockId, "")
-                        onTableSortChange(tableBlockId, "", PageTableSortDirection.Ascending)
-                        onTableFilterChange(tableBlockId, PageTableFilter())
-                        onTableGroupChange(tableBlockId, "")
-                    },
-                )
-                Spacer(modifier = Modifier.height(8.dp))
+            if (table.hasActiveTableControls(searchInput)) {
+                item(
+                    key = "database-active-controls",
+                    contentType = "database-active-controls",
+                ) {
+                    TableActiveControlsRow(
+                        table = table,
+                        searchQuery = searchInput,
+                        onClearSort = { onTableSortChange(tableBlockId, "", PageTableSortDirection.Ascending) },
+                        onClearFilter = { onTableFilterChange(tableBlockId, PageTableFilter()) },
+                        onClearGroup = { onTableGroupChange(tableBlockId, "") },
+                        onClearSearch = { onSearchQueryChange(tableBlockId, "") },
+                        onClearAll = {
+                            onSearchQueryChange(tableBlockId, "")
+                            onTableSortChange(tableBlockId, "", PageTableSortDirection.Ascending)
+                            onTableFilterChange(tableBlockId, PageTableFilter())
+                            onTableGroupChange(tableBlockId, "")
+                        },
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
             }
 
             if (table.view == PageTableView.Table) {
@@ -307,8 +403,31 @@ internal fun PageDatabaseSurface(
                     key = "database-table-header",
                     contentType = "database-table-header",
                 ) {
-                    Box(modifier = Modifier.horizontalScroll(scrollState)) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clipToBounds(),
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(scrollState, enabled = false),
+                        ) {
+                            Spacer(
+                                modifier = Modifier
+                                    .width(tableHorizontalContentWidth)
+                                    .height(1.dp),
+                            )
+                        }
                         TableHeaderRow(
+                            modifier = Modifier
+                                .wrapContentWidth(
+                                    align = Alignment.Start,
+                                    unbounded = true,
+                                )
+                                .graphicsLayer {
+                                    translationX = -scrollState.value.toFloat()
+                                },
                             tableBlockId = tableBlockId,
                             table = table,
                             columns = visibleColumns,
@@ -344,10 +463,13 @@ internal fun PageDatabaseSurface(
 
             inlineDatabaseTableBlockEditor(
                 horizontalScrollState = scrollState,
+                horizontalViewportWidthPx = horizontalViewportWidthPx,
+                horizontalViewportDensity = density,
+                horizontalWindowScrollOffsetPx = horizontalWindowScrollOffsetPx,
                 tableSearchInput = searchInput,
                 onSearchQueryChange = { query -> onSearchQueryChange(tableBlockId, query) },
                 openRowId = openRowId,
-                onOpenRowIdChange = { rowId -> tableOpenRowIds[tableBlockId] = rowId },
+                onOpenRowIdChange = { rowId -> tableOpenRowIds[tableUiStateKey] = rowId },
                 tableBlockId = tableBlockId,
                 pageId = uiState.page!!.id,
                 pageUpdatedAt = uiState.page.updatedAt,
@@ -358,7 +480,7 @@ internal fun PageDatabaseSurface(
                 renderState = renderState,
                 activeEditingCellKey = activeEditingCellKey,
                 onActiveEditingCellKeyChange = { cellKey ->
-                    tableActiveEditingCellKeys[tableBlockId] = cellKey
+                    tableActiveEditingCellKeys[tableUiStateKey] = cellKey
                 },
                 onTitleChange = { title -> onTableTitleChange(tableBlockId, title) },
                 onViewChange = { view -> onTableViewChange(tableBlockId, view) },

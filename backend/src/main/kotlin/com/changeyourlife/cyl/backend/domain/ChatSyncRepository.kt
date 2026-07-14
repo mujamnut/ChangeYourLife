@@ -19,6 +19,7 @@ data class ChatMessageRecord(
     val content: String,
     val pageLinksJson: String,
     val actionMetadataJson: String,
+    val attachmentsJson: String = "[]",
     val createdAt: Long,
     val updatedAt: Long,
 )

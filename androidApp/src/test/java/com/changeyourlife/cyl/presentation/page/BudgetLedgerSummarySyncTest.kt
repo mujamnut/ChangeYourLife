@@ -65,6 +65,8 @@ class BudgetLedgerSummarySyncTest {
         assertEquals("1488", summary.displayValue(monthRow, "Income", references))
         assertEquals("1480", summary.displayValue(monthRow, "Balance", references))
         assertTrue(transactions.columns.single { column -> column.name == "Category" }.config.options.any { option -> option.name == "Fuel" })
+        assertEquals("", transactions.sort.columnId)
+        assertEquals("", transactions.groupByColumnId)
     }
 
     @Test

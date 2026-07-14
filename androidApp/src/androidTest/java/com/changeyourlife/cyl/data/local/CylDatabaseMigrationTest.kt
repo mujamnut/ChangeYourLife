@@ -493,6 +493,31 @@ class CylDatabaseMigrationTest {
         database.close()
     }
 
+    @Test
+    fun migrate14To15AddsSyncedAiSkillsTable() {
+        helper.createDatabase(TEST_DATABASE, 14).apply {
+            close()
+        }
+
+        val database = helper.runMigrationsAndValidate(
+            TEST_DATABASE,
+            15,
+            true,
+            DatabaseModule.MIGRATION_14_15,
+        )
+
+        assertTrue(database.tableExists("ai_skills"))
+        assertTrue(database.columnExists("ai_skills", "workspaceId"))
+        assertTrue(database.columnExists("ai_skills", "whenToUse"))
+        assertTrue(database.columnExists("ai_skills", "instructions"))
+        assertTrue(database.columnExists("ai_skills", "deletedAt"))
+        assertTrue(database.columnExists("ai_skills", "syncStatus"))
+        assertTrue(database.columnExists("ai_skills", "remoteUpdatedAt"))
+        assertTrue(database.columnExists("ai_skills", "lastSyncedAt"))
+
+        database.close()
+    }
+
     private fun Cursor.stringValue(columnName: String): String {
         return getString(getColumnIndexOrThrow(columnName))
     }

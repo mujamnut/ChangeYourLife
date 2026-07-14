@@ -76,8 +76,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.ui.platform.LocalContext
+import com.changeyourlife.cyl.data.local.session.AppThemeMode
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -114,6 +117,7 @@ fun HomeRoute(
     onSearch: () -> Unit,
     onOpenAiHistory: () -> Unit,
     onOpenAiProfile: () -> Unit,
+    onOpenAiSkills: () -> Unit,
     onLoggedOut: () -> Unit,
     modifier: Modifier = Modifier,
     viewModel: HomeViewModel = hiltViewModel(),
@@ -142,6 +146,7 @@ fun HomeRoute(
         onSearch = onSearch,
         onOpenAiHistory = onOpenAiHistory,
         onOpenAiProfile = onOpenAiProfile,
+        onOpenAiSkills = onOpenAiSkills,
         onDismissCreateWorkspace = viewModel::hideCreateWorkspace,
         onNewWorkspaceNameChange = viewModel::updateNewWorkspaceName,
         onCreateWorkspace = viewModel::createWorkspace,
@@ -155,6 +160,7 @@ fun HomeRoute(
         onClearChatHistorySearchQuery = viewModel::clearChatHistorySearchQuery,
         onRetrySync = viewModel::retrySyncNow,
         onToggleAutoSync = viewModel::setAutoSyncEnabled,
+        onThemeModeChange = viewModel::setThemeMode,
         onSyncNow = viewModel::syncNow,
         onDismissChatError = viewModel::clearAiChatError,
         onLogout = {
@@ -198,6 +204,7 @@ private fun HomeScreen(
     onSearch: () -> Unit,
     onOpenAiHistory: () -> Unit,
     onOpenAiProfile: () -> Unit,
+    onOpenAiSkills: () -> Unit,
     onDismissCreateWorkspace: () -> Unit,
     onNewWorkspaceNameChange: (String) -> Unit,
     onCreateWorkspace: () -> Unit,
@@ -211,6 +218,7 @@ private fun HomeScreen(
     onClearChatHistorySearchQuery: () -> Unit,
     onRetrySync: () -> Unit,
     onToggleAutoSync: (Boolean) -> Unit,
+    onThemeModeChange: (AppThemeMode) -> Unit,
     onSyncNow: () -> Unit,
     onDismissChatError: () -> Unit,
     onLogout: () -> Unit,
@@ -245,6 +253,8 @@ private fun HomeScreen(
                 modelLabel = uiState.aiModelLabel,
                 visionStatusLabel = uiState.aiVisionStatusLabel,
                 visionPipelineLabel = uiState.aiVisionPipelineLabel,
+                enabledSkillsCount = uiState.aiSkills.count { skill -> skill.isEnabled },
+                totalSkillsCount = uiState.aiSkills.size,
                 onSendMessage = onSendChatMessage,
                 onUndoAction = onUndoAiAction,
                 onClearHistory = onClearChatHistory,
@@ -261,6 +271,12 @@ private fun HomeScreen(
                         onOpenAiProfile()
                     }
                 },
+                onOpenSkillsPage = {
+                    scope.launch { chatSheetState.hide() }.invokeOnCompletion {
+                        isChatSheetOpen = false
+                        onOpenAiSkills()
+                    }
+                },
                 onDismissError = onDismissChatError,
             onOpenPage = { pageId, targetType, targetId ->
                 scope.launch { chatSheetState.hide() }.invokeOnCompletion {
@@ -269,9 +285,9 @@ private fun HomeScreen(
                 }
             },
             onDismiss = {
-                scope.launch { chatSheetState.hide() }.invokeOnCompletion {
-                    isChatSheetOpen = false
-                }
+                // ModalBottomSheet invokes this only after its own hide animation completes.
+                // Hiding the same SheetState again can restart gesture settlement and cause jitter.
+                isChatSheetOpen = false
             },
             sheetState = chatSheetState,
         )
@@ -367,6 +383,8 @@ private fun HomeScreen(
                 syncOverview = uiState.syncOverview,
                 isAutoSyncEnabled = uiState.isAutoSyncEnabled,
                 onToggleAutoSync = onToggleAutoSync,
+                themeMode = uiState.themeMode,
+                onThemeModeChange = onThemeModeChange,
                 onSyncNow = onSyncNow,
                 selectedTab = selectedHomeTab,
                 onSelectTab = { tab -> selectedHomeTab = tab },
@@ -649,6 +667,8 @@ private fun HomeHeader(
     syncOverview: SyncOverview,
     isAutoSyncEnabled: Boolean,
     onToggleAutoSync: (Boolean) -> Unit,
+    themeMode: AppThemeMode,
+    onThemeModeChange: (AppThemeMode) -> Unit,
     onSyncNow: () -> Unit,
     selectedTab: HomeTab,
     onSelectTab: (HomeTab) -> Unit,
@@ -665,6 +685,8 @@ private fun HomeHeader(
             syncOverview = syncOverview,
             isAutoSyncEnabled = isAutoSyncEnabled,
             onToggleAutoSync = onToggleAutoSync,
+            themeMode = themeMode,
+            onThemeModeChange = onThemeModeChange,
             onSyncNow = onSyncNow,
             onRetrySync = onRetrySync,
             onOpenTrash = {
@@ -749,6 +771,8 @@ private fun HomeProfileSheet(
     syncOverview: SyncOverview,
     isAutoSyncEnabled: Boolean,
     onToggleAutoSync: (Boolean) -> Unit,
+    themeMode: AppThemeMode,
+    onThemeModeChange: (AppThemeMode) -> Unit,
     onSyncNow: () -> Unit,
     onRetrySync: () -> Unit,
     onOpenTrash: () -> Unit,
@@ -848,6 +872,58 @@ private fun HomeProfileSheet(
                     )
                 },
             )
+
+            ListItem(
+                headlineContent = { Text(text = "App Theme") },
+                supportingContent = { Text(text = "Choose light, dark, or system mode") },
+                leadingContent = {
+                    Icon(
+                        imageVector = Icons.Rounded.Palette,
+                        contentDescription = null,
+                    )
+                },
+            )
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 2.dp)
+                    .background(
+                        color = MaterialTheme.colorScheme.surfaceContainerLow,
+                        shape = RoundedCornerShape(12.dp)
+                    )
+                    .padding(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                AppThemeMode.entries.forEach { mode ->
+                    val isSelected = themeMode == mode
+                    val text = when (mode) {
+                        AppThemeMode.SYSTEM -> "System"
+                        AppThemeMode.LIGHT -> "Light"
+                        AppThemeMode.DARK -> "Dark"
+                    }
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(36.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(
+                                if (isSelected) MaterialTheme.colorScheme.surfaceContainerHigh
+                                else Color.Transparent
+                            )
+                            .clickable { onThemeModeChange(mode) },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = text,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
+                            color = if (isSelected) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
 
             ListItem(
                 headlineContent = { Text(text = "Trash") },
@@ -1920,6 +1996,7 @@ private fun HomeRoutePreview() {
             onSearch = {},
             onOpenAiHistory = {},
             onOpenAiProfile = {},
+            onOpenAiSkills = {},
             onDismissCreateWorkspace = {},
             onNewWorkspaceNameChange = {},
             onCreateWorkspace = {},
@@ -1933,6 +2010,7 @@ private fun HomeRoutePreview() {
             onClearChatHistorySearchQuery = {},
             onRetrySync = {},
             onToggleAutoSync = {},
+            onThemeModeChange = {},
             onSyncNow = {},
             onDismissChatError = {},
             onLogout = {},

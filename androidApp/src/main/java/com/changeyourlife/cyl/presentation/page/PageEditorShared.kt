@@ -2004,6 +2004,7 @@ internal fun PageEditorScreenPreview() {
             onDismissHomeAiError = {},
             onOpenAiHistory = {},
             onOpenAiProfile = {},
+            onOpenAiSkills = {},
         )
     }
 }

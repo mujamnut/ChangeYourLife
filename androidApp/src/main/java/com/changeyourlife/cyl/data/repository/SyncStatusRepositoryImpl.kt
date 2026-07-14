@@ -2,6 +2,7 @@ package com.changeyourlife.cyl.data.repository
 
 import com.changeyourlife.cyl.data.local.dao.PageDao
 import com.changeyourlife.cyl.data.local.dao.AiActionLogDao
+import com.changeyourlife.cyl.data.local.dao.AiSkillDao
 import com.changeyourlife.cyl.data.local.dao.ChatMessageDao
 import com.changeyourlife.cyl.data.local.dao.SyncTombstoneDao
 import com.changeyourlife.cyl.data.local.dao.WorkspaceDao
@@ -16,6 +17,7 @@ class SyncStatusRepositoryImpl @Inject constructor(
     private val workspaceDao: WorkspaceDao,
     private val pageDao: PageDao,
     private val aiActionLogDao: AiActionLogDao,
+    private val aiSkillDao: AiSkillDao,
     private val chatMessageDao: ChatMessageDao,
     private val syncTombstoneDao: SyncTombstoneDao,
     private val backgroundSyncQueue: BackgroundSyncQueue,
@@ -25,6 +27,7 @@ class SyncStatusRepositoryImpl @Inject constructor(
             workspaceDao.observeWorkspacesNeedingSyncCount(),
             pageDao.observePagesNeedingSyncCount(),
             aiActionLogDao.observeLogsNeedingSyncCount(),
+            aiSkillDao.observeSkillsNeedingSyncCount(),
             chatMessageDao.observeSessionsNeedingSyncCount(),
             chatMessageDao.observeMessagesNeedingSyncCount(),
             syncTombstoneDao.observePendingTombstoneCount(),
@@ -35,6 +38,7 @@ class SyncStatusRepositoryImpl @Inject constructor(
             workspaceDao.observeWorkspaceConflictCount(),
             pageDao.observePageConflictCount(),
             aiActionLogDao.observeLogConflictCount(),
+            aiSkillDao.observeSkillConflictCount(),
             chatMessageDao.observeSessionConflictCount(),
             chatMessageDao.observeMessageConflictCount(),
         ) { counts ->

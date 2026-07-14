@@ -6,8 +6,18 @@ data class ChatMessage(
     val role: String,
     val content: String,
     val pageLinks: List<ChatPageLink>,
+    val attachments: List<ChatMessageAttachment> = emptyList(),
     val actionMetadata: ChatActionMetadata? = null,
     val createdAt: Long,
+)
+
+data class ChatMessageAttachment(
+    val id: String,
+    val name: String,
+    val mimeType: String,
+    val kind: String,
+    val sizeBytes: Long,
+    val previewDataUrl: String = "",
 )
 
 data class ChatSession(

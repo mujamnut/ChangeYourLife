@@ -303,7 +303,7 @@ internal fun AiProfileRoute(
 }
 
 @Composable
-private fun AiFullPageHeader(
+internal fun AiFullPageHeader(
     title: String,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,

@@ -37,6 +37,24 @@ data class PageListResponse(
 )
 
 @Serializable
+data class AiSkillSyncDto(
+    val id: String,
+    val workspaceId: String,
+    val name: String,
+    val whenToUse: String,
+    val instructions: String,
+    val isEnabled: Boolean,
+    val createdAt: Long,
+    val updatedAt: Long,
+    val deletedAt: Long? = null,
+)
+
+@Serializable
+data class AiSkillListResponse(
+    val skills: List<AiSkillSyncDto>,
+)
+
+@Serializable
 data class AiActionLogSyncDto(
     val auditId: String,
     val requestMessageId: String,
@@ -87,6 +105,7 @@ data class ChatMessageSyncDto(
     val content: String,
     val pageLinksJson: String = "[]",
     val actionMetadataJson: String = "",
+    val attachmentsJson: String = "[]",
     val createdAt: Long,
     val updatedAt: Long,
 )

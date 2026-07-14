@@ -15,11 +15,14 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -57,8 +60,10 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -66,8 +71,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
@@ -76,6 +84,8 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.changeyourlife.cyl.domain.model.AiActionUndoState
 import com.changeyourlife.cyl.presentation.page.RichTextCommandPaletteItem
 import com.changeyourlife.cyl.presentation.utility.decodeBase64ImageDataUrlToImageBitmap
@@ -83,13 +93,16 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 private const val AiAttachmentThumbnailMaxDimensionPx = 192
+private const val AiAttachmentPreviewMaxDimensionPx = 2048
 
+@Immutable
 internal data class AiMentionChipUi(
     val pageId: String,
     val title: String,
     val canRemove: Boolean,
 )
 
+@Immutable
 internal data class AiAttachmentPreviewUi(
     val label: String,
     val mimeType: String,
@@ -268,6 +281,7 @@ internal fun AiSheetHeader(
 internal fun AiComposerCard(
     inputState: TextFieldState,
     inputText: String,
+    focusRequester: FocusRequester,
     mentionChips: List<AiMentionChipUi>,
     onRemoveMention: (String) -> Unit,
     stagedAttachments: List<AiAttachmentPreviewUi>,
@@ -340,6 +354,7 @@ internal fun AiComposerCard(
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(min = 36.dp, max = 112.dp)
+                .focusRequester(focusRequester)
                 .contentReceiver(pastedImageReceiver)
                 .onFocusChanged { focusState ->
                     if (focusState.isFocused) {
@@ -396,6 +411,229 @@ internal fun AiComposerCard(
                 enabled = canSend,
                 isGenerating = isGenerating,
                 onClick = onSend,
+            )
+        }
+    }
+}
+
+@Composable
+internal fun AiChatMessageAttachments(
+    attachments: List<AiChatAttachment>,
+    modifier: Modifier = Modifier,
+) {
+    if (attachments.isEmpty()) return
+    val scrollState = rememberScrollState()
+    var previewAttachment by remember { mutableStateOf<AiChatAttachment?>(null) }
+    Row(
+        modifier = modifier
+            .widthIn(max = 300.dp)
+            .horizontalScroll(scrollState),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        attachments.forEach { attachment ->
+            key(attachment.id) {
+                AiChatMessageAttachmentItem(
+                    attachment = attachment,
+                    onPreview = { previewAttachment = attachment },
+                )
+            }
+        }
+    }
+    previewAttachment?.let { attachment ->
+        AiImagePreviewDialog(
+            attachment = attachment,
+            onDismiss = { previewAttachment = null },
+        )
+    }
+}
+
+@Composable
+private fun AiChatMessageAttachmentItem(
+    attachment: AiChatAttachment,
+    onPreview: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val isImage = attachment.kind == "image" ||
+        attachment.mimeType.startsWith("image/", ignoreCase = true)
+    if (isImage && attachment.previewDataUrl.isNotBlank()) {
+        var thumbnail by remember(attachment.previewDataUrl) {
+            mutableStateOf<ImageBitmap?>(null)
+        }
+        LaunchedEffect(attachment.previewDataUrl) {
+            thumbnail = withContext(Dispatchers.Default) {
+                decodeBase64ImageDataUrlToImageBitmap(
+                    dataUrl = attachment.previewDataUrl,
+                    maxDimensionPx = AiAttachmentThumbnailMaxDimensionPx * 2,
+                )
+            }
+        }
+        Column(
+            modifier = modifier.width(140.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(width = 140.dp, height = 104.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.surfaceContainer)
+                    .clickable(onClick = onPreview),
+                contentAlignment = Alignment.Center,
+            ) {
+                val bitmap = thumbnail
+                if (bitmap != null) {
+                    Image(
+                        bitmap = bitmap,
+                        contentDescription = attachment.name,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop,
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Rounded.Photo,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
+            }
+            Text(
+                text = attachment.name.ifBlank { "Image" },
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    } else {
+        Row(
+            modifier = modifier
+                .height(48.dp)
+                .widthIn(max = 220.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(MaterialTheme.colorScheme.surfaceContainer)
+                .padding(horizontal = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(9.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.AttachFile,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp),
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = attachment.name.ifBlank { "Attached file" },
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = attachment.mimeType.ifBlank { attachment.kind },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AiImagePreviewDialog(
+    attachment: AiChatAttachment,
+    onDismiss: () -> Unit,
+) {
+    var preview by remember(attachment.previewDataUrl) {
+        mutableStateOf<ImageBitmap?>(null)
+    }
+    var hasFinishedLoading by remember(attachment.previewDataUrl) {
+        mutableStateOf(false)
+    }
+    LaunchedEffect(attachment.previewDataUrl) {
+        hasFinishedLoading = false
+        preview = withContext(Dispatchers.Default) {
+            decodeBase64ImageDataUrlToImageBitmap(
+                dataUrl = attachment.previewDataUrl,
+                maxDimensionPx = AiAttachmentPreviewMaxDimensionPx,
+            )
+        }
+        hasFinishedLoading = true
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false,
+        ),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color(0xF20B0B0B))
+                .statusBarsPadding()
+                .navigationBarsPadding(),
+        ) {
+            when {
+                preview != null -> {
+                    Image(
+                        bitmap = preview!!,
+                        contentDescription = attachment.name.ifBlank { "Image preview" },
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 12.dp, vertical = 72.dp),
+                        contentScale = ContentScale.Fit,
+                    )
+                }
+                !hasFinishedLoading -> {
+                    CircularProgressIndicator(
+                        modifier = Modifier
+                            .size(28.dp)
+                            .align(Alignment.Center),
+                        color = Color.White,
+                        strokeWidth = 2.dp,
+                    )
+                }
+                else -> {
+                    Text(
+                        text = "Preview unavailable",
+                        modifier = Modifier.align(Alignment.Center),
+                        color = Color.White,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+            }
+
+            IconButton(
+                onClick = onDismiss,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(12.dp)
+                    .size(44.dp)
+                    .clip(RoundedCornerShape(22.dp))
+                    .background(Color.White.copy(alpha = 0.12f)),
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Close,
+                    contentDescription = "Close image preview",
+                    tint = Color.White,
+                )
+            }
+
+            Text(
+                text = attachment.name.ifBlank { "Image" },
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(horizontal = 24.dp, vertical = 20.dp),
+                color = Color.White.copy(alpha = 0.86f),
+                style = MaterialTheme.typography.labelMedium,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
             )
         }
     }
@@ -589,7 +827,11 @@ internal fun AiSettingsPanel(
     modelLabel: String,
     visionStatusLabel: String,
     visionPipelineLabel: String,
+    enabledSkillsCount: Int,
+    totalSkillsCount: Int,
     hasMessages: Boolean,
+    onOpenSkills: () -> Unit,
+    onOpenPersonalize: () -> Unit,
     onClearHistory: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -634,7 +876,12 @@ internal fun AiSettingsPanel(
             AiSettingRow(
                 icon = Icons.Rounded.Extension,
                 label = "Skills",
-                value = "Default",
+                value = when {
+                    totalSkillsCount == 0 -> "Set up"
+                    enabledSkillsCount == totalSkillsCount -> "$enabledSkillsCount active"
+                    else -> "$enabledSkillsCount/$totalSkillsCount active"
+                },
+                onClick = onOpenSkills,
             )
         }
         item {
@@ -642,6 +889,7 @@ internal fun AiSettingsPanel(
                 icon = Icons.Rounded.Person,
                 label = "Personalize",
                 value = "Profile page",
+                onClick = onOpenPersonalize,
             )
         }
         if (hasMessages) {
@@ -699,12 +947,16 @@ private fun AiSettingRow(
     icon: ImageVector,
     label: String,
     value: String,
+    onClick: (() -> Unit)? = null,
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .height(46.dp)
             .clip(RoundedCornerShape(10.dp))
+            .then(
+                if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier,
+            )
             .padding(horizontal = 12.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -776,36 +1028,41 @@ private fun AiComposerIconButton(
 ) {
     IconButton(
         onClick = onClick,
-        modifier = Modifier
-            .size(40.dp)
-            .clip(RoundedCornerShape(20.dp))
-            .background(
-                if (active) {
-                    MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
-                } else {
-                    MaterialTheme.colorScheme.surface.copy(alpha = 0f)
-                },
-            )
-            .border(
-                width = 1.dp,
-                color = if (active) {
-                    MaterialTheme.colorScheme.primary.copy(alpha = 0.32f)
-                } else {
-                    MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0f)
-                },
-                shape = RoundedCornerShape(20.dp),
-            ),
+        modifier = Modifier.size(40.dp),
     ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = contentDescription,
-            tint = if (active) {
-                MaterialTheme.colorScheme.primary
-            } else {
-                MaterialTheme.colorScheme.onSurfaceVariant
-            },
-            modifier = Modifier.size(22.dp),
-        )
+        Box(
+            modifier = Modifier
+                .size(30.dp)
+                .clip(RoundedCornerShape(15.dp))
+                .background(
+                    if (active) {
+                        MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.72f)
+                    } else {
+                        Color.Transparent
+                    },
+                )
+                .border(
+                    width = 1.dp,
+                    color = if (active) {
+                        MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.48f)
+                    } else {
+                        Color.Transparent
+                    },
+                    shape = RoundedCornerShape(15.dp),
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = contentDescription,
+                tint = if (active) {
+                    MaterialTheme.colorScheme.onSurface
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                modifier = Modifier.size(19.dp),
+            )
+        }
     }
 }
 

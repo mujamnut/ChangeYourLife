@@ -14,6 +14,16 @@ object AiChatMessageMapper {
                 id = message.id,
                 role = message.role,
                 content = message.content,
+                attachments = message.attachments.map { attachment ->
+                    AiChatAttachment(
+                        id = attachment.id,
+                        name = attachment.name,
+                        mimeType = attachment.mimeType,
+                        kind = attachment.kind,
+                        sizeBytes = attachment.sizeBytes,
+                        previewDataUrl = attachment.previewDataUrl,
+                    )
+                },
                 pageLinks = message.pageLinks.map { link ->
                     AiChatPageLink(
                         pageId = link.pageId,

@@ -1,12 +1,14 @@
 package com.changeyourlife.cyl.data.sync
 
 import com.changeyourlife.cyl.data.local.dao.AiActionLogDao
+import com.changeyourlife.cyl.data.local.dao.AiSkillDao
 import com.changeyourlife.cyl.data.local.dao.ChatMessageDao
 import com.changeyourlife.cyl.data.local.dao.PageDao
 import com.changeyourlife.cyl.data.local.dao.PageContentDao
 import com.changeyourlife.cyl.data.local.dao.SyncTombstoneDao
 import com.changeyourlife.cyl.data.local.dao.WorkspaceDao
 import com.changeyourlife.cyl.data.local.entity.AiActionLogEntity
+import com.changeyourlife.cyl.data.local.entity.AiSkillEntity
 import com.changeyourlife.cyl.data.local.entity.ChatMessageEntity
 import com.changeyourlife.cyl.data.local.entity.ChatSessionEntity
 import com.changeyourlife.cyl.data.local.entity.PageEntity
@@ -20,6 +22,7 @@ import com.changeyourlife.cyl.data.local.model.PageContentSnapshot
 import com.changeyourlife.cyl.data.local.session.AuthTokenStore
 import com.changeyourlife.cyl.data.local.session.WorkspaceSelectionStore
 import com.changeyourlife.cyl.data.remote.sync.AiActionLogSyncDto
+import com.changeyourlife.cyl.data.remote.sync.AiSkillSyncDto
 import com.changeyourlife.cyl.data.remote.sync.ChatMessageSyncDto
 import com.changeyourlife.cyl.data.remote.sync.ChatSessionSyncDto
 import com.changeyourlife.cyl.data.remote.sync.PageBlockCreateRequestDto
@@ -46,6 +49,7 @@ import com.changeyourlife.cyl.domain.model.PageTable
 import com.changeyourlife.cyl.domain.model.PageTableCellValue
 import com.changeyourlife.cyl.domain.model.PageTableColumn
 import com.changeyourlife.cyl.domain.model.PageTableRow
+import com.changeyourlife.cyl.domain.model.isActive
 import javax.inject.Inject
 import javax.inject.Singleton
 import retrofit2.HttpException
@@ -56,6 +60,7 @@ class SessionSyncCoordinator @Inject constructor(
     private val pageDao: PageDao,
     private val pageContentDao: PageContentDao,
     private val aiActionLogDao: AiActionLogDao,
+    private val aiSkillDao: AiSkillDao,
     private val chatMessageDao: ChatMessageDao,
     private val syncTombstoneDao: SyncTombstoneDao,
     private val syncApi: SyncApi,
@@ -86,6 +91,7 @@ class SessionSyncCoordinator @Inject constructor(
             refreshPages(workspaceId = workspaceId, includeDeleted = true)
             refreshChatSessions(scopeId = homeChatScopeId(workspaceId))
             refreshAiActionLogs(workspaceId = workspaceId)
+            refreshAiSkills(workspaceId = workspaceId)
         }
 
         pushPendingChanges()
@@ -98,6 +104,7 @@ class SessionSyncCoordinator @Inject constructor(
         pushPendingChatSessions()
         pushPendingChatMessages()
         pushPendingAiActionLogs()
+        pushPendingAiSkills()
     }
 
     suspend fun pushPendingChangesForWorker(): Boolean {
@@ -164,6 +171,19 @@ class SessionSyncCoordinator @Inject constructor(
         }.onFailure(::handleSyncFailure)
     }
 
+    suspend fun refreshAiSkills(workspaceId: String) {
+        val header = authHeader() ?: return
+        runCatching {
+            syncApi.listAiSkills(
+                authorization = header,
+                workspaceId = workspaceId,
+                includeDeleted = true,
+            ).skills
+        }.onSuccess { skills ->
+            skills.forEach { skill -> mergeAiSkill(skill) }
+        }.onFailure(::handleSyncFailure)
+    }
+
     suspend fun refreshChatSessions(scopeId: String) {
         val header = authHeader() ?: return
         runCatching {
@@ -220,12 +240,7 @@ class SessionSyncCoordinator @Inject constructor(
                 page = page.toDomain().toSyncDto(),
             )
         }.onSuccess { remotePage ->
-            persistPage(
-                remotePage.toSyncedEntity(
-                    previous = page,
-                    now = System.currentTimeMillis(),
-                ),
-            )
+            persistPushResponse(remotePage = remotePage, pushedPage = page)
         }.onFailure(::handleSyncFailure)
     }
 
@@ -243,6 +258,22 @@ class SessionSyncCoordinator @Inject constructor(
                     previous = actionLog,
                     now = System.currentTimeMillis(),
                 ),
+            )
+        }.onFailure(::handleSyncFailure)
+    }
+
+    suspend fun pushAiSkill(skill: AiSkillEntity) {
+        val header = authHeader() ?: return
+        runCatching {
+            syncApi.upsertAiSkill(
+                authorization = header,
+                id = skill.id,
+                skill = skill.toSyncDto(),
+            )
+        }.onSuccess { remoteSkill ->
+            persistAiSkillPushResponse(
+                remoteSkill = remoteSkill,
+                pushedSkill = skill,
             )
         }.onFailure(::handleSyncFailure)
     }
@@ -303,12 +334,7 @@ class SessionSyncCoordinator @Inject constructor(
                 request = PageBlockPatchRequestDto(text = text),
             )
         }.onSuccess { remotePage ->
-            persistPage(
-                remotePage.toSyncedEntity(
-                    previous = page,
-                    now = System.currentTimeMillis(),
-                ),
-            )
+            persistPushResponse(remotePage = remotePage, pushedPage = page)
         }.onFailure { error ->
             handleSyncFailure(error)
             pushPage(page)
@@ -333,12 +359,7 @@ class SessionSyncCoordinator @Inject constructor(
                 ),
             )
         }.onSuccess { remotePage ->
-            persistPage(
-                remotePage.toSyncedEntity(
-                    previous = page,
-                    now = System.currentTimeMillis(),
-                ),
-            )
+            persistPushResponse(remotePage = remotePage, pushedPage = page)
         }.onFailure { error ->
             handleSyncFailure(error)
             pushPage(page)
@@ -363,12 +384,7 @@ class SessionSyncCoordinator @Inject constructor(
                 ),
             )
         }.onSuccess { remotePage ->
-            persistPage(
-                remotePage.toSyncedEntity(
-                    previous = page,
-                    now = System.currentTimeMillis(),
-                ),
-            )
+            persistPushResponse(remotePage = remotePage, pushedPage = page)
         }.onFailure { error ->
             handleSyncFailure(error)
             pushPage(page)
@@ -394,12 +410,7 @@ class SessionSyncCoordinator @Inject constructor(
                 ),
             )
         }.onSuccess { remotePage ->
-            persistPage(
-                remotePage.toSyncedEntity(
-                    previous = page,
-                    now = System.currentTimeMillis(),
-                ),
-            )
+            persistPushResponse(remotePage = remotePage, pushedPage = page)
         }.onFailure { error ->
             handleSyncFailure(error)
             pushPage(page)
@@ -420,12 +431,7 @@ class SessionSyncCoordinator @Inject constructor(
                 request = table.toPatchRequestDto(),
             )
         }.onSuccess { remotePage ->
-            persistPage(
-                remotePage.toSyncedEntity(
-                    previous = page,
-                    now = System.currentTimeMillis(),
-                ),
-            )
+            persistPushResponse(remotePage = remotePage, pushedPage = page)
         }.onFailure { error ->
             handleSyncFailure(error)
             pushPage(page)
@@ -447,12 +453,7 @@ class SessionSyncCoordinator @Inject constructor(
                 request = column.toPatchRequestDto(),
             )
         }.onSuccess { remotePage ->
-            persistPage(
-                remotePage.toSyncedEntity(
-                    previous = page,
-                    now = System.currentTimeMillis(),
-                ),
-            )
+            persistPushResponse(remotePage = remotePage, pushedPage = page)
         }.onFailure { error ->
             handleSyncFailure(error)
             pushPage(page)
@@ -485,7 +486,7 @@ class SessionSyncCoordinator @Inject constructor(
                 ),
             )
         }.onSuccess { remotePage ->
-            persistPage(remotePage.toSyncedEntity(previous = page, now = System.currentTimeMillis()))
+            persistPushResponse(remotePage = remotePage, pushedPage = page)
         }.onFailure { error ->
             handleSyncFailure(error)
             pushPage(page)
@@ -504,7 +505,7 @@ class SessionSyncCoordinator @Inject constructor(
                 blockId = blockId,
             )
         }.onSuccess { remotePage ->
-            persistPage(remotePage.toSyncedEntity(previous = page, now = System.currentTimeMillis()))
+            persistPushResponse(remotePage = remotePage, pushedPage = page)
         }.onFailure { error ->
             handleSyncFailure(error)
             pushPage(page)
@@ -525,7 +526,7 @@ class SessionSyncCoordinator @Inject constructor(
                 request = PageElementPositionPatchRequestDto(targetIndex = targetIndex),
             )
         }.onSuccess { remotePage ->
-            persistPage(remotePage.toSyncedEntity(previous = page, now = System.currentTimeMillis()))
+            persistPushResponse(remotePage = remotePage, pushedPage = page)
         }.onFailure { error ->
             handleSyncFailure(error)
             pushPage(page)
@@ -551,7 +552,7 @@ class SessionSyncCoordinator @Inject constructor(
                 ),
             )
         }.onSuccess { remotePage ->
-            persistPage(remotePage.toSyncedEntity(previous = page, now = System.currentTimeMillis()))
+            persistPushResponse(remotePage = remotePage, pushedPage = page)
         }.onFailure { error ->
             handleSyncFailure(error)
             pushPage(page)
@@ -570,7 +571,7 @@ class SessionSyncCoordinator @Inject constructor(
                 propertyId = propertyId,
             )
         }.onSuccess { remotePage ->
-            persistPage(remotePage.toSyncedEntity(previous = page, now = System.currentTimeMillis()))
+            persistPushResponse(remotePage = remotePage, pushedPage = page)
         }.onFailure { error ->
             handleSyncFailure(error)
             pushPage(page)
@@ -591,7 +592,7 @@ class SessionSyncCoordinator @Inject constructor(
                 request = PageElementPositionPatchRequestDto(targetIndex = targetIndex),
             )
         }.onSuccess { remotePage ->
-            persistPage(remotePage.toSyncedEntity(previous = page, now = System.currentTimeMillis()))
+            persistPushResponse(remotePage = remotePage, pushedPage = page)
         }.onFailure { error ->
             handleSyncFailure(error)
             pushPage(page)
@@ -625,7 +626,7 @@ class SessionSyncCoordinator @Inject constructor(
                 ),
             )
         }.onSuccess { remotePage ->
-            persistPage(remotePage.toSyncedEntity(previous = page, now = System.currentTimeMillis()))
+            persistPushResponse(remotePage = remotePage, pushedPage = page)
         }.onFailure { error ->
             handleSyncFailure(error)
             pushPage(page)
@@ -646,7 +647,7 @@ class SessionSyncCoordinator @Inject constructor(
                 columnId = columnId,
             )
         }.onSuccess { remotePage ->
-            persistPage(remotePage.toSyncedEntity(previous = page, now = System.currentTimeMillis()))
+            persistPushResponse(remotePage = remotePage, pushedPage = page)
         }.onFailure { error ->
             handleSyncFailure(error)
             pushPage(page)
@@ -669,7 +670,7 @@ class SessionSyncCoordinator @Inject constructor(
                 request = PageElementPositionPatchRequestDto(targetIndex = targetIndex),
             )
         }.onSuccess { remotePage ->
-            persistPage(remotePage.toSyncedEntity(previous = page, now = System.currentTimeMillis()))
+            persistPushResponse(remotePage = remotePage, pushedPage = page)
         }.onFailure { error ->
             handleSyncFailure(error)
             pushPage(page)
@@ -701,7 +702,7 @@ class SessionSyncCoordinator @Inject constructor(
                 ),
             )
         }.onSuccess { remotePage ->
-            persistPage(remotePage.toSyncedEntity(previous = page, now = System.currentTimeMillis()))
+            persistPushResponse(remotePage = remotePage, pushedPage = page)
         }.onFailure { error ->
             handleSyncFailure(error)
             pushPage(page)
@@ -726,7 +727,7 @@ class SessionSyncCoordinator @Inject constructor(
                 ),
             )
         }.onSuccess { remotePage ->
-            persistPage(remotePage.toSyncedEntity(previous = page, now = System.currentTimeMillis()))
+            persistPushResponse(remotePage = remotePage, pushedPage = page)
         }.onFailure { error ->
             handleSyncFailure(error)
             pushPage(page)
@@ -747,7 +748,7 @@ class SessionSyncCoordinator @Inject constructor(
                 rowId = rowId,
             )
         }.onSuccess { remotePage ->
-            persistPage(remotePage.toSyncedEntity(previous = page, now = System.currentTimeMillis()))
+            persistPushResponse(remotePage = remotePage, pushedPage = page)
         }.onFailure { error ->
             handleSyncFailure(error)
             pushPage(page)
@@ -770,7 +771,7 @@ class SessionSyncCoordinator @Inject constructor(
                 request = PageElementPositionPatchRequestDto(targetIndex = targetIndex),
             )
         }.onSuccess { remotePage ->
-            persistPage(remotePage.toSyncedEntity(previous = page, now = System.currentTimeMillis()))
+            persistPushResponse(remotePage = remotePage, pushedPage = page)
         }.onFailure { error ->
             handleSyncFailure(error)
             pushPage(page)
@@ -853,7 +854,8 @@ class SessionSyncCoordinator @Inject constructor(
             pageDao.getPagesNeedingSync().any { page -> page.syncStatus != SyncStatus.Conflict } ||
             chatMessageDao.getSessionsNeedingSync().any { session -> session.syncStatus != SyncStatus.Conflict } ||
             chatMessageDao.getMessagesNeedingSync().any { message -> message.syncStatus != SyncStatus.Conflict } ||
-            aiActionLogDao.getLogsNeedingSync().any { actionLog -> actionLog.syncStatus != SyncStatus.Conflict }
+            aiActionLogDao.getLogsNeedingSync().any { actionLog -> actionLog.syncStatus != SyncStatus.Conflict } ||
+            aiSkillDao.getSkillsNeedingSync().any { skill -> skill.syncStatus != SyncStatus.Conflict }
     }
 
     private suspend fun pushPendingTombstones() {
@@ -884,6 +886,12 @@ class SessionSyncCoordinator @Inject constructor(
         aiActionLogDao.getLogsNeedingSync()
             .filterNot { actionLog -> actionLog.syncStatus == SyncStatus.Conflict }
             .forEach { actionLog -> pushAiActionLog(actionLog.copy(syncStatus = SyncStatus.PendingPush)) }
+    }
+
+    private suspend fun pushPendingAiSkills() {
+        aiSkillDao.getSkillsNeedingSync()
+            .filterNot { skill -> skill.syncStatus == SyncStatus.Conflict }
+            .forEach { skill -> pushAiSkill(skill.copy(syncStatus = SyncStatus.PendingPush)) }
     }
 
     private suspend fun mergeWorkspace(remoteWorkspace: WorkspaceSyncDto) {
@@ -1000,6 +1008,34 @@ class SessionSyncCoordinator @Inject constructor(
         }
     }
 
+    private suspend fun mergeAiSkill(remoteSkill: AiSkillSyncDto) {
+        val localSkill = aiSkillDao.getByIdIncludingDeleted(remoteSkill.id)
+        val now = System.currentTimeMillis()
+        when {
+            localSkill == null -> {
+                aiSkillDao.upsert(remoteSkill.toSyncedEntity(previous = null, now = now))
+            }
+
+            localSkill.workspaceId != remoteSkill.workspaceId -> {
+                // IDs are immutable across workspaces. Keep the local record and let the server reject a bad collision.
+                aiSkillDao.upsert(localSkill.copy(syncStatus = SyncStatus.Conflict))
+            }
+
+            remoteSkill.updatedAt >= localSkill.updatedAt || localSkill.syncStatus == SyncStatus.Synced -> {
+                aiSkillDao.upsert(remoteSkill.toSyncedEntity(previous = localSkill, now = now))
+            }
+
+            else -> {
+                val pending = localSkill.copy(
+                    syncStatus = SyncStatus.PendingPush,
+                    remoteUpdatedAt = maxOf(localSkill.remoteUpdatedAt, remoteSkill.updatedAt),
+                )
+                aiSkillDao.upsert(pending)
+                pushAiSkill(pending)
+            }
+        }
+    }
+
     private suspend fun mergeChatSession(remoteSession: ChatSessionSyncDto) {
         val localSession = chatMessageDao.getSessionIncludingDeleted(remoteSession.id)
         val now = System.currentTimeMillis()
@@ -1108,6 +1144,40 @@ class SessionSyncCoordinator @Inject constructor(
             )
     }
 
+    private fun AiSkillEntity.toSyncDto(): AiSkillSyncDto {
+        return AiSkillSyncDto(
+            id = id,
+            workspaceId = workspaceId,
+            name = name,
+            whenToUse = whenToUse,
+            instructions = instructions,
+            isEnabled = isEnabled,
+            createdAt = createdAt,
+            updatedAt = updatedAt,
+            deletedAt = deletedAt,
+        )
+    }
+
+    private fun AiSkillSyncDto.toSyncedEntity(
+        previous: AiSkillEntity?,
+        now: Long,
+    ): AiSkillEntity {
+        return AiSkillEntity(
+            id = id,
+            workspaceId = workspaceId,
+            name = name,
+            whenToUse = whenToUse,
+            instructions = instructions,
+            isEnabled = isEnabled,
+            createdAt = previous?.createdAt ?: createdAt,
+            updatedAt = updatedAt,
+            deletedAt = deletedAt,
+            syncStatus = SyncStatus.Synced,
+            remoteUpdatedAt = updatedAt,
+            lastSyncedAt = now,
+        )
+    }
+
     private fun ChatSessionEntity.toSyncDto(): ChatSessionSyncDto {
         return ChatSessionSyncDto(
             id = id,
@@ -1145,6 +1215,7 @@ class SessionSyncCoordinator @Inject constructor(
             content = content,
             pageLinksJson = pageLinksJson,
             actionMetadataJson = actionMetadataJson,
+            attachmentsJson = attachmentsJson,
             createdAt = createdAt,
             updatedAt = updatedAt,
         )
@@ -1161,12 +1232,80 @@ class SessionSyncCoordinator @Inject constructor(
             content = content,
             pageLinksJson = pageLinksJson,
             actionMetadataJson = actionMetadataJson,
+            attachmentsJson = attachmentsJson.takeUnless { remoteJson ->
+                remoteJson == "[]" && previous?.attachmentsJson?.let { localJson ->
+                    localJson.isNotBlank() && localJson != "[]"
+                } == true
+            } ?: previous?.attachmentsJson.orEmpty().ifBlank { "[]" },
             createdAt = previous?.createdAt ?: createdAt,
             updatedAt = updatedAt,
             syncStatus = SyncStatus.Synced,
             remoteUpdatedAt = updatedAt,
             lastSyncedAt = now,
         )
+    }
+
+    private suspend fun persistPushResponse(
+        remotePage: PageSyncDto,
+        pushedPage: PageEntity,
+    ) {
+        val now = System.currentTimeMillis()
+        val currentPage = pageDao.getPage(pushedPage.id)
+        if (currentPage != null && currentPage.hasLocalMutationAfter(pushedPage)) {
+            persistPage(
+                currentPage.copy(
+                    syncStatus = SyncStatus.PendingPush,
+                    remoteUpdatedAt = maxOf(currentPage.remoteUpdatedAt, remotePage.updatedAt),
+                    lastSyncedAt = now,
+                ),
+            )
+            return
+        }
+        persistPage(remotePage.toSyncedEntity(previous = currentPage ?: pushedPage, now = now))
+    }
+
+    private suspend fun persistAiSkillPushResponse(
+        remoteSkill: AiSkillSyncDto,
+        pushedSkill: AiSkillEntity,
+    ) {
+        val now = System.currentTimeMillis()
+        val currentSkill = aiSkillDao.getByIdIncludingDeleted(pushedSkill.id)
+        if (currentSkill != null && currentSkill.hasLocalMutationAfter(pushedSkill)) {
+            aiSkillDao.upsert(
+                currentSkill.copy(
+                    syncStatus = SyncStatus.PendingPush,
+                    remoteUpdatedAt = maxOf(currentSkill.remoteUpdatedAt, remoteSkill.updatedAt),
+                    lastSyncedAt = now,
+                ),
+            )
+            return
+        }
+        aiSkillDao.upsert(
+            remoteSkill.toSyncedEntity(
+                previous = currentSkill ?: pushedSkill,
+                now = now,
+            ),
+        )
+    }
+
+    private fun PageEntity.hasLocalMutationAfter(pushedPage: PageEntity): Boolean {
+        return updatedAt > pushedPage.updatedAt ||
+            workspaceId != pushedPage.workspaceId ||
+            parentPageId != pushedPage.parentPageId ||
+            title != pushedPage.title ||
+            content != pushedPage.content ||
+            sortOrder != pushedPage.sortOrder ||
+            deletedAt != pushedPage.deletedAt
+    }
+
+    private fun AiSkillEntity.hasLocalMutationAfter(pushedSkill: AiSkillEntity): Boolean {
+        return updatedAt > pushedSkill.updatedAt ||
+            workspaceId != pushedSkill.workspaceId ||
+            name != pushedSkill.name ||
+            whenToUse != pushedSkill.whenToUse ||
+            instructions != pushedSkill.instructions ||
+            isEnabled != pushedSkill.isEnabled ||
+            deletedAt != pushedSkill.deletedAt
     }
 
     private suspend fun persistPage(page: PageEntity) {
@@ -1225,12 +1364,12 @@ class SessionSyncCoordinator @Inject constructor(
             timelineEndColumnId = viewConfig.timelineEndColumnId,
             dashboardMetricColumnId = viewConfig.dashboardMetricColumnId,
             dashboardGroupColumnId = viewConfig.dashboardGroupColumnId,
-            sortColumnId = sort.columnId,
-            sortDirection = sort.direction.name,
-            filterColumnId = filter.columnId,
-            filterQuery = filter.query,
-            filterOperator = filter.operator.name,
-            groupByColumnId = groupByColumnId,
+            sortColumnId = sort.columnId.takeIf { it.isNotBlank() } ?: "",
+            sortDirection = sort.direction.name.takeIf { sort.columnId.isNotBlank() },
+            filterColumnId = filter.columnId.takeIf { filter.isActive() } ?: "",
+            filterQuery = filter.query.takeIf { filter.isActive() } ?: "",
+            filterOperator = filter.operator.name.takeIf { filter.isActive() },
+            groupByColumnId = groupByColumnId.takeIf { it.isNotBlank() } ?: "",
         )
     }
 

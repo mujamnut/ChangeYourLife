@@ -208,6 +208,39 @@ class PageContentJsonMutatorTest {
         assertEquals(emptySet(), table["filter"]!!.jsonObject.keys)
     }
 
+    @Test
+    fun updateTableClearsFilterWhenColumnIdIsBlankWithoutQueryPatch() {
+        val content = relationContent.replace(
+            "\"rows\": [",
+            """
+            "filter": { "columnId": "name", "query": "food", "operator": "Contains" },
+                "rows": [
+            """.trimIndent(),
+        )
+
+        val updated = PageContentJsonMutator.updateTable(
+            content = content,
+            tableBlockId = "table-1",
+            title = null,
+            view = null,
+            calendarDateColumnId = null,
+            timelineStartColumnId = null,
+            timelineEndColumnId = null,
+            dashboardMetricColumnId = null,
+            dashboardGroupColumnId = null,
+            sortColumnId = null,
+            sortDirection = null,
+            filterColumnId = "",
+            filterQuery = null,
+            filterOperator = null,
+            groupByColumnId = null,
+        )
+
+        val table = requireNotNull(updated).tableObject()
+
+        assertEquals(emptySet(), table["filter"]!!.jsonObject.keys)
+    }
+
     private val relationContent = """
         {
           "blocks": [

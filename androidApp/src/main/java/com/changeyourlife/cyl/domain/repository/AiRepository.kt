@@ -41,6 +41,7 @@ data class AiDiagnostics(
 
 data class AiImageAttachment(
     val dataUrl: String = "",
+    val previewDataUrl: String = "",
     val textContent: String = "",
     val mimeType: String = "",
     val name: String = "",

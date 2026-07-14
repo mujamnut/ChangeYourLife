@@ -109,7 +109,7 @@ object AiChatActionOrchestrator {
                 proposedActions = proposedActions.mapIndexed { index, action -> action.toMetadataItem(index) },
                 executedActions = appliedActionIndexes
                     .map { index -> proposedActions[index].toMetadataItem(index) },
-                executionMessages = diagnosticMessages + actionResults.messages,
+                executionMessages = diagnosticMessages + visibleExecutionMessages,
                 validationIssues = backendValidationIssues + actionDecision.validationIssues + actionResults.validationIssues.filterNot { issue ->
                     issue.actionIndex != null && issue.actionIndex in rejectedActionIndexes
                 },

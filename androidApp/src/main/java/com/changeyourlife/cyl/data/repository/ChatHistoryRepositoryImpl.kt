@@ -9,6 +9,7 @@ import com.changeyourlife.cyl.domain.model.ChatActionMetadata
 import com.changeyourlife.cyl.domain.model.ChatActionMetadataItem
 import com.changeyourlife.cyl.domain.model.ChatActionValidationMetadata
 import com.changeyourlife.cyl.domain.model.ChatMessage
+import com.changeyourlife.cyl.domain.model.ChatMessageAttachment
 import com.changeyourlife.cyl.domain.model.ChatPageLink
 import com.changeyourlife.cyl.domain.model.ChatSession
 import com.changeyourlife.cyl.domain.repository.ChatHistoryRepository
@@ -70,6 +71,7 @@ class ChatHistoryRepositoryImpl @Inject constructor(
         role: String,
         content: String,
         pageLinks: List<ChatPageLink>,
+        attachments: List<ChatMessageAttachment>,
         actionMetadata: ChatActionMetadata?,
     ): ChatMessage {
         val now = System.currentTimeMillis()
@@ -101,6 +103,7 @@ class ChatHistoryRepositoryImpl @Inject constructor(
             role = role,
             content = content,
             pageLinks = pageLinks,
+            attachments = attachments,
             actionMetadata = actionMetadata,
             createdAt = now,
         )
@@ -161,6 +164,9 @@ private fun ChatMessageEntity.toDomain(json: Json): ChatMessage {
         pageLinks = runCatching {
             json.decodeFromString<List<ChatPageLinkDto>>(pageLinksJson).map { it.toDomain() }
         }.getOrDefault(emptyList()),
+        attachments = runCatching {
+            json.decodeFromString<List<ChatMessageAttachmentDto>>(attachmentsJson).map { it.toDomain() }
+        }.getOrDefault(emptyList()),
         actionMetadata = actionMetadataJson
             .takeIf { it.isNotBlank() }
             ?.let { metadataJson ->
@@ -178,6 +184,7 @@ private fun ChatMessage.toEntity(json: Json): ChatMessageEntity {
         role = role,
         content = content,
         pageLinksJson = json.encodeToString(pageLinks.map { it.toDto() }),
+        attachmentsJson = json.encodeToString(attachments.map { it.toDto() }),
         actionMetadataJson = actionMetadata?.let { metadata ->
             json.encodeToString(metadata.toDto())
         }.orEmpty(),
@@ -192,6 +199,16 @@ private data class ChatPageLinkDto(
     val title: String,
     val targetType: String = "",
     val targetId: String = "",
+)
+
+@Serializable
+private data class ChatMessageAttachmentDto(
+    val id: String,
+    val name: String,
+    val mimeType: String,
+    val kind: String,
+    val sizeBytes: Long,
+    val previewDataUrl: String = "",
 )
 
 @Serializable
@@ -242,6 +259,28 @@ private fun ChatPageLink.toDto(): ChatPageLinkDto {
         title = title,
         targetType = targetType,
         targetId = targetId,
+    )
+}
+
+private fun ChatMessageAttachmentDto.toDomain(): ChatMessageAttachment {
+    return ChatMessageAttachment(
+        id = id,
+        name = name,
+        mimeType = mimeType,
+        kind = kind,
+        sizeBytes = sizeBytes,
+        previewDataUrl = previewDataUrl,
+    )
+}
+
+private fun ChatMessageAttachment.toDto(): ChatMessageAttachmentDto {
+    return ChatMessageAttachmentDto(
+        id = id,
+        name = name,
+        mimeType = mimeType,
+        kind = kind,
+        sizeBytes = sizeBytes,
+        previewDataUrl = previewDataUrl,
     )
 }
 

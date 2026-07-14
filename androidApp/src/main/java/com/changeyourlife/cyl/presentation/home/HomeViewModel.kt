@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.changeyourlife.cyl.core.constants.CylDefaults
 import com.changeyourlife.cyl.core.network.toBackendConnectionMessage
+import com.changeyourlife.cyl.domain.model.AiSkill
 import com.changeyourlife.cyl.domain.model.Page
 import com.changeyourlife.cyl.domain.model.PageBlock
 import com.changeyourlife.cyl.domain.model.PageBlockDocument
@@ -21,6 +22,7 @@ import com.changeyourlife.cyl.domain.model.isActive
 import com.changeyourlife.cyl.domain.repository.AuthRepository
 import com.changeyourlife.cyl.domain.repository.AiBlockContext
 import com.changeyourlife.cyl.domain.model.ChatMessage
+import com.changeyourlife.cyl.domain.model.ChatMessageAttachment
 import com.changeyourlife.cyl.domain.model.ChatPageLink
 import com.changeyourlife.cyl.domain.model.ChatSession
 import com.changeyourlife.cyl.domain.repository.ChatHistoryRepository
@@ -31,12 +33,14 @@ import com.changeyourlife.cyl.domain.repository.TaskRepository
 import com.changeyourlife.cyl.domain.repository.WorkspaceRepository
 import com.changeyourlife.cyl.domain.repository.AiPageContext
 import com.changeyourlife.cyl.domain.repository.AiRepository
+import com.changeyourlife.cyl.domain.repository.AiSkillRepository
 import com.changeyourlife.cyl.domain.repository.AiException
 import com.changeyourlife.cyl.domain.repository.AiImageAttachment
 import com.changeyourlife.cyl.domain.repository.AiStatus
 import com.changeyourlife.cyl.domain.repository.AiActionLogRepository
 import com.changeyourlife.cyl.domain.usecase.ApplyAiActionUndoUseCase
 import com.changeyourlife.cyl.domain.usecase.BuildAiMemoryContextUseCase
+import com.changeyourlife.cyl.domain.usecase.BuildAiSkillContextUseCase
 import com.changeyourlife.cyl.presentation.ai.AiActionExecutionUseCase
 import com.changeyourlife.cyl.presentation.ai.AiActionLogFactory
 import com.changeyourlife.cyl.presentation.ai.AiChatActionOrchestrator
@@ -50,6 +54,8 @@ import com.changeyourlife.cyl.presentation.page.PageModuleTemplates
 import com.changeyourlife.cyl.presentation.page.PageModuleType
 import com.changeyourlife.cyl.presentation.page.PageTableReference
 import com.changeyourlife.cyl.presentation.page.tableReferences
+import com.changeyourlife.cyl.data.local.session.AppThemeMode
+import com.changeyourlife.cyl.data.local.session.SyncSettingsStore
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
@@ -68,6 +74,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.UUID
 
 @HiltViewModel
 class HomeViewModel @Inject constructor(
@@ -77,13 +84,15 @@ class HomeViewModel @Inject constructor(
     private val authRepository: AuthRepository,
     private val reminderRepository: ReminderRepository,
     private val aiRepository: AiRepository,
+    private val aiSkillRepository: AiSkillRepository,
     private val aiActionExecutionUseCase: AiActionExecutionUseCase,
     private val applyAiActionUndoUseCase: ApplyAiActionUndoUseCase,
     private val buildAiMemoryContextUseCase: BuildAiMemoryContextUseCase,
+    private val buildAiSkillContextUseCase: BuildAiSkillContextUseCase,
     private val aiActionLogRepository: AiActionLogRepository,
     private val chatHistoryRepository: ChatHistoryRepository,
     private val syncStatusRepository: SyncStatusRepository,
-    private val syncSettingsStore: com.changeyourlife.cyl.data.local.session.SyncSettingsStore,
+    private val syncSettingsStore: SyncSettingsStore,
     private val backgroundSyncQueue: com.changeyourlife.cyl.data.sync.BackgroundSyncQueue,
 ) : ViewModel() {
     private val workspaceFormState = MutableStateFlow(WorkspaceFormState())
@@ -96,6 +105,15 @@ class HomeViewModel @Inject constructor(
                     ?: CylDefaults.DefaultWorkspaceId,
             )
         }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val activeWorkspaceSkills: Flow<List<AiSkill>> = workspaceRepository.observeActiveWorkspaceId()
+        .map { workspaceId ->
+            workspaceId
+                ?.takeIf { id -> id.isNotBlank() }
+                ?: CylDefaults.DefaultWorkspaceId
+        }
+        .flatMapLatest(aiSkillRepository::observeSkills)
 
     @OptIn(ExperimentalCoroutinesApi::class)
     private val chatSessions: Flow<List<ChatSession>> = activeWorkspaceChatScope
@@ -134,6 +152,7 @@ class HomeViewModel @Inject constructor(
     private val aiModelLabel = MutableStateFlow("AI model")
     private val searchQuery = MutableStateFlow("")
     private val chatHistorySearchQuery = MutableStateFlow("")
+    private val aiSkillError = MutableStateFlow<String?>(null)
 
     @OptIn(ExperimentalCoroutinesApi::class)
     private val chatHistorySearchMessages: Flow<List<ChatMessage>> = activeWorkspaceChatScope
@@ -280,11 +299,18 @@ class HomeViewModel @Inject constructor(
             aiChatError = chat.error,
         )
     }.let { baseState ->
-        combine(baseState, chatHistorySearchQuery, chatHistorySearchResults, syncSettingsStore.isAutoSyncEnabled) { state, chatSearchQuery, chatSearchResults, isAutoSyncEnabled ->
+        combine(
+            baseState,
+            chatHistorySearchQuery,
+            chatHistorySearchResults,
+            syncSettingsStore.isAutoSyncEnabled,
+            syncSettingsStore.themeMode
+        ) { state, chatSearchQuery, chatSearchResults, isAutoSyncEnabled, themeMode ->
             state.copy(
                 chatHistorySearchQuery = chatSearchQuery,
                 chatHistorySearchResults = chatSearchResults,
                 isAutoSyncEnabled = isAutoSyncEnabled,
+                themeMode = themeMode,
             )
         }
     }.let { baseState ->
@@ -295,6 +321,13 @@ class HomeViewModel @Inject constructor(
                 aiModelLabel = modelLabel,
                 aiVisionStatusLabel = aiStatus.toVisionStatusLabel(),
                 aiVisionPipelineLabel = aiStatus.toVisionPipelineLabel(),
+            )
+        }
+    }.let { baseState ->
+        combine(baseState, activeWorkspaceSkills, aiSkillError) { state, skills, skillError ->
+            state.copy(
+                aiSkills = skills,
+                aiSkillError = skillError,
             )
         }
     }.stateIn(
@@ -437,6 +470,10 @@ class HomeViewModel @Inject constructor(
         syncSettingsStore.setAutoSyncEnabled(enabled)
     }
 
+    fun setThemeMode(mode: AppThemeMode) {
+        syncSettingsStore.setThemeMode(mode)
+    }
+
     fun syncNow() {
         backgroundSyncQueue.syncSessionSoon()
     }
@@ -475,6 +512,86 @@ class HomeViewModel @Inject constructor(
             authRepository.logout()
             onLoggedOut()
         }
+    }
+
+    fun saveAiSkill(
+        skillId: String?,
+        name: String,
+        whenToUse: String,
+        instructions: String,
+        isEnabled: Boolean,
+    ) {
+        val normalizedName = name.trim().take(MaxAiSkillNameChars)
+        val normalizedWhenToUse = whenToUse.trim().take(MaxAiSkillWhenToUseChars)
+        val normalizedInstructions = instructions.trim().take(MaxAiSkillInstructionsChars)
+        if (normalizedName.isBlank() || normalizedWhenToUse.isBlank() || normalizedInstructions.isBlank()) return
+
+        viewModelScope.launch {
+            aiSkillError.value = null
+            runCatching {
+                val workspaceId = workspaceRepository.getActiveWorkspaceId()
+                    ?.takeIf { id -> id.isNotBlank() }
+                    ?: CylDefaults.DefaultWorkspaceId
+                val existing = skillId
+                    ?.let { id ->
+                        aiSkillRepository.observeSkills(workspaceId).first()
+                            .firstOrNull { skill -> skill.id == id }
+                    }
+                val now = System.currentTimeMillis()
+                aiSkillRepository.upsertSkill(
+                    AiSkill(
+                        id = existing?.id ?: UUID.randomUUID().toString(),
+                        workspaceId = workspaceId,
+                        name = normalizedName,
+                        whenToUse = normalizedWhenToUse,
+                        instructions = normalizedInstructions,
+                        isEnabled = isEnabled,
+                        createdAt = existing?.createdAt ?: now,
+                        updatedAt = now,
+                    ),
+                )
+            }.onFailure {
+                aiSkillError.value = "Could not save this skill. Please try again."
+            }
+        }
+    }
+
+    fun deleteAiSkill(skillId: String) {
+        if (skillId.isBlank()) return
+        viewModelScope.launch {
+            aiSkillError.value = null
+            runCatching {
+                val workspaceId = workspaceRepository.getActiveWorkspaceId()
+                    ?.takeIf { id -> id.isNotBlank() }
+                    ?: CylDefaults.DefaultWorkspaceId
+                aiSkillRepository.deleteSkill(workspaceId = workspaceId, skillId = skillId)
+            }.onFailure {
+                aiSkillError.value = "Could not delete this skill. Please try again."
+            }
+        }
+    }
+
+    fun setAiSkillEnabled(skillId: String, enabled: Boolean) {
+        if (skillId.isBlank()) return
+        viewModelScope.launch {
+            aiSkillError.value = null
+            runCatching {
+                val workspaceId = workspaceRepository.getActiveWorkspaceId()
+                    ?.takeIf { id -> id.isNotBlank() }
+                    ?: CylDefaults.DefaultWorkspaceId
+                aiSkillRepository.setSkillEnabled(
+                    workspaceId = workspaceId,
+                    skillId = skillId,
+                    enabled = enabled,
+                )
+            }.onFailure {
+                aiSkillError.value = "Could not update this skill. Please try again."
+            }
+        }
+    }
+
+    fun clearAiSkillError() {
+        aiSkillError.value = null
     }
 
     fun sendChatMessage(
@@ -538,6 +655,10 @@ class HomeViewModel @Inject constructor(
         isAiGeneratingChat.value = true
         viewModelScope.launch {
             aiChatError.value = null
+            val visiblePrompt = prompt.trim()
+            val requestPrompt = visiblePrompt.ifBlank {
+                if (images.isNotEmpty()) ImageOnlyAiRequestPrompt else visiblePrompt
+            }
 
             val workspaceId = workspaceRepository.getActiveWorkspaceId()
                 ?.takeIf { it.isNotBlank() }
@@ -547,18 +668,30 @@ class HomeViewModel @Inject constructor(
             val currentMessages = chatHistoryRepository.observeMessages(session.id)
                 .first()
                 .let(AiChatMessageMapper::toAiChatMessages)
-            val userMessage = AiChatMessage(role = "user", content = prompt)
-            val updatedMessages = currentMessages + userMessage
+            val userMessage = AiChatMessage(role = "user", content = visiblePrompt)
+            val messageAttachments = images.map { image ->
+                ChatMessageAttachment(
+                    id = UUID.randomUUID().toString(),
+                    name = image.name.ifBlank {
+                        if (image.kind == "text") "Attached file" else "Attached image"
+                    },
+                    mimeType = image.mimeType,
+                    kind = image.kind,
+                    sizeBytes = image.sizeBytes.coerceAtLeast(0L),
+                    previewDataUrl = image.previewDataUrl,
+                )
+            }
             val savedUserMessage = chatHistoryRepository.appendMessage(
                 sessionId = session.id,
                 role = userMessage.role,
                 content = userMessage.content,
+                attachments = messageAttachments,
             )
             val pages = pageRepository.observePages(workspaceId)
                 .first()
                 .sortedByDescending { page -> page.updatedAt }
             val textMentionedPageIds = pages
-                .findMentionedPages(prompt)
+                .findMentionedPages(visiblePrompt)
                 .map { page -> page.id }
             val normalizedMentionedPageIds = (mentionedPageIds + textMentionedPageIds + listOfNotNull(attachedPageId))
                 .filter { pageId -> pageId.isNotBlank() }
@@ -581,9 +714,9 @@ class HomeViewModel @Inject constructor(
             val allChatMessages = chatHistoryRepository.observeMessagesForScope(scopeId)
                 .first()
                 .filterNot { message -> message.id == savedUserMessage.id }
-            if (images.isEmpty() && !prompt.referencesCurrentAttachment()) {
+            if (images.isEmpty() && !visiblePrompt.referencesCurrentAttachment()) {
                 buildHomeAiSearchReply(
-                    prompt = prompt,
+                    prompt = visiblePrompt,
                     pages = pages,
                     tasks = openTasks,
                     chatSessions = allChatSessions,
@@ -602,7 +735,7 @@ class HomeViewModel @Inject constructor(
 
             val memoryContext = buildAiMemoryContextUseCase(
                 currentSessionId = session.id,
-                prompt = prompt,
+                prompt = requestPrompt,
                 sessions = allChatSessions,
                 messages = allChatMessages,
             )
@@ -611,9 +744,18 @@ class HomeViewModel @Inject constructor(
             } else {
                 emptyList()
             }
-            val messagesForAi = memoryMessages + currentMessages + userMessage.copy(
-                content = prompt.withMentionContext(explicitlyMentionedPages),
+            val skillContext = buildAiSkillContextUseCase(
+                aiSkillRepository.observeSkills(workspaceId).first(),
             )
+            val skillMessages = skillContext
+                .takeIf { context -> context.isNotBlank() }
+                ?.let { context -> listOf(AiChatMessage(role = "system", content = context)) }
+                .orEmpty()
+            val messagesForAi = skillMessages + memoryMessages +
+                currentMessages.filter { message -> message.content.isNotBlank() } +
+                userMessage.copy(
+                    content = requestPrompt.withMentionContext(explicitlyMentionedPages),
+                )
             aiRepository.chatWithActions(
                 messages = messagesForAi.toRoleContentPairs(),
                 pages = pageContext,
@@ -625,7 +767,7 @@ class HomeViewModel @Inject constructor(
                     val orchestration = AiChatActionOrchestrator.orchestrate(
                         workspaceId = workspaceId,
                         scopedTargetPage = scopedTargetPage,
-                        prompt = prompt,
+                        prompt = visiblePrompt,
                         backendResult = result,
                         requestMessageId = savedUserMessage.id,
                         provider = aiStatusState.value.provider,
@@ -1251,6 +1393,11 @@ private const val SearchTargetBlock = "block"
 private const val SearchTargetRow = "row"
 private const val SearchTargetRowBlock = "row_block"
 private const val DraftHomeChatSessionId = "draft-home-chat"
+private const val ImageOnlyAiRequestPrompt =
+    "Describe the attached image or file and extract the useful visible content."
+private const val MaxAiSkillNameChars = 64
+private const val MaxAiSkillWhenToUseChars = 320
+private const val MaxAiSkillInstructionsChars = 2_000
 
 private fun String.isReadOnlySearchRequest(): Boolean {
     val text = lowercase()
@@ -1647,8 +1794,11 @@ data class HomeUiState(
     val aiModelLabel: String = "AI model",
     val aiVisionStatusLabel: String = "",
     val aiVisionPipelineLabel: String = "",
+    val aiSkills: List<AiSkill> = emptyList(),
+    val aiSkillError: String? = null,
     val syncOverview: SyncOverview = SyncOverview(),
     val isAutoSyncEnabled: Boolean = false,
+    val themeMode: AppThemeMode = AppThemeMode.SYSTEM,
 )
 
 private data class HomeTableUpdateResult(

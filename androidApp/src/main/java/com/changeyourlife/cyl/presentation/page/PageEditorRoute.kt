@@ -198,6 +198,7 @@ fun PageEditorRoute(
     onDismissHomeAiError: () -> Unit,
     onOpenAiHistory: () -> Unit,
     onOpenAiProfile: () -> Unit,
+    onOpenAiSkills: () -> Unit,
     modifier: Modifier = Modifier,
     viewModel: PageEditorViewModel = hiltViewModel(),
 ) {
@@ -288,6 +289,7 @@ fun PageEditorRoute(
         onDismissHomeAiError = onDismissHomeAiError,
         onOpenAiHistory = onOpenAiHistory,
         onOpenAiProfile = onOpenAiProfile,
+        onOpenAiSkills = onOpenAiSkills,
         modifier = modifier,
     )
 }
@@ -382,6 +384,7 @@ internal fun PageEditorScreen(
     onDismissHomeAiError: () -> Unit,
     onOpenAiHistory: () -> Unit,
     onOpenAiProfile: () -> Unit,
+    onOpenAiSkills: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var isAiChatSheetOpen by rememberSaveable { mutableStateOf(false) }
@@ -588,6 +591,7 @@ internal fun PageEditorScreen(
                 onDismissHomeAiError = onDismissHomeAiError,
                 onOpenAiHistory = onOpenAiHistory,
                 onOpenAiProfile = onOpenAiProfile,
+                onOpenAiSkills = onOpenAiSkills,
                 onDismissHomeAiErrorClick = onDismissHomeAiError,
                 initialSearchTargetType = initialSearchTargetType,
                 initialSearchTargetId = initialSearchTargetId,
@@ -597,6 +601,18 @@ internal fun PageEditorScreen(
         }
 
         else -> {
+            PageFramePerformanceProbe(
+                label = "PageEditor:${uiState.page.id.take(8)}",
+                detailProvider = {
+                    "blocks=${pageBlocks.size} " +
+                        "hasDb=$hasDatabaseBlock " +
+                        "v=${pageListState.firstVisibleItemIndex}:${pageListState.firstVisibleItemScrollOffset} " +
+                        "focus=$editorFocusScope " +
+                        "activeBlock=${activeBlockId?.take(8).orEmpty()}"
+                },
+            )
+            RecompositionProbe("page.surface")
+
             Scaffold(
                 modifier = modifier,
                 containerColor = MaterialTheme.colorScheme.surface,
@@ -685,6 +701,8 @@ internal fun PageEditorScreen(
                         modelLabel = homeAiState.aiModelLabel,
                         visionStatusLabel = homeAiState.aiVisionStatusLabel,
                         visionPipelineLabel = homeAiState.aiVisionPipelineLabel,
+                        enabledSkillsCount = homeAiState.aiSkills.count { skill -> skill.isEnabled },
+                        totalSkillsCount = homeAiState.aiSkills.size,
                         onSendMessage = { message, mentionedPageIds, images ->
                             onSendAiMessage(message, mentionedPageIds, uiState.page.id, images)
                         },
@@ -698,6 +716,10 @@ internal fun PageEditorScreen(
                         onOpenProfilePage = {
                             isAiChatSheetOpen = false
                             onOpenAiProfile()
+                        },
+                        onOpenSkillsPage = {
+                            isAiChatSheetOpen = false
+                            onOpenAiSkills()
                         },
                         onDismissError = onDismissHomeAiError,
                         onOpenPage = { pageId, targetType, targetId ->
@@ -745,6 +767,29 @@ internal fun PageEditorScreen(
                     (currentPageTables + otherPageTables).distinctBy { reference -> reference.blockId }
                 }
                 val databaseRenderStates = uiState.databaseRenderStates
+                val tableSearchInputsSnapshot = tableSearchInputs.toMap()
+                val fallbackDatabaseRenderStates = remember(
+                    pageBlocks,
+                    databaseRenderStates,
+                    tableSearchInputsSnapshot,
+                    tableReferences,
+                    initialSearchTargetType,
+                    initialSearchTargetId,
+                ) {
+                    pageBlocks
+                        .filter { block ->
+                            block.type == PageBlockType.DatabaseTable &&
+                                !databaseRenderStates.containsKey(block.id)
+                        }
+                        .associate { block ->
+                            block.id to block.table.buildInlineDatabaseTableRenderState(
+                                tableReferences = tableReferences,
+                                tableSearchInput = tableSearchInputsSnapshot[block.id].orEmpty(),
+                                searchTargetType = initialSearchTargetType,
+                                searchTargetId = initialSearchTargetId,
+                            )
+                        }
+                }
                 val searchTargetIndex = remember(
                     pageBlocks,
                     initialSearchTargetType,
@@ -807,22 +852,21 @@ internal fun PageEditorScreen(
 
                     pageBlocks.forEach { block ->
                         if (block.type == PageBlockType.DatabaseTable) {
-                            val scrollState = tableHorizontalScrollStates.getOrPut(block.id) { androidx.compose.foundation.ScrollState(0) }
-                            val searchInput = tableSearchInputs[block.id] ?: ""
-                            val openRowId = tableOpenRowIds[block.id]
-                            val activeEditingCellKey = tableActiveEditingCellKeys[block.id]
-                            val renderState = databaseRenderStates[block.id] ?: block.table.buildInlineDatabaseTableRenderState(
-                                tableReferences = tableReferences,
-                                tableSearchInput = searchInput,
-                                searchTargetType = initialSearchTargetType,
-                                searchTargetId = initialSearchTargetId,
-                            )
+                            val tableUiStateKey = "${uiState.page.id}::${block.id}"
+                            val scrollState = tableHorizontalScrollStates.getOrPut(tableUiStateKey) {
+                                androidx.compose.foundation.ScrollState(0)
+                            }
+                            val searchInput = tableSearchInputs[tableUiStateKey] ?: ""
+                            val openRowId = tableOpenRowIds[tableUiStateKey]
+                            val activeEditingCellKey = tableActiveEditingCellKeys[tableUiStateKey]
+                            val renderState = databaseRenderStates[block.id]
+                                ?: fallbackDatabaseRenderStates.getValue(block.id)
                             inlineDatabaseTableBlockEditor(
                                 horizontalScrollState = scrollState,
                                 tableSearchInput = searchInput,
-                                onSearchQueryChange = { query -> tableSearchInputs[block.id] = query },
+                                onSearchQueryChange = { query -> tableSearchInputs[tableUiStateKey] = query },
                                 openRowId = openRowId,
-                                onOpenRowIdChange = { rowId -> tableOpenRowIds[block.id] = rowId },
+                                onOpenRowIdChange = { rowId -> tableOpenRowIds[tableUiStateKey] = rowId },
                                 tableBlockId = block.id,
                                 pageId = uiState.page.id,
                                 pageUpdatedAt = uiState.page.updatedAt,
@@ -833,7 +877,7 @@ internal fun PageEditorScreen(
                                 renderState = renderState,
                                 activeEditingCellKey = activeEditingCellKey,
                                 onActiveEditingCellKeyChange = { cellKey ->
-                                    tableActiveEditingCellKeys[block.id] = cellKey
+                                    tableActiveEditingCellKeys[tableUiStateKey] = cellKey
                                 },
                                 onTitleChange = { title -> onTableTitleChange(block.id, title) },
                                 onViewChange = { view -> onTableViewChange(block.id, view) },

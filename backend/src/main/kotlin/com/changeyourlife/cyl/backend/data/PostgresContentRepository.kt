@@ -196,7 +196,7 @@ class PostgresContentRepository(
                 if (parentWorkspaceId != serverWorkspaceId) return@withContext null
             }
 
-            dataSource.connection.use { connection ->
+            val saved = dataSource.connection.use { connection ->
                 connection.prepareStatement(
                     """
                     INSERT INTO pages (
@@ -212,6 +212,7 @@ class PostgresContentRepository(
                         sort_order = EXCLUDED.sort_order,
                         updated_at = EXCLUDED.updated_at,
                         deleted_at = EXCLUDED.deleted_at
+                    WHERE pages.updated_at < EXCLUDED.updated_at
                     RETURNING id, workspace_id, parent_page_id, title, content, sort_order,
                               created_at, updated_at, deleted_at
                     """.trimIndent(),
@@ -230,6 +231,7 @@ class PostgresContentRepository(
                     }
                 }
             }
+            saved ?: getPage(userId = userId, pageId = page.id, includeDeleted = true)
         }
 
     override suspend fun updatePageBlockText(
@@ -361,44 +363,57 @@ class PostgresContentRepository(
         transform: (String) -> String?,
     ): PageRecord? = withContext(Dispatchers.IO) {
         dataSource.connection.use { connection ->
-            val currentContent = connection.selectOwnedPageContent(
-                userId = userId,
-                pageId = pageId,
-            ) ?: return@withContext null
-            val updatedContent = transform(currentContent) ?: return@withContext null
-
-            connection.prepareStatement(
-                """
-                WITH updated AS (
-                    UPDATE pages
-                    SET content = ?, updated_at = ?
-                    WHERE id = ?
-                      AND deleted_at IS NULL
-                      AND workspace_id IN (
-                          SELECT id FROM workspaces WHERE user_id = ?
-                      )
-                    RETURNING *
-                )
-                SELECT updated.id,
-                       COALESCE(workspaces.client_id, workspaces.id) AS workspace_id,
-                       updated.parent_page_id,
-                       updated.title,
-                       updated.content,
-                       updated.sort_order,
-                       updated.created_at,
-                       updated.updated_at,
-                       updated.deleted_at
-                FROM updated
-                INNER JOIN workspaces ON workspaces.id = updated.workspace_id
-                """.trimIndent(),
-            ).use { statement ->
-                statement.setString(1, updatedContent)
-                statement.setLong(2, updatedAt)
-                statement.setString(3, pageId)
-                statement.setString(4, userId)
-                statement.executeQuery().use { resultSet ->
-                    if (resultSet.next()) resultSet.toPageRecord() else null
+            connection.autoCommit = false
+            try {
+                val currentContent = connection.selectOwnedPageContent(
+                    userId = userId,
+                    pageId = pageId,
+                ) ?: run {
+                    connection.rollback()
+                    return@withContext null
                 }
+                val updatedContent = transform(currentContent) ?: run {
+                    connection.rollback()
+                    return@withContext null
+                }
+                val saved = connection.prepareStatement(
+                    """
+                    WITH updated AS (
+                        UPDATE pages
+                        SET content = ?, updated_at = GREATEST(?, updated_at + 1)
+                        WHERE id = ?
+                          AND deleted_at IS NULL
+                          AND workspace_id IN (
+                              SELECT id FROM workspaces WHERE user_id = ?
+                          )
+                        RETURNING *
+                    )
+                    SELECT updated.id,
+                           COALESCE(workspaces.client_id, workspaces.id) AS workspace_id,
+                           updated.parent_page_id,
+                           updated.title,
+                           updated.content,
+                           updated.sort_order,
+                           updated.created_at,
+                           updated.updated_at,
+                           updated.deleted_at
+                    FROM updated
+                    INNER JOIN workspaces ON workspaces.id = updated.workspace_id
+                    """.trimIndent(),
+                ).use { statement ->
+                    statement.setString(1, updatedContent)
+                    statement.setLong(2, updatedAt)
+                    statement.setString(3, pageId)
+                    statement.setString(4, userId)
+                    statement.executeQuery().use { resultSet ->
+                        if (resultSet.next()) resultSet.toPageRecord() else null
+                    }
+                }
+                connection.commit()
+                saved
+            } catch (error: Throwable) {
+                runCatching { connection.rollback() }
+                throw error
             }
         }
     }
@@ -459,6 +474,7 @@ private fun java.sql.Connection.selectOwnedPageContent(userId: String, pageId: S
           AND pages.id = ?
           AND pages.deleted_at IS NULL
         LIMIT 1
+        FOR UPDATE OF pages
         """.trimIndent(),
     ).use { statement ->
         statement.setString(1, userId)

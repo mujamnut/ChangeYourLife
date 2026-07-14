@@ -243,7 +243,11 @@ private sealed interface AiActionContract {
 
         override fun requiredFieldIssues(actionIndex: Int, action: AiService.AiActionItem): List<AiActionValidationIssue> = when (action.type) {
             "ADD_TABLE_ROW" -> {
-                if (action.hasAny(action.rowTitle, action.title, action.content) || action.cellValues.isNotEmpty() || action.tableRows.isNotEmpty()) {
+                val hasCellValue = action.cellValues.values.any { value -> value.isNotBlank() }
+                val hasTableRowValue = action.tableRows.any { row ->
+                    row.values.any { value -> value.isNotBlank() }
+                }
+                if (action.hasAny(action.rowTitle, action.title, action.content) || hasCellValue || hasTableRowValue) {
                     emptyList()
                 } else {
                     listOf(missingField(actionIndex, "rowTitle", "Add row action needs rowTitle, title, content, cellValues, or tableRows."))
@@ -296,7 +300,9 @@ private sealed interface AiActionContract {
         override fun requiredFieldIssues(actionIndex: Int, action: AiService.AiActionItem): List<AiActionValidationIssue> = buildList {
             if (!action.hasAny(action.rowId, action.rowTitle, action.title)) add(missingField(actionIndex, "rowTitle", "Cell update needs rowId, rowTitle, or title."))
             if (!action.hasAny(action.columnId, action.columnName, action.propertyName)) add(missingField(actionIndex, "columnName", "Cell update needs columnId, columnName, or propertyName."))
-            if (!action.hasAny(action.value, action.content)) add(missingField(actionIndex, "value", "Cell update needs value or content."))
+            if (!action.hasAny(action.value, action.content) && action.cellValues.isEmpty()) {
+                add(missingField(actionIndex, "value", "Cell update needs value, content, or cellValues."))
+            }
         }
     }
 

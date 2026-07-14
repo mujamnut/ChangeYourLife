@@ -6,6 +6,9 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Color
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.util.Base64
@@ -23,18 +26,22 @@ import androidx.compose.foundation.content.MediaType
 import androidx.compose.foundation.content.ReceiveContentListener
 import androidx.compose.foundation.content.consume
 import androidx.compose.foundation.content.hasMediaType
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.input.rememberTextFieldState
@@ -50,6 +57,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -59,11 +67,21 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Velocity
 import com.changeyourlife.cyl.domain.repository.AiImageAttachment
 import com.changeyourlife.cyl.domain.model.Page
 import com.changeyourlife.cyl.presentation.page.EditorSuggestionController
@@ -71,10 +89,10 @@ import com.changeyourlife.cyl.presentation.page.RichTextCommandPaletteKind
 import com.changeyourlife.cyl.presentation.page.paletteItemId
 import com.changeyourlife.cyl.presentation.page.richTextMentionPaletteItems
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
+import kotlin.math.abs
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class, ExperimentalComposeUiApi::class)
 @Composable
@@ -87,12 +105,15 @@ fun AiChatSheet(
     modelLabel: String = "AI model",
     visionStatusLabel: String = "",
     visionPipelineLabel: String = "",
+    enabledSkillsCount: Int = 0,
+    totalSkillsCount: Int = 0,
     onSendMessage: (String, List<String>, List<AiImageAttachment>) -> Unit,
     onUndoAction: (String, String) -> Unit,
     onClearHistory: () -> Unit,
     onCreateChatSession: () -> Unit,
     onOpenHistoryPage: () -> Unit,
     onOpenProfilePage: () -> Unit,
+    onOpenSkillsPage: () -> Unit,
     onDismissError: () -> Unit,
     onOpenPage: (String, String, String) -> Unit,
     onDismiss: () -> Unit,
@@ -114,12 +135,13 @@ fun AiChatSheet(
     var stagedImageAttachments by remember {
         mutableStateOf(emptyList<AiImageAttachment>())
     }
-    val listState = rememberLazyListState()
     val context = LocalContext.current
     val configuration = LocalConfiguration.current
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
+    val inputFocusRequester = remember { FocusRequester() }
     val composerScope = rememberCoroutineScope()
+    var isBodyDismissInProgress by remember { mutableStateOf(false) }
     val stableSheetMaxHeight = remember(configuration.screenHeightDp) {
         configuration.screenHeightDp.dp * 0.90f
     }
@@ -128,7 +150,15 @@ fun AiChatSheet(
         successMessage: String? = null,
     ) {
         result.attachment?.let { attachment ->
-            stagedImageAttachments = (stagedImageAttachments + attachment).takeLast(MaxAiChatImages)
+            if (stagedImageAttachments.size >= MaxAiChatImages) {
+                Toast.makeText(
+                    context,
+                    "You can attach up to $MaxAiChatImages files.",
+                    Toast.LENGTH_SHORT,
+                ).show()
+                return
+            }
+            stagedImageAttachments = stagedImageAttachments + attachment
             if (!successMessage.isNullOrBlank()) {
                 Toast.makeText(context, successMessage, Toast.LENGTH_SHORT).show()
             }
@@ -194,28 +224,41 @@ fun AiChatSheet(
         }
         if (queuedUris.isNotEmpty()) {
             composerScope.launch {
+                val availableSlots = (MaxAiChatImages - stagedImageAttachments.size).coerceAtLeast(0)
+                if (availableSlots == 0) {
+                    Toast.makeText(
+                        context,
+                        "You can attach up to $MaxAiChatImages files.",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                    return@launch
+                }
+                val acceptedUris = queuedUris.take(availableSlots)
                 val results = withContext(Dispatchers.IO) {
-                    queuedUris.map { imageUri ->
+                    acceptedUris.map { imageUri ->
                         context.readPastedImageAttachment(imageUri, fallbackName = "Pasted image")
                     }
                 }
-                var attachedCount = 0
-                results.forEach { result ->
-                    result.attachment?.let { attachment ->
-                        stagedImageAttachments = (stagedImageAttachments + attachment).takeLast(MaxAiChatImages)
-                        attachedCount += 1
-                    }
-                }
+                val acceptedAttachments = results
+                    .mapNotNull(AiAttachmentReadResult::attachment)
+                stagedImageAttachments = stagedImageAttachments + acceptedAttachments
+                val attachedCount = acceptedAttachments.size
                 if (attachedCount > 0) {
                     Toast.makeText(
                         context,
                         if (attachedCount == 1) "Image pasted" else "$attachedCount images pasted",
                         Toast.LENGTH_SHORT,
                     ).show()
-                } else {
-                    results.lastOrNull()?.userMessage?.takeIf { it.isNotBlank() }?.let { message ->
-                        Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                    if (queuedUris.size > acceptedUris.size) {
+                        Toast.makeText(
+                            context,
+                            "Only $MaxAiChatImages attachments can be added at once.",
+                            Toast.LENGTH_SHORT,
+                        ).show()
                     }
+                } else {
+                    val message = results.lastOrNull()?.userMessage?.takeIf { it.isNotBlank() }
+                    message?.let { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
                 }
             }
         }
@@ -223,15 +266,31 @@ fun AiChatSheet(
     }
     val mentionSuggestionState = EditorSuggestionController.resolve(
         text = inputText,
-        cursor = inputText.length,
+        cursor = inputState.selection.end,
         mentionPages = mentionPages,
         enabledKinds = setOf(RichTextCommandPaletteKind.Mention),
     )
     var activePanel by rememberSaveable { mutableStateOf<AiComposerPanel?>(null) }
     var isMentionPickerOpen by rememberSaveable { mutableStateOf(false) }
-    var isKeyboardReplacementVisible by remember { mutableStateOf(false) }
-    val shouldShowKeyboardReplacement = activePanel != null || isMentionPickerOpen || mentionSuggestionState != null
+    val shouldShowKeyboardReplacement = activePanel != null || isMentionPickerOpen
     val avatarSpec = remember(persona) { persona.toAvatarSpec() }
+    val stagedAttachmentPreviews = remember(stagedImageAttachments) {
+        stagedImageAttachments.mapIndexed { index, attachment ->
+            AiAttachmentPreviewUi(
+                label = attachment.name.ifBlank {
+                    if (attachment.kind == "text") "File ${index + 1}" else "Image ${index + 1}"
+                },
+                mimeType = attachment.mimeType,
+                dataUrl = attachment.previewDataUrl.ifBlank { attachment.dataUrl },
+                kind = attachment.kind,
+                statusLabel = when {
+                    attachment.kind == "text" -> "Text ready"
+                    attachment.mimeType.startsWith("image/", ignoreCase = true) -> "Vision ready"
+                    else -> "Attached"
+                },
+            )
+        }
+    }
     val mentionChips = remember(
         attachedPageId,
         attachedPageTitle,
@@ -265,7 +324,7 @@ fun AiChatSheet(
     }
     val sendCurrentPrompt = {
         if ((inputText.isNotBlank() || stagedImageAttachments.isNotEmpty()) && !isGenerating) {
-            val message = inputText.trim().ifBlank { "Read the attached file or image and help me use it in CYL." }
+            val message = inputText.trim()
             onSendMessage(
                 message,
                 message.resolveMentionedPageIds(
@@ -282,47 +341,35 @@ fun AiChatSheet(
         }
     }
     val onSelectMentionPage: (Page) -> Unit = { page ->
-        inputState.setTextAndPlaceCursorAtEnd(inputText.removeActiveMentionQuery())
+        inputState.setTextAndPlaceCursorAtEnd(
+            inputText.removeActiveMentionQuery(cursor = inputState.selection.end),
+        )
         selectedMentionPageIds = (selectedMentionPageIds + page.id)
             .filter { id -> id.isNotBlank() }
             .distinct()
         isMentionPickerOpen = false
         activePanel = null
+        composerScope.launch {
+            inputFocusRequester.requestFocus()
+            keyboardController?.show()
+        }
     }
 
-    LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
-    }
     LaunchedEffect(attachedPageId) {
         inputState.setTextAndPlaceCursorAtEnd("")
     }
-    LaunchedEffect(shouldShowKeyboardReplacement) {
-        if (shouldShowKeyboardReplacement) {
-            focusManager.clearFocus(force = true)
-            keyboardController?.hide()
-            delay(120)
-            keyboardController?.hide()
-            isKeyboardReplacementVisible = true
-        } else {
-            isKeyboardReplacementVisible = false
-        }
-    }
     fun openComposerPanel(panel: AiComposerPanel) {
         val nextPanel = if (activePanel == panel) null else panel
-        focusManager.clearFocus(force = true)
-        keyboardController?.hide()
         isMentionPickerOpen = false
-        isKeyboardReplacementVisible = false
-        activePanel = null
-        if (nextPanel == null) return
-        composerScope.launch {
-            delay(80)
+        activePanel = nextPanel
+        if (nextPanel != null) {
             focusManager.clearFocus(force = true)
             keyboardController?.hide()
-            activePanel = nextPanel
-            delay(120)
-            focusManager.clearFocus(force = true)
-            keyboardController?.hide()
+        } else {
+            composerScope.launch {
+                inputFocusRequester.requestFocus()
+                keyboardController?.show()
+            }
         }
     }
 
@@ -371,132 +418,37 @@ fun AiChatSheet(
                 }
             }
 
-            LazyColumn(
-                state = listState,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-            ) {
-                if (messages.isEmpty() && !isGenerating) {
-                    item {
-                        EmptyAiMessageHint(attachedPageTitle = attachedPageTitle)
-                    }
-                }
-
-                items(
-                    items = messages,
-                    key = { message -> message.id.ifBlank { "${message.role}:${message.content.hashCode()}" } },
-                ) { message ->
-                    val isUser = message.role == "user"
-                    val messageText = message.content.ifBlank { "No response content." }
-                    Box(
-                        modifier = Modifier.fillMaxWidth(),
-                        contentAlignment = if (isUser) Alignment.CenterEnd else Alignment.CenterStart,
-                    ) {
-                        Column(
-                            modifier = if (isUser) {
-                                Modifier.widthIn(max = 300.dp)
+            AiChatMessageList(
+                messages = messages,
+                isGenerating = isGenerating,
+                attachedPageTitle = attachedPageTitle,
+                onOpenPage = onOpenPage,
+                onBodyDismiss = {
+                    if (!isBodyDismissInProgress) {
+                        isBodyDismissInProgress = true
+                        composerScope.launch { sheetState.hide() }.invokeOnCompletion {
+                            if (!sheetState.isVisible) {
+                                onDismiss()
                             } else {
-                                Modifier.fillMaxWidth()
-                            },
-                            horizontalAlignment = if (isUser) Alignment.End else Alignment.Start,
-                            verticalArrangement = Arrangement.spacedBy(4.dp),
-                        ) {
-                            Text(
-                                text = messageText,
-                                modifier = if (isUser) {
-                                    Modifier
-                                        .clip(RoundedCornerShape(12.dp))
-                                        .combinedClickable(
-                                            onClick = {},
-                                            onLongClick = {
-                                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                                clipboard.setPrimaryClip(
-                                                    ClipData.newPlainText("CYL AI message", messageText),
-                                                )
-                                                Toast.makeText(context, "Message copied", Toast.LENGTH_SHORT).show()
-                                            },
-                                        )
-                                        .background(MaterialTheme.colorScheme.primaryContainer)
-                                        .padding(horizontal = 12.dp, vertical = 8.dp)
-                                } else {
-                                    Modifier
-                                        .fillMaxWidth()
-                                        .combinedClickable(
-                                            onClick = {},
-                                            onLongClick = {
-                                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                                clipboard.setPrimaryClip(
-                                                    ClipData.newPlainText("CYL AI message", messageText),
-                                                )
-                                                Toast.makeText(context, "Message copied", Toast.LENGTH_SHORT).show()
-                                            },
-                                        )
-                                        .padding(horizontal = 2.dp, vertical = 5.dp)
-                                },
-                                color = if (isUser) {
-                                    MaterialTheme.colorScheme.onPrimaryContainer
-                                } else {
-                                    MaterialTheme.colorScheme.onSurface
-                                },
-                                style = MaterialTheme.typography.bodyMedium,
-                            )
-                            if (!isUser && message.pageLinks.isNotEmpty()) {
-                                AiChatPageLinks(
-                                    links = message.pageLinks,
-                                    onOpenPage = onOpenPage,
-                                )
+                                isBodyDismissInProgress = false
                             }
                         }
                     }
-                }
-
-                if (isGenerating) {
-                    item {
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier
-                                .padding(horizontal = 2.dp, vertical = 10.dp),
-                        ) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(14.dp),
-                                strokeWidth = 2.dp,
-                            )
-                            Text(
-                                text = "Thinking...",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                }
-            }
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+            )
 
             AiComposerCard(
                 inputState = inputState,
                 inputText = inputText,
+                focusRequester = inputFocusRequester,
                 mentionChips = mentionChips,
                 onRemoveMention = { pageId ->
                     selectedMentionPageIds = selectedMentionPageIds.filterNot { id -> id == pageId }
                 },
-                stagedAttachments = stagedImageAttachments.mapIndexed { index, attachment ->
-                    AiAttachmentPreviewUi(
-                        label = attachment.name.ifBlank {
-                            if (attachment.kind == "text") "File ${index + 1}" else "Image ${index + 1}"
-                        },
-                        mimeType = attachment.mimeType,
-                        dataUrl = attachment.dataUrl,
-                        kind = attachment.kind,
-                        statusLabel = when {
-                            attachment.kind == "text" -> "Text ready"
-                            attachment.mimeType.startsWith("image/", ignoreCase = true) -> "Vision ready"
-                            else -> "Attached"
-                        },
-                    )
-                },
+                stagedAttachments = stagedAttachmentPreviews,
                 onRemoveAttachment = { index ->
                     stagedImageAttachments = stagedImageAttachments.filterIndexed { itemIndex, _ ->
                         itemIndex != index
@@ -533,9 +485,24 @@ fun AiChatSheet(
                 mentionSuggestionState?.items.orEmpty()
             }
             AnimatedVisibility(
-                visible = shouldShowKeyboardReplacement && isKeyboardReplacementVisible,
-                enter = slideInVertically(initialOffsetY = { height -> height }) + fadeIn(),
-                exit = slideOutVertically(targetOffsetY = { height -> height }) + fadeOut(),
+                visible = activePanel == null && !isMentionPickerOpen && mentionSuggestionState != null,
+                enter = fadeIn(),
+                exit = fadeOut(),
+            ) {
+                AiMentionPickerPanel(
+                    items = mentionSuggestionState?.items.orEmpty(),
+                    onSelect = { item ->
+                        val page = mentionPages.firstOrNull { candidate ->
+                            candidate.paletteItemId() == item.id
+                        }
+                        if (page != null) onSelectMentionPage(page)
+                    },
+                    selectedItemId = mentionSuggestionState?.selectedItem?.id,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
+                )
+            }
+            AiKeyboardReplacementHost(
+                requestedVisible = shouldShowKeyboardReplacement,
             ) {
                 AiKeyboardReplacementPanel(
                     modifier = Modifier.padding(top = 2.dp),
@@ -571,7 +538,17 @@ fun AiChatSheet(
                                 modelLabel = modelLabel,
                                 visionStatusLabel = visionStatusLabel,
                                 visionPipelineLabel = visionPipelineLabel,
+                                enabledSkillsCount = enabledSkillsCount,
+                                totalSkillsCount = totalSkillsCount,
                                 hasMessages = messages.isNotEmpty(),
+                                onOpenSkills = {
+                                    activePanel = null
+                                    onOpenSkillsPage()
+                                },
+                                onOpenPersonalize = {
+                                    activePanel = null
+                                    onOpenProfilePage()
+                                },
                                 onClearHistory = onClearHistory,
                             )
                         }
@@ -582,6 +559,232 @@ fun AiChatSheet(
     }
 }
 
+@Composable
+private fun AiKeyboardReplacementHost(
+    requestedVisible: Boolean,
+    content: @Composable () -> Unit,
+) {
+    val density = LocalDensity.current
+    val isImeVisible = WindowInsets.ime.getBottom(density) > 0
+    AnimatedVisibility(
+        visible = requestedVisible && !isImeVisible,
+        enter = slideInVertically(initialOffsetY = { height -> height }) + fadeIn(),
+        exit = slideOutVertically(targetOffsetY = { height -> height }) + fadeOut(),
+        content = { content() },
+    )
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun AiChatMessageList(
+    messages: List<AiChatMessage>,
+    isGenerating: Boolean,
+    attachedPageTitle: String?,
+    onOpenPage: (String, String, String) -> Unit,
+    onBodyDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val context = LocalContext.current
+    val density = LocalDensity.current
+    val listState = rememberLazyListState()
+    val dismissThresholdPx = remember(density) { with(density) { 64.dp.toPx() } }
+    val bodyScrollBoundary = remember {
+        object : NestedScrollConnection {
+            override fun onPostScroll(
+                consumed: Offset,
+                available: Offset,
+                source: NestedScrollSource,
+            ): Offset = if (source == NestedScrollSource.UserInput) {
+                Offset(x = 0f, y = available.y)
+            } else {
+                Offset.Zero
+            }
+
+            override suspend fun onPostFling(
+                consumed: Velocity,
+                available: Velocity,
+            ): Velocity = Velocity(x = 0f, y = available.y)
+        }
+    }
+    var previousMessageCount by remember { mutableIntStateOf(-1) }
+
+    LaunchedEffect(messages.size, isGenerating) {
+        val layoutInfo = listState.layoutInfo
+        val lastVisibleIndex = layoutInfo.visibleItemsInfo.lastOrNull()?.index
+        val wasNearBottom = lastVisibleIndex == null ||
+            lastVisibleIndex >= (layoutInfo.totalItemsCount - 2).coerceAtLeast(0)
+        val isInitialPosition = previousMessageCount < 0
+        val latestMessageIsUser = messages.size > previousMessageCount &&
+            messages.lastOrNull()?.role == "user"
+        val targetIndex = when {
+            isGenerating -> messages.size
+            messages.isNotEmpty() -> messages.lastIndex
+            else -> null
+        }
+        if (targetIndex != null && (isInitialPosition || wasNearBottom || latestMessageIsUser)) {
+            if (isInitialPosition) {
+                listState.scrollToItem(targetIndex)
+            } else {
+                listState.animateScrollToItem(targetIndex)
+            }
+        }
+        previousMessageCount = messages.size
+    }
+
+    LazyColumn(
+        state = listState,
+        modifier = modifier
+            .nestedScroll(bodyScrollBoundary)
+            .aiChatBodyDismissGesture(
+                canStartDismiss = { !listState.canScrollBackward },
+                dismissThresholdPx = dismissThresholdPx,
+                onDismiss = onBodyDismiss,
+            ),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+        // The sheet already consumes unhandled vertical drag through nested scroll.
+        // A second overscroll transform here makes pull-to-dismiss visibly fight the sheet.
+        overscrollEffect = null,
+    ) {
+        if (messages.isEmpty() && !isGenerating) {
+            item(key = "empty") {
+                EmptyAiMessageHint(attachedPageTitle = attachedPageTitle)
+            }
+        }
+
+        itemsIndexed(
+            items = messages,
+            key = { index, message ->
+                message.id.ifBlank { "${message.role}:${message.content.hashCode()}:$index" }
+            },
+        ) { _, message ->
+            val isUser = message.role == "user"
+            val messageText = message.content.trim().ifBlank {
+                if (message.attachments.isEmpty()) "No response content." else ""
+            }
+            Box(
+                modifier = Modifier.fillMaxWidth(),
+                contentAlignment = if (isUser) Alignment.CenterEnd else Alignment.CenterStart,
+            ) {
+                Column(
+                    modifier = if (isUser) {
+                        Modifier.widthIn(max = 300.dp)
+                    } else {
+                        Modifier.fillMaxWidth()
+                    },
+                    horizontalAlignment = if (isUser) Alignment.End else Alignment.Start,
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    if (message.attachments.isNotEmpty()) {
+                        AiChatMessageAttachments(attachments = message.attachments)
+                    }
+                    if (messageText.isNotBlank()) {
+                        Text(
+                            text = messageText,
+                            modifier = if (isUser) {
+                                Modifier
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .combinedClickable(
+                                        onClick = {},
+                                        onLongClick = { context.copyAiChatMessage(messageText) },
+                                    )
+                                    .background(MaterialTheme.colorScheme.primaryContainer)
+                                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                            } else {
+                                Modifier
+                                    .fillMaxWidth()
+                                    .combinedClickable(
+                                        onClick = {},
+                                        onLongClick = { context.copyAiChatMessage(messageText) },
+                                    )
+                                    .padding(horizontal = 2.dp, vertical = 5.dp)
+                            },
+                            color = if (isUser) {
+                                MaterialTheme.colorScheme.onPrimaryContainer
+                            } else {
+                                MaterialTheme.colorScheme.onSurface
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                    if (!isUser && message.pageLinks.isNotEmpty()) {
+                        AiChatPageLinks(
+                            links = message.pageLinks,
+                            onOpenPage = onOpenPage,
+                        )
+                    }
+                }
+            }
+        }
+
+        if (isGenerating) {
+            item(key = "generating") {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(horizontal = 2.dp, vertical = 10.dp),
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(14.dp),
+                        strokeWidth = 2.dp,
+                    )
+                    Text(
+                        text = "Thinking...",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun Modifier.aiChatBodyDismissGesture(
+    canStartDismiss: () -> Boolean,
+    dismissThresholdPx: Float,
+    onDismiss: () -> Unit,
+): Modifier = pointerInput(dismissThresholdPx, onDismiss) {
+    awaitEachGesture {
+        val down = awaitFirstDown(
+            requireUnconsumed = false,
+            pass = PointerEventPass.Initial,
+        )
+        if (!canStartDismiss()) return@awaitEachGesture
+
+        var distanceY = 0f
+        var isDismissDrag = false
+        var didDismiss = false
+
+        while (true) {
+            val event = awaitPointerEvent(pass = PointerEventPass.Initial)
+            val change = event.changes.firstOrNull { pointer -> pointer.id == down.id } ?: break
+            if (!change.pressed) break
+
+            val deltaY = change.positionChange().y
+            distanceY += deltaY
+
+            if (!isDismissDrag && abs(distanceY) >= viewConfiguration.touchSlop) {
+                if (distanceY <= 0f) break
+                isDismissDrag = true
+            }
+
+            if (isDismissDrag) {
+                change.consume()
+                if (!didDismiss && distanceY >= dismissThresholdPx) {
+                    didDismiss = true
+                    onDismiss()
+                }
+            }
+        }
+    }
+}
+
+private fun Context.copyAiChatMessage(message: String) {
+    val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+    clipboard.setPrimaryClip(ClipData.newPlainText("CYL AI message", message))
+    Toast.makeText(this, "Message copied", Toast.LENGTH_SHORT).show()
+}
+
 private enum class AiComposerPanel {
     Attachments,
     Settings,
@@ -590,6 +793,8 @@ private enum class AiComposerPanel {
 private const val MaxAiChatImages = 4
 private const val MaxAiChatImageBytes = 4L * 1024L * 1024L
 private const val MaxAiChatTextFileBytes = 256L * 1024L
+private const val MaxAiChatPreviewDimension = 384
+private const val MaxAiChatPreviewBytes = 96 * 1024
 
 private data class AiAttachmentReadResult(
     val attachment: AiImageAttachment? = null,
@@ -625,6 +830,7 @@ private fun Context.readAiImageAttachment(
                 AiAttachmentReadResult(
                     attachment = AiImageAttachment(
                         dataUrl = "data:$mimeType;base64,${Base64.encodeToString(bytes, Base64.NO_WRAP)}",
+                        previewDataUrl = bytes.toAiChatPreviewDataUrl(),
                         mimeType = mimeType,
                         name = name,
                         sizeBytes = bytes.size.toLong(),
@@ -747,12 +953,65 @@ private fun Bitmap.toAiImageAttachmentResult(
     return AiAttachmentReadResult(
         attachment = AiImageAttachment(
             dataUrl = "data:image/jpeg;base64,${Base64.encodeToString(bytes, Base64.NO_WRAP)}",
+            previewDataUrl = bytes.toAiChatPreviewDataUrl(),
             mimeType = "image/jpeg",
             name = "$name.jpg",
             sizeBytes = bytes.size.toLong(),
             kind = "image",
         ),
     )
+}
+
+private fun ByteArray.toAiChatPreviewDataUrl(): String {
+    if (isEmpty()) return ""
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeByteArray(this, 0, size, bounds)
+    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return ""
+
+    var sampleSize = 1
+    while (
+        bounds.outWidth / sampleSize > MaxAiChatPreviewDimension * 2 ||
+        bounds.outHeight / sampleSize > MaxAiChatPreviewDimension * 2
+    ) {
+        sampleSize *= 2
+    }
+    val decoded = BitmapFactory.decodeByteArray(
+        this,
+        0,
+        size,
+        BitmapFactory.Options().apply { inSampleSize = sampleSize },
+    ) ?: return ""
+    val scale = minOf(
+        1f,
+        MaxAiChatPreviewDimension.toFloat() / maxOf(decoded.width, decoded.height).toFloat(),
+    )
+    val targetWidth = (decoded.width * scale).toInt().coerceAtLeast(1)
+    val targetHeight = (decoded.height * scale).toInt().coerceAtLeast(1)
+    val scaled = if (targetWidth == decoded.width && targetHeight == decoded.height) {
+        decoded
+    } else {
+        Bitmap.createScaledBitmap(decoded, targetWidth, targetHeight, true)
+    }
+    val flattened = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
+    Canvas(flattened).apply {
+        drawColor(Color.WHITE)
+        drawBitmap(scaled, 0f, 0f, null)
+    }
+
+    var quality = 78
+    var previewBytes: ByteArray
+    do {
+        val output = ByteArrayOutputStream()
+        flattened.compress(Bitmap.CompressFormat.JPEG, quality, output)
+        previewBytes = output.toByteArray()
+        quality -= 10
+    } while (previewBytes.size > MaxAiChatPreviewBytes && quality >= 38)
+
+    if (scaled !== decoded) scaled.recycle()
+    decoded.recycle()
+    flattened.recycle()
+    if (previewBytes.size > MaxAiChatPreviewBytes) return ""
+    return "data:image/jpeg;base64,${Base64.encodeToString(previewBytes, Base64.NO_WRAP)}"
 }
 
 private fun java.io.InputStream.readBytesWithLimit(limitBytes: Long): ByteArray {
@@ -807,11 +1066,16 @@ private fun String.cleanTextFileForAi(): String {
         .trim()
 }
 
-private fun String.removeActiveMentionQuery(): String {
-    val atIndex = lastIndexOf('@')
+private fun String.removeActiveMentionQuery(cursor: Int): String {
+    val safeCursor = cursor.coerceIn(0, length)
+    if (safeCursor == 0) return this
+    val atIndex = lastIndexOf('@', startIndex = (safeCursor - 1).coerceAtLeast(0))
     if (atIndex < 0) return this
     val before = substring(0, atIndex).trimEnd()
-    return if (before.isBlank()) "" else "$before "
+    val after = substring(safeCursor).trimStart()
+    return listOf(before, after)
+        .filter { part -> part.isNotBlank() }
+        .joinToString(" ")
 }
 
 private fun String.resolveMentionedPageIds(

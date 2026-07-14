@@ -22,6 +22,8 @@ data class ChatMessageEntity(
     val pageLinksJson: String,
     @ColumnInfo(defaultValue = "''")
     val actionMetadataJson: String,
+    @ColumnInfo(defaultValue = "'[]'")
+    val attachmentsJson: String = "[]",
     val createdAt: Long,
     val updatedAt: Long,
     val syncStatus: String = SyncStatus.PendingPush,

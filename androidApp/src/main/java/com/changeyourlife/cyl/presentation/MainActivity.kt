@@ -13,6 +13,9 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.lifecycle.lifecycleScope
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import com.changeyourlife.cyl.data.local.session.SyncSettingsStore
 import com.changeyourlife.cyl.domain.repository.ReminderRepository
 import com.changeyourlife.cyl.presentation.app.CylApp
 import dagger.hilt.android.AndroidEntryPoint
@@ -24,6 +27,9 @@ class MainActivity : ComponentActivity() {
     @Inject
     lateinit var reminderRepository: ReminderRepository
 
+    @Inject
+    lateinit var syncSettingsStore: SyncSettingsStore
+
     private var wasExactAlarmAllowed = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -33,7 +39,8 @@ class MainActivity : ComponentActivity() {
         requestExactAlarmPermissionIfNeeded()
         enableEdgeToEdge()
         setContent {
-            CylApp()
+            val themeMode by syncSettingsStore.themeMode.collectAsState()
+            CylApp(themeMode = themeMode)
         }
     }
 

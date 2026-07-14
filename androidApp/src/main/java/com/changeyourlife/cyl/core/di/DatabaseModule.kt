@@ -6,6 +6,7 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.changeyourlife.cyl.data.local.CylDatabase
 import com.changeyourlife.cyl.data.local.dao.AiActionLogDao
+import com.changeyourlife.cyl.data.local.dao.AiSkillDao
 import com.changeyourlife.cyl.data.local.dao.ChatMessageDao
 import com.changeyourlife.cyl.data.local.dao.PageDao
 import com.changeyourlife.cyl.data.local.dao.PageContentDao
@@ -43,6 +44,8 @@ object DatabaseModule {
             .addMigrations(MIGRATION_10_11)
             .addMigrations(MIGRATION_11_12)
             .addMigrations(MIGRATION_12_13)
+            .addMigrations(MIGRATION_13_14)
+            .addMigrations(MIGRATION_14_15)
             .build()
     }
 
@@ -84,6 +87,11 @@ object DatabaseModule {
     @Provides
     fun provideAiActionLogDao(database: CylDatabase): AiActionLogDao {
         return database.aiActionLogDao()
+    }
+
+    @Provides
+    fun provideAiSkillDao(database: CylDatabase): AiSkillDao {
+        return database.aiSkillDao()
     }
 
     val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -501,6 +509,50 @@ object DatabaseModule {
                 """
                 CREATE INDEX IF NOT EXISTS `index_page_table_rows_tableId_isFavorite`
                 ON `page_table_rows` (`tableId`, `isFavorite`)
+                """.trimIndent(),
+            )
+        }
+    }
+
+    val MIGRATION_13_14 = object : Migration(13, 14) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                "ALTER TABLE `chat_messages` ADD COLUMN `attachmentsJson` TEXT NOT NULL DEFAULT '[]'",
+            )
+        }
+    }
+
+    val MIGRATION_14_15 = object : Migration(14, 15) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `ai_skills` (
+                    `id` TEXT NOT NULL,
+                    `workspaceId` TEXT NOT NULL,
+                    `name` TEXT NOT NULL,
+                    `whenToUse` TEXT NOT NULL,
+                    `instructions` TEXT NOT NULL,
+                    `isEnabled` INTEGER NOT NULL,
+                    `createdAt` INTEGER NOT NULL,
+                    `updatedAt` INTEGER NOT NULL,
+                    `deletedAt` INTEGER,
+                    `syncStatus` TEXT NOT NULL,
+                    `remoteUpdatedAt` INTEGER NOT NULL,
+                    `lastSyncedAt` INTEGER NOT NULL,
+                    PRIMARY KEY(`id`)
+                )
+                """.trimIndent(),
+            )
+            db.execSQL(
+                """
+                CREATE INDEX IF NOT EXISTS `index_ai_skills_workspaceId_updatedAt`
+                ON `ai_skills` (`workspaceId`, `updatedAt`)
+                """.trimIndent(),
+            )
+            db.execSQL(
+                """
+                CREATE INDEX IF NOT EXISTS `index_ai_skills_syncStatus`
+                ON `ai_skills` (`syncStatus`)
                 """.trimIndent(),
             )
         }

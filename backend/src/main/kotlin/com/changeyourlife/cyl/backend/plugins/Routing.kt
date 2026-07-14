@@ -1,12 +1,14 @@
 package com.changeyourlife.cyl.backend.plugins
 
 import com.changeyourlife.cyl.backend.domain.AiActionLogRepository
+import com.changeyourlife.cyl.backend.domain.AiSkillSyncRepository
 import com.changeyourlife.cyl.backend.domain.ChatSyncRepository
 import com.changeyourlife.cyl.backend.domain.UserRepository
 import com.changeyourlife.cyl.backend.domain.ContentRepository
 import com.changeyourlife.cyl.backend.model.HealthResponse
 import com.changeyourlife.cyl.backend.routes.aiActionLogRoutes
 import com.changeyourlife.cyl.backend.routes.aiRoutes
+import com.changeyourlife.cyl.backend.routes.aiSkillSyncRoutes
 import com.changeyourlife.cyl.backend.routes.authRoutes
 import com.changeyourlife.cyl.backend.routes.chatSyncRoutes
 import com.changeyourlife.cyl.backend.routes.contentRoutes
@@ -25,6 +27,7 @@ fun Application.configureRouting(
     contentRepository: ContentRepository,
     aiActionLogRepository: AiActionLogRepository,
     chatSyncRepository: ChatSyncRepository,
+    aiSkillSyncRepository: AiSkillSyncRepository,
     jwtService: JwtService,
     databaseConfigured: Boolean,
     aiService: AiService,
@@ -65,6 +68,10 @@ fun Application.configureRouting(
 
         chatSyncRoutes(
             chatSyncRepository = chatSyncRepository,
+        )
+
+        aiSkillSyncRoutes(
+            aiSkillSyncRepository = aiSkillSyncRepository,
         )
 
         aiRoutes(

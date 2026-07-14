@@ -411,6 +411,8 @@ class AiService(
             - If one current/mentioned page is clearly in context and user does not mention a page, use that page.
             - For date words like harini/today, use the client date.
             - For money like "29 ringgit", put the numeric value in an amount/price/cost column if such column exists or create a Number column.
+            - To change one existing cell, use UPDATE_TABLE_CELL with the exact table, row, column, and value. Text and Number cells are editable data: never convert them to Select/Status or modify dropdown options unless the user explicitly asks to change the property type/options.
+            - To change several cells in one existing row, use UPDATE_TABLE_ROW with cellValues. To intentionally clear one cell, use UPDATE_TABLE_CELL with cellValues containing that column and an empty string.
             - For table creation, infer sensible columns and rows from the user's intent instead of using fixed templates.
             - Do not set table sort, filter, group, hidden columns, or view rules when creating a page/table unless the user explicitly asks for those controls. A normal monthly expenses request should create data/schema only; user can filter/sort/group manually later.
             - For monthly expenses/budget with salary and spending data, prefer a transaction ledger plus summary:
@@ -431,6 +433,9 @@ class AiService(
 
             User: saya guna 29 ringgit harini beli makeup
             JSON: {"reply":"Siap - saya tambah rekod belanja itu.","actions":[{"type":"ADD_TABLE_ROW","tableTitle":"Transactions","rowTitle":"makeup","cellValues":{"Name":"makeup","Category":"Makeup","Type":"Expense","Amount":"29","Status":"Confirmed","Date":"${clientDate.ifBlank { "today" }}"}}]}
+
+            User: dalam row makeup ubah Notes jadi beli di kedai
+            JSON: {"reply":"Siap - saya kemas kini catatan itu.","actions":[{"type":"UPDATE_TABLE_CELL","tableTitle":"Transactions","rowTitle":"makeup","columnName":"Notes","value":"beli di kedai"}]}
 
             User: @Budget Tracker ubah nama table jadi Expenses
             JSON: {"reply":"Siap - saya rename table itu.","actions":[{"type":"RENAME_TABLE","targetTitle":"Budget Tracker","title":"Expenses"}]}

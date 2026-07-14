@@ -67,7 +67,10 @@ class InMemoryContentRepository : ContentRepository {
             val parent = pagesByKey[pageKey(userId, page.parentPageId)] ?: return null
             if (parent.workspaceId != page.workspaceId) return null
         }
-        pagesByKey[pageKey(userId, page.id)] = page
+        val key = pageKey(userId, page.id)
+        val existing = pagesByKey[key]
+        if (existing != null && existing.updatedAt >= page.updatedAt) return existing
+        pagesByKey[key] = page
         return page
     }
 
@@ -165,11 +168,18 @@ class InMemoryContentRepository : ContentRepository {
         updatedAt: Long,
         transform: (String) -> String?,
     ): PageRecord? {
-        val page = getPage(userId, pageId, includeDeleted = false) ?: return null
-        val updatedContent = transform(page.content) ?: return null
-        val updatedPage = page.copy(content = updatedContent, updatedAt = updatedAt)
-        pagesByKey[pageKey(userId, pageId)] = updatedPage
-        return updatedPage
+        val key = pageKey(userId, pageId)
+        return synchronized(pagesByKey) {
+            val page = pagesByKey[key]?.takeIf { existing -> existing.deletedAt == null } ?: return@synchronized null
+            workspacesByKey[workspaceKey(userId, page.workspaceId)]
+                ?.takeIf { existing -> existing.deletedAt == null }
+                ?: return@synchronized null
+            val updatedContent = transform(page.content) ?: return@synchronized null
+            val nextUpdatedAt = maxOf(updatedAt, page.updatedAt + 1L)
+            val updatedPage = page.copy(content = updatedContent, updatedAt = nextUpdatedAt)
+            pagesByKey[key] = updatedPage
+            updatedPage
+        }
     }
 }
 

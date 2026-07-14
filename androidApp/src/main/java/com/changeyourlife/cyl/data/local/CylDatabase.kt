@@ -3,6 +3,7 @@ package com.changeyourlife.cyl.data.local
 import androidx.room.Database
 import androidx.room.RoomDatabase
 import com.changeyourlife.cyl.data.local.dao.AiActionLogDao
+import com.changeyourlife.cyl.data.local.dao.AiSkillDao
 import com.changeyourlife.cyl.data.local.dao.ChatMessageDao
 import com.changeyourlife.cyl.data.local.dao.PageDao
 import com.changeyourlife.cyl.data.local.dao.PageContentDao
@@ -11,6 +12,7 @@ import com.changeyourlife.cyl.data.local.dao.SyncTombstoneDao
 import com.changeyourlife.cyl.data.local.dao.TaskDao
 import com.changeyourlife.cyl.data.local.dao.WorkspaceDao
 import com.changeyourlife.cyl.data.local.entity.AiActionLogEntity
+import com.changeyourlife.cyl.data.local.entity.AiSkillEntity
 import com.changeyourlife.cyl.data.local.entity.ChatMessageEntity
 import com.changeyourlife.cyl.data.local.entity.ChatSessionEntity
 import com.changeyourlife.cyl.data.local.entity.PageBlockEntity
@@ -41,8 +43,9 @@ import com.changeyourlife.cyl.data.local.entity.WorkspaceEntity
         ChatSessionEntity::class,
         SyncTombstoneEntity::class,
         AiActionLogEntity::class,
+        AiSkillEntity::class,
     ],
-    version = 13,
+    version = 15,
     exportSchema = true,
 )
 abstract class CylDatabase : RoomDatabase() {
@@ -54,4 +57,5 @@ abstract class CylDatabase : RoomDatabase() {
     abstract fun chatMessageDao(): ChatMessageDao
     abstract fun syncTombstoneDao(): SyncTombstoneDao
     abstract fun aiActionLogDao(): AiActionLogDao
+    abstract fun aiSkillDao(): AiSkillDao
 }

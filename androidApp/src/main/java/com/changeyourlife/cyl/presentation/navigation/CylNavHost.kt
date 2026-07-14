@@ -23,6 +23,7 @@ import com.changeyourlife.cyl.domain.repository.AuthState
 import com.changeyourlife.cyl.presentation.ai.AiHistoryRoute
 import com.changeyourlife.cyl.presentation.ai.AiPersonaUiState
 import com.changeyourlife.cyl.presentation.ai.AiProfileRoute
+import com.changeyourlife.cyl.presentation.ai.AiSkillsRoute
 import com.changeyourlife.cyl.presentation.ai.DefaultAiAvatarIconKey
 import com.changeyourlife.cyl.presentation.auth.AuthRoute
 import com.changeyourlife.cyl.presentation.home.HomeRoute
@@ -36,6 +37,7 @@ private object Routes {
     const val HomeSearch = "home/search"
     const val AiHistory = "ai/history"
     const val AiProfile = "ai/profile"
+    const val AiSkills = "ai/skills"
     const val PageEditor = "page"
 
     fun pageEditor(
@@ -130,6 +132,11 @@ fun CylNavHost(
                         launchSingleTop = true
                     }
                 },
+                onOpenAiSkills = {
+                    navController.navigate(Routes.AiSkills) {
+                        launchSingleTop = true
+                    }
+                },
                 onLoggedOut = {
                     navController.navigate(Routes.Auth) {
                         popUpTo(Routes.Home) {
@@ -170,6 +177,17 @@ fun CylNavHost(
                 onDisplayNameChange = { value -> aiDisplayName = value },
                 onAvatarColorIndexChange = { index -> aiAvatarColorIndex = index },
                 onAvatarIconKeyChange = { key -> aiAvatarIconKey = key },
+            )
+        }
+        composable(Routes.AiSkills) {
+            AiSkillsRoute(
+                skills = homeUiState.aiSkills,
+                errorMessage = homeUiState.aiSkillError,
+                onBack = { navController.popBackStack() },
+                onSaveSkill = homeViewModel::saveAiSkill,
+                onDeleteSkill = homeViewModel::deleteAiSkill,
+                onSetSkillEnabled = homeViewModel::setAiSkillEnabled,
+                onDismissError = homeViewModel::clearAiSkillError,
             )
         }
         composable(
@@ -213,6 +231,11 @@ fun CylNavHost(
                 },
                 onOpenAiProfile = {
                     navController.navigate(Routes.AiProfile) {
+                        launchSingleTop = true
+                    }
+                },
+                onOpenAiSkills = {
+                    navController.navigate(Routes.AiSkills) {
                         launchSingleTop = true
                     }
                 },

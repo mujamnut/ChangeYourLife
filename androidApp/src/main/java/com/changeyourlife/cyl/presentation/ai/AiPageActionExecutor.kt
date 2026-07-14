@@ -483,6 +483,9 @@ class AiPageActionExecutor @Inject constructor(
                     }
 
                     "ADD_TABLE_ROW" -> {
+                        if (!action.hasMeaningfulTableRowPayload()) {
+                            error("Add row needs at least one non-empty value")
+                        }
                         if (action.isTaskTableRowAction()) {
                             val mutation = workingDocument.withTaskTableAction(action)
                             workingDocument = mutation.document
@@ -644,7 +647,7 @@ class AiPageActionExecutor @Inject constructor(
                     "UPDATE_TABLE_CELL" -> {
                         val columnName = action.columnName.ifBlank { action.propertyName }
                         val rowTitle = action.rowTitle.ifBlank { action.title }
-                        val value = action.value.ifBlank { action.content }
+                        val value = action.resolvedTableCellUpdateValue(columnName)
                         if (!documentChanged && action.rowId.isNotBlank() && action.columnId.isNotBlank()) {
                             val updated = pageRepository.updateTableCellValue(
                                 pageId = page.id,
@@ -1732,9 +1735,19 @@ private fun ChatAction.buildTableRows(columns: List<PageTableColumn>): List<Page
         tableRows.isNotEmpty() -> tableRows
         cellValues.isNotEmpty() -> listOf(cellValues)
         rowTitle.isNotBlank() || content.isNotBlank() -> listOf(mapOf(columns.first().name to rowTitle.ifBlank { content }))
-        else -> listOf(emptyMap())
+        else -> emptyList()
     }
-    return rowMaps.map { values -> columns.newRow(values) }
+    return rowMaps
+        .filter { values -> values.values.any { value -> value.isNotBlank() } }
+        .map { values -> columns.newRow(values) }
+}
+
+private fun ChatAction.hasMeaningfulTableRowPayload(): Boolean {
+    return rowTitle.isNotBlank() ||
+        title.isNotBlank() ||
+        content.isNotBlank() ||
+        cellValues.values.any { value -> value.isNotBlank() } ||
+        tableRows.any { row -> row.values.any { value -> value.isNotBlank() } }
 }
 
 private fun ChatAction.withResolvedRelationTarget(document: PageBlockDocument): ChatAction {
@@ -2160,6 +2173,18 @@ private fun PageBlock.updateCellByNames(
             },
         ),
     )
+}
+
+private fun ChatAction.resolvedTableCellUpdateValue(columnName: String): String {
+    if (value.isNotBlank()) return value
+    if (content.isNotBlank()) return content
+
+    val normalizedColumnName = columnName.normalizedAiKey()
+    return cellValues.entries
+        .firstOrNull { entry -> entry.key.normalizedAiKey() == normalizedColumnName }
+        ?.value
+        ?: cellValues.values.singleOrNull()
+        .orEmpty()
 }
 
 private fun PageBlock.addRowPageBlock(

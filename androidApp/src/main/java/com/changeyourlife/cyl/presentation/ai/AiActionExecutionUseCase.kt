@@ -391,9 +391,11 @@ private fun ChatAction.buildTableRows(columns: List<PageTableColumn>): List<Page
         tableRows.isNotEmpty() -> tableRows
         cellValues.isNotEmpty() -> listOf(cellValues)
         rowTitle.isNotBlank() || content.isNotBlank() -> listOf(mapOf(columns.first().name to rowTitle.ifBlank { content }))
-        else -> listOf(emptyMap())
+        else -> emptyList()
     }
-    return rowMaps.map { values -> columns.newRow(values) }
+    return rowMaps
+        .filter { values -> values.values.any { value -> value.isNotBlank() } }
+        .map { values -> columns.newRow(values) }
 }
 
 private fun List<PageTableColumn>.newRow(valuesByColumnName: Map<String, String>): PageTableRow {

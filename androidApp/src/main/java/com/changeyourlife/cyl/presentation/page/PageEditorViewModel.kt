@@ -29,6 +29,7 @@ import com.changeyourlife.cyl.domain.model.PageTableView
 import com.changeyourlife.cyl.domain.model.PageTableViewConfig
 import com.changeyourlife.cyl.domain.model.PageSyncState
 import com.changeyourlife.cyl.domain.model.PageTextSpan
+import com.changeyourlife.cyl.domain.model.isActive
 import com.changeyourlife.cyl.domain.model.toTypedCellValue
 import com.changeyourlife.cyl.domain.repository.PageRepository
 import com.changeyourlife.cyl.domain.usecase.AppliedEditorCommand
@@ -1400,7 +1401,11 @@ class PageEditorViewModel @Inject constructor(
             val result = tableMutationUseCase.updateSort(document, blockId, columnId, direction)
             if (!result.changed) return
             recordTableUndo(result)
-            queueTablePatchPendingDocument(blockId, result.document)
+            if (columnId.isBlank()) {
+                queueDocumentUpdate(result.document)
+            } else {
+                queueTablePatchPendingDocument(blockId, result.document)
+            }
         }
     }
 
@@ -1414,7 +1419,11 @@ class PageEditorViewModel @Inject constructor(
             val result = tableMutationUseCase.updateFilter(document, blockId, filter)
             if (!result.changed) return
             recordTableUndo(result)
-            queueTablePatchPendingDocument(blockId, result.document)
+            if (!filter.isActive()) {
+                queueDocumentUpdate(result.document)
+            } else {
+                queueTablePatchPendingDocument(blockId, result.document)
+            }
         }
     }
 
@@ -1428,7 +1437,11 @@ class PageEditorViewModel @Inject constructor(
             val result = tableMutationUseCase.updateGroup(document, blockId, columnId)
             if (!result.changed) return
             recordTableUndo(result)
-            queueTablePatchPendingDocument(blockId, result.document)
+            if (columnId.isBlank()) {
+                queueDocumentUpdate(result.document)
+            } else {
+                queueTablePatchPendingDocument(blockId, result.document)
+            }
         }
     }
 

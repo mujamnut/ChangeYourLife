@@ -20,6 +20,11 @@ import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
 import io.ktor.server.routing.put
 import io.ktor.server.routing.route
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 fun Route.chatSyncRoutes(chatSyncRepository: ChatSyncRepository) {
     authenticate("auth-jwt") {
@@ -139,16 +144,46 @@ private fun ChatSessionSyncDto.validate(): String? {
 }
 
 private fun ChatMessageSyncDto.validate(): String? {
-    return when {
-        id.isBlank() -> "Chat message id is required."
-        sessionId.isBlank() -> "sessionId is required."
-        scopeId.isBlank() -> "scopeId is required."
-        role.isBlank() -> "role is required."
-        role !in setOf("user", "assistant", "system") -> "role must be user, assistant, or system."
-        createdAt <= 0L -> "createdAt must be greater than 0."
-        updatedAt <= 0L -> "updatedAt must be greater than 0."
-        else -> null
+    if (id.isBlank()) return "Chat message id is required."
+    if (sessionId.isBlank()) return "sessionId is required."
+    if (scopeId.isBlank()) return "scopeId is required."
+    if (role.isBlank()) return "role is required."
+    if (role !in setOf("user", "assistant", "system")) {
+        return "role must be user, assistant, or system."
     }
+    if (attachmentsJson.length > MaxChatAttachmentsJsonLength) return "attachmentsJson is too large."
+    attachmentsJson.validateChatAttachmentsJson()?.let { return it }
+    if (createdAt <= 0L) return "createdAt must be greater than 0."
+    if (updatedAt <= 0L) return "updatedAt must be greater than 0."
+    return null
+}
+
+private fun String.validateChatAttachmentsJson(): String? {
+    val attachments = runCatching { Json.parseToJsonElement(this).jsonArray }
+        .getOrElse { return "attachmentsJson must be a JSON array." }
+    if (attachments.size > MaxChatAttachmentCount) {
+        return "A chat message supports at most $MaxChatAttachmentCount attachments."
+    }
+    attachments.forEachIndexed { index, element ->
+        val attachment = runCatching { element.jsonObject }
+            .getOrElse { return "Attachment $index must be a JSON object." }
+        val id = runCatching { attachment["id"]?.jsonPrimitive?.contentOrNull }.getOrNull().orEmpty()
+        val name = runCatching { attachment["name"]?.jsonPrimitive?.contentOrNull }.getOrNull().orEmpty()
+        val kind = runCatching { attachment["kind"]?.jsonPrimitive?.contentOrNull }.getOrNull().orEmpty()
+        val preview = runCatching {
+            attachment["previewDataUrl"]?.jsonPrimitive?.contentOrNull
+        }.getOrNull().orEmpty()
+        if (id.isBlank()) return "Attachment $index id is required."
+        if (name.isBlank()) return "Attachment $index name is required."
+        if (kind !in setOf("image", "text")) return "Attachment $index kind is invalid."
+        if (preview.length > MaxChatAttachmentPreviewLength) {
+            return "Attachment $index preview is too large."
+        }
+        if (preview.isNotBlank() && !preview.startsWith("data:image/")) {
+            return "Attachment $index preview must be an image data URL."
+        }
+    }
+    return null
 }
 
 private fun ChatSessionRecord.toDto(): ChatSessionSyncDto {
@@ -183,6 +218,7 @@ private fun ChatMessageRecord.toDto(): ChatMessageSyncDto {
         content = content,
         pageLinksJson = pageLinksJson,
         actionMetadataJson = actionMetadataJson,
+        attachmentsJson = attachmentsJson,
         createdAt = createdAt,
         updatedAt = updatedAt,
     )
@@ -198,7 +234,12 @@ private fun ChatMessageSyncDto.toRecord(userId: String): ChatMessageRecord {
         content = content,
         pageLinksJson = pageLinksJson,
         actionMetadataJson = actionMetadataJson,
+        attachmentsJson = attachmentsJson,
         createdAt = createdAt,
         updatedAt = updatedAt,
     )
 }
+
+private const val MaxChatAttachmentsJsonLength = 700_000
+private const val MaxChatAttachmentCount = 4
+private const val MaxChatAttachmentPreviewLength = 150_000

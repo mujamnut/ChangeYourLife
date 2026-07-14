@@ -1,6 +1,7 @@
 package com.changeyourlife.cyl.domain.repository
 
 import com.changeyourlife.cyl.domain.model.ChatMessage
+import com.changeyourlife.cyl.domain.model.ChatMessageAttachment
 import com.changeyourlife.cyl.domain.model.ChatActionMetadata
 import com.changeyourlife.cyl.domain.model.ChatPageLink
 import com.changeyourlife.cyl.domain.model.ChatSession
@@ -25,6 +26,7 @@ interface ChatHistoryRepository {
         role: String,
         content: String,
         pageLinks: List<ChatPageLink> = emptyList(),
+        attachments: List<ChatMessageAttachment> = emptyList(),
         actionMetadata: ChatActionMetadata? = null,
     ): ChatMessage
 

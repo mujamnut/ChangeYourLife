@@ -12,7 +12,6 @@ import com.changeyourlife.cyl.domain.model.PageTableOptionColor
 import com.changeyourlife.cyl.domain.model.PageTableRow
 import com.changeyourlife.cyl.domain.model.PageTableRollupAggregation
 import com.changeyourlife.cyl.domain.model.PageTableSelectOption
-import com.changeyourlife.cyl.domain.model.PageTableSort
 import com.changeyourlife.cyl.domain.model.normalizedForType
 import com.changeyourlife.cyl.domain.model.toTypedCellValue
 import java.math.BigDecimal
@@ -294,8 +293,6 @@ private fun PageTable.toLedgerRows(): List<LedgerRow> {
 
 private fun PageTable.normalizedTransactionTable(ledger: List<LedgerRow>): PageTable {
     val nextColumns = budgetTransactionColumns(ledger)
-    val dateColumn = nextColumns.firstOrNull { column -> column.name.normalizedBudgetKey() == "date" }
-    val monthColumn = nextColumns.firstOrNull { column -> column.name.normalizedBudgetKey() == "month" }
     val categoryOptions = ledger.map { row -> row.category }
     val monthOptions = ledger.map { row -> row.month }
     val typeOptions = ledger.map { row -> row.type } + listOf("Expense", "Income", "Debt")
@@ -332,11 +329,10 @@ private fun PageTable.normalizedTransactionTable(ledger: List<LedgerRow>): PageT
     return copy(
         columns = configuredColumns,
         rows = nextRows,
-        sort = sort.takeIf { value -> value.columnId.isNotBlank() }
-            ?: PageTableSort(columnId = dateColumn?.id.orEmpty()),
-        groupByColumnId = groupByColumnId.ifBlank { monthColumn?.id.orEmpty() },
         viewConfig = viewConfig.copy(
-            calendarDateColumnId = viewConfig.calendarDateColumnId.ifBlank { dateColumn?.id.orEmpty() },
+            calendarDateColumnId = viewConfig.calendarDateColumnId.ifBlank {
+                configuredColumns.firstOrNull { column -> column.name.normalizedBudgetKey() == "date" }?.id.orEmpty()
+            },
             dashboardMetricColumnId = viewConfig.dashboardMetricColumnId.ifBlank {
                 configuredColumns.firstOrNull { column -> column.name.normalizedBudgetKey() == "amount" }?.id.orEmpty()
             },

@@ -9,6 +9,7 @@ import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.platform.LocalContext
+import com.changeyourlife.cyl.data.local.session.AppThemeMode
 
 private val LightColorScheme = lightColorScheme(
     primary = CylPrimary,
@@ -72,7 +73,12 @@ private val DarkColorScheme = darkColorScheme(
 
 @Composable
 fun ChangeYourLifeTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
+    themeMode: AppThemeMode = AppThemeMode.SYSTEM,
+    darkTheme: Boolean = when (themeMode) {
+        AppThemeMode.SYSTEM -> isSystemInDarkTheme()
+        AppThemeMode.LIGHT -> false
+        AppThemeMode.DARK -> true
+    },
     dynamicColor: Boolean = false,
     content: @Composable () -> Unit,
 ) {

@@ -185,9 +185,7 @@ object PageContentJsonMutator {
                 val normalizedFilterQuery = filterQuery?.trim()
                 val shouldClearFilter =
                     normalizedFilterColumnId != null &&
-                        normalizedFilterColumnId.isBlank() &&
-                        normalizedFilterQuery != null &&
-                        normalizedFilterQuery.isBlank()
+                        normalizedFilterColumnId.isBlank()
 
                 if (shouldClearFilter) {
                     updatedTable = updatedTable.withElement("filter", JsonObject(emptyMap()))
