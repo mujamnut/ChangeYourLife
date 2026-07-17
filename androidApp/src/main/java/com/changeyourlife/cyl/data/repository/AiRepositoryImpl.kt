@@ -85,6 +85,8 @@ class AiRepositoryImpl @Inject constructor(
         clientDate: String,
         clientTimezone: String,
         images: List<AiImageAttachment>,
+        webSearchEnabled: Boolean,
+        webSearchQuery: String,
     ): Result<ChatActionResult> = withContext(Dispatchers.IO) {
         runCatching {
             val header = getAuthHeader()
@@ -123,6 +125,8 @@ class AiRepositoryImpl @Inject constructor(
                         kind = image.kind,
                     )
                 },
+                webSearchEnabled = webSearchEnabled,
+                webSearchQuery = webSearchQuery,
             )
             val response = runChatWithActionsJob(header = header, request = request)
             if (response.reply.isBlank() && response.actions.isEmpty() && response.validationIssues.isEmpty()) {
@@ -217,6 +221,9 @@ private fun com.changeyourlife.cyl.data.remote.ai.AiDiagnosticsDto.toDeveloperSu
         visionProvider.takeIf { it.isNotBlank() }?.let { "visionProvider=$it" },
         visionModel.takeIf { it.isNotBlank() }?.let { "visionModel=$it" },
         visionStatus.takeIf { it.isNotBlank() }?.let { "visionStatus=$it" },
+        webSearchProvider.takeIf { it.isNotBlank() }?.let { "webSearchProvider=$it" },
+        webSearchStatus.takeIf { it.isNotBlank() }?.let { "webSearchStatus=$it" },
+        webSearchResultCount.takeIf { it > 0 }?.let { "webSearchResults=$it" },
     )
         .filterNotNull()
         .joinToString(", ")

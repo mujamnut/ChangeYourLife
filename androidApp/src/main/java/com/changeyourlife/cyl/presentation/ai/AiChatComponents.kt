@@ -829,7 +829,9 @@ internal fun AiSettingsPanel(
     visionPipelineLabel: String,
     enabledSkillsCount: Int,
     totalSkillsCount: Int,
+    webSearchEnabled: Boolean,
     hasMessages: Boolean,
+    onToggleWebSearch: () -> Unit,
     onOpenSkills: () -> Unit,
     onOpenPersonalize: () -> Unit,
     onClearHistory: () -> Unit,
@@ -869,7 +871,9 @@ internal fun AiSettingsPanel(
             AiSettingRow(
                 icon = Icons.Rounded.Public,
                 label = "Source",
-                value = "App context, web off",
+                value = if (webSearchEnabled) "App + web" else "App context",
+                active = webSearchEnabled,
+                onClick = onToggleWebSearch,
             )
         }
         item {
@@ -947,6 +951,7 @@ private fun AiSettingRow(
     icon: ImageVector,
     label: String,
     value: String,
+    active: Boolean = false,
     onClick: (() -> Unit)? = null,
 ) {
     Row(
@@ -954,6 +959,13 @@ private fun AiSettingRow(
             .fillMaxWidth()
             .height(46.dp)
             .clip(RoundedCornerShape(10.dp))
+            .background(
+                if (active) {
+                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f)
+                } else {
+                    Color.Transparent
+                },
+            )
             .then(
                 if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier,
             )

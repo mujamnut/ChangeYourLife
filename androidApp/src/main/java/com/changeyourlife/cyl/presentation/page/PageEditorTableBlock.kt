@@ -532,10 +532,6 @@ internal fun TableToolbar(
                     onViewConfigChange = onViewConfigChange,
                     onDataSourceChange = onDataSourceChange,
                 )
-                DatabaseSyncStatusChip(
-                    syncState = syncState,
-                    isSaving = isSaving,
-                )
                 Spacer(modifier = Modifier.weight(1f))
                 TableControlIconButton(
                     icon = Icons.Rounded.Search,
@@ -3756,11 +3752,12 @@ internal fun TableDatePropertySettingsSheet(
         nextReminder: PageTableDateReminder = reminder,
         nextTimezone: String = timezoneLabel,
     ) {
+        val normalizedReminder = nextReminder.coerceForIncludeTime(nextTimeFormat != PageTableTimeFormat.Hidden)
         dateFormat = nextDateFormat
         timeFormat = nextTimeFormat
-        reminder = nextReminder
+        reminder = normalizedReminder
         timezoneLabel = nextTimezone
-        onDateSettingsChange(nextDateFormat, nextTimeFormat, nextReminder, nextTimezone)
+        onDateSettingsChange(nextDateFormat, nextTimeFormat, normalizedReminder, nextTimezone)
     }
 
     PropertyDetailHeader(title = "Edit property", onBack = onBack)
@@ -3785,7 +3782,7 @@ internal fun TableDatePropertySettingsSheet(
             icon = Icons.Rounded.Notifications,
             label = "Notifications",
             selectedLabel = reminder.label,
-            items = PageTableDateReminder.entries,
+            items = dateReminderOptions(timeFormat != PageTableTimeFormat.Hidden),
             itemLabel = { value -> value.label },
             onSelect = { value -> save(nextReminder = value) },
         )
@@ -5332,17 +5329,22 @@ internal fun TableDateEditorSheet(
     var dateFormat by remember(column.dateFormat) { mutableStateOf(column.dateFormat) }
     var timeFormat by remember(column.timeFormat) { mutableStateOf(column.timeFormat) }
     val hasCellDateMetadata = remember(value) { value.trim().startsWith("{") }
-    var reminder by remember(value, column.dateReminder) {
-        mutableStateOf(if (hasCellDateMetadata) cellValue.reminder else column.dateReminder)
+    var reminder by remember(value, column.dateReminder, includeTime) {
+        mutableStateOf(
+            (if (hasCellDateMetadata) cellValue.reminder else column.dateReminder)
+                .coerceForIncludeTime(includeTime),
+        )
     }
     var timezoneLabel by remember(value, column.timezoneLabel) {
         mutableStateOf(if (hasCellDateMetadata) cellValue.timezoneLabel else column.timezoneLabel)
     }
 
     fun saveCell(next: TableDateCellValue) {
+        val normalizedReminder = reminder.coerceForIncludeTime(next.includeTime)
+        reminder = normalizedReminder
         val normalized = next.copy(
             timezoneLabel = timezoneLabel,
-            reminder = reminder,
+            reminder = normalizedReminder,
         )
         cellValue = normalized
         onValueChange(normalized.toTableDateCellStorageValue())
@@ -5655,7 +5657,7 @@ internal fun TableDateEditorSheet(
                     icon = Icons.Rounded.Notifications,
                     label = "Remind",
                     selectedLabel = reminder.label,
-                    items = PageTableDateReminder.entries,
+                    items = dateReminderOptions(includeTime),
                     itemLabel = { reminder -> reminder.label },
                     onSelect = { nextReminder ->
                         reminder = nextReminder

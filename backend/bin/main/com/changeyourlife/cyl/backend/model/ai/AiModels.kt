@@ -56,6 +56,10 @@ data class AiDiagnostics(
     val visionModel: String = "",
     val visionStatus: String = "",
     val visionPipelineVersion: String = "",
+    val webSearchAttempted: Boolean = false,
+    val webSearchProvider: String = "",
+    val webSearchStatus: String = "",
+    val webSearchResultCount: Int = 0,
     val warning: String = "",
 )
 
@@ -67,6 +71,8 @@ data class ChatWithActionsRequest(
     val clientDate: String = "",
     val clientTimezone: String = "",
     val images: List<AiImageInput> = emptyList(),
+    val webSearchEnabled: Boolean = false,
+    val webSearchQuery: String = "",
 )
 
 @Serializable

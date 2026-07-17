@@ -190,7 +190,8 @@ fun PageEditorRoute(
     initialSearchTargetType: String = "",
     initialSearchTargetId: String = "",
     onOpenPage: (String, String, String) -> Unit,
-    onSendAiMessage: (String, List<String>, String?, List<AiImageAttachment>) -> Unit,
+    onSearch: () -> Unit,
+    onSendAiMessage: (String, List<String>, String?, List<AiImageAttachment>, Boolean) -> Unit,
     onHomeAiMentionQueryChange: (String) -> Unit,
     onUndoAiAction: (String, String) -> Unit,
     onClearHomeAiHistory: () -> Unit,
@@ -212,6 +213,7 @@ fun PageEditorRoute(
         aiPersona = aiPersona,
         onBack = onBack,
         onOpenPage = onOpenPage,
+        onSearch = onSearch,
         initialSearchTargetType = initialSearchTargetType,
         initialSearchTargetId = initialSearchTargetId,
         onTitleChange = viewModel::updateTitle,
@@ -305,6 +307,7 @@ internal fun PageEditorScreen(
     aiPersona: AiPersonaUiState,
     onBack: () -> Unit,
     onOpenPage: (String, String, String) -> Unit,
+    onSearch: () -> Unit,
     initialSearchTargetType: String = "",
     initialSearchTargetId: String = "",
     onTitleChange: (String) -> Unit,
@@ -378,7 +381,7 @@ internal fun PageEditorScreen(
     onUndoEditorChange: () -> Unit,
     onKeepLocalConflict: () -> Unit,
     onUseRemoteConflict: () -> Unit,
-    onSendAiMessage: (String, List<String>, String?, List<AiImageAttachment>) -> Unit,
+    onSendAiMessage: (String, List<String>, String?, List<AiImageAttachment>, Boolean) -> Unit,
     onHomeAiMentionQueryChange: (String) -> Unit,
     onUndoAiAction: (String, String) -> Unit,
     onClearHomeAiHistory: () -> Unit,
@@ -392,7 +395,6 @@ internal fun PageEditorScreen(
     modifier: Modifier = Modifier,
 ) {
     var isAiChatSheetOpen by rememberSaveable { mutableStateOf(false) }
-    var isPageSearchSheetOpen by rememberSaveable { mutableStateOf(false) }
     var isBlockPickerSheetOpen by rememberSaveable { mutableStateOf(false) }
     val aiChatSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var activeBlockId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -563,6 +565,7 @@ internal fun PageEditorScreen(
                 tableOpenRowIds = tableOpenRowIds,
                 tableActiveEditingCellKeys = tableActiveEditingCellKeys,
                 onBack = onBack,
+                onSearch = onSearch,
                 onTitleChange = onTitleChange,
                 onTableTitleChange = onTableTitleChange,
                 onTableViewChange = onTableViewChange,
@@ -702,8 +705,9 @@ internal fun PageEditorScreen(
                             activeBlockId?.let(::deleteBlockAndFocusSibling)
                         },
                         onUndoEditorChange = onUndoEditorChange,
-                        onSearch = { isPageSearchSheetOpen = true },
+                        onSearch = onSearch,
                         onOpenAi = {
+                            onCreateHomeChatSession()
                             isAiChatSheetOpen = true
                         },
                         onCreateBlock = { isBlockPickerSheetOpen = true },
@@ -727,8 +731,8 @@ internal fun PageEditorScreen(
                         visionPipelineLabel = homeAiState.aiVisionPipelineLabel,
                         enabledSkillsCount = homeAiState.aiSkills.count { skill -> skill.isEnabled },
                         totalSkillsCount = homeAiState.aiSkills.size,
-                        onSendMessage = { message, mentionedPageIds, images ->
-                            onSendAiMessage(message, mentionedPageIds, uiState.page.id, images)
+                        onSendMessage = { message, mentionedPageIds, images, webSearchEnabled ->
+                            onSendAiMessage(message, mentionedPageIds, uiState.page.id, images, webSearchEnabled)
                         },
                         onMentionQueryChange = onHomeAiMentionQueryChange,
                         onUndoAction = onUndoAiAction,
@@ -755,15 +759,6 @@ internal fun PageEditorScreen(
                         sheetState = aiChatSheetState,
                         attachedPageId = uiState.page.id,
                         attachedPageTitle = uiState.title.ifBlank { "Untitled page" },
-                    )
-                }
-                if (isPageSearchSheetOpen) {
-                    PageSearchSheet(
-                        pageTitle = uiState.title.ifBlank { "Untitled page" },
-                        properties = uiState.properties,
-                        blocks = uiState.blocks,
-                        onDismiss = { isPageSearchSheetOpen = false },
-                        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
                     )
                 }
                 if (isBlockPickerSheetOpen) {

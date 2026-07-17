@@ -653,7 +653,7 @@ internal data class TableDateCellValue(
     val includeEndDate: Boolean = false,
     val includeTime: Boolean = false,
     val timezoneLabel: String = "Local",
-    val reminder: PageTableDateReminder = PageTableDateReminder.OnDayOfEvent,
+    val reminder: PageTableDateReminder = PageTableDateReminder.None,
 )
 
 internal val TableDateCellJson = Json {
@@ -684,7 +684,7 @@ internal fun TableDateCellValue.toTableDateCellStorageValue(): String {
         startTime.isBlank() &&
         endDate.isBlank() &&
         timezoneLabel == "Local" &&
-        reminder == PageTableDateReminder.OnDayOfEvent
+        reminder == PageTableDateReminder.None
     return if (isPlainDate) {
         startDate
     } else {
@@ -760,9 +760,46 @@ internal val PageTableDateReminder.label: String
     get() = when (this) {
         PageTableDateReminder.None -> "None"
         PageTableDateReminder.AtTimeOfEvent -> "At time of event"
-        PageTableDateReminder.OnDayOfEvent -> "On day of event"
+        PageTableDateReminder.FiveMinutesBefore -> "5 min before"
+        PageTableDateReminder.TenMinutesBefore -> "10 min before"
+        PageTableDateReminder.FifteenMinutesBefore -> "15 min before"
+        PageTableDateReminder.ThirtyMinutesBefore -> "30 min before"
+        PageTableDateReminder.OneHourBefore -> "1 hour before"
+        PageTableDateReminder.TwoHoursBefore -> "2 hours before"
+        PageTableDateReminder.OnDayOfEvent -> "On day of event (9 AM)"
         PageTableDateReminder.OneDayBefore -> "1 day before"
+        PageTableDateReminder.TwoDaysBefore -> "2 days before"
+        PageTableDateReminder.OneWeekBefore -> "1 week before"
     }
+
+internal fun PageTableDateReminder.coerceForIncludeTime(includeTime: Boolean): PageTableDateReminder {
+    return if (this in dateReminderOptions(includeTime)) this else PageTableDateReminder.None
+}
+
+internal fun dateReminderOptions(includeTime: Boolean): List<PageTableDateReminder> {
+    return if (includeTime) {
+        listOf(
+            PageTableDateReminder.None,
+            PageTableDateReminder.AtTimeOfEvent,
+            PageTableDateReminder.FiveMinutesBefore,
+            PageTableDateReminder.TenMinutesBefore,
+            PageTableDateReminder.FifteenMinutesBefore,
+            PageTableDateReminder.ThirtyMinutesBefore,
+            PageTableDateReminder.OneHourBefore,
+            PageTableDateReminder.TwoHoursBefore,
+            PageTableDateReminder.OneDayBefore,
+            PageTableDateReminder.TwoDaysBefore,
+        )
+    } else {
+        listOf(
+            PageTableDateReminder.None,
+            PageTableDateReminder.OnDayOfEvent,
+            PageTableDateReminder.OneDayBefore,
+            PageTableDateReminder.TwoDaysBefore,
+            PageTableDateReminder.OneWeekBefore,
+        )
+    }
+}
 
 internal fun String.toLocalDateOrNull(): LocalDate? {
     val trimmed = trim()
@@ -1931,6 +1968,7 @@ internal fun PageEditorScreenPreview() {
             aiPersona = AiPersonaUiState(),
             onBack = {},
             onOpenPage = { _, _, _ -> },
+            onSearch = {},
             onTitleChange = {},
             onBlockTextChange = { _, _ -> },
             onBlockRichTextChange = { _, _, _ -> },
@@ -1995,7 +2033,7 @@ internal fun PageEditorScreenPreview() {
             onUndoEditorChange = {},
             onKeepLocalConflict = {},
             onUseRemoteConflict = {},
-            onSendAiMessage = { _, _, _, _ -> },
+            onSendAiMessage = { _, _, _, _, _ -> },
             onHomeAiMentionQueryChange = {},
             onUndoAiAction = { _, _ -> },
             onClearHomeAiHistory = {},

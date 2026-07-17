@@ -106,7 +106,7 @@ fun AiChatSheet(
     visionPipelineLabel: String = "",
     enabledSkillsCount: Int = 0,
     totalSkillsCount: Int = 0,
-    onSendMessage: (String, List<String>, List<AiImageAttachment>) -> Unit,
+    onSendMessage: (String, List<String>, List<AiImageAttachment>, Boolean) -> Unit,
     onMentionQueryChange: (String) -> Unit = {},
     onUndoAction: (String, String) -> Unit,
     onClearHistory: () -> Unit,
@@ -273,6 +273,7 @@ fun AiChatSheet(
     )
     var activePanel by rememberSaveable { mutableStateOf<AiComposerPanel?>(null) }
     var isMentionPickerOpen by rememberSaveable { mutableStateOf(false) }
+    var isWebSearchEnabled by rememberSaveable { mutableStateOf(false) }
     val shouldShowKeyboardReplacement = activePanel != null || isMentionPickerOpen
     val avatarSpec = remember(persona) { persona.toAvatarSpec() }
     val stagedAttachmentPreviews = remember(stagedImageAttachments) {
@@ -337,6 +338,7 @@ fun AiChatSheet(
                     .filter { pageId -> pageId.isNotBlank() }
                     .distinct(),
                 stagedImageAttachments,
+                isWebSearchEnabled,
             )
             inputState.setTextAndPlaceCursorAtEnd("")
             selectedMentionPageIds = emptyList()
@@ -552,7 +554,11 @@ fun AiChatSheet(
                                 visionPipelineLabel = visionPipelineLabel,
                                 enabledSkillsCount = enabledSkillsCount,
                                 totalSkillsCount = totalSkillsCount,
+                                webSearchEnabled = isWebSearchEnabled,
                                 hasMessages = messages.isNotEmpty(),
+                                onToggleWebSearch = {
+                                    isWebSearchEnabled = !isWebSearchEnabled
+                                },
                                 onOpenSkills = {
                                     activePanel = null
                                     onOpenSkillsPage()

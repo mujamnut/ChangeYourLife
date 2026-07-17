@@ -128,6 +128,12 @@ class ScheduleTableDateReminderUseCase @Inject constructor(
         val reminderDateTime = when (reminder) {
             PageTableDateReminder.None -> return null
             PageTableDateReminder.AtTimeOfEvent -> eventDateTime
+            PageTableDateReminder.FiveMinutesBefore -> eventDateTime.minusMinutes(5)
+            PageTableDateReminder.TenMinutesBefore -> eventDateTime.minusMinutes(10)
+            PageTableDateReminder.FifteenMinutesBefore -> eventDateTime.minusMinutes(15)
+            PageTableDateReminder.ThirtyMinutesBefore -> eventDateTime.minusMinutes(30)
+            PageTableDateReminder.OneHourBefore -> eventDateTime.minusHours(1)
+            PageTableDateReminder.TwoHoursBefore -> eventDateTime.minusHours(2)
             PageTableDateReminder.OnDayOfEvent -> {
                 val onDayInstant = onDayDateTime.atZone(zoneId).toInstant()
                 val eventInstant = eventDateTime.atZone(zoneId).toInstant()
@@ -138,6 +144,8 @@ class ScheduleTableDateReminderUseCase @Inject constructor(
                 }
             }
             PageTableDateReminder.OneDayBefore -> eventDateTime.minusDays(1)
+            PageTableDateReminder.TwoDaysBefore -> eventDateTime.minusDays(2)
+            PageTableDateReminder.OneWeekBefore -> eventDateTime.minusWeeks(1)
         }
         return reminderDateTime.atZone(zoneId).toInstant()
     }

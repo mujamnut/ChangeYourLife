@@ -78,6 +78,7 @@ internal fun PageDatabaseSurface(
     tableOpenRowIds: androidx.compose.runtime.snapshots.SnapshotStateMap<String, String?>,
     tableActiveEditingCellKeys: androidx.compose.runtime.snapshots.SnapshotStateMap<String, String?>,
     onBack: () -> Unit,
+    onSearch: () -> Unit,
     onTitleChange: (String) -> Unit,
     onTableTitleChange: (String, String) -> Unit,
     onTableViewChange: (String, PageTableView) -> Unit,
@@ -127,7 +128,7 @@ internal fun PageDatabaseSurface(
     onOutdentTableRowPageBlock: (String, String, String) -> Unit,
     onKeepLocalConflict: () -> Unit,
     onUseRemoteConflict: () -> Unit,
-    onSendAiMessage: (String, List<String>, String?, List<AiImageAttachment>) -> Unit,
+    onSendAiMessage: (String, List<String>, String?, List<AiImageAttachment>, Boolean) -> Unit,
     onHomeAiMentionQueryChange: (String) -> Unit,
     onUndoAiAction: (String, String) -> Unit,
     onClearHomeAiHistory: () -> Unit,
@@ -145,7 +146,6 @@ internal fun PageDatabaseSurface(
     modifier: Modifier = Modifier,
 ) {
     var isAiChatSheetOpen by rememberSaveable { mutableStateOf(false) }
-    var isPageSearchSheetOpen by rememberSaveable { mutableStateOf(false) }
     val aiChatSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     val table = databaseBlock.table
@@ -252,12 +252,15 @@ internal fun PageDatabaseSurface(
                 centerLabel = "Ask AI",
                 centerIcon = Icons.Rounded.AutoAwesome,
                 centerContentDescription = "Ask AI about this page",
-                onCenterClick = { isAiChatSheetOpen = true },
+                onCenterClick = {
+                    onCreateHomeChatSession()
+                    isAiChatSheetOpen = true
+                },
                 leadingActions = {
                     CylChromeIconButton(
                         icon = Icons.Rounded.Search,
                         contentDescription = "Search page",
-                        onClick = { isPageSearchSheetOpen = true },
+                        onClick = onSearch,
                     )
                 },
                 trailingActions = {}
@@ -277,8 +280,8 @@ internal fun PageDatabaseSurface(
                 visionPipelineLabel = homeAiState.aiVisionPipelineLabel,
                 enabledSkillsCount = homeAiState.aiSkills.count { skill -> skill.isEnabled },
                 totalSkillsCount = homeAiState.aiSkills.size,
-                onSendMessage = { message, mentionedPageIds, images ->
-                    onSendAiMessage(message, mentionedPageIds, currentPageId, images)
+                onSendMessage = { message, mentionedPageIds, images, webSearchEnabled ->
+                    onSendAiMessage(message, mentionedPageIds, currentPageId, images, webSearchEnabled)
                 },
                 onMentionQueryChange = onHomeAiMentionQueryChange,
                 onUndoAction = onUndoAiAction,
@@ -307,16 +310,6 @@ internal fun PageDatabaseSurface(
                 attachedPageTitle = uiState.title.ifBlank { "Untitled page" },
             )
         }
-        if (isPageSearchSheetOpen) {
-            PageSearchSheet(
-                pageTitle = uiState.title.ifBlank { "Untitled page" },
-                properties = uiState.properties,
-                blocks = uiState.blocks,
-                onDismiss = { isPageSearchSheetOpen = false },
-                sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-            )
-        }
-
         LazyColumn(
             state = databaseListState,
             modifier = Modifier

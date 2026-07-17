@@ -436,11 +436,6 @@ internal fun TableRowPageSheet(
                     },
                     modifier = Modifier.weight(1f),
                 )
-                DatabaseSyncStatusChip(
-                    syncState = syncState,
-                    isSaving = isSaving,
-                    showDetailOnClick = false,
-                )
                 IconButton(
                     onClick = {
                         clearRowEditorFocus()

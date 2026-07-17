@@ -21,6 +21,16 @@ sdk.dir=C\:/Users/<your-user>/AppData/Local/Android/Sdk
 # Backend will try these in order until one succeeds.
 # OPENROUTER_VISION_MODELS=google/gemma-4-26b-a4b-it:free,google/gemma-3-4b-it:free,google/gemini-2.0-flash-exp:free
 
+# Optional AI web source.
+# Android chat settings decide per-message whether web search is used.
+# Jina search is attempted first and may work without a key; Exa/Tavily are fallback providers only when keys exist.
+# WEB_SEARCH_ENABLED=true
+# WEB_SEARCH_TIMEOUT_MS=12000
+# WEB_SEARCH_CACHE_TTL_SECONDS=900
+# JINA_API_KEY=
+# EXA_API_KEY=
+# TAVILY_API_KEY=
+
 # Backend PostgreSQL persistence.
 # Aiven PostgreSQL service URI normally needs sslmode=require.
 # Do not commit your real database password.

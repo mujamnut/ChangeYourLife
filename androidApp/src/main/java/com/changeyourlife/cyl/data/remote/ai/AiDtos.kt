@@ -51,6 +51,10 @@ data class AiDiagnosticsDto(
     val visionModel: String = "",
     val visionStatus: String = "",
     val visionPipelineVersion: String = "",
+    val webSearchAttempted: Boolean = false,
+    val webSearchProvider: String = "",
+    val webSearchStatus: String = "",
+    val webSearchResultCount: Int = 0,
     val warning: String = "",
 )
 
@@ -63,6 +67,8 @@ data class ChatWithActionsRequestDto(
     val clientDate: String = "",
     val clientTimezone: String = "",
     val images: List<AiImageInputDto> = emptyList(),
+    val webSearchEnabled: Boolean = false,
+    val webSearchQuery: String = "",
 )
 
 @Serializable

@@ -201,16 +201,6 @@ internal fun PageEditorTopBar(
     syncState: PageSyncState,
     onBack: () -> Unit,
 ) {
-    var isSyncSheetOpen by rememberSaveable { mutableStateOf(false) }
-
-    if (isSyncSheetOpen) {
-        PageSyncStatusSheet(
-            syncState = syncState,
-            isSaving = isSaving,
-            onDismiss = { isSyncSheetOpen = false },
-        )
-    }
-
     TopAppBar(
         title = {
             Row(
@@ -246,13 +236,7 @@ internal fun PageEditorTopBar(
                 )
             }
         },
-        actions = {
-            PageSyncStatusButton(
-                syncState = syncState,
-                isSaving = isSaving,
-                onClick = { isSyncSheetOpen = true },
-            )
-        },
+        actions = {},
         colors = TopAppBarDefaults.topAppBarColors(
             containerColor = MaterialTheme.colorScheme.surface,
             scrolledContainerColor = MaterialTheme.colorScheme.surface,

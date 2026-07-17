@@ -19,6 +19,7 @@ data class AppConfig(
     val openRouterApiKey: String?,
     val openRouterModel: String,
     val openRouterVisionModels: List<String>,
+    val webSearch: WebSearchConfig,
 ) {
     companion object {
         private const val DefaultLmStudioModel = "qwen/qwen3.5-9b"
@@ -96,6 +97,38 @@ data class AppConfig(
                 )?.toModelList()
                     ?.takeIf { models -> models.isNotEmpty() }
                     ?: DefaultOpenRouterVisionModels,
+                webSearch = WebSearchConfig(
+                    enabled = loadSetting(
+                        environment = environment,
+                        envNames = listOf("WEB_SEARCH_ENABLED", "AI_WEB_SEARCH_ENABLED"),
+                        propNames = listOf("web.search.enabled", "WEB_SEARCH_ENABLED", "AI_WEB_SEARCH_ENABLED"),
+                    )?.toBooleanStrictOrNull() ?: true,
+                    jinaApiKey = loadApiKey(
+                        environment = environment,
+                        envNames = listOf("JINA_API_KEY"),
+                        propNames = listOf("jina.api.key", "JINA_API_KEY"),
+                    ),
+                    exaApiKey = loadApiKey(
+                        environment = environment,
+                        envNames = listOf("EXA_API_KEY"),
+                        propNames = listOf("exa.api.key", "EXA_API_KEY"),
+                    ),
+                    tavilyApiKey = loadApiKey(
+                        environment = environment,
+                        envNames = listOf("TAVILY_API_KEY"),
+                        propNames = listOf("tavily.api.key", "TAVILY_API_KEY"),
+                    ),
+                    timeoutMs = loadSetting(
+                        environment = environment,
+                        envNames = listOf("WEB_SEARCH_TIMEOUT_MS"),
+                        propNames = listOf("web.search.timeout.ms", "WEB_SEARCH_TIMEOUT_MS"),
+                    )?.toLongOrNull()?.coerceIn(2_000L, 30_000L) ?: 12_000L,
+                    cacheTtlSeconds = loadSetting(
+                        environment = environment,
+                        envNames = listOf("WEB_SEARCH_CACHE_TTL_SECONDS"),
+                        propNames = listOf("web.search.cache.ttl.seconds", "WEB_SEARCH_CACHE_TTL_SECONDS"),
+                    )?.toLongOrNull()?.coerceIn(60L, 86_400L) ?: 900L,
+                ),
             )
         }
 
@@ -177,6 +210,15 @@ data class AppConfig(
         }
     }
 }
+
+data class WebSearchConfig(
+    val enabled: Boolean = true,
+    val jinaApiKey: String? = null,
+    val exaApiKey: String? = null,
+    val tavilyApiKey: String? = null,
+    val timeoutMs: Long = 12_000L,
+    val cacheTtlSeconds: Long = 900L,
+)
 
 data class EmailConfig(
     val resendApiKey: String?,

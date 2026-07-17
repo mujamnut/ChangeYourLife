@@ -48,6 +48,7 @@ class AiService(
     private val modelActionNormalizer: AiModelActionNormalizer = AiModelActionNormalizer(actionSchemaValidator),
     private val promptActionRecovery: AiPromptActionRecovery = AiPromptActionRecovery(actionSchemaValidator),
     private val completionProvider: ((List<ChatMessage>, Boolean, Double) -> String)? = null,
+    private val webSearchService: WebSearchService? = null,
 ) {
     private val logger = LoggerFactory.getLogger(AiService::class.java)
 
@@ -244,6 +245,8 @@ class AiService(
         clientDate: String = "",
         clientTimezone: String = "",
         images: List<AiImageInput> = emptyList(),
+        webSearchEnabled: Boolean = false,
+        webSearchQuery: String = "",
         progress: AiJobProgressSink? = null,
     ): AiActionResult {
         if (images.isNotEmpty()) {
@@ -252,14 +255,32 @@ class AiService(
                 initialDiagnosticsFor(images).copy(phase = AiJobPhases.VisionProcessing),
             )
         }
-        val preparedMessages = messages.withAttachmentContext(images)
+        val attachmentPreparedMessages = messages.withAttachmentContext(images)
+        val userMessage = messages.lastOrNull { message -> message.role.equals("user", ignoreCase = true) }
+            ?.content
+            .orEmpty()
+        var preparedMessages = attachmentPreparedMessages
+        if (webSearchEnabled) {
+            val searchQuery = webSearchQuery.ifBlank { userMessage }
+            progress?.invoke(
+                AiJobPhases.WebSearching,
+                preparedMessages.diagnostics.copy(
+                    phase = AiJobPhases.WebSearching,
+                    webSearchAttempted = true,
+                    webSearchStatus = "running",
+                ),
+            )
+            val webContext = webSearchService?.search(searchQuery)
+                ?: WebSearchContext(query = searchQuery, status = "disabled")
+            preparedMessages = preparedMessages.copy(
+                messages = preparedMessages.messages.withWebSearchContext(webContext),
+                diagnostics = preparedMessages.diagnostics.withWebSearchContext(webContext),
+            )
+        }
         progress?.invoke(
             AiJobPhases.Planning,
             preparedMessages.diagnostics.copy(phase = AiJobPhases.Planning),
         )
-        val userMessage = messages.lastOrNull { message -> message.role.equals("user", ignoreCase = true) }
-            ?.content
-            .orEmpty()
 
         val reply = if (isMockMode) {
             "[AI Sandbox Mode - No API Key]\nHere is a simulated response to your question: \"$userMessage\". Add LMSTUDIO_BASE_URL or OPENROUTER_API_KEY to enable live AI answers."
@@ -498,6 +519,43 @@ class AiService(
 
     private fun List<ChatMessage>.withImageContext(images: List<AiImageInput>): List<ChatMessage> =
         withAttachmentContext(images).messages
+
+    private fun List<ChatMessage>.withWebSearchContext(webContext: WebSearchContext): List<ChatMessage> {
+        val promptContext = webContext.toPromptContext()
+        if (promptContext.isBlank()) return this
+        val lastUserIndex = indexOfLast { message -> message.role.equals("user", ignoreCase = true) }
+        return if (lastUserIndex < 0) {
+            this + ChatMessage(role = "user", content = promptContext)
+        } else {
+            mapIndexed { index, message ->
+                if (index == lastUserIndex) {
+                    message.copy(
+                        content = """
+                            ${message.content}
+
+                            $promptContext
+                        """.trimIndent(),
+                    )
+                } else {
+                    message
+                }
+            }
+        }
+    }
+
+    private fun AiDiagnostics.withWebSearchContext(webContext: WebSearchContext): AiDiagnostics {
+        val mergedWarning = listOf(warning, webContext.warning)
+            .filter { message -> message.isNotBlank() }
+            .joinToString(separator = " | ")
+            .take(MaxDiagnosticsWarningChars)
+        return copy(
+            webSearchAttempted = true,
+            webSearchProvider = webContext.provider,
+            webSearchStatus = webContext.status,
+            webSearchResultCount = webContext.results.size,
+            warning = mergedWarning,
+        )
+    }
 
     private fun List<ChatMessage>.withAttachmentContext(images: List<AiImageInput>): PreparedAttachmentContext {
         val context = buildAttachmentContext(images)
@@ -1287,6 +1345,7 @@ class AiService(
         const val VisionJpegQuality = 0.76f
         const val MaxTextContextFiles = 4
         const val MaxTextContextChars = 16_000
+        const val MaxDiagnosticsWarningChars = 500
         val AiRequestTimeout: Duration = Duration.ofMinutes(5)
         const val DefaultLmStudioModel = "qwen/qwen3.5-9b"
         val DefaultLmStudioVisionModels = listOf("qwen/qwen3.5-9b")

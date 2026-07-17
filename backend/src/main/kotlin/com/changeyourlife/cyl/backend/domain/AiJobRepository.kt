@@ -33,6 +33,7 @@ object AiJobPhases {
     const val Queued = "queued"
     const val Running = "running"
     const val VisionProcessing = "vision_processing"
+    const val WebSearching = "web_searching"
     const val Planning = "planning"
     const val ExecutingAction = "executing_action"
     const val Succeeded = "succeeded"

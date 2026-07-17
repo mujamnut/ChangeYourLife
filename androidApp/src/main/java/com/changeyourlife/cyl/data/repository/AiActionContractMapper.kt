@@ -43,6 +43,10 @@ internal object AiActionContractMapper {
                 visionModel = response.diagnostics.visionModel,
                 visionStatus = response.diagnostics.visionStatus,
                 visionPipelineVersion = response.diagnostics.visionPipelineVersion,
+                webSearchAttempted = response.diagnostics.webSearchAttempted,
+                webSearchProvider = response.diagnostics.webSearchProvider,
+                webSearchStatus = response.diagnostics.webSearchStatus,
+                webSearchResultCount = response.diagnostics.webSearchResultCount,
                 warning = response.diagnostics.warning,
             ),
         )

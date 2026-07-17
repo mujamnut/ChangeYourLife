@@ -10,6 +10,8 @@ interface AiRepository {
         clientDate: String = "",
         clientTimezone: String = "",
         images: List<AiImageAttachment> = emptyList(),
+        webSearchEnabled: Boolean = false,
+        webSearchQuery: String = "",
     ): Result<ChatActionResult>
 }
 
@@ -33,6 +35,10 @@ data class AiDiagnostics(
     val visionModel: String = "",
     val visionStatus: String = "",
     val visionPipelineVersion: String = "",
+    val webSearchAttempted: Boolean = false,
+    val webSearchProvider: String = "",
+    val webSearchStatus: String = "",
+    val webSearchResultCount: Int = 0,
     val warning: String = "",
 ) {
     val hasAttachmentContext: Boolean

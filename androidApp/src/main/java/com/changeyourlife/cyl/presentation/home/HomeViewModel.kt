@@ -677,12 +677,14 @@ class HomeViewModel @Inject constructor(
         prompt: String,
         mentionedPageIds: List<String> = emptyList(),
         images: List<AiImageAttachment> = emptyList(),
+        webSearchEnabled: Boolean = false,
     ) {
         sendChatMessageScoped(
             prompt = prompt,
             mentionedPageIds = mentionedPageIds,
             attachedPageId = null,
             images = images,
+            webSearchEnabled = webSearchEnabled,
         )
     }
 
@@ -691,12 +693,14 @@ class HomeViewModel @Inject constructor(
         mentionedPageIds: List<String>,
         attachedPageId: String?,
         images: List<AiImageAttachment> = emptyList(),
+        webSearchEnabled: Boolean = false,
     ) {
         sendChatMessageScoped(
             prompt = prompt,
             mentionedPageIds = mentionedPageIds,
             attachedPageId = attachedPageId,
             images = images,
+            webSearchEnabled = webSearchEnabled,
         )
     }
 
@@ -728,6 +732,7 @@ class HomeViewModel @Inject constructor(
         mentionedPageIds: List<String>,
         attachedPageId: String?,
         images: List<AiImageAttachment>,
+        webSearchEnabled: Boolean,
     ) {
         if ((prompt.isBlank() && images.isEmpty()) || isAiGeneratingChat.value) return
 
@@ -835,6 +840,8 @@ class HomeViewModel @Inject constructor(
                 pages = pageContext,
                 tasks = taskContext,
                 images = images,
+                webSearchEnabled = webSearchEnabled,
+                webSearchQuery = requestPrompt,
             )
                 .onSuccess { result ->
                     isAiGeneratingChat.value = false

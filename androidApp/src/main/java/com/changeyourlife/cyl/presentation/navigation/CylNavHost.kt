@@ -227,6 +227,11 @@ fun CylNavHost(
                 onOpenPage = { pageId, targetType, targetId ->
                     navController.navigate(Routes.pageEditor(pageId, targetType, targetId))
                 },
+                onSearch = {
+                    navController.navigate(Routes.HomeSearch) {
+                        launchSingleTop = true
+                    }
+                },
                 onSendAiMessage = homeViewModel::sendChatMessage,
                 onHomeAiMentionQueryChange = homeViewModel::updateAiMentionQuery,
                 onUndoAiAction = homeViewModel::undoAiAction,

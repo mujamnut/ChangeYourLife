@@ -118,7 +118,7 @@ private fun defaultTaskColumns(): List<PageTableColumn> {
         PageBlockCodec.newTableColumn("Date", PageTableColumnType.Date).copy(
             dateFormat = PageTableDateFormat.DayMonthYear,
             timeFormat = PageTableTimeFormat.TwelveHour,
-            dateReminder = PageTableDateReminder.AtTimeOfEvent,
+            dateReminder = PageTableDateReminder.None,
             timezoneLabel = "Local",
         ),
         PageBlockCodec.newTableColumn("Notes", PageTableColumnType.Text),
@@ -159,7 +159,7 @@ private fun PageBlock.withRequiredTaskColumns(): PageBlock {
                 type = PageTableColumnType.Date,
                 dateFormat = PageTableDateFormat.DayMonthYear,
                 timeFormat = PageTableTimeFormat.TwelveHour,
-                dateReminder = PageTableDateReminder.AtTimeOfEvent,
+                dateReminder = PageTableDateReminder.None,
                 timezoneLabel = column.timezoneLabel.ifBlank { "Local" },
             )
         } else {
@@ -311,13 +311,17 @@ private fun String.toPageTableDateReminder(
     return when (trim().lowercase()) {
         "none", "off" -> PageTableDateReminder.None
         "attimeofevent", "at time of event", "time" -> PageTableDateReminder.AtTimeOfEvent
+        "fiveminutesbefore", "5 minutes before", "5 minute before", "5 min before" -> PageTableDateReminder.FiveMinutesBefore
+        "tenminutesbefore", "10 minutes before", "10 minute before", "10 min before" -> PageTableDateReminder.TenMinutesBefore
+        "fifteenminutesbefore", "15 minutes before", "15 minute before", "15 min before" -> PageTableDateReminder.FifteenMinutesBefore
+        "thirtyminutesbefore", "30 minutes before", "30 minute before", "30 min before" -> PageTableDateReminder.ThirtyMinutesBefore
+        "onehourbefore", "1 hour before", "hour before" -> PageTableDateReminder.OneHourBefore
+        "twohoursbefore", "2 hours before", "2 hour before" -> PageTableDateReminder.TwoHoursBefore
         "onedaybefore", "1 day before", "day before" -> PageTableDateReminder.OneDayBefore
+        "twodaysbefore", "2 days before", "2 day before" -> PageTableDateReminder.TwoDaysBefore
+        "oneweekbefore", "1 week before", "week before" -> PageTableDateReminder.OneWeekBefore
         "ondayofevent", "on day of event", "same day" -> PageTableDateReminder.OnDayOfEvent
-        else -> if (type == PageTableColumnType.Date && defaultFor.containsTimeIntent()) {
-            PageTableDateReminder.AtTimeOfEvent
-        } else {
-            PageTableDateReminder.OnDayOfEvent
-        }
+        else -> PageTableDateReminder.None
     }
 }
 

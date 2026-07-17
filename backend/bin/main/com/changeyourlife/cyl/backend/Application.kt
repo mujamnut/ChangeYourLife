@@ -28,6 +28,7 @@ import com.changeyourlife.cyl.backend.service.AiJobService
 import com.changeyourlife.cyl.backend.service.AiService
 import com.changeyourlife.cyl.backend.service.EmailService
 import com.changeyourlife.cyl.backend.service.JwtService
+import com.changeyourlife.cyl.backend.service.WebSearchService
 import io.ktor.server.application.Application
 import io.ktor.server.application.serverConfig
 import io.ktor.server.engine.EngineConnectorBuilder
@@ -99,6 +100,7 @@ fun Application.module(
         openRouterApiKey = appConfig.openRouterApiKey,
         openRouterModel = appConfig.openRouterModel,
         openRouterVisionModels = appConfig.openRouterVisionModels,
+        webSearchService = WebSearchService(appConfig.webSearch),
     )
     environment.log.info(
         "AI provider initialized: provider=${aiService.activeProvider}, model=${aiService.activeModel}, apiKeyConfigured=${!aiService.isMockMode}",

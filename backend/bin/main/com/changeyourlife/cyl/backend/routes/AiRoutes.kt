@@ -73,6 +73,8 @@ fun Route.aiRoutes(
                         clientDate = request.clientDate,
                         clientTimezone = request.clientTimezone,
                         images = request.images,
+                        webSearchEnabled = request.webSearchEnabled,
+                        webSearchQuery = request.webSearchQuery,
                     )
                 }
                 call.respond(result.toResponse())
@@ -92,6 +94,8 @@ fun Route.aiRoutes(
                         clientDate = request.clientDate,
                         clientTimezone = request.clientTimezone,
                         images = request.images,
+                        webSearchEnabled = request.webSearchEnabled,
+                        webSearchQuery = request.webSearchQuery,
                         progress = progress,
                     ).toResponse()
                 }

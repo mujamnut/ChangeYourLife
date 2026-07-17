@@ -18,6 +18,8 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
@@ -28,6 +30,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -210,7 +213,7 @@ private fun HomeScreen(
     onDismissCreateWorkspace: () -> Unit,
     onNewWorkspaceNameChange: (String) -> Unit,
     onCreateWorkspace: () -> Unit,
-    onSendChatMessage: (String, List<String>, List<AiImageAttachment>) -> Unit,
+    onSendChatMessage: (String, List<String>, List<AiImageAttachment>, Boolean) -> Unit,
     onAiMentionQueryChange: (String) -> Unit,
     onUndoAiAction: (String, String) -> Unit,
     onClearChatHistory: () -> Unit,
@@ -398,7 +401,10 @@ private fun HomeScreen(
         bottomBar = {
             HomeBottomBar(
                 onSearch = onSearch,
-                onOpenAi = { isChatSheetOpen = true },
+                onOpenAi = {
+                    onCreateChatSession()
+                    isChatSheetOpen = true
+                },
                 onCreatePage = { isCreateSheetOpen = true },
             )
         },
@@ -590,14 +596,24 @@ private fun HomeSearchScreen(
     onClearSearchQuery: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Scaffold(modifier = modifier) { innerPadding ->
+    Scaffold(
+        modifier = modifier,
+        bottomBar = {
+            HomeSearchBottomBar(
+                query = uiState.searchQuery,
+                resultCount = uiState.searchResults.size,
+                onQueryChange = onSearchQueryChange,
+                onClear = onClearSearchQuery,
+            )
+        },
+    ) { innerPadding ->
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(
                 start = 20.dp,
                 top = innerPadding.calculateTopPadding() + 18.dp,
                 end = 20.dp,
-                bottom = innerPadding.calculateBottomPadding() + 24.dp,
+                bottom = innerPadding.calculateBottomPadding() + 16.dp,
             ),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
@@ -629,15 +645,6 @@ private fun HomeSearchScreen(
             }
 
             item {
-                GlobalPageSearch(
-                    query = uiState.searchQuery,
-                    resultCount = uiState.searchResults.size,
-                    onQueryChange = onSearchQueryChange,
-                    onClear = onClearSearchQuery,
-                )
-            }
-
-            item {
                 SearchScopeChips(
                     selectedScope = uiState.searchScope,
                     onScopeChange = onSearchScopeChange,
@@ -651,6 +658,12 @@ private fun HomeSearchScreen(
             } else {
                 item {
                     HomeSectionHeader(text = "Results")
+                    Text(
+                        text = "${uiState.searchResults.size} result${if (uiState.searchResults.size == 1) "" else "s"}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
                     if (uiState.searchResults.isEmpty()) {
                         Spacer(modifier = Modifier.height(8.dp))
                         EmptySearchCard()
@@ -1775,50 +1788,78 @@ private fun ModuleQuickCreate(
 }
 
 @Composable
-private fun GlobalPageSearch(
+private fun HomeSearchBottomBar(
     query: String,
     resultCount: Int,
     onQueryChange: (String) -> Unit,
     onClear: () -> Unit,
 ) {
-    Column(
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+    CylFloatingChromeSurface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .imePadding()
+            .navigationBarsPadding()
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        shape = RoundedCornerShape(30.dp),
     ) {
-        OutlinedTextField(
-            value = query,
-            onValueChange = onQueryChange,
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
-            placeholder = { Text(text = "Search pages, blocks, tables, rows") },
-            leadingIcon = {
-                Icon(
-                    imageVector = Icons.Rounded.Search,
-                    contentDescription = null,
-                )
-            },
-            trailingIcon = {
-                if (query.isNotBlank()) {
-                    IconButton(onClick = onClear) {
-                        Icon(
-                            imageVector = Icons.Rounded.Close,
-                            contentDescription = "Clear search",
-                        )
-                    }
-                }
-            },
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-            shape = RoundedCornerShape(18.dp),
-            colors = TextFieldDefaults.colors(
-                focusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
-                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
-            ),
-        )
-        if (query.isNotBlank()) {
-            Text(
-                text = "$resultCount result${if (resultCount == 1) "" else "s"}",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Search,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(22.dp),
             )
+            BasicTextField(
+                value = query,
+                onValueChange = onQueryChange,
+                modifier = Modifier
+                    .weight(1f)
+                    .height(44.dp),
+                singleLine = true,
+                textStyle = MaterialTheme.typography.bodyLarge.copy(
+                    color = MaterialTheme.colorScheme.onSurface,
+                ),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                decorationBox = { innerTextField ->
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.CenterStart,
+                    ) {
+                        if (query.isBlank()) {
+                            Text(
+                                text = "Search pages, blocks, tables, rows",
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        innerTextField()
+                    }
+                },
+            )
+            if (query.isNotBlank()) {
+                Text(
+                    text = resultCount.toString(),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                IconButton(
+                    onClick = onClear,
+                    modifier = Modifier.size(44.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Close,
+                        contentDescription = "Clear search",
+                    )
+                }
+            }
         }
     }
 }
@@ -2074,7 +2115,7 @@ private fun HomeRoutePreview() {
             onDismissCreateWorkspace = {},
             onNewWorkspaceNameChange = {},
             onCreateWorkspace = {},
-            onSendChatMessage = { _, _, _ -> },
+            onSendChatMessage = { _, _, _, _ -> },
             onAiMentionQueryChange = {},
             onUndoAiAction = { _, _ -> },
             onClearChatHistory = {},

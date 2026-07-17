@@ -188,7 +188,7 @@ data class PageTableColumn(
     val config: PageTableColumnConfig = PageTableColumnConfig(),
     val dateFormat: PageTableDateFormat = PageTableDateFormat.DayMonthYear,
     val timeFormat: PageTableTimeFormat = PageTableTimeFormat.Hidden,
-    val dateReminder: PageTableDateReminder = PageTableDateReminder.OnDayOfEvent,
+    val dateReminder: PageTableDateReminder = PageTableDateReminder.None,
     val timezoneLabel: String = "Local",
     val formula: String = "",
     val relationTargetTableId: String = "",
@@ -305,8 +305,16 @@ enum class PageTableTimeFormat {
 enum class PageTableDateReminder {
     None,
     AtTimeOfEvent,
+    FiveMinutesBefore,
+    TenMinutesBefore,
+    FifteenMinutesBefore,
+    ThirtyMinutesBefore,
+    OneHourBefore,
+    TwoHoursBefore,
     OnDayOfEvent,
     OneDayBefore,
+    TwoDaysBefore,
+    OneWeekBefore,
 }
 
 @Serializable
@@ -361,7 +369,7 @@ data class PageTableDateCellValue(
     val includeEndDate: Boolean = false,
     val includeTime: Boolean = false,
     val timezoneLabel: String = "Local",
-    val reminder: PageTableDateReminder = PageTableDateReminder.OnDayOfEvent,
+    val reminder: PageTableDateReminder = PageTableDateReminder.None,
 )
 
 @Serializable
