@@ -62,6 +62,7 @@ class WebSearchService(
         }
 
         providers.forEach { provider ->
+            logger.info("Web search started: provider={}, query='{}'", provider, normalizedQuery.take(160))
             val context = runCatching {
                 when (provider) {
                     "jina" -> searchJina(normalizedQuery, cappedLimit)
@@ -76,6 +77,13 @@ class WebSearchService(
             }.getOrNull()
 
             if (context != null && context.results.isNotEmpty()) {
+                logger.info(
+                    "Web search completed: provider={}, status={}, results={}, query='{}'",
+                    context.provider,
+                    context.status,
+                    context.results.size,
+                    normalizedQuery.take(160),
+                )
                 cache[cacheKey] = CachedWebSearch(
                     context = context.copy(cached = false),
                     createdAtMillis = now,

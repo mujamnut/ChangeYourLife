@@ -260,7 +260,8 @@ class AiService(
             ?.content
             .orEmpty()
         var preparedMessages = attachmentPreparedMessages
-        if (webSearchEnabled) {
+        val shouldUseWebSearch = webSearchEnabled || userMessage.shouldAutoUseWebSearch()
+        if (shouldUseWebSearch) {
             val searchQuery = webSearchQuery.ifBlank { userMessage }
             progress?.invoke(
                 AiJobPhases.WebSearching,
@@ -272,6 +273,15 @@ class AiService(
             )
             val webContext = webSearchService?.search(searchQuery)
                 ?: WebSearchContext(query = searchQuery, status = "disabled")
+            logger.info(
+                "AI web search prepared: requested={}, auto={}, status={}, provider={}, results={}, query='{}'",
+                webSearchEnabled,
+                !webSearchEnabled,
+                webContext.status,
+                webContext.provider,
+                webContext.results.size,
+                searchQuery.take(160),
+            )
             preparedMessages = preparedMessages.copy(
                 messages = preparedMessages.messages.withWebSearchContext(webContext),
                 diagnostics = preparedMessages.diagnostics.withWebSearchContext(webContext),
@@ -403,6 +413,8 @@ class AiService(
             If the user asks to create, update, delete, rename, add a row, edit a table, edit a page, or change a property, produce CYL actions.
             Do not answer with markdown tables when the user wants data created in the app. Convert the idea into table/page actions.
             Do not expose internal ids. Use page/table/block/row/column names from context.
+            If CYL_WEB_CONTEXT is present, use those web results for current/live questions and cite URLs when useful.
+            If CYL_WEB_CONTEXT says no reliable web result is available, say the web source could not retrieve results. Do not claim you cannot browse based only on model limitations.
 
             Supported action types:
             CREATE_PAGE, RENAME_PAGE, UPDATE_PAGE,
@@ -555,6 +567,11 @@ class AiService(
             webSearchResultCount = webContext.results.size,
             warning = mergedWarning,
         )
+    }
+
+    private fun String.shouldAutoUseWebSearch(): Boolean {
+        val lower = lowercase()
+        return WebSearchTriggerPhrases.any { trigger -> lower.contains(trigger) }
     }
 
     private fun List<ChatMessage>.withAttachmentContext(images: List<AiImageInput>): PreparedAttachmentContext {
@@ -1354,6 +1371,33 @@ class AiService(
             "google/gemma-4-26b-a4b-it:free",
             "google/gemma-3-4b-it:free",
             "google/gemini-2.0-flash-exp:free",
+        )
+        val WebSearchTriggerPhrases = listOf(
+            "search web",
+            "web search",
+            "search internet",
+            "cari web",
+            "cari internet",
+            "carikan di web",
+            "carikan internet",
+            "google",
+            "browse",
+            "browsing",
+            "latest",
+            "terkini",
+            "terbaru",
+            "paling baru",
+            "sekarang",
+            "hari ini",
+            "today",
+            "current",
+            "recent",
+            "news",
+            "berita",
+            "harga",
+            "price",
+            "model terbaru",
+            "latest model",
         )
     }
 }
