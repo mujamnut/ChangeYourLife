@@ -157,9 +157,13 @@ fun CylNavHost(
                     navController.navigate(Routes.pageEditor(pageId, targetType, targetId))
                 },
                 onOpenChatSession = { sessionId, _ ->
-                    homeViewModel.selectChatSession(sessionId)
-                    navController.navigate(Routes.AiHistory) {
-                        launchSingleTop = true
+                    if (homeUiState.isAiGeneratingChat) {
+                        homeViewModel.selectChatSession(sessionId)
+                    } else {
+                        homeViewModel.selectChatSession(sessionId)
+                        navController.navigate(Routes.AiHistory) {
+                            launchSingleTop = true
+                        }
                     }
                 },
                 viewModel = homeViewModel,
@@ -172,6 +176,7 @@ fun CylNavHost(
                 previews = homeUiState.chatSessionPreviews,
                 searchQuery = homeUiState.chatHistorySearchQuery,
                 searchResults = homeUiState.chatHistorySearchResults,
+                isGenerating = homeUiState.isAiGeneratingChat,
                 onBack = { navController.popBackStack() },
                 onCreateChatSession = homeViewModel::createNewChatSession,
                 onSelectChatSession = homeViewModel::selectChatSession,

@@ -32,7 +32,14 @@ internal fun buildChatHistorySearchResults(
                 ),
             )
             messagesBySession[session.id].orEmpty().forEach { message ->
-                val attachmentText = message.attachments.joinToString(separator = " ") { attachment -> attachment.name }
+                val attachmentText = message.attachments.joinToString(separator = " ") { attachment ->
+                    listOf(
+                        attachment.name,
+                        attachment.textContent.take(500),
+                    )
+                        .filter { value -> value.isNotBlank() }
+                        .joinToString(separator = " ")
+                }
                 val pageLinkText = message.pageLinks.joinToString(separator = " ") { link -> link.title }
                 add(
                     ChatSearchCandidate(

@@ -34,7 +34,6 @@ import androidx.compose.foundation.text.input.TextFieldLineLimits
 import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Send
-import androidx.compose.material.icons.automirrored.rounded.Undo
 import androidx.compose.material.icons.rounded.AccessTime
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.AlternateEmail
@@ -45,18 +44,14 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Extension
-import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Photo
 import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -66,7 +61,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -86,7 +80,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import com.changeyourlife.cyl.domain.model.AiActionUndoState
 import com.changeyourlife.cyl.presentation.page.RichTextCommandPaletteItem
 import com.changeyourlife.cyl.presentation.utility.decodeBase64ImageDataUrlToImageBitmap
 import kotlinx.coroutines.Dispatchers
@@ -221,6 +214,7 @@ internal fun AiMentionPickerPanel(
 internal fun AiSheetHeader(
     displayName: String,
     avatarSpec: AiAvatarSpec,
+    isGenerating: Boolean,
     onOpenHistory: () -> Unit,
     onOpenProfile: () -> Unit,
     onCreateChatSession: () -> Unit,
@@ -237,6 +231,7 @@ internal fun AiSheetHeader(
             icon = Icons.Rounded.AccessTime,
             contentDescription = "Chat history",
             onClick = onOpenHistory,
+            enabled = !isGenerating,
         )
         Box(
             modifier = Modifier
@@ -272,6 +267,7 @@ internal fun AiSheetHeader(
             icon = Icons.Rounded.Edit,
             contentDescription = "New chat",
             onClick = onCreateChatSession,
+            enabled = !isGenerating,
         )
     }
 }
@@ -456,14 +452,15 @@ private fun AiChatMessageAttachmentItem(
 ) {
     val isImage = attachment.kind == "image" ||
         attachment.mimeType.startsWith("image/", ignoreCase = true)
-    if (isImage && attachment.previewDataUrl.isNotBlank()) {
-        var thumbnail by remember(attachment.previewDataUrl) {
+    val thumbnailDataUrl = attachment.previewDataUrl.ifBlank { attachment.dataUrl }
+    if (isImage && thumbnailDataUrl.isNotBlank()) {
+        var thumbnail by remember(thumbnailDataUrl) {
             mutableStateOf<ImageBitmap?>(null)
         }
-        LaunchedEffect(attachment.previewDataUrl) {
+        LaunchedEffect(thumbnailDataUrl) {
             thumbnail = withContext(Dispatchers.Default) {
                 decodeBase64ImageDataUrlToImageBitmap(
-                    dataUrl = attachment.previewDataUrl,
+                    dataUrl = thumbnailDataUrl,
                     maxDimensionPx = AiAttachmentThumbnailMaxDimensionPx * 2,
                 )
             }
@@ -547,17 +544,18 @@ private fun AiImagePreviewDialog(
     attachment: AiChatAttachment,
     onDismiss: () -> Unit,
 ) {
-    var preview by remember(attachment.previewDataUrl) {
+    val previewDataUrl = attachment.dataUrl.ifBlank { attachment.previewDataUrl }
+    var preview by remember(previewDataUrl) {
         mutableStateOf<ImageBitmap?>(null)
     }
-    var hasFinishedLoading by remember(attachment.previewDataUrl) {
+    var hasFinishedLoading by remember(previewDataUrl) {
         mutableStateOf(false)
     }
-    LaunchedEffect(attachment.previewDataUrl) {
+    LaunchedEffect(previewDataUrl) {
         hasFinishedLoading = false
         preview = withContext(Dispatchers.Default) {
             decodeBase64ImageDataUrlToImageBitmap(
-                dataUrl = attachment.previewDataUrl,
+                dataUrl = previewDataUrl,
                 maxDimensionPx = AiAttachmentPreviewMaxDimensionPx,
             )
         }
@@ -1119,197 +1117,6 @@ private fun AiSendButton(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-internal fun AiChatActionDetails(
-    metadata: AiChatActionMetadata,
-    pageId: String,
-    onUndoAction: (String, String) -> Unit,
-) {
-    var isDetailsOpen by rememberSaveable { mutableStateOf(false) }
-    val validationCount = metadata.validationIssues.size
-    val executedCount = metadata.executedActions.size
-    val proposedCount = metadata.proposedActions.size
-    val summary = when {
-        validationCount > 0 -> "$validationCount issue${if (validationCount == 1) "" else "s"}"
-        executedCount > 0 -> "$executedCount action${if (executedCount == 1) "" else "s"} applied"
-        proposedCount > 0 -> "$proposedCount action${if (proposedCount == 1) "" else "s"} proposed"
-        else -> "Action details"
-    }
-    val summaryColor = if (validationCount > 0) {
-        MaterialTheme.colorScheme.error
-    } else {
-        MaterialTheme.colorScheme.onSurfaceVariant
-    }
-    val summaryBackground = if (validationCount > 0) {
-        MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.42f)
-    } else {
-        MaterialTheme.colorScheme.surfaceContainer
-    }
-    val canUndo = metadata.auditId.isNotBlank() &&
-        pageId.isNotBlank() &&
-        metadata.executedActions.isNotEmpty() &&
-        metadata.undoState == AiActionUndoState.Available
-
-    Row(
-        modifier = Modifier
-            .height(32.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .background(summaryBackground)
-            .clickable { isDetailsOpen = true }
-            .padding(start = 10.dp, end = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            text = summary,
-            style = MaterialTheme.typography.labelMedium,
-            color = summaryColor,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        Icon(
-            imageVector = Icons.Rounded.KeyboardArrowDown,
-            contentDescription = "Show action details",
-            tint = summaryColor,
-            modifier = Modifier.size(16.dp),
-        )
-    }
-
-    if (isDetailsOpen) {
-        ModalBottomSheet(
-            onDismissRequest = { isDetailsOpen = false },
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 20.dp)
-                    .padding(bottom = 24.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                Text(
-                    text = "Action details",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-                if (metadata.schemaName.isNotBlank()) {
-                    Text(
-                        text = "${metadata.schemaName} v${metadata.schemaVersion}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                AiActionMetadataSection(
-                    title = "Proposed",
-                    items = metadata.proposedActions,
-                )
-                AiActionMetadataSection(
-                    title = "Applied",
-                    items = metadata.executedActions,
-                )
-                AiValidationIssueSection(issues = metadata.validationIssues)
-                if (metadata.executionMessages.isNotEmpty()) {
-                    AiActionTextSection(
-                        title = "Result",
-                        lines = metadata.executionMessages,
-                    )
-                }
-                if (canUndo) {
-                    HorizontalDivider(
-                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.34f),
-                    )
-                    TextButton(
-                        onClick = {
-                            isDetailsOpen = false
-                            onUndoAction(metadata.auditId, pageId)
-                        },
-                        contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp),
-                    ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Rounded.Undo,
-                            contentDescription = null,
-                            modifier = Modifier.size(16.dp),
-                        )
-                        Text(text = "Undo AI action")
-                    }
-                } else if (metadata.undoState == AiActionUndoState.Applied) {
-                    Text(
-                        text = "Undone",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun AiActionMetadataSection(
-    title: String,
-    items: List<AiChatActionMetadataItem>,
-) {
-    if (items.isEmpty()) return
-    AiActionTextSection(
-        title = title,
-        lines = items.map { item ->
-            listOf(item.type.prettyActionType(), item.target)
-                .filter { value -> value.isNotBlank() }
-                .joinToString(": ")
-        },
-    )
-}
-
-@Composable
-private fun AiValidationIssueSection(issues: List<AiChatActionValidationIssue>) {
-    if (issues.isEmpty()) return
-    AiActionTextSection(
-        title = "Rejected",
-        lines = issues.map { issue ->
-            listOf(issue.field, issue.message.ifBlank { issue.code })
-                .filter { value -> value.isNotBlank() }
-                .joinToString(": ")
-        },
-        isWarning = true,
-    )
-}
-
-@Composable
-private fun AiActionTextSection(
-    title: String,
-    lines: List<String>,
-    isWarning: Boolean = false,
-) {
-    if (lines.isEmpty()) return
-    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-        Text(
-            text = title,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            fontWeight = FontWeight.SemiBold,
-        )
-        lines
-            .filter { line -> line.isNotBlank() }
-            .take(4)
-            .forEach { line ->
-                Text(
-                    text = line,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (isWarning) {
-                        MaterialTheme.colorScheme.error
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-    }
-}
-
 @Composable
 internal fun EmptyAiMessageHint(attachedPageTitle: String?) {
     Box(
@@ -1368,11 +1175,4 @@ private fun String.compactAiModelLabel(): String {
         .replace(":free", " free", ignoreCase = true)
         .trim()
     return model.ifBlank { clean }
-}
-
-private fun String.prettyActionType(): String {
-    return lowercase()
-        .split('_')
-        .filter { part -> part.isNotBlank() }
-        .joinToString(" ") { part -> part.replaceFirstChar { char -> char.titlecase() } }
 }

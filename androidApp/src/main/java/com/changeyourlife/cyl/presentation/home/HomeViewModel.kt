@@ -58,7 +58,6 @@ import com.changeyourlife.cyl.presentation.ai.AiChatMessageMapper
 import com.changeyourlife.cyl.presentation.ai.AiChatMessage
 import com.changeyourlife.cyl.presentation.ai.AiChatPageLink
 import com.changeyourlife.cyl.presentation.ai.ChatHistorySearchResult
-import com.changeyourlife.cyl.presentation.ai.buildChatHistorySearchResults
 import com.changeyourlife.cyl.presentation.ai.toRoleContentPairs
 import com.changeyourlife.cyl.presentation.page.PageBlockCodec
 import com.changeyourlife.cyl.presentation.page.PageModuleTemplates
@@ -71,11 +70,14 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
@@ -85,6 +87,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.CancellationException
 import java.util.UUID
 
 @HiltViewModel
@@ -253,16 +256,35 @@ class HomeViewModel @Inject constructor(
         )
     }
 
+    @OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
     private val chatHistorySearchResults: Flow<List<ChatHistorySearchResult>> = combine(
+        workspaceRepository.observeActiveWorkspaceId(),
         chatSessions,
-        chatHistorySearchMessages,
-        chatHistorySearchQuery,
-    ) { sessions, messages, query ->
-        buildChatHistorySearchResults(
+        chatHistorySearchQuery
+            .debounce(ChatHistorySearchDebounceMs)
+            .map { query -> query.trim() }
+            .distinctUntilChanged(),
+    ) { workspaceId, sessions, query ->
+        ChatHistoryIndexedSearchRequest(
+            workspaceId = workspaceId
+                ?.takeIf { id -> id.isNotBlank() }
+                ?: CylDefaults.DefaultWorkspaceId,
             sessions = sessions,
-            messages = messages,
             query = query,
         )
+    }.mapLatest { request ->
+        if (request.query.isBlank()) {
+            emptyList()
+        } else {
+            searchWorkspaceUseCase(
+                SearchQuery(
+                    workspaceId = request.workspaceId,
+                    query = request.query,
+                    scopes = setOf(SearchTargetType.Chat),
+                    limit = ChatHistorySearchResultLimit,
+                ),
+            ).toChatHistorySearchResults(request.sessions)
+        }
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -738,157 +760,175 @@ class HomeViewModel @Inject constructor(
 
         isAiGeneratingChat.value = true
         viewModelScope.launch {
+            var responseSessionId: String? = null
             aiChatError.value = null
-            val visiblePrompt = prompt.trim()
-            val requestPrompt = visiblePrompt.ifBlank {
-                if (images.isNotEmpty()) ImageOnlyAiRequestPrompt else visiblePrompt
-            }
+            try {
+                val visiblePrompt = prompt.trim()
+                val requestPrompt = visiblePrompt.ifBlank {
+                    if (images.isNotEmpty()) ImageOnlyAiRequestPrompt else visiblePrompt
+                }
 
-            val workspaceId = workspaceRepository.getActiveWorkspaceId()
-                ?.takeIf { it.isNotBlank() }
-                ?: CylDefaults.DefaultWorkspaceId
-            val scopeId = homeChatScopeId(workspaceId)
-            val session = resolveActiveChatSession(scopeId)
-            val currentMessages = chatHistoryRepository.observeMessages(session.id)
-                .first()
-                .let(AiChatMessageMapper::toAiChatMessages)
-            val userMessage = AiChatMessage(role = "user", content = visiblePrompt)
-            val messageAttachments = images.map { image ->
-                ChatMessageAttachment(
-                    id = UUID.randomUUID().toString(),
-                    name = image.name.ifBlank {
-                        if (image.kind == "text") "Attached file" else "Attached image"
-                    },
-                    mimeType = image.mimeType,
-                    kind = image.kind,
-                    sizeBytes = image.sizeBytes.coerceAtLeast(0L),
-                    previewDataUrl = image.previewDataUrl,
+                val workspaceId = workspaceRepository.getActiveWorkspaceId()
+                    ?.takeIf { it.isNotBlank() }
+                    ?: CylDefaults.DefaultWorkspaceId
+                val scopeId = homeChatScopeId(workspaceId)
+                val session = resolveActiveChatSession(scopeId)
+                responseSessionId = session.id
+                val currentMessages = chatHistoryRepository.observeMessages(session.id)
+                    .first()
+                    .let(AiChatMessageMapper::toAiChatMessages)
+                val userMessage = AiChatMessage(role = "user", content = visiblePrompt)
+                val messageAttachments = images.map { image ->
+                    ChatMessageAttachment(
+                        id = UUID.randomUUID().toString(),
+                        name = image.name.ifBlank {
+                            if (image.kind == "text") "Attached file" else "Attached image"
+                        },
+                        mimeType = image.mimeType,
+                        kind = image.kind,
+                        sizeBytes = image.sizeBytes.coerceAtLeast(0L),
+                        dataUrl = image.dataUrl,
+                        textContent = image.textContent,
+                        previewDataUrl = image.previewDataUrl,
+                    )
+                }
+                val savedUserMessage = chatHistoryRepository.appendMessage(
+                    sessionId = session.id,
+                    role = userMessage.role,
+                    content = userMessage.content,
+                    attachments = messageAttachments,
                 )
-            }
-            val savedUserMessage = chatHistoryRepository.appendMessage(
-                sessionId = session.id,
-                role = userMessage.role,
-                content = userMessage.content,
-                attachments = messageAttachments,
-            )
-            val pages = pageRepository.observePages(workspaceId)
-                .first()
-                .sortedByDescending { page -> page.updatedAt }
-            val normalizedMentionedPageIds = (mentionedPageIds + listOfNotNull(attachedPageId))
-                .filter { pageId -> pageId.isNotBlank() }
-                .distinct()
-            val attachedPage = attachedPageId
-                ?.takeIf { pageId -> pageId.isNotBlank() }
-                ?.let { pageId -> pages.firstOrNull { page -> page.id == pageId } }
-            val scopedTargetPage = attachedPage
-                ?: normalizedMentionedPageIds
-                    .singleOrNull()
+                val pages = pageRepository.observePages(workspaceId)
+                    .first()
+                    .sortedByDescending { page -> page.updatedAt }
+                val normalizedMentionedPageIds = (mentionedPageIds + listOfNotNull(attachedPageId))
+                    .filter { pageId -> pageId.isNotBlank() }
+                    .distinct()
+                val attachedPage = attachedPageId
+                    ?.takeIf { pageId -> pageId.isNotBlank() }
                     ?.let { pageId -> pages.firstOrNull { page -> page.id == pageId } }
-            val explicitlyMentionedPages = pages.findPagesByIds(normalizedMentionedPageIds)
-            val pageContext = pages
-                .withMentionedPagesFirst(normalizedMentionedPageIds)
-                .map { page -> page.toAiPageContext() }
-            val openTasks = taskRepository.observeOpenTasks(workspaceId)
-                .first()
-            val taskContext = openTasks.map { task -> task.id to task.title }
-            val allChatSessions = chatHistoryRepository.observeSessions(scopeId).first()
-            val allChatMessages = chatHistoryRepository.observeMessagesForScope(scopeId)
-                .first()
-                .filterNot { message -> message.id == savedUserMessage.id }
-            val searchContext = if (images.isEmpty() && !requestPrompt.referencesCurrentAttachment()) {
-                buildAiSearchContextUseCase(
-                    workspaceId = workspaceId,
-                    prompt = requestPrompt,
-                    currentPageId = scopedTargetPage?.id.orEmpty(),
-                    limit = HomeAiSearchContextLimit,
-                )
-            } else {
-                AiSearchContext.Empty
-            }
-
-            val memoryContext = buildAiMemoryContextUseCase(
-                currentSessionId = session.id,
-                prompt = requestPrompt,
-                sessions = allChatSessions,
-                messages = allChatMessages,
-            )
-            val memoryMessages = if (memoryContext.isNotBlank) {
-                listOf(AiChatMessage(role = "system", content = memoryContext.content))
-            } else {
-                emptyList()
-            }
-            val skillContext = buildAiSkillContextUseCase(
-                aiSkillRepository.observeSkills(workspaceId).first(),
-            )
-            val skillMessages = skillContext
-                .takeIf { context -> context.isNotBlank() }
-                ?.let { context -> listOf(AiChatMessage(role = "system", content = context)) }
-                .orEmpty()
-            val searchMessages = if (searchContext.isNotBlank) {
-                listOf(AiChatMessage(role = "system", content = searchContext.content))
-            } else {
-                emptyList()
-            }
-            val searchPageLinks = searchContext.results.toAiSearchPageLinks()
-            val messagesForAi = skillMessages + memoryMessages + searchMessages +
-                currentMessages.filter { message -> message.content.isNotBlank() } +
-                userMessage.copy(
-                    content = requestPrompt.withMentionContext(explicitlyMentionedPages),
-                )
-            aiRepository.chatWithActions(
-                messages = messagesForAi.toRoleContentPairs(),
-                pages = pageContext,
-                tasks = taskContext,
-                images = images,
-                webSearchEnabled = webSearchEnabled,
-                webSearchQuery = requestPrompt,
-            )
-                .onSuccess { result ->
-                    isAiGeneratingChat.value = false
-                    val orchestration = AiChatActionOrchestrator.orchestrate(
+                val scopedTargetPage = attachedPage
+                    ?: normalizedMentionedPageIds
+                        .singleOrNull()
+                        ?.let { pageId -> pages.firstOrNull { page -> page.id == pageId } }
+                val explicitlyMentionedPages = pages.findPagesByIds(normalizedMentionedPageIds)
+                val pageContext = pages
+                    .withMentionedPagesFirst(normalizedMentionedPageIds)
+                    .map { page -> page.toAiPageContext() }
+                val openTasks = taskRepository.observeOpenTasks(workspaceId)
+                    .first()
+                val taskContext = openTasks.map { task -> task.id to task.title }
+                val allChatSessions = chatHistoryRepository.observeSessions(scopeId).first()
+                val allChatMessages = chatHistoryRepository.observeMessagesForScope(scopeId)
+                    .first()
+                    .filterNot { message -> message.id == savedUserMessage.id }
+                val searchContext = if (images.isEmpty() && !requestPrompt.referencesCurrentAttachment()) {
+                    buildAiSearchContextUseCase(
                         workspaceId = workspaceId,
-                        scopedTargetPage = scopedTargetPage,
-                        prompt = visiblePrompt,
-                        backendResult = result,
-                        requestMessageId = savedUserMessage.id,
-                        provider = aiStatusState.value.provider,
-                        model = aiStatusState.value.model,
-                    ) { targetWorkspaceId, targetPage, actions ->
-                        aiActionExecutionUseCase.executeCandidates(
-                            workspaceId = targetWorkspaceId,
-                            scopedTargetPage = targetPage,
-                            actions = actions,
+                        prompt = requestPrompt,
+                        currentPageId = scopedTargetPage?.id.orEmpty(),
+                        limit = HomeAiSearchContextLimit,
+                    )
+                } else {
+                    AiSearchContext.Empty
+                }
+
+                val memoryContext = buildAiMemoryContextUseCase(
+                    currentSessionId = session.id,
+                    prompt = requestPrompt,
+                    sessions = allChatSessions,
+                    messages = allChatMessages,
+                )
+                val memoryMessages = if (memoryContext.isNotBlank) {
+                    listOf(AiChatMessage(role = "system", content = memoryContext.content))
+                } else {
+                    emptyList()
+                }
+                val skillContext = buildAiSkillContextUseCase(
+                    aiSkillRepository.observeSkills(workspaceId).first(),
+                )
+                val skillMessages = skillContext
+                    .takeIf { context -> context.isNotBlank() }
+                    ?.let { context -> listOf(AiChatMessage(role = "system", content = context)) }
+                    .orEmpty()
+                val searchMessages = if (searchContext.isNotBlank) {
+                    listOf(AiChatMessage(role = "system", content = searchContext.content))
+                } else {
+                    emptyList()
+                }
+                val searchPageLinks = searchContext.results.toAiSearchPageLinks()
+                val messagesForAi = skillMessages + memoryMessages + searchMessages +
+                    currentMessages.filter { message -> message.content.isNotBlank() } +
+                    userMessage.copy(
+                        content = requestPrompt.withMentionContext(explicitlyMentionedPages),
+                    )
+                aiRepository.chatWithActions(
+                    messages = messagesForAi.toRoleContentPairs(),
+                    pages = pageContext,
+                    tasks = taskContext,
+                    images = images,
+                    webSearchEnabled = webSearchEnabled,
+                    webSearchQuery = requestPrompt,
+                )
+                    .onSuccess { result ->
+                        val orchestration = AiChatActionOrchestrator.orchestrate(
+                            workspaceId = workspaceId,
+                            scopedTargetPage = scopedTargetPage,
+                            prompt = visiblePrompt,
+                            backendResult = result,
+                            requestMessageId = savedUserMessage.id,
+                            provider = aiStatusState.value.provider,
+                            model = aiStatusState.value.model,
+                        ) { targetWorkspaceId, targetPage, actions ->
+                            aiActionExecutionUseCase.executeCandidates(
+                                workspaceId = targetWorkspaceId,
+                                scopedTargetPage = targetPage,
+                                actions = actions,
+                            )
+                        }
+                        val assistantMessage = chatHistoryRepository.appendMessage(
+                            sessionId = session.id,
+                            role = "assistant",
+                            content = orchestration.reply.sanitizeAiUserVisibleText(),
+                            pageLinks = (orchestration.pageLinks + searchPageLinks)
+                                .distinctBy { link -> "${link.pageId}:${link.targetType}:${link.targetId}" }
+                                .toDomainChatPageLinks(),
+                            actionMetadata = orchestration.actionMetadata,
+                        )
+                        AiActionLogFactory.fromMetadata(
+                            sessionId = session.id,
+                            workspaceId = workspaceId,
+                            responseMessageId = assistantMessage.id,
+                            metadata = orchestration.actionMetadata,
+                            undoCommands = orchestration.undoCommands,
+                        )?.let { actionLog ->
+                            aiActionLogRepository.upsert(actionLog)
+                        }
+                    }
+                    .onFailure { error ->
+                        val message = error.toAiChatErrorMessage().sanitizeAiUserVisibleText()
+                        aiChatError.value = message
+                        chatHistoryRepository.appendMessage(
+                            sessionId = session.id,
+                            role = "assistant",
+                            content = message,
                         )
                     }
-                    val assistantMessage = chatHistoryRepository.appendMessage(
-                        sessionId = session.id,
-                        role = "assistant",
-                        content = orchestration.reply.sanitizeAiUserVisibleText(),
-                        pageLinks = (orchestration.pageLinks + searchPageLinks)
-                            .distinctBy { link -> "${link.pageId}:${link.targetType}:${link.targetId}" }
-                            .toDomainChatPageLinks(),
-                        actionMetadata = orchestration.actionMetadata,
-                    )
-                    AiActionLogFactory.fromMetadata(
-                        sessionId = session.id,
-                        workspaceId = workspaceId,
-                        responseMessageId = assistantMessage.id,
-                        metadata = orchestration.actionMetadata,
-                        undoCommands = orchestration.undoCommands,
-                    )?.let { actionLog ->
-                        aiActionLogRepository.upsert(actionLog)
-                    }
-                }
-                .onFailure { error ->
-                    isAiGeneratingChat.value = false
-                    val message = error.toAiChatErrorMessage().sanitizeAiUserVisibleText()
-                    aiChatError.value = message
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                val message = error.toAiChatErrorMessage().sanitizeAiUserVisibleText()
+                aiChatError.value = message
+                responseSessionId?.let { sessionId ->
                     chatHistoryRepository.appendMessage(
-                        sessionId = session.id,
+                        sessionId = sessionId,
                         role = "assistant",
                         content = message,
                     )
                 }
+            } finally {
+                isAiGeneratingChat.value = false
+            }
         }
     }
 
@@ -961,6 +1001,7 @@ class HomeViewModel @Inject constructor(
     }
 
     fun clearChatHistory() {
+        if (blockChatSessionChangeDuringGeneration()) return
         aiChatError.value = null
         viewModelScope.launch {
             val workspaceId = workspaceRepository.getActiveWorkspaceId()
@@ -975,16 +1016,19 @@ class HomeViewModel @Inject constructor(
     }
 
     fun createNewChatSession() {
+        if (blockChatSessionChangeDuringGeneration()) return
         activeChatSessionId.value = DraftHomeChatSessionId
         aiChatError.value = null
     }
 
     fun selectChatSession(sessionId: String) {
+        if (blockChatSessionChangeDuringGeneration()) return
         activeChatSessionId.value = sessionId
         aiChatError.value = null
     }
 
     fun deleteChatSession(sessionId: String) {
+        if (blockChatSessionChangeDuringGeneration()) return
         viewModelScope.launch {
             chatHistoryRepository.deleteSession(sessionId)
             if (activeChatSessionId.value == sessionId) {
@@ -996,6 +1040,12 @@ class HomeViewModel @Inject constructor(
 
     fun clearAiChatError() {
         aiChatError.value = null
+    }
+
+    private fun blockChatSessionChangeDuringGeneration(): Boolean {
+        if (!isAiGeneratingChat.value) return false
+        aiChatError.value = ActiveAiResponseSessionLockMessage
+        return true
     }
 
     private suspend fun startFreshHomeChatSessionOnLaunch() {
@@ -1191,6 +1241,58 @@ private fun SearchTargetType.searchLabel(): String = when (this) {
     SearchTargetType.Chat -> "Chat"
 }
 
+private fun List<SearchResult>.toChatHistorySearchResults(
+    sessions: List<ChatSession>,
+): List<ChatHistorySearchResult> {
+    val sessionsById = sessions.associateBy { session -> session.id }
+    return asSequence()
+        .filter { result -> result.target.type == SearchTargetType.Chat }
+        .filter { result -> result.target.chatSessionId.isNotBlank() }
+        .groupBy { result -> result.target.chatSessionId }
+        .mapNotNull { (sessionId, results) ->
+            val session = sessionsById[sessionId] ?: return@mapNotNull null
+            val bestResult = results.maxWithOrNull(
+                compareBy<SearchResult> { result -> result.score }
+                    .thenBy { result -> result.updatedAt },
+            )
+            ChatHistoryRankedSearchResult(
+                result = ChatHistorySearchResult(
+                    session = session,
+                    snippet = bestResult
+                        ?.toChatHistorySnippet()
+                        .orEmpty()
+                        .ifBlank { session.title.ifBlank { "New chat" } },
+                    matchCount = results.size,
+                    lastMatchedAt = results.maxOfOrNull { result -> result.updatedAt } ?: session.updatedAt,
+                ),
+                score = results.sumOf { result -> result.score },
+            )
+        }
+        .sortedWith(
+            compareByDescending<ChatHistoryRankedSearchResult> { ranked -> ranked.score }
+                .thenByDescending { ranked -> ranked.result.lastMatchedAt }
+                .thenBy { ranked -> ranked.result.session.title.lowercase() },
+        )
+        .map { ranked -> ranked.result }
+        .toList()
+}
+
+private fun SearchResult.toChatHistorySnippet(): String {
+    val prefix = when {
+        subtitle.equals("User", ignoreCase = true) -> "You: "
+        subtitle.equals("Assistant", ignoreCase = true) -> "CYL: "
+        subtitle.equals("Chat", ignoreCase = true) -> ""
+        subtitle.isNotBlank() -> "${subtitle.compactLine()}: "
+        else -> ""
+    }
+    return (prefix + snippet.ifBlank { title }.compactLine()).take(120)
+}
+
+private data class ChatHistoryRankedSearchResult(
+    val result: ChatHistorySearchResult,
+    val score: Int,
+)
+
 private fun List<ChatSession>.toChatSessionPreviews(
     messages: List<ChatMessage>,
 ): Map<String, ChatSessionPreview> {
@@ -1216,7 +1318,11 @@ private const val SearchTargetRow = "row"
 const val SearchTargetChat = "chat"
 private const val HomeSearchResultLimit = 40
 private const val HomeAiSearchContextLimit = 8
+private const val ChatHistorySearchResultLimit = 40
+private const val ChatHistorySearchDebounceMs = 250L
 private const val DraftHomeChatSessionId = "draft-home-chat"
+private const val ActiveAiResponseSessionLockMessage =
+    "Please wait for the current AI response to finish before switching chats."
 private const val ImageOnlyAiRequestPrompt =
     "Describe the attached image or file and extract the useful visible content."
 private const val MaxAiSkillNameChars = 64
@@ -1618,16 +1724,15 @@ private data class HomeSearchRequest(
     val scope: HomeSearchScope,
 )
 
+private data class ChatHistoryIndexedSearchRequest(
+    val workspaceId: String,
+    val sessions: List<ChatSession>,
+    val query: String,
+)
+
 private data class HomeSearchRouteTarget(
     val type: String,
     val id: String,
-)
-
-data class ChatHistorySearchResult(
-    val session: ChatSession,
-    val snippet: String,
-    val matchCount: Int,
-    val lastMatchedAt: Long,
 )
 
 data class ChatSessionPreview(

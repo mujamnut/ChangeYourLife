@@ -21,6 +21,8 @@ object AiChatMessageMapper {
                         mimeType = attachment.mimeType,
                         kind = attachment.kind,
                         sizeBytes = attachment.sizeBytes,
+                        dataUrl = attachment.dataUrl,
+                        textContent = attachment.textContent,
                         previewDataUrl = attachment.previewDataUrl,
                     )
                 },

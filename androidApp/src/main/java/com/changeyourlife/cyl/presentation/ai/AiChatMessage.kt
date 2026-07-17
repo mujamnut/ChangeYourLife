@@ -19,6 +19,8 @@ data class AiChatAttachment(
     val mimeType: String,
     val kind: String,
     val sizeBytes: Long,
+    val dataUrl: String = "",
+    val textContent: String = "",
     val previewDataUrl: String = "",
 )
 

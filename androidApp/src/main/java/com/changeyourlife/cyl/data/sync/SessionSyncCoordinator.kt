@@ -53,6 +53,13 @@ import com.changeyourlife.cyl.domain.model.PageTableRow
 import com.changeyourlife.cyl.domain.model.isActive
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import retrofit2.HttpException
 
 @Singleton
@@ -1221,7 +1228,7 @@ class SessionSyncCoordinator @Inject constructor(
             content = content,
             pageLinksJson = pageLinksJson,
             actionMetadataJson = actionMetadataJson,
-            attachmentsJson = attachmentsJson,
+            attachmentsJson = attachmentsJson.toRemoteChatAttachmentsJson(),
             createdAt = createdAt,
             updatedAt = updatedAt,
         )
@@ -1242,7 +1249,8 @@ class SessionSyncCoordinator @Inject constructor(
                 remoteJson == "[]" && previous?.attachmentsJson?.let { localJson ->
                     localJson.isNotBlank() && localJson != "[]"
                 } == true
-            } ?: previous?.attachmentsJson.orEmpty().ifBlank { "[]" },
+            }?.mergeLocalChatAttachmentPayload(previous?.attachmentsJson)
+                ?: previous?.attachmentsJson.orEmpty().ifBlank { "[]" },
             createdAt = previous?.createdAt ?: createdAt,
             updatedAt = updatedAt,
             syncStatus = SyncStatus.Synced,
@@ -1412,4 +1420,63 @@ class SessionSyncCoordinator @Inject constructor(
     private fun PageBlock.flattenBlocks(): List<PageBlock> {
         return listOf(this) + children.flatMap { child -> child.flattenBlocks() }
     }
+}
+
+private val chatAttachmentPayloadJson = Json {
+    ignoreUnknownKeys = true
+    encodeDefaults = true
+}
+
+private fun String.toRemoteChatAttachmentsJson(): String {
+    if (isBlank() || this == "[]") return "[]"
+
+    return runCatching {
+        val stripped = chatAttachmentPayloadJson.parseToJsonElement(this).jsonArray.map { element ->
+            val attachment = element.jsonObject
+            buildJsonObject {
+                attachment.forEach { (key, value) ->
+                    if (key != "dataUrl" && key != "textContent") {
+                        put(key, value)
+                    }
+                }
+            }
+        }
+        JsonArray(stripped).toString()
+    }.getOrDefault(this)
+}
+
+private fun String.mergeLocalChatAttachmentPayload(localJson: String?): String {
+    if (isBlank() || this == "[]") {
+        return localJson?.takeIf { it.isNotBlank() } ?: "[]"
+    }
+    if (localJson.isNullOrBlank() || localJson == "[]") return this
+
+    return runCatching {
+        val localById = chatAttachmentPayloadJson.parseToJsonElement(localJson)
+            .jsonArray
+            .mapNotNull { element ->
+                val attachment = element.jsonObject
+                val id = attachment["id"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                if (id.isBlank()) null else id to attachment
+            }
+            .toMap()
+
+        val merged = chatAttachmentPayloadJson.parseToJsonElement(this).jsonArray.map { element ->
+            val remoteAttachment = element.jsonObject
+            val id = remoteAttachment["id"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            val localAttachment = localById[id]
+            buildJsonObject {
+                remoteAttachment.forEach { (key, value) -> put(key, value) }
+                val remoteDataUrl = remoteAttachment["dataUrl"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                val remoteTextContent = remoteAttachment["textContent"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                if (remoteDataUrl.isBlank()) {
+                    localAttachment?.get("dataUrl")?.let { value -> put("dataUrl", value) }
+                }
+                if (remoteTextContent.isBlank()) {
+                    localAttachment?.get("textContent")?.let { value -> put("textContent", value) }
+                }
+            }
+        }
+        JsonArray(merged).toString()
+    }.getOrDefault(this)
 }

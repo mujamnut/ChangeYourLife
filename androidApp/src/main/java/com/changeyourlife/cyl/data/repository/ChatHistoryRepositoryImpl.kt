@@ -215,6 +215,8 @@ private data class ChatMessageAttachmentDto(
     val mimeType: String,
     val kind: String,
     val sizeBytes: Long,
+    val dataUrl: String = "",
+    val textContent: String = "",
     val previewDataUrl: String = "",
 )
 
@@ -276,6 +278,8 @@ private fun ChatMessageAttachmentDto.toDomain(): ChatMessageAttachment {
         mimeType = mimeType,
         kind = kind,
         sizeBytes = sizeBytes,
+        dataUrl = dataUrl,
+        textContent = textContent,
         previewDataUrl = previewDataUrl,
     )
 }
@@ -287,6 +291,8 @@ private fun ChatMessageAttachment.toDto(): ChatMessageAttachmentDto {
         mimeType = mimeType,
         kind = kind,
         sizeBytes = sizeBytes,
+        dataUrl = dataUrl,
+        textContent = textContent,
         previewDataUrl = previewDataUrl,
     )
 }

@@ -5,13 +5,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import android.graphics.Canvas
-import android.graphics.Color
 import android.net.Uri
-import android.provider.OpenableColumns
-import android.util.Base64
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -26,8 +20,6 @@ import androidx.compose.foundation.content.MediaType
 import androidx.compose.foundation.content.ReceiveContentListener
 import androidx.compose.foundation.content.consume
 import androidx.compose.foundation.content.hasMediaType
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -68,30 +60,21 @@ import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
-import androidx.compose.ui.input.nestedscroll.NestedScrollSource
-import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.input.pointer.PointerEventPass
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.Velocity
 import com.changeyourlife.cyl.domain.repository.AiImageAttachment
 import com.changeyourlife.cyl.domain.model.MentionCandidate
 import com.changeyourlife.cyl.presentation.page.RichTextCommandPaletteKind
 import com.changeyourlife.cyl.presentation.page.RichTextCommandPaletteItem
 import com.changeyourlife.cyl.presentation.page.RichTextMentionParser
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.ByteArrayOutputStream
-import kotlin.math.abs
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class, ExperimentalComposeUiApi::class)
 @Composable
@@ -144,7 +127,6 @@ fun AiChatSheet(
     val keyboardController = LocalSoftwareKeyboardController.current
     val inputFocusRequester = remember { FocusRequester() }
     val composerScope = rememberCoroutineScope()
-    var isBodyDismissInProgress by remember { mutableStateOf(false) }
     val stableSheetMaxHeight = remember(configuration.screenHeightDp) {
         configuration.screenHeightDp.dp * 0.90f
     }
@@ -404,6 +386,7 @@ fun AiChatSheet(
             AiSheetHeader(
                 displayName = persona.displayName,
                 avatarSpec = avatarSpec,
+                isGenerating = isGenerating,
                 onOpenHistory = {
                     onOpenHistoryPage()
                 },
@@ -441,18 +424,6 @@ fun AiChatSheet(
                 isGenerating = isGenerating,
                 attachedPageTitle = attachedPageTitle,
                 onOpenPage = onOpenPage,
-                onBodyDismiss = {
-                    if (!isBodyDismissInProgress) {
-                        isBodyDismissInProgress = true
-                        composerScope.launch { sheetState.hide() }.invokeOnCompletion {
-                            if (!sheetState.isVisible) {
-                                onDismiss()
-                            } else {
-                                isBodyDismissInProgress = false
-                            }
-                        }
-                    }
-                },
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f),
@@ -583,9 +554,24 @@ private fun AiKeyboardReplacementHost(
     content: @Composable () -> Unit,
 ) {
     val density = LocalDensity.current
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
     val isImeVisible = WindowInsets.ime.getBottom(density) > 0
+    var hasWaitedForImeToHide by remember { mutableStateOf(false) }
+
+    LaunchedEffect(requestedVisible) {
+        hasWaitedForImeToHide = false
+        if (requestedVisible) {
+            focusManager.clearFocus(force = true)
+            keyboardController?.hide()
+            delay(AiKeyboardReplacementImeWaitMs)
+            hasWaitedForImeToHide = true
+            keyboardController?.hide()
+        }
+    }
+
     AnimatedVisibility(
-        visible = requestedVisible && !isImeVisible,
+        visible = requestedVisible && (!isImeVisible || hasWaitedForImeToHide),
         enter = slideInVertically(initialOffsetY = { height -> height }) + fadeIn(),
         exit = slideOutVertically(targetOffsetY = { height -> height }) + fadeOut(),
         content = { content() },
@@ -599,31 +585,10 @@ private fun AiChatMessageList(
     isGenerating: Boolean,
     attachedPageTitle: String?,
     onOpenPage: (String, String, String) -> Unit,
-    onBodyDismiss: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
-    val density = LocalDensity.current
     val listState = rememberLazyListState()
-    val dismissThresholdPx = remember(density) { with(density) { 64.dp.toPx() } }
-    val bodyScrollBoundary = remember {
-        object : NestedScrollConnection {
-            override fun onPostScroll(
-                consumed: Offset,
-                available: Offset,
-                source: NestedScrollSource,
-            ): Offset = if (source == NestedScrollSource.UserInput) {
-                Offset(x = 0f, y = available.y)
-            } else {
-                Offset.Zero
-            }
-
-            override suspend fun onPostFling(
-                consumed: Velocity,
-                available: Velocity,
-            ): Velocity = Velocity(x = 0f, y = available.y)
-        }
-    }
     var previousMessageCount by remember { mutableIntStateOf(-1) }
 
     LaunchedEffect(messages.size, isGenerating) {
@@ -651,17 +616,9 @@ private fun AiChatMessageList(
 
     LazyColumn(
         state = listState,
-        modifier = modifier
-            .nestedScroll(bodyScrollBoundary)
-            .aiChatBodyDismissGesture(
-                canStartDismiss = { !listState.canScrollBackward },
-                dismissThresholdPx = dismissThresholdPx,
-                onDismiss = onBodyDismiss,
-            ),
+        modifier = modifier,
         verticalArrangement = Arrangement.spacedBy(8.dp),
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-        // The sheet already consumes unhandled vertical drag through nested scroll.
-        // A second overscroll transform here makes pull-to-dismiss visibly fight the sheet.
         overscrollEffect = null,
     ) {
         if (messages.isEmpty() && !isGenerating) {
@@ -757,46 +714,6 @@ private fun AiChatMessageList(
     }
 }
 
-private fun Modifier.aiChatBodyDismissGesture(
-    canStartDismiss: () -> Boolean,
-    dismissThresholdPx: Float,
-    onDismiss: () -> Unit,
-): Modifier = pointerInput(dismissThresholdPx, onDismiss) {
-    awaitEachGesture {
-        val down = awaitFirstDown(
-            requireUnconsumed = false,
-            pass = PointerEventPass.Initial,
-        )
-        if (!canStartDismiss()) return@awaitEachGesture
-
-        var distanceY = 0f
-        var isDismissDrag = false
-        var didDismiss = false
-
-        while (true) {
-            val event = awaitPointerEvent(pass = PointerEventPass.Initial)
-            val change = event.changes.firstOrNull { pointer -> pointer.id == down.id } ?: break
-            if (!change.pressed) break
-
-            val deltaY = change.positionChange().y
-            distanceY += deltaY
-
-            if (!isDismissDrag && abs(distanceY) >= viewConfiguration.touchSlop) {
-                if (distanceY <= 0f) break
-                isDismissDrag = true
-            }
-
-            if (isDismissDrag) {
-                change.consume()
-                if (!didDismiss && distanceY >= dismissThresholdPx) {
-                    didDismiss = true
-                    onDismiss()
-                }
-            }
-        }
-    }
-}
-
 private fun Context.copyAiChatMessage(message: String) {
     val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     clipboard.setPrimaryClip(ClipData.newPlainText("CYL AI message", message))
@@ -808,281 +725,7 @@ private enum class AiComposerPanel {
     Settings,
 }
 
-private const val MaxAiChatImages = 4
-private const val MaxAiChatImageBytes = 4L * 1024L * 1024L
-private const val MaxAiChatTextFileBytes = 256L * 1024L
-private const val MaxAiChatPreviewDimension = 384
-private const val MaxAiChatPreviewBytes = 96 * 1024
-
-private data class AiAttachmentReadResult(
-    val attachment: AiImageAttachment? = null,
-    val userMessage: String? = null,
-)
-
-private fun Context.readAiImageAttachment(
-    uri: Uri,
-    fallbackName: String,
-): AiAttachmentReadResult {
-    val rawMimeType = contentResolver.getType(uri).orEmpty()
-    val name = queryOpenableName(uri).ifBlank { fallbackName }
-    val bytes = runCatching {
-        contentResolver.openInputStream(uri)?.use { input ->
-            input.readBytesWithLimit(maxOf(MaxAiChatImageBytes, MaxAiChatTextFileBytes) + 1)
-        }
-    }.getOrNull()
-
-    if (bytes == null || bytes.isEmpty()) {
-        return AiAttachmentReadResult(userMessage = "Could not read that file.")
-    }
-    val mimeType = inferAttachmentMimeType(
-        rawMimeType = rawMimeType,
-        name = name,
-        bytes = bytes,
-    )
-
-    return when {
-        mimeType.startsWith("image/", ignoreCase = true) -> {
-            if (bytes.size.toLong() > MaxAiChatImageBytes) {
-                AiAttachmentReadResult(userMessage = "Image is too large. Use an image under 4 MB.")
-            } else {
-                AiAttachmentReadResult(
-                    attachment = AiImageAttachment(
-                        dataUrl = "data:$mimeType;base64,${Base64.encodeToString(bytes, Base64.NO_WRAP)}",
-                        previewDataUrl = bytes.toAiChatPreviewDataUrl(),
-                        mimeType = mimeType,
-                        name = name,
-                        sizeBytes = bytes.size.toLong(),
-                        kind = "image",
-                    ),
-                )
-            }
-        }
-        isReadableTextAttachment(mimeType = mimeType, name = name) -> {
-            if (bytes.size.toLong() > MaxAiChatTextFileBytes) {
-                AiAttachmentReadResult(userMessage = "Text file is too large. Use a file under 256 KB.")
-            } else {
-                AiAttachmentReadResult(
-                    attachment = AiImageAttachment(
-                        textContent = bytes.toString(Charsets.UTF_8).cleanTextFileForAi(),
-                        mimeType = mimeType,
-                        name = name,
-                        sizeBytes = bytes.size.toLong(),
-                        kind = "text",
-                    ),
-                )
-            }
-        }
-        else -> AiAttachmentReadResult(
-            userMessage = "This file type is not readable yet. Use image, TXT, CSV, Markdown, or JSON.",
-        )
-    }
-}
-
-private fun Context.readPastedImageAttachment(
-    uri: Uri,
-    fallbackName: String,
-): AiAttachmentReadResult {
-    val result = readAiImageAttachment(uri = uri, fallbackName = fallbackName)
-    val attachment = result.attachment ?: return result
-    return if (attachment.kind == "image" || attachment.mimeType.startsWith("image/", ignoreCase = true)) {
-        AiAttachmentReadResult(attachment = attachment.copy(name = attachment.name.ifBlank { fallbackName }))
-    } else {
-        AiAttachmentReadResult(userMessage = "Only images can be pasted into the chat composer.")
-    }
-}
-
-private fun inferAttachmentMimeType(
-    rawMimeType: String,
-    name: String,
-    bytes: ByteArray,
-): String {
-    val normalized = rawMimeType.lowercase().trim()
-    if (normalized.startsWith("image/") || normalized.startsWith("text/")) return normalized
-    if (normalized.isNotBlank() && normalized != "application/octet-stream") {
-        return normalized
-    }
-
-    val lowerName = name.lowercase()
-    return when {
-        lowerName.endsWith(".jpg") || lowerName.endsWith(".jpeg") || bytes.isJpeg() -> "image/jpeg"
-        lowerName.endsWith(".png") || bytes.isPng() -> "image/png"
-        lowerName.endsWith(".webp") || bytes.isWebp() -> "image/webp"
-        lowerName.endsWith(".gif") || bytes.isGif() -> "image/gif"
-        isReadableTextAttachment(mimeType = normalized, name = name) -> "text/plain"
-        else -> normalized.ifBlank { "application/octet-stream" }
-    }
-}
-
-private fun ByteArray.isJpeg(): Boolean =
-    size >= 3 && this[0] == 0xFF.toByte() && this[1] == 0xD8.toByte() && this[2] == 0xFF.toByte()
-
-private fun ByteArray.isPng(): Boolean =
-    size >= 8 &&
-        this[0] == 0x89.toByte() &&
-        this[1] == 0x50.toByte() &&
-        this[2] == 0x4E.toByte() &&
-        this[3] == 0x47.toByte()
-
-private fun ByteArray.isGif(): Boolean =
-    size >= 6 &&
-        this[0] == 'G'.code.toByte() &&
-        this[1] == 'I'.code.toByte() &&
-        this[2] == 'F'.code.toByte()
-
-private fun ByteArray.isWebp(): Boolean =
-    size >= 12 &&
-        this[0] == 'R'.code.toByte() &&
-        this[1] == 'I'.code.toByte() &&
-        this[2] == 'F'.code.toByte() &&
-        this[3] == 'F'.code.toByte() &&
-        this[8] == 'W'.code.toByte() &&
-        this[9] == 'E'.code.toByte() &&
-        this[10] == 'B'.code.toByte() &&
-        this[11] == 'P'.code.toByte()
-
-private fun Context.queryOpenableName(uri: Uri): String {
-    return runCatching {
-        contentResolver.query(
-            uri,
-            arrayOf(OpenableColumns.DISPLAY_NAME),
-            null,
-            null,
-            null,
-        )?.use { cursor ->
-            if (cursor.moveToFirst()) {
-                val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                if (nameIndex >= 0) cursor.getString(nameIndex).orEmpty() else ""
-            } else {
-                ""
-            }
-        }.orEmpty()
-    }.getOrDefault("")
-}
-
-private fun Bitmap.toAiImageAttachmentResult(
-    name: String,
-): AiAttachmentReadResult {
-    val output = ByteArrayOutputStream()
-    compress(Bitmap.CompressFormat.JPEG, 86, output)
-    val bytes = output.toByteArray()
-    if (bytes.size.toLong() > MaxAiChatImageBytes) {
-        return AiAttachmentReadResult(userMessage = "Camera image is too large. Try a smaller image.")
-    }
-    return AiAttachmentReadResult(
-        attachment = AiImageAttachment(
-            dataUrl = "data:image/jpeg;base64,${Base64.encodeToString(bytes, Base64.NO_WRAP)}",
-            previewDataUrl = bytes.toAiChatPreviewDataUrl(),
-            mimeType = "image/jpeg",
-            name = "$name.jpg",
-            sizeBytes = bytes.size.toLong(),
-            kind = "image",
-        ),
-    )
-}
-
-private fun ByteArray.toAiChatPreviewDataUrl(): String {
-    if (isEmpty()) return ""
-    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-    BitmapFactory.decodeByteArray(this, 0, size, bounds)
-    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return ""
-
-    var sampleSize = 1
-    while (
-        bounds.outWidth / sampleSize > MaxAiChatPreviewDimension * 2 ||
-        bounds.outHeight / sampleSize > MaxAiChatPreviewDimension * 2
-    ) {
-        sampleSize *= 2
-    }
-    val decoded = BitmapFactory.decodeByteArray(
-        this,
-        0,
-        size,
-        BitmapFactory.Options().apply { inSampleSize = sampleSize },
-    ) ?: return ""
-    val scale = minOf(
-        1f,
-        MaxAiChatPreviewDimension.toFloat() / maxOf(decoded.width, decoded.height).toFloat(),
-    )
-    val targetWidth = (decoded.width * scale).toInt().coerceAtLeast(1)
-    val targetHeight = (decoded.height * scale).toInt().coerceAtLeast(1)
-    val scaled = if (targetWidth == decoded.width && targetHeight == decoded.height) {
-        decoded
-    } else {
-        Bitmap.createScaledBitmap(decoded, targetWidth, targetHeight, true)
-    }
-    val flattened = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
-    Canvas(flattened).apply {
-        drawColor(Color.WHITE)
-        drawBitmap(scaled, 0f, 0f, null)
-    }
-
-    var quality = 78
-    var previewBytes: ByteArray
-    do {
-        val output = ByteArrayOutputStream()
-        flattened.compress(Bitmap.CompressFormat.JPEG, quality, output)
-        previewBytes = output.toByteArray()
-        quality -= 10
-    } while (previewBytes.size > MaxAiChatPreviewBytes && quality >= 38)
-
-    if (scaled !== decoded) scaled.recycle()
-    decoded.recycle()
-    flattened.recycle()
-    if (previewBytes.size > MaxAiChatPreviewBytes) return ""
-    return "data:image/jpeg;base64,${Base64.encodeToString(previewBytes, Base64.NO_WRAP)}"
-}
-
-private fun java.io.InputStream.readBytesWithLimit(limitBytes: Long): ByteArray {
-    val output = ByteArrayOutputStream()
-    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-    var total = 0L
-    while (true) {
-        val read = read(buffer)
-        if (read <= 0) break
-        total += read
-        if (total > limitBytes) {
-            return output.toByteArray() + buffer.copyOf(read)
-        }
-        output.write(buffer, 0, read)
-    }
-    return output.toByteArray()
-}
-
-private fun isReadableTextAttachment(
-    mimeType: String,
-    name: String,
-): Boolean {
-    val lowerMime = mimeType.lowercase()
-    val lowerName = name.lowercase()
-    return lowerMime.startsWith("text/") ||
-        lowerMime in setOf(
-            "application/json",
-            "application/xml",
-            "application/yaml",
-            "application/x-yaml",
-            "application/csv",
-            "application/sql",
-            "application/javascript",
-        ) ||
-        lowerName.endsWith(".txt") ||
-        lowerName.endsWith(".md") ||
-        lowerName.endsWith(".markdown") ||
-        lowerName.endsWith(".csv") ||
-        lowerName.endsWith(".tsv") ||
-        lowerName.endsWith(".json") ||
-        lowerName.endsWith(".xml") ||
-        lowerName.endsWith(".yaml") ||
-        lowerName.endsWith(".yml") ||
-        lowerName.endsWith(".sql") ||
-        lowerName.endsWith(".log")
-}
-
-private fun String.cleanTextFileForAi(): String {
-    return replace("\u0000", "")
-        .lines()
-        .joinToString("\n") { line -> line.trimEnd() }
-        .trim()
-}
+private const val AiKeyboardReplacementImeWaitMs = 260L
 
 private fun String.removeActiveMentionQuery(cursor: Int): String {
     val safeCursor = cursor.coerceIn(0, length)

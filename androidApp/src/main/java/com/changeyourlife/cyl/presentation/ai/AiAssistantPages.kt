@@ -66,6 +66,7 @@ internal fun AiHistoryRoute(
     previews: Map<String, ChatSessionPreview>,
     searchQuery: String,
     searchResults: List<ChatHistorySearchResult>,
+    isGenerating: Boolean,
     onBack: () -> Unit,
     onCreateChatSession: () -> Unit,
     onSelectChatSession: (String) -> Unit,
@@ -98,6 +99,7 @@ internal fun AiHistoryRoute(
                 action = {
                     IconButton(
                         onClick = onCreateChatSession,
+                        enabled = !isGenerating,
                         modifier = Modifier.size(44.dp),
                     ) {
                         Icon(
@@ -159,6 +161,7 @@ internal fun AiHistoryRoute(
                                 isActive = result.session.id == activeSessionId,
                                 preview = previews[result.session.id],
                                 supportTextOverride = result.snippet,
+                                enabled = !isGenerating,
                                 onClick = { onSelectChatSession(result.session.id) },
                                 onDelete = { onDeleteChatSession(result.session.id) },
                             )
@@ -172,6 +175,7 @@ internal fun AiHistoryRoute(
                                 session = session,
                                 isActive = session.id == activeSessionId,
                                 preview = previews[session.id],
+                                enabled = !isGenerating,
                                 onClick = { onSelectChatSession(session.id) },
                                 onDelete = { onDeleteChatSession(session.id) },
                             )
@@ -473,6 +477,7 @@ private fun AiHistoryRow(
     isActive: Boolean,
     preview: ChatSessionPreview?,
     supportTextOverride: String? = null,
+    enabled: Boolean,
     onClick: () -> Unit,
     onDelete: () -> Unit,
 ) {
@@ -492,7 +497,7 @@ private fun AiHistoryRow(
                     MaterialTheme.colorScheme.surface
                 },
             )
-            .clickable(onClick = onClick)
+            .clickable(enabled = enabled, onClick = onClick)
             .padding(start = 4.dp, end = 0.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -550,6 +555,7 @@ private fun AiHistoryRow(
         Box {
             IconButton(
                 onClick = { isMenuOpen.value = true },
+                enabled = enabled,
                 modifier = Modifier.size(44.dp),
             ) {
                 Icon(
