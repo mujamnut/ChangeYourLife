@@ -128,6 +128,7 @@ internal fun PageDatabaseSurface(
     onKeepLocalConflict: () -> Unit,
     onUseRemoteConflict: () -> Unit,
     onSendAiMessage: (String, List<String>, String?, List<AiImageAttachment>) -> Unit,
+    onHomeAiMentionQueryChange: (String) -> Unit,
     onUndoAiAction: (String, String) -> Unit,
     onClearHomeAiHistory: () -> Unit,
     onCreateHomeChatSession: () -> Unit,
@@ -267,7 +268,7 @@ internal fun PageDatabaseSurface(
             val currentPageId = uiState.page?.id
             AiChatSheet(
                 messages = homeAiState.chatMessages,
-                mentionPages = homeAiState.allPages,
+                mentionCandidates = homeAiState.aiMentionCandidates,
                 persona = aiPersona,
                 isGenerating = homeAiState.isAiGeneratingChat,
                 errorMessage = homeAiState.aiChatError,
@@ -279,6 +280,7 @@ internal fun PageDatabaseSurface(
                 onSendMessage = { message, mentionedPageIds, images ->
                     onSendAiMessage(message, mentionedPageIds, currentPageId, images)
                 },
+                onMentionQueryChange = onHomeAiMentionQueryChange,
                 onUndoAction = onUndoAiAction,
                 onClearHistory = onClearHomeAiHistory,
                 onCreateChatSession = onCreateHomeChatSession,

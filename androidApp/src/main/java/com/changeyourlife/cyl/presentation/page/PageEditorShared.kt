@@ -1996,6 +1996,7 @@ internal fun PageEditorScreenPreview() {
             onKeepLocalConflict = {},
             onUseRemoteConflict = {},
             onSendAiMessage = { _, _, _, _ -> },
+            onHomeAiMentionQueryChange = {},
             onUndoAiAction = { _, _ -> },
             onClearHomeAiHistory = {},
             onCreateHomeChatSession = {},

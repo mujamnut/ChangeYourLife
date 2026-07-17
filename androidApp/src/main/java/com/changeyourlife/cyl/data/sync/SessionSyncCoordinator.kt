@@ -21,6 +21,7 @@ import com.changeyourlife.cyl.data.local.mapper.toEntity
 import com.changeyourlife.cyl.data.local.model.PageContentSnapshot
 import com.changeyourlife.cyl.data.local.session.AuthTokenStore
 import com.changeyourlife.cyl.data.local.session.WorkspaceSelectionStore
+import com.changeyourlife.cyl.data.search.SearchIndexRebuilder
 import com.changeyourlife.cyl.data.remote.sync.AiActionLogSyncDto
 import com.changeyourlife.cyl.data.remote.sync.AiSkillSyncDto
 import com.changeyourlife.cyl.data.remote.sync.ChatMessageSyncDto
@@ -66,6 +67,7 @@ class SessionSyncCoordinator @Inject constructor(
     private val syncApi: SyncApi,
     private val tokenStore: AuthTokenStore,
     private val selectionStore: WorkspaceSelectionStore,
+    private val searchIndexRebuilder: SearchIndexRebuilder,
 ) {
     suspend fun syncAfterAuth() {
         val header = authHeader() ?: return
@@ -288,12 +290,12 @@ class SessionSyncCoordinator @Inject constructor(
                 session = session.toSyncDto(),
             )
         }.onSuccess { remoteSession ->
-            chatMessageDao.upsertSession(
-                remoteSession.toSyncedEntity(
-                    previous = session,
-                    now = System.currentTimeMillis(),
-                ),
+            val syncedSession = remoteSession.toSyncedEntity(
+                previous = session,
+                now = System.currentTimeMillis(),
             )
+            chatMessageDao.upsertSession(syncedSession)
+            searchIndexRebuilder.rebuildChatSession(syncedSession)
         }.onFailure(::handleSyncFailure)
     }
 
@@ -311,12 +313,14 @@ class SessionSyncCoordinator @Inject constructor(
                 message = message.toSyncDto(session),
             )
         }.onSuccess { remoteMessage ->
-            chatMessageDao.upsertMessage(
-                remoteMessage.toSyncedEntity(
-                    previous = message,
-                    now = System.currentTimeMillis(),
-                ),
+            val syncedMessage = remoteMessage.toSyncedEntity(
+                previous = message,
+                now = System.currentTimeMillis(),
             )
+            chatMessageDao.upsertMessage(
+                syncedMessage,
+            )
+            searchIndexRebuilder.rebuildChatSession(syncedMessage.scopeId)
         }.onFailure(::handleSyncFailure)
     }
 
@@ -1061,6 +1065,7 @@ class SessionSyncCoordinator @Inject constructor(
                 pushChatSession(localSession.id)
             }
         }
+        searchIndexRebuilder.rebuildChatSession(remoteSession.id)
     }
 
     private suspend fun mergeChatMessage(remoteMessage: ChatMessageSyncDto) {
@@ -1088,6 +1093,7 @@ class SessionSyncCoordinator @Inject constructor(
                 pushChatMessage(localMessage.id)
             }
         }
+        searchIndexRebuilder.rebuildChatSession(remoteMessage.sessionId)
     }
 
     private suspend fun markPageSynced(pageId: String) {
@@ -1321,6 +1327,7 @@ class SessionSyncCoordinator @Inject constructor(
                 cells = projection.cells,
             )
         }
+        searchIndexRebuilder.rebuildPage(page)
     }
 
     private fun authHeader(): String? {

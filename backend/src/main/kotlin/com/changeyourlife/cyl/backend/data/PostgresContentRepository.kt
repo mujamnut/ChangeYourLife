@@ -1,6 +1,8 @@
 package com.changeyourlife.cyl.backend.data
 
 import com.changeyourlife.cyl.backend.domain.ContentRepository
+import com.changeyourlife.cyl.backend.domain.ContentSearchQuery
+import com.changeyourlife.cyl.backend.domain.ContentSearchResult
 import com.changeyourlife.cyl.backend.domain.PageRecord
 import com.changeyourlife.cyl.backend.domain.WorkspaceRecord
 import java.sql.PreparedStatement
@@ -181,6 +183,52 @@ class PostgresContentRepository(
                     statement.setBoolean(3, includeDeleted)
                     statement.executeQuery().use { resultSet ->
                         if (resultSet.next()) resultSet.toPageRecord() else null
+                    }
+                }
+            }
+        }
+
+    override suspend fun search(userId: String, query: ContentSearchQuery): List<ContentSearchResult> =
+        withContext(Dispatchers.IO) {
+            val rawQuery = query.query.trim()
+            if (rawQuery.isBlank()) return@withContext emptyList()
+            val candidateSql = buildSearchCandidateSql(query.scopes)
+            if (candidateSql.isBlank()) return@withContext emptyList()
+
+            dataSource.connection.use { connection ->
+                connection.prepareStatement(
+                    """
+                    WITH input AS (
+                        SELECT plainto_tsquery('simple', ?) AS ts_query,
+                               lower(?) AS raw_query
+                    ),
+                    owned_pages AS (
+                        SELECT pages.*,
+                               COALESCE(workspaces.client_id, workspaces.id) AS client_workspace_id
+                        FROM pages
+                        INNER JOIN workspaces ON workspaces.id = pages.workspace_id
+                        WHERE workspaces.user_id = ?
+                          AND COALESCE(workspaces.client_id, workspaces.id) = ?
+                          AND pages.deleted_at IS NULL
+                          AND workspaces.deleted_at IS NULL
+                    )
+                    SELECT *
+                    FROM (
+                        $candidateSql
+                    ) AS candidates
+                    ORDER BY score DESC, updated_at DESC
+                    LIMIT ?
+                    """.trimIndent(),
+                ).use { statement ->
+                    statement.setString(1, rawQuery)
+                    statement.setString(2, rawQuery.lowercase())
+                    statement.setString(3, userId)
+                    statement.setString(4, query.workspaceId)
+                    statement.setInt(5, query.limit)
+                    statement.executeQuery().use { resultSet ->
+                        buildList {
+                            while (resultSet.next()) add(resultSet.toContentSearchResult())
+                        }
                     }
                 }
             }
@@ -485,6 +533,233 @@ private fun java.sql.Connection.selectOwnedPageContent(userId: String, pageId: S
     }
 }
 
+private val DefaultBackendSearchScopes = setOf("Page", "Block", "Table", "Row", "Property", "Column", "Cell")
+
+private fun buildSearchCandidateSql(scopes: Set<String>): String {
+    val requestedScopes = scopes.ifEmpty { DefaultBackendSearchScopes }
+    return buildList {
+        if (requestedScopes.containsSearchScope("Page")) add(PageSearchCandidateSql)
+        if (requestedScopes.containsSearchScope("Block")) add(BlockSearchCandidateSql)
+        if (requestedScopes.containsSearchScope("Property")) add(PropertySearchCandidateSql)
+        if (requestedScopes.containsSearchScope("Table")) add(TableSearchCandidateSql)
+        if (requestedScopes.containsSearchScope("Column")) add(ColumnSearchCandidateSql)
+        if (requestedScopes.containsSearchScope("Row")) add(RowSearchCandidateSql)
+        if (requestedScopes.containsSearchScope("Cell")) add(CellSearchCandidateSql)
+    }.joinToString(separator = "\nUNION ALL\n")
+}
+
+private fun Set<String>.containsSearchScope(scope: String): Boolean =
+    any { requested -> requested.equals(scope, ignoreCase = true) }
+
+private const val EmptySearchField = "''::text"
+
+private val PageSearchCandidateSql = """
+SELECT 'Page'::text AS target_type,
+       p.client_workspace_id AS workspace_id,
+       p.id AS page_id,
+       $EmptySearchField AS block_id,
+       $EmptySearchField AS table_block_id,
+       $EmptySearchField AS row_id,
+       $EmptySearchField AS column_id,
+       $EmptySearchField AS property_id,
+       $EmptySearchField AS chat_session_id,
+       $EmptySearchField AS chat_message_id,
+       COALESCE(NULLIF(p.title, ''), 'Untitled page') AS title,
+       'Page'::text AS subtitle,
+       left(regexp_replace(COALESCE(p.content, ''), '[[:space:]]+', ' ', 'g'), 240) AS snippet,
+       (
+           (ts_rank_cd(to_tsvector('simple', COALESCE(p.title, '') || ' ' || COALESCE(p.content, '')), input.ts_query) * 1000)::integer
+           + CASE WHEN lower(COALESCE(p.title, '')) = input.raw_query THEN 300 ELSE 0 END
+           + CASE WHEN lower(COALESCE(p.title, '')) LIKE '%' || input.raw_query || '%' THEN 120 ELSE 0 END
+       ) AS score,
+       p.updated_at AS updated_at
+FROM owned_pages p
+CROSS JOIN input
+WHERE to_tsvector('simple', COALESCE(p.title, '') || ' ' || COALESCE(p.content, '')) @@ input.ts_query
+   OR lower(COALESCE(p.title, '') || ' ' || COALESCE(p.content, '')) LIKE '%' || input.raw_query || '%'
+""".trimIndent()
+
+private val BlockSearchCandidateSql = """
+SELECT 'Block'::text AS target_type,
+       p.client_workspace_id AS workspace_id,
+       p.id AS page_id,
+       b.id AS block_id,
+       CASE WHEN b.type = 'Table' THEN b.id ELSE $EmptySearchField END AS table_block_id,
+       $EmptySearchField AS row_id,
+       $EmptySearchField AS column_id,
+       $EmptySearchField AS property_id,
+       $EmptySearchField AS chat_session_id,
+       $EmptySearchField AS chat_message_id,
+       COALESCE(NULLIF(left(b.text, 80), ''), b.type) AS title,
+       COALESCE(NULLIF(p.title, ''), 'Untitled page') || ' / Block' AS subtitle,
+       left(regexp_replace(COALESCE(b.text, '') || ' ' || COALESCE(b.metadata_json, ''), '[[:space:]]+', ' ', 'g'), 240) AS snippet,
+       (
+           (ts_rank_cd(to_tsvector('simple', COALESCE(b.text, '') || ' ' || COALESCE(b.metadata_json, '')), input.ts_query) * 1000)::integer
+           + CASE WHEN lower(COALESCE(b.text, '')) LIKE '%' || input.raw_query || '%' THEN 80 ELSE 0 END
+       ) AS score,
+       b.updated_at AS updated_at
+FROM page_blocks b
+INNER JOIN owned_pages p ON p.id = b.page_id
+CROSS JOIN input
+WHERE b.deleted_at IS NULL
+  AND (
+      to_tsvector('simple', COALESCE(b.text, '') || ' ' || COALESCE(b.metadata_json, '')) @@ input.ts_query
+      OR lower(COALESCE(b.text, '') || ' ' || COALESCE(b.metadata_json, '')) LIKE '%' || input.raw_query || '%'
+  )
+""".trimIndent()
+
+private val PropertySearchCandidateSql = """
+SELECT 'Property'::text AS target_type,
+       p.client_workspace_id AS workspace_id,
+       p.id AS page_id,
+       $EmptySearchField AS block_id,
+       $EmptySearchField AS table_block_id,
+       $EmptySearchField AS row_id,
+       $EmptySearchField AS column_id,
+       pr.id AS property_id,
+       $EmptySearchField AS chat_session_id,
+       $EmptySearchField AS chat_message_id,
+       pr.name AS title,
+       COALESCE(NULLIF(p.title, ''), 'Untitled page') || ' / Property' AS subtitle,
+       left(regexp_replace(pr.type || ' ' || COALESCE(pr.value, '') || ' ' || COALESCE(pr.metadata_json, ''), '[[:space:]]+', ' ', 'g'), 240) AS snippet,
+       (
+           (ts_rank_cd(to_tsvector('simple', pr.name || ' ' || COALESCE(pr.value, '') || ' ' || COALESCE(pr.metadata_json, '')), input.ts_query) * 1000)::integer
+           + CASE WHEN lower(pr.name) LIKE '%' || input.raw_query || '%' THEN 100 ELSE 0 END
+       ) AS score,
+       pr.updated_at AS updated_at
+FROM page_properties pr
+INNER JOIN owned_pages p ON p.id = pr.page_id
+CROSS JOIN input
+WHERE pr.deleted_at IS NULL
+  AND (
+      to_tsvector('simple', pr.name || ' ' || COALESCE(pr.value, '') || ' ' || COALESCE(pr.metadata_json, '')) @@ input.ts_query
+      OR lower(pr.name || ' ' || COALESCE(pr.value, '') || ' ' || COALESCE(pr.metadata_json, '')) LIKE '%' || input.raw_query || '%'
+  )
+""".trimIndent()
+
+private val TableSearchCandidateSql = """
+SELECT 'Table'::text AS target_type,
+       p.client_workspace_id AS workspace_id,
+       p.id AS page_id,
+       t.block_id AS block_id,
+       t.block_id AS table_block_id,
+       $EmptySearchField AS row_id,
+       $EmptySearchField AS column_id,
+       $EmptySearchField AS property_id,
+       $EmptySearchField AS chat_session_id,
+       $EmptySearchField AS chat_message_id,
+       COALESCE(NULLIF(t.title, ''), 'Table') AS title,
+       COALESCE(NULLIF(p.title, ''), 'Untitled page') || ' / Database' AS subtitle,
+       left(regexp_replace(t.view || ' ' || COALESCE(t.view_config_json, '') || ' ' || COALESCE(t.sort_json, '') || ' ' || COALESCE(t.filter_json, ''), '[[:space:]]+', ' ', 'g'), 240) AS snippet,
+       (
+           (ts_rank_cd(to_tsvector('simple', COALESCE(t.title, '') || ' ' || COALESCE(t.view_config_json, '') || ' ' || COALESCE(t.filter_json, '')), input.ts_query) * 1000)::integer
+           + CASE WHEN lower(COALESCE(t.title, '')) LIKE '%' || input.raw_query || '%' THEN 100 ELSE 0 END
+       ) AS score,
+       t.updated_at AS updated_at
+FROM page_tables t
+INNER JOIN owned_pages p ON p.id = t.page_id
+CROSS JOIN input
+WHERE t.deleted_at IS NULL
+  AND (
+      to_tsvector('simple', COALESCE(t.title, '') || ' ' || COALESCE(t.view_config_json, '') || ' ' || COALESCE(t.filter_json, '')) @@ input.ts_query
+      OR lower(COALESCE(t.title, '') || ' ' || COALESCE(t.view_config_json, '') || ' ' || COALESCE(t.filter_json, '')) LIKE '%' || input.raw_query || '%'
+  )
+""".trimIndent()
+
+private val ColumnSearchCandidateSql = """
+SELECT 'Column'::text AS target_type,
+       p.client_workspace_id AS workspace_id,
+       p.id AS page_id,
+       t.block_id AS block_id,
+       t.block_id AS table_block_id,
+       $EmptySearchField AS row_id,
+       c.id AS column_id,
+       $EmptySearchField AS property_id,
+       $EmptySearchField AS chat_session_id,
+       $EmptySearchField AS chat_message_id,
+       c.name AS title,
+       COALESCE(NULLIF(t.title, ''), 'Table') || ' / Column' AS subtitle,
+       left(regexp_replace(c.type || ' ' || COALESCE(c.config_json, ''), '[[:space:]]+', ' ', 'g'), 240) AS snippet,
+       (
+           (ts_rank_cd(to_tsvector('simple', c.name || ' ' || c.type || ' ' || COALESCE(c.config_json, '')), input.ts_query) * 1000)::integer
+           + CASE WHEN lower(c.name) LIKE '%' || input.raw_query || '%' THEN 100 ELSE 0 END
+       ) AS score,
+       c.updated_at AS updated_at
+FROM page_table_columns c
+INNER JOIN page_tables t ON t.id = c.table_id
+INNER JOIN owned_pages p ON p.id = t.page_id
+CROSS JOIN input
+WHERE c.deleted_at IS NULL
+  AND t.deleted_at IS NULL
+  AND (
+      to_tsvector('simple', c.name || ' ' || c.type || ' ' || COALESCE(c.config_json, '')) @@ input.ts_query
+      OR lower(c.name || ' ' || c.type || ' ' || COALESCE(c.config_json, '')) LIKE '%' || input.raw_query || '%'
+  )
+""".trimIndent()
+
+private val RowSearchCandidateSql = """
+SELECT 'Row'::text AS target_type,
+       p.client_workspace_id AS workspace_id,
+       p.id AS page_id,
+       t.block_id AS block_id,
+       t.block_id AS table_block_id,
+       r.id AS row_id,
+       $EmptySearchField AS column_id,
+       $EmptySearchField AS property_id,
+       $EmptySearchField AS chat_session_id,
+       $EmptySearchField AS chat_message_id,
+       COALESCE(NULLIF(left(r.metadata_json, 80), ''), 'Row') AS title,
+       COALESCE(NULLIF(t.title, ''), 'Table') || ' / Row' AS subtitle,
+       left(regexp_replace(COALESCE(r.metadata_json, '') || ' ' || COALESCE(r.content_json, ''), '[[:space:]]+', ' ', 'g'), 240) AS snippet,
+       (ts_rank_cd(to_tsvector('simple', COALESCE(r.metadata_json, '') || ' ' || COALESCE(r.content_json, '')), input.ts_query) * 1000)::integer AS score,
+       r.updated_at AS updated_at
+FROM page_table_rows r
+INNER JOIN page_tables t ON t.id = r.table_id
+INNER JOIN owned_pages p ON p.id = t.page_id
+CROSS JOIN input
+WHERE r.deleted_at IS NULL
+  AND t.deleted_at IS NULL
+  AND (
+      to_tsvector('simple', COALESCE(r.metadata_json, '') || ' ' || COALESCE(r.content_json, '')) @@ input.ts_query
+      OR lower(COALESCE(r.metadata_json, '') || ' ' || COALESCE(r.content_json, '')) LIKE '%' || input.raw_query || '%'
+  )
+""".trimIndent()
+
+private val CellSearchCandidateSql = """
+SELECT 'Cell'::text AS target_type,
+       p.client_workspace_id AS workspace_id,
+       p.id AS page_id,
+       t.block_id AS block_id,
+       t.block_id AS table_block_id,
+       cell.row_id AS row_id,
+       cell.column_id AS column_id,
+       $EmptySearchField AS property_id,
+       $EmptySearchField AS chat_session_id,
+       $EmptySearchField AS chat_message_id,
+       COALESCE(NULLIF(left(cell.value, 80), ''), c.name) AS title,
+       COALESCE(NULLIF(t.title, ''), 'Table') || ' / ' || c.name AS subtitle,
+       left(regexp_replace(COALESCE(cell.value, '') || ' ' || COALESCE(cell.value_json, ''), '[[:space:]]+', ' ', 'g'), 240) AS snippet,
+       (
+           (ts_rank_cd(to_tsvector('simple', COALESCE(cell.value, '') || ' ' || COALESCE(cell.value_json, '')), input.ts_query) * 1000)::integer
+           + CASE WHEN lower(COALESCE(cell.value, '')) LIKE '%' || input.raw_query || '%' THEN 100 ELSE 0 END
+       ) AS score,
+       cell.updated_at AS updated_at
+FROM page_table_cells cell
+INNER JOIN page_table_rows r ON r.id = cell.row_id
+INNER JOIN page_table_columns c ON c.id = cell.column_id
+INNER JOIN page_tables t ON t.id = r.table_id
+INNER JOIN owned_pages p ON p.id = t.page_id
+CROSS JOIN input
+WHERE cell.deleted_at IS NULL
+  AND r.deleted_at IS NULL
+  AND c.deleted_at IS NULL
+  AND t.deleted_at IS NULL
+  AND (
+      to_tsvector('simple', COALESCE(cell.value, '') || ' ' || COALESCE(cell.value_json, '')) @@ input.ts_query
+      OR lower(COALESCE(cell.value, '') || ' ' || COALESCE(cell.value_json, '')) LIKE '%' || input.raw_query || '%'
+  )
+""".trimIndent()
+
 private fun PreparedStatement.setNullableLong(index: Int, value: Long?) {
     if (value == null) {
         setObject(index, null)
@@ -529,6 +804,26 @@ private fun ResultSet.toPageRecord(workspaceId: String): PageRecord {
         createdAt = getLong("created_at"),
         updatedAt = getLong("updated_at"),
         deletedAt = getNullableLong("deleted_at"),
+    )
+}
+
+private fun ResultSet.toContentSearchResult(): ContentSearchResult {
+    return ContentSearchResult(
+        targetType = getString("target_type"),
+        workspaceId = getString("workspace_id"),
+        pageId = getString("page_id"),
+        blockId = getString("block_id"),
+        tableBlockId = getString("table_block_id"),
+        rowId = getString("row_id"),
+        columnId = getString("column_id"),
+        propertyId = getString("property_id"),
+        chatSessionId = getString("chat_session_id"),
+        chatMessageId = getString("chat_message_id"),
+        title = getString("title"),
+        subtitle = getString("subtitle"),
+        snippet = getString("snippet"),
+        score = getInt("score"),
+        updatedAt = getLong("updated_at"),
     )
 }
 

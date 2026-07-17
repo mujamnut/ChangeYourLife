@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.changeyourlife.cyl.core.constants.CylDefaults
 import com.changeyourlife.cyl.core.network.toBackendConnectionMessage
+import com.changeyourlife.cyl.domain.model.AiSearchContext
 import com.changeyourlife.cyl.domain.model.AiSkill
 import com.changeyourlife.cyl.domain.model.Page
 import com.changeyourlife.cyl.domain.model.PageBlock
@@ -15,6 +16,10 @@ import com.changeyourlife.cyl.domain.model.PageTableColumn
 import com.changeyourlife.cyl.domain.model.PageTableColumnType
 import com.changeyourlife.cyl.domain.model.PageTableRow
 import com.changeyourlife.cyl.domain.model.Reminder
+import com.changeyourlife.cyl.domain.model.SearchQuery
+import com.changeyourlife.cyl.domain.model.SearchResult
+import com.changeyourlife.cyl.domain.model.SearchTarget
+import com.changeyourlife.cyl.domain.model.SearchTargetType
 import com.changeyourlife.cyl.domain.model.SyncOverview
 import com.changeyourlife.cyl.domain.model.TaskItem
 import com.changeyourlife.cyl.domain.model.Workspace
@@ -25,6 +30,8 @@ import com.changeyourlife.cyl.domain.model.ChatMessage
 import com.changeyourlife.cyl.domain.model.ChatMessageAttachment
 import com.changeyourlife.cyl.domain.model.ChatPageLink
 import com.changeyourlife.cyl.domain.model.ChatSession
+import com.changeyourlife.cyl.domain.model.MentionCandidate
+import com.changeyourlife.cyl.domain.model.MentionQuery
 import com.changeyourlife.cyl.domain.repository.ChatHistoryRepository
 import com.changeyourlife.cyl.domain.repository.PageRepository
 import com.changeyourlife.cyl.domain.repository.ReminderRepository
@@ -40,14 +47,18 @@ import com.changeyourlife.cyl.domain.repository.AiStatus
 import com.changeyourlife.cyl.domain.repository.AiActionLogRepository
 import com.changeyourlife.cyl.domain.usecase.ApplyAiActionUndoUseCase
 import com.changeyourlife.cyl.domain.usecase.BuildAiMemoryContextUseCase
+import com.changeyourlife.cyl.domain.usecase.BuildAiSearchContextUseCase
 import com.changeyourlife.cyl.domain.usecase.BuildAiSkillContextUseCase
+import com.changeyourlife.cyl.domain.usecase.ResolveMentionUseCase
+import com.changeyourlife.cyl.domain.usecase.SearchWorkspaceUseCase
 import com.changeyourlife.cyl.presentation.ai.AiActionExecutionUseCase
 import com.changeyourlife.cyl.presentation.ai.AiActionLogFactory
 import com.changeyourlife.cyl.presentation.ai.AiChatActionOrchestrator
 import com.changeyourlife.cyl.presentation.ai.AiChatMessageMapper
 import com.changeyourlife.cyl.presentation.ai.AiChatMessage
 import com.changeyourlife.cyl.presentation.ai.AiChatPageLink
-import com.changeyourlife.cyl.presentation.ai.AiPageTargetResolver
+import com.changeyourlife.cyl.presentation.ai.ChatHistorySearchResult
+import com.changeyourlife.cyl.presentation.ai.buildChatHistorySearchResults
 import com.changeyourlife.cyl.presentation.ai.toRoleContentPairs
 import com.changeyourlife.cyl.presentation.page.PageBlockCodec
 import com.changeyourlife.cyl.presentation.page.PageModuleTemplates
@@ -88,7 +99,10 @@ class HomeViewModel @Inject constructor(
     private val aiActionExecutionUseCase: AiActionExecutionUseCase,
     private val applyAiActionUndoUseCase: ApplyAiActionUndoUseCase,
     private val buildAiMemoryContextUseCase: BuildAiMemoryContextUseCase,
+    private val buildAiSearchContextUseCase: BuildAiSearchContextUseCase,
     private val buildAiSkillContextUseCase: BuildAiSkillContextUseCase,
+    private val searchWorkspaceUseCase: SearchWorkspaceUseCase,
+    private val resolveMentionUseCase: ResolveMentionUseCase,
     private val aiActionLogRepository: AiActionLogRepository,
     private val chatHistoryRepository: ChatHistoryRepository,
     private val syncStatusRepository: SyncStatusRepository,
@@ -151,8 +165,54 @@ class HomeViewModel @Inject constructor(
     private val aiStatusState = MutableStateFlow(AiStatus())
     private val aiModelLabel = MutableStateFlow("AI model")
     private val searchQuery = MutableStateFlow("")
+    private val searchScope = MutableStateFlow(HomeSearchScope.All)
+    private val aiMentionQuery = MutableStateFlow("")
     private val chatHistorySearchQuery = MutableStateFlow("")
     private val aiSkillError = MutableStateFlow<String?>(null)
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val workspaceSearchResults: Flow<List<HomeSearchResult>> = combine(
+        workspaceRepository.observeActiveWorkspaceId(),
+        searchQuery,
+        searchScope,
+    ) { workspaceId, query, scope ->
+        HomeSearchRequest(
+            workspaceId = workspaceId
+                ?.takeIf { id -> id.isNotBlank() }
+                ?: CylDefaults.DefaultWorkspaceId,
+            query = query,
+            scope = scope,
+        )
+    }.mapLatest { request ->
+        if (request.query.isBlank()) {
+            emptyList()
+        } else {
+            searchWorkspaceUseCase(
+                SearchQuery(
+                    workspaceId = request.workspaceId,
+                    query = request.query,
+                    scopes = request.scope.targetTypes,
+                    limit = HomeSearchResultLimit,
+                ),
+            )
+                .mapNotNull { result -> result.toHomeSearchResult() }
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val aiMentionCandidates: Flow<List<MentionCandidate>> = combine(
+        workspaceRepository.observeActiveWorkspaceId(),
+        aiMentionQuery,
+    ) { workspaceId, query ->
+        MentionQuery(
+            workspaceId = workspaceId
+                ?.takeIf { id -> id.isNotBlank() }
+                ?: CylDefaults.DefaultWorkspaceId,
+            query = query,
+        )
+    }.mapLatest { query ->
+        resolveMentionUseCase(query)
+    }
 
     @OptIn(ExperimentalCoroutinesApi::class)
     private val chatHistorySearchMessages: Flow<List<ChatMessage>> = activeWorkspaceChatScope
@@ -198,7 +258,11 @@ class HomeViewModel @Inject constructor(
         chatHistorySearchMessages,
         chatHistorySearchQuery,
     ) { sessions, messages, query ->
-        sessions.toChatHistorySearchResults(messages, query)
+        buildChatHistorySearchResults(
+            sessions = sessions,
+            messages = messages,
+            query = query,
+        )
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -314,20 +378,27 @@ class HomeViewModel @Inject constructor(
             )
         }
     }.let { baseState ->
-        combine(baseState, searchQuery, aiModelLabel, aiStatusState) { state, query, modelLabel, aiStatus ->
+        combine(baseState, searchQuery, searchScope, workspaceSearchResults) { state, query, scope, searchResults ->
             state.copy(
                 searchQuery = query,
-                searchResults = state.allPages.toSearchResults(query),
+                searchScope = scope,
+                searchResults = searchResults,
+            )
+        }
+    }.let { baseState ->
+        combine(baseState, aiModelLabel, aiStatusState) { state, modelLabel, aiStatus ->
+            state.copy(
                 aiModelLabel = modelLabel,
                 aiVisionStatusLabel = aiStatus.toVisionStatusLabel(),
                 aiVisionPipelineLabel = aiStatus.toVisionPipelineLabel(),
             )
         }
     }.let { baseState ->
-        combine(baseState, activeWorkspaceSkills, aiSkillError) { state, skills, skillError ->
+        combine(baseState, activeWorkspaceSkills, aiSkillError, aiMentionCandidates) { state, skills, skillError, mentionCandidates ->
             state.copy(
                 aiSkills = skills,
                 aiSkillError = skillError,
+                aiMentionCandidates = mentionCandidates,
             )
         }
     }.stateIn(
@@ -456,6 +527,14 @@ class HomeViewModel @Inject constructor(
 
     fun updateSearchQuery(query: String) {
         searchQuery.value = query
+    }
+
+    fun updateSearchScope(scope: HomeSearchScope) {
+        searchScope.value = scope
+    }
+
+    fun updateAiMentionQuery(query: String) {
+        aiMentionQuery.value = query
     }
 
     fun clearSearchQuery() {
@@ -690,10 +769,7 @@ class HomeViewModel @Inject constructor(
             val pages = pageRepository.observePages(workspaceId)
                 .first()
                 .sortedByDescending { page -> page.updatedAt }
-            val textMentionedPageIds = pages
-                .findMentionedPages(visiblePrompt)
-                .map { page -> page.id }
-            val normalizedMentionedPageIds = (mentionedPageIds + textMentionedPageIds + listOfNotNull(attachedPageId))
+            val normalizedMentionedPageIds = (mentionedPageIds + listOfNotNull(attachedPageId))
                 .filter { pageId -> pageId.isNotBlank() }
                 .distinct()
             val attachedPage = attachedPageId
@@ -714,23 +790,15 @@ class HomeViewModel @Inject constructor(
             val allChatMessages = chatHistoryRepository.observeMessagesForScope(scopeId)
                 .first()
                 .filterNot { message -> message.id == savedUserMessage.id }
-            if (images.isEmpty() && !visiblePrompt.referencesCurrentAttachment()) {
-                buildHomeAiSearchReply(
-                    prompt = visiblePrompt,
-                    pages = pages,
-                    tasks = openTasks,
-                    chatSessions = allChatSessions,
-                    chatMessages = allChatMessages,
-                )?.let { searchReply ->
-                    isAiGeneratingChat.value = false
-                    chatHistoryRepository.appendMessage(
-                        sessionId = session.id,
-                        role = "assistant",
-                        content = searchReply.content,
-                        pageLinks = searchReply.pageLinks.toDomainChatPageLinks(),
-                    )
-                    return@launch
-                }
+            val searchContext = if (images.isEmpty() && !requestPrompt.referencesCurrentAttachment()) {
+                buildAiSearchContextUseCase(
+                    workspaceId = workspaceId,
+                    prompt = requestPrompt,
+                    currentPageId = scopedTargetPage?.id.orEmpty(),
+                    limit = HomeAiSearchContextLimit,
+                )
+            } else {
+                AiSearchContext.Empty
             }
 
             val memoryContext = buildAiMemoryContextUseCase(
@@ -751,7 +819,13 @@ class HomeViewModel @Inject constructor(
                 .takeIf { context -> context.isNotBlank() }
                 ?.let { context -> listOf(AiChatMessage(role = "system", content = context)) }
                 .orEmpty()
-            val messagesForAi = skillMessages + memoryMessages +
+            val searchMessages = if (searchContext.isNotBlank) {
+                listOf(AiChatMessage(role = "system", content = searchContext.content))
+            } else {
+                emptyList()
+            }
+            val searchPageLinks = searchContext.results.toAiSearchPageLinks()
+            val messagesForAi = skillMessages + memoryMessages + searchMessages +
                 currentMessages.filter { message -> message.content.isNotBlank() } +
                 userMessage.copy(
                     content = requestPrompt.withMentionContext(explicitlyMentionedPages),
@@ -783,7 +857,9 @@ class HomeViewModel @Inject constructor(
                         sessionId = session.id,
                         role = "assistant",
                         content = orchestration.reply.sanitizeAiUserVisibleText(),
-                        pageLinks = orchestration.pageLinks.toDomainChatPageLinks(),
+                        pageLinks = (orchestration.pageLinks + searchPageLinks)
+                            .distinctBy { link -> "${link.pageId}:${link.targetType}:${link.targetId}" }
+                            .toDomainChatPageLinks(),
                         actionMetadata = orchestration.actionMetadata,
                     )
                     AiActionLogFactory.fromMetadata(
@@ -875,17 +951,6 @@ class HomeViewModel @Inject constructor(
             The user selected these page mentions from the chat UI. Treat them as exact target pages for create/update/delete actions. Do not mention internal IDs in your reply:
             $context
         """.trimIndent()
-    }
-
-    private fun List<Page>.findMentionedPage(prompt: String): Page? {
-        return findMentionedPages(prompt).firstOrNull()
-    }
-
-    private fun List<Page>.findMentionedPages(prompt: String): List<Page> {
-        return AiPageTargetResolver.findMentionedPages(
-            prompt = prompt,
-            pages = this,
-        )
     }
 
     fun clearChatHistory() {
@@ -1063,51 +1128,60 @@ class HomeViewModel @Inject constructor(
     }
 }
 
-private fun List<Page>.toSearchResults(query: String): List<PageSearchResult> {
-    val terms = query.trim()
-        .split(Regex("\\s+"))
-        .filter { term -> term.isNotBlank() }
-    if (terms.isEmpty()) return emptyList()
-
-    return asSequence()
-        .mapNotNull { page ->
-            val candidates = page.searchCandidates()
-            val haystack = candidates.joinToString(separator = "\n") { candidate -> candidate.text }
-            if (terms.all { term -> haystack.contains(term, ignoreCase = true) }) {
-                val bestCandidate = candidates
-                    .map { candidate -> candidate to candidate.text.searchScore(terms) }
-                    .filter { (_, score) -> score > 0 }
-                    .sortedWith(
-                        compareByDescending<Pair<PageSearchCandidate, Int>> { (_, score) -> score }
-                            .thenBy { (candidate, _) -> candidate.targetType }
-                            .thenBy { (candidate, _) -> candidate.text },
-                    )
-                    .firstOrNull()
-                    ?.first
-                    ?: PageSearchCandidate(
-                        text = "Title: ${page.title.ifBlank { "Untitled page" }}",
-                        targetType = SearchTargetPageTitle,
-                        targetId = "",
-                    )
-                PageSearchResult(
-                    page = page,
-                    snippet = bestCandidate.text.compactLine().ifBlank { "Title match" },
-                    targetType = bestCandidate.targetType,
-                    targetId = bestCandidate.targetId,
-                )
-            } else {
-                null
-            }
-        }
-        .take(30)
-        .toList()
+private fun SearchResult.toHomeSearchResult(): HomeSearchResult? {
+    val routeTarget = target.toPageRouteTarget()
+    val pageId = target.pageId.takeIf { id -> id.isNotBlank() }
+        ?: target.chatSessionId.takeIf { id -> target.type == SearchTargetType.Chat && id.isNotBlank() }
+        ?: return null
+    return HomeSearchResult(
+        id = id,
+        pageId = pageId,
+        title = title.ifBlank { "Untitled page" },
+        subtitle = subtitle,
+        snippet = snippet.compactLine(),
+        targetLabel = target.type.searchLabel(),
+        targetType = routeTarget.type,
+        targetId = routeTarget.id,
+        chatSessionId = target.chatSessionId,
+        chatMessageId = target.chatMessageId,
+        score = score,
+        updatedAt = updatedAt,
+    )
 }
 
-private fun List<ChatSession>.toChatHistorySearchResults(
-    messages: List<ChatMessage>,
-    query: String,
-): List<ChatHistorySearchResult> {
-    return toChatHistorySearchResults(messages = messages, terms = query.searchTerms())
+private fun List<SearchResult>.toAiSearchPageLinks(): List<AiChatPageLink> =
+    mapNotNull { result ->
+        val pageId = result.target.pageId.takeIf { id -> id.isNotBlank() } ?: return@mapNotNull null
+        val routeTarget = result.target.toPageRouteTarget()
+        AiChatPageLink(
+            pageId = pageId,
+            title = result.title.ifBlank { result.subtitle.ifBlank { "Search result" } },
+            targetType = routeTarget.type,
+            targetId = routeTarget.id,
+        )
+    }
+        .distinctBy { link -> "${link.pageId}:${link.targetType}:${link.targetId}" }
+
+private fun SearchTarget.toPageRouteTarget(): HomeSearchRouteTarget = when (type) {
+    SearchTargetType.Page -> HomeSearchRouteTarget(SearchTargetPageTitle, "")
+    SearchTargetType.Block -> HomeSearchRouteTarget(SearchTargetBlock, blockId)
+    SearchTargetType.Table -> HomeSearchRouteTarget(SearchTargetBlock, tableBlockId.ifBlank { blockId })
+    SearchTargetType.Row -> HomeSearchRouteTarget(SearchTargetRow, rowId)
+    SearchTargetType.Cell -> HomeSearchRouteTarget(SearchTargetRow, rowId)
+    SearchTargetType.Column -> HomeSearchRouteTarget(SearchTargetBlock, tableBlockId.ifBlank { blockId })
+    SearchTargetType.Property -> HomeSearchRouteTarget(SearchTargetPageTitle, "")
+    SearchTargetType.Chat -> HomeSearchRouteTarget(SearchTargetChat, chatMessageId)
+}
+
+private fun SearchTargetType.searchLabel(): String = when (this) {
+    SearchTargetType.Page -> "Page"
+    SearchTargetType.Block -> "Block"
+    SearchTargetType.Table -> "Database"
+    SearchTargetType.Row -> "Row"
+    SearchTargetType.Property -> "Property"
+    SearchTargetType.Column -> "Column"
+    SearchTargetType.Cell -> "Cell"
+    SearchTargetType.Chat -> "Chat"
 }
 
 private fun List<ChatSession>.toChatSessionPreviews(
@@ -1129,313 +1203,18 @@ private fun ChatMessage.toPreviewText(): String {
     return "$speaker: ${content.compactLine()}".take(96)
 }
 
-private fun List<ChatSession>.toChatHistorySearchResults(
-    messages: List<ChatMessage>,
-    terms: List<String>,
-): List<ChatHistorySearchResult> {
-    if (terms.isEmpty()) return emptyList()
-    val messagesBySession = messages.groupBy { message -> message.sessionId }
-    return mapNotNull { session ->
-        val candidates = buildList {
-            add(ChatSearchCandidate(text = "Chat title: ${session.title}", createdAt = session.updatedAt))
-            messagesBySession[session.id].orEmpty().forEach { message ->
-                add(
-                    ChatSearchCandidate(
-                        text = "${message.role}: ${message.content}",
-                        createdAt = message.createdAt,
-                    ),
-                )
-            }
-        }
-        val haystack = candidates.joinToString(separator = "\n") { candidate -> candidate.text }
-        if (!terms.all { term -> haystack.contains(term, ignoreCase = true) }) {
-            null
-        } else {
-            val matches = candidates
-                .map { candidate -> candidate to candidate.text.searchScore(terms) }
-                .filter { (_, score) -> score > 0 }
-            val bestCandidate = matches
-                .sortedWith(
-                    compareByDescending<Pair<ChatSearchCandidate, Int>> { (_, score) -> score }
-                        .thenByDescending { (candidate, _) -> candidate.createdAt },
-                )
-                .firstOrNull()
-                ?.first
-            val snippet = bestCandidate
-                ?.text
-                ?.removePrefix("user: ")
-                ?.removePrefix("assistant: ")
-                ?.removePrefix("Chat title: ")
-                ?.compactLine()
-                .orEmpty()
-                .ifBlank { session.title.ifBlank { "New chat" } }
-            ChatHistorySearchResult(
-                session = session,
-                snippet = snippet,
-                matchCount = matches.size,
-                lastMatchedAt = matches.maxOfOrNull { (candidate, _) -> candidate.createdAt }
-                    ?: session.updatedAt,
-            )
-        }
-    }
-        .sortedWith(
-            compareByDescending<ChatHistorySearchResult> { result -> result.lastMatchedAt }
-                .thenBy { result -> result.session.title },
-        )
-        .take(30)
-}
-
-private fun buildHomeAiSearchReply(
-    prompt: String,
-    pages: List<Page>,
-    tasks: List<TaskItem>,
-    chatSessions: List<ChatSession>,
-    chatMessages: List<ChatMessage>,
-): HomeAiSearchReply? {
-    if (prompt.referencesCurrentAttachment()) return null
-    if (!prompt.isReadOnlySearchRequest()) return null
-    val terms = prompt.searchTerms()
-    if (terms.isEmpty()) {
-        return HomeAiSearchReply(
-            content = "Boleh. Beritahu keyword atau data apa yang awak nak saya cari.",
-        )
-    }
-
-    val pageMatches = pages.flatMap { page ->
-        page.searchCandidates().mapNotNull { candidate ->
-            val score = candidate.text.searchScore(terms)
-            if (score <= 0) {
-                null
-            } else {
-                AiSearchHit(
-                    title = page.title.ifBlank { "Untitled page" },
-                    detail = candidate.text.compactLine(),
-                    score = score,
-                    pageLink = page.toChatPageLink(
-                        targetType = candidate.targetType,
-                        targetId = candidate.targetId,
-                    ),
-                )
-            }
-        }
-    }
-    val taskMatches = tasks.mapNotNull { task ->
-        val line = "Task: ${task.title}"
-        val score = line.searchScore(terms)
-        if (score <= 0) null else AiSearchHit(title = "Tasks", detail = line, score = score)
-    }
-    val chatMatches = chatSessions.toChatHistorySearchResults(chatMessages, terms)
-        .map { result ->
-            AiSearchHit(
-                title = "Chat: ${result.session.title.ifBlank { "New chat" }}",
-                detail = result.snippet,
-                score = result.matchCount,
-            )
-        }
-    val matches = (pageMatches + taskMatches + chatMatches)
-        .sortedWith(compareByDescending<AiSearchHit> { it.score }.thenBy { it.title })
-        .take(8)
-
-    if (matches.isEmpty()) {
-        return HomeAiSearchReply(
-            content = "Saya tak jumpa padanan untuk `${terms.joinToString(" ")}` dalam pages, tables, rows, tasks, atau chat history yang ada.",
-        )
-    }
-
-    return HomeAiSearchReply(
-        content = buildString {
-            appendLine("Saya jumpa ${matches.size} padanan teratas:")
-            matches.forEachIndexed { index, hit ->
-                appendLine("${index + 1}. ${hit.title} - ${hit.detail}")
-            }
-        }.trim(),
-        pageLinks = matches.mapNotNull { hit -> hit.pageLink }.distinctBy { link -> link.pageId },
-    )
-}
-
-private fun Page.searchLines(): List<String> {
-    val document = PageBlockCodec.decodeDocument(content)
-    val propertyLines = document.properties.map { property ->
-        "Property ${property.name} (${property.type.name}) ${property.value}"
-    }
-    return propertyLines + document.blocks.flatMap { block -> block.searchLines() }
-}
-
-private fun Page.searchCandidates(): List<PageSearchCandidate> {
-    val document = PageBlockCodec.decodeDocument(content)
-    val title = title.ifBlank { "Untitled page" }
-    return buildList {
-        add(
-            PageSearchCandidate(
-                text = "Title: $title",
-                targetType = SearchTargetPageTitle,
-                targetId = "",
-            ),
-        )
-        document.properties.forEach { property ->
-            add(
-                PageSearchCandidate(
-                    text = "Property ${property.name} (${property.type.name}) ${property.value}",
-                    targetType = SearchTargetProperty,
-                    targetId = property.id,
-                ),
-            )
-        }
-        document.blocks.forEach { block ->
-            addAll(block.searchCandidates())
-        }
-    }
-}
-
-private fun PageBlock.searchCandidates(): List<PageSearchCandidate> {
-    val selfCandidates = when (type) {
-        PageBlockType.DatabaseTable,
-        PageBlockType.Table,
-        -> table.searchCandidates(tableBlockId = id)
-        PageBlockType.MediaFile -> mediaAttachments.map { attachment ->
-            PageSearchCandidate(
-                text = "File ${attachment.name} ${attachment.mimeType}",
-                targetType = SearchTargetBlock,
-                targetId = id,
-            )
-        }.ifEmpty {
-            listOf(
-                PageSearchCandidate(
-                    text = "Media file",
-                    targetType = SearchTargetBlock,
-                    targetId = id,
-                ),
-            )
-        }
-        PageBlockType.Divider -> listOf(
-            PageSearchCandidate(
-                text = "Divider",
-                targetType = SearchTargetBlock,
-                targetId = id,
-            ),
-        )
-        else -> listOf(
-            PageSearchCandidate(
-                text = "${type.name}: ${text.ifBlank { "empty" }}",
-                targetType = SearchTargetBlock,
-                targetId = id,
-            ),
-        )
-    }
-    return selfCandidates + children.flatMap { child -> child.searchCandidates() }
-}
-
-private fun PageTable.searchCandidates(tableBlockId: String): List<PageSearchCandidate> {
-    val columnCandidates = columns.map { column ->
-        PageSearchCandidate(
-            text = "Column ${column.name} ${column.type.name} ${column.formula}",
-            targetType = SearchTargetBlock,
-            targetId = tableBlockId,
-        )
-    }
-    val rowCandidates = rows.flatMap { row ->
-        val cells = columns.mapNotNull { column ->
-            row.cells[column.id]
-                ?.takeIf { value -> value.isNotBlank() }
-                ?.let { value -> "${column.name}: $value" }
-        }
-        val rowTitle = row.cellText(columns.firstOrNull()).ifBlank { row.id }
-        listOf(
-            PageSearchCandidate(
-                text = "Row $rowTitle ${cells.joinToString(separator = "; ")}",
-                targetType = SearchTargetRow,
-                targetId = row.id,
-            ),
-        ) + row.blocks.flatMap { block ->
-            block.searchCandidates().map { candidate ->
-                candidate.copy(
-                    targetType = SearchTargetRowBlock,
-                    targetId = candidate.targetId,
-                )
-            }
-        }
-    }
-    return listOf(
-        PageSearchCandidate(
-            text = "Table $title ${view.name}",
-            targetType = SearchTargetBlock,
-            targetId = tableBlockId,
-        ),
-    ) + columnCandidates + rowCandidates
-}
-
-private data class AiSearchHit(
-    val title: String,
-    val detail: String,
-    val score: Int,
-    val pageLink: AiChatPageLink? = null,
-)
-
-private data class HomeAiSearchReply(
-    val content: String,
-    val pageLinks: List<AiChatPageLink> = emptyList(),
-)
-
-private data class PageSearchCandidate(
-    val text: String,
-    val targetType: String,
-    val targetId: String,
-)
-
-private data class ChatSearchCandidate(
-    val text: String,
-    val createdAt: Long,
-)
-
 private const val SearchTargetPageTitle = "title"
-private const val SearchTargetProperty = "property"
 private const val SearchTargetBlock = "block"
 private const val SearchTargetRow = "row"
-private const val SearchTargetRowBlock = "row_block"
+const val SearchTargetChat = "chat"
+private const val HomeSearchResultLimit = 40
+private const val HomeAiSearchContextLimit = 8
 private const val DraftHomeChatSessionId = "draft-home-chat"
 private const val ImageOnlyAiRequestPrompt =
     "Describe the attached image or file and extract the useful visible content."
 private const val MaxAiSkillNameChars = 64
 private const val MaxAiSkillWhenToUseChars = 320
 private const val MaxAiSkillInstructionsChars = 2_000
-
-private fun String.isReadOnlySearchRequest(): Boolean {
-    val text = lowercase()
-    val searchWords = listOf(
-        "cari",
-        "search",
-        "find",
-        "lookup",
-        "senarai",
-        "list",
-        "tunjuk",
-        "show",
-    )
-    val mutationWords = listOf(
-        "buat",
-        "create",
-        "tambah",
-        "add",
-        "ubah",
-        "tukar",
-        "change",
-        "update",
-        "edit",
-        "delete",
-        "padam",
-        "remove",
-        "rename",
-        "complete",
-        "mark",
-        "sort",
-        "filter",
-        "group",
-        "set",
-        "jadikan",
-    )
-    return searchWords.any { word -> text.contains(word) } &&
-        mutationWords.none { word -> text.contains(word) }
-}
 
 private fun String.referencesCurrentAttachment(): Boolean {
     val text = lowercase()
@@ -1570,38 +1349,6 @@ private fun String.searchScore(terms: List<String>): Int {
     return terms.count { term -> text.contains(term) }
 }
 
-private fun PageBlock.searchLines(): List<String> {
-    val selfLines = when (type) {
-        PageBlockType.DatabaseTable,
-        PageBlockType.Table,
-        -> table.searchLines()
-        PageBlockType.MediaFile -> mediaAttachments.map { attachment ->
-            "File ${attachment.name} ${attachment.mimeType}"
-        }.ifEmpty { listOf("Media file") }
-        PageBlockType.Divider -> listOf("Divider")
-        else -> listOf(text)
-    }
-    return selfLines.filter { line -> line.isNotBlank() } +
-        children.flatMap { child -> child.searchLines() }
-}
-
-private fun PageTable.searchLines(): List<String> {
-    val columnLines = columns.map { column ->
-        "Column ${column.name} ${column.type.name} ${column.formula}"
-    }
-    val rowLines = rows.flatMap { row ->
-        val cells = columns.mapNotNull { column ->
-            row.cells[column.id]
-                ?.takeIf { value -> value.isNotBlank() }
-                ?.let { value -> "${column.name}: $value" }
-        }
-        val rowTitle = row.cellText(columns.firstOrNull()).ifBlank { row.id }
-        listOf("Row $rowTitle ${cells.joinToString(separator = "; ")}") +
-            row.blocks.flatMap { block -> block.searchLines() }
-    }
-    return listOf("Table $title ${view.name}") + columnLines + rowLines
-}
-
 private fun String.compactLine(): String {
     return trim()
         .replace(Regex("\\s+"), " ")
@@ -1727,6 +1474,7 @@ private fun String.sanitizeAiUserVisibleText(): String {
                 .trim()
         }
         .filterNot { line -> line.equals("CYL_MENTION_CONTEXT:", ignoreCase = true) }
+        .filterNot { line -> line.equals("CYL_SEARCH_CONTEXT:", ignoreCase = true) }
         .joinToString("\n")
         .replace(Regex("\\n{3,}"), "\n\n")
         .trim()
@@ -1777,7 +1525,8 @@ data class HomeUiState(
     val recentPages: List<Page> = emptyList(),
     val deletedPages: List<Page> = emptyList(),
     val searchQuery: String = "",
-    val searchResults: List<PageSearchResult> = emptyList(),
+    val searchScope: HomeSearchScope = HomeSearchScope.All,
+    val searchResults: List<HomeSearchResult> = emptyList(),
     val openTasks: List<TaskItem> = emptyList(),
     val reminders: List<Reminder> = emptyList(),
     val isCreateWorkspaceDialogVisible: Boolean = false,
@@ -1796,21 +1545,75 @@ data class HomeUiState(
     val aiVisionPipelineLabel: String = "",
     val aiSkills: List<AiSkill> = emptyList(),
     val aiSkillError: String? = null,
+    val aiMentionCandidates: List<MentionCandidate> = emptyList(),
     val syncOverview: SyncOverview = SyncOverview(),
     val isAutoSyncEnabled: Boolean = false,
     val themeMode: AppThemeMode = AppThemeMode.SYSTEM,
 )
+
+enum class HomeSearchScope(
+    val label: String,
+    val targetTypes: Set<SearchTargetType>,
+) {
+    All(
+        label = "All",
+        targetTypes = SearchTargetType.defaultSearchScopes() + SearchTargetType.Chat,
+    ),
+    Pages(
+        label = "Pages",
+        targetTypes = setOf(SearchTargetType.Page),
+    ),
+    Blocks(
+        label = "Blocks",
+        targetTypes = setOf(SearchTargetType.Block),
+    ),
+    Tables(
+        label = "Tables",
+        targetTypes = setOf(SearchTargetType.Table, SearchTargetType.Column),
+    ),
+    Rows(
+        label = "Rows",
+        targetTypes = setOf(SearchTargetType.Row, SearchTargetType.Cell),
+    ),
+    Properties(
+        label = "Properties",
+        targetTypes = setOf(SearchTargetType.Property, SearchTargetType.Column),
+    ),
+    Chats(
+        label = "Chats",
+        targetTypes = setOf(SearchTargetType.Chat),
+    ),
+}
 
 private data class HomeTableUpdateResult(
     val page: Page,
     val tableTitle: String,
 )
 
-data class PageSearchResult(
-    val page: Page,
+data class HomeSearchResult(
+    val id: String,
+    val pageId: String,
+    val title: String,
+    val subtitle: String,
     val snippet: String,
+    val targetLabel: String,
     val targetType: String = "",
     val targetId: String = "",
+    val chatSessionId: String = "",
+    val chatMessageId: String = "",
+    val score: Int = 0,
+    val updatedAt: Long = 0,
+)
+
+private data class HomeSearchRequest(
+    val workspaceId: String,
+    val query: String,
+    val scope: HomeSearchScope,
+)
+
+private data class HomeSearchRouteTarget(
+    val type: String,
+    val id: String,
 )
 
 data class ChatHistorySearchResult(
@@ -1824,15 +1627,3 @@ data class ChatSessionPreview(
     val lastMessage: String = "",
     val messageCount: Int = 0,
 )
-
-private fun Page.toChatPageLink(
-    targetType: String = "",
-    targetId: String = "",
-): AiChatPageLink {
-    return AiChatPageLink(
-        pageId = id,
-        title = title.ifBlank { "Untitled page" },
-        targetType = targetType,
-        targetId = targetId,
-    )
-}

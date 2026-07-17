@@ -156,6 +156,12 @@ fun CylNavHost(
                 onOpenPage = { pageId, targetType, targetId ->
                     navController.navigate(Routes.pageEditor(pageId, targetType, targetId))
                 },
+                onOpenChatSession = { sessionId, _ ->
+                    homeViewModel.selectChatSession(sessionId)
+                    navController.navigate(Routes.AiHistory) {
+                        launchSingleTop = true
+                    }
+                },
                 viewModel = homeViewModel,
             )
         }
@@ -164,10 +170,14 @@ fun CylNavHost(
                 sessions = homeUiState.chatSessions,
                 activeSessionId = homeUiState.activeChatSessionId,
                 previews = homeUiState.chatSessionPreviews,
+                searchQuery = homeUiState.chatHistorySearchQuery,
+                searchResults = homeUiState.chatHistorySearchResults,
                 onBack = { navController.popBackStack() },
                 onCreateChatSession = homeViewModel::createNewChatSession,
                 onSelectChatSession = homeViewModel::selectChatSession,
                 onDeleteChatSession = homeViewModel::deleteChatSession,
+                onSearchQueryChange = homeViewModel::updateChatHistorySearchQuery,
+                onClearSearchQuery = homeViewModel::clearChatHistorySearchQuery,
             )
         }
         composable(Routes.AiProfile) {
@@ -218,6 +228,7 @@ fun CylNavHost(
                     navController.navigate(Routes.pageEditor(pageId, targetType, targetId))
                 },
                 onSendAiMessage = homeViewModel::sendChatMessage,
+                onHomeAiMentionQueryChange = homeViewModel::updateAiMentionQuery,
                 onUndoAiAction = homeViewModel::undoAiAction,
                 onClearHomeAiHistory = homeViewModel::clearChatHistory,
                 onCreateHomeChatSession = homeViewModel::createNewChatSession,

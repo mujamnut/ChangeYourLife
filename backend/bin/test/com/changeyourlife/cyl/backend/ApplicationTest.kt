@@ -9,6 +9,7 @@ import com.changeyourlife.cyl.backend.model.ai.ChatMessage
 import com.changeyourlife.cyl.backend.model.ai.ChatWithActionsResponse
 import com.changeyourlife.cyl.backend.model.auth.AuthResponse
 import com.changeyourlife.cyl.backend.model.auth.ForgotPasswordResponse
+import com.changeyourlife.cyl.backend.model.search.SearchListResponse
 import com.changeyourlife.cyl.backend.model.sync.AiActionLogListResponse
 import com.changeyourlife.cyl.backend.model.sync.AiActionLogSyncDto
 import com.changeyourlife.cyl.backend.model.sync.ChatMessageListResponse
@@ -379,6 +380,67 @@ class ApplicationTest {
             header(HttpHeaders.Authorization, authHeader)
         }
         assertEquals(HttpStatusCode.NoContent, restoreResponse.status)
+    }
+
+    @Test
+    fun authenticatedSearchReturnsOwnedPageResultsOnly() = testApplication {
+        application {
+            module(appConfig = inMemoryTestConfig())
+        }
+
+        val firstUserAuth = registerAndReturnAuthHeader(
+            email = "search-owner-a@example.com",
+            password = "search-password",
+        )
+        val secondUserAuth = registerAndReturnAuthHeader(
+            email = "search-owner-b@example.com",
+            password = "search-password",
+        )
+        val workspace = WorkspaceSyncDto(
+            id = "workspace-search",
+            name = "Search Workspace",
+            createdAt = 1L,
+            updatedAt = 1L,
+        )
+        assertEquals(
+            HttpStatusCode.OK,
+            client.put("/api/v1/workspaces/${workspace.id}") {
+                header(HttpHeaders.Authorization, firstUserAuth)
+                contentType(ContentType.Application.Json)
+                setBody(Json.encodeToString(workspace))
+            }.status,
+        )
+        val page = PageSyncDto(
+            id = "page-search-budget",
+            workspaceId = workspace.id,
+            title = "Budget Tracker",
+            content = """{"version":1,"blocks":[{"id":"block-food","type":"Text","text":"Food fuel monthly expense"}]}""",
+            sortOrder = 0,
+            createdAt = 2L,
+            updatedAt = 2L,
+        )
+        assertEquals(
+            HttpStatusCode.OK,
+            client.put("/api/v1/pages/${page.id}") {
+                header(HttpHeaders.Authorization, firstUserAuth)
+                contentType(ContentType.Application.Json)
+                setBody(Json.encodeToString(page))
+            }.status,
+        )
+
+        val ownerSearchResponse = client.get("/api/v1/search?workspaceId=${workspace.id}&q=fuel&scope=Page&limit=10") {
+            header(HttpHeaders.Authorization, firstUserAuth)
+        }
+        assertEquals(HttpStatusCode.OK, ownerSearchResponse.status)
+        val ownerSearch = Json.decodeFromString<SearchListResponse>(ownerSearchResponse.bodyAsText())
+        assertEquals(listOf("page-search-budget"), ownerSearch.results.map { result -> result.pageId })
+
+        val secondUserSearchResponse = client.get("/api/v1/search?workspaceId=${workspace.id}&q=fuel&scope=Page&limit=10") {
+            header(HttpHeaders.Authorization, secondUserAuth)
+        }
+        assertEquals(HttpStatusCode.OK, secondUserSearchResponse.status)
+        val secondUserSearch = Json.decodeFromString<SearchListResponse>(secondUserSearchResponse.bodyAsText())
+        assertTrue(secondUserSearch.results.isEmpty())
     }
 
     @Test

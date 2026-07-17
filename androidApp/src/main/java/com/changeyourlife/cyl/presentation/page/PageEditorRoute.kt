@@ -176,6 +176,7 @@ import com.changeyourlife.cyl.presentation.components.CylChromeIconButton
 import com.changeyourlife.cyl.presentation.components.CylFloatingChromeSurface
 import com.changeyourlife.cyl.presentation.home.HomeUiState
 import com.changeyourlife.cyl.presentation.theme.ChangeYourLifeTheme
+import kotlinx.coroutines.delay
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
@@ -190,6 +191,7 @@ fun PageEditorRoute(
     initialSearchTargetId: String = "",
     onOpenPage: (String, String, String) -> Unit,
     onSendAiMessage: (String, List<String>, String?, List<AiImageAttachment>) -> Unit,
+    onHomeAiMentionQueryChange: (String) -> Unit,
     onUndoAiAction: (String, String) -> Unit,
     onClearHomeAiHistory: () -> Unit,
     onCreateHomeChatSession: () -> Unit,
@@ -290,6 +292,7 @@ fun PageEditorRoute(
         onOpenAiHistory = onOpenAiHistory,
         onOpenAiProfile = onOpenAiProfile,
         onOpenAiSkills = onOpenAiSkills,
+        onHomeAiMentionQueryChange = onHomeAiMentionQueryChange,
         modifier = modifier,
     )
 }
@@ -376,6 +379,7 @@ internal fun PageEditorScreen(
     onKeepLocalConflict: () -> Unit,
     onUseRemoteConflict: () -> Unit,
     onSendAiMessage: (String, List<String>, String?, List<AiImageAttachment>) -> Unit,
+    onHomeAiMentionQueryChange: (String) -> Unit,
     onUndoAiAction: (String, String) -> Unit,
     onClearHomeAiHistory: () -> Unit,
     onCreateHomeChatSession: () -> Unit,
@@ -419,6 +423,25 @@ internal fun PageEditorScreen(
                 .take(1)
         } else {
             uiState.blocks
+        }
+    }
+    var activeSearchTargetType by rememberSaveable(initialSearchTargetType, initialSearchTargetId) {
+        mutableStateOf(initialSearchTargetType)
+    }
+    var activeSearchTargetId by rememberSaveable(initialSearchTargetType, initialSearchTargetId) {
+        mutableStateOf(initialSearchTargetId)
+    }
+
+    LaunchedEffect(initialSearchTargetType, initialSearchTargetId) {
+        activeSearchTargetType = initialSearchTargetType
+        activeSearchTargetId = initialSearchTargetId
+    }
+
+    LaunchedEffect(activeSearchTargetType, activeSearchTargetId) {
+        if (activeSearchTargetType.isNotBlank() || activeSearchTargetId.isNotBlank()) {
+            delay(SearchHighlightDurationMillis)
+            activeSearchTargetType = ""
+            activeSearchTargetId = ""
         }
     }
 
@@ -583,6 +606,7 @@ internal fun PageEditorScreen(
                 onKeepLocalConflict = onKeepLocalConflict,
                 onUseRemoteConflict = onUseRemoteConflict,
                 onSendAiMessage = onSendAiMessage,
+                onHomeAiMentionQueryChange = onHomeAiMentionQueryChange,
                 onUndoAiAction = onUndoAiAction,
                 onClearHomeAiHistory = onClearHomeAiHistory,
                 onCreateHomeChatSession = onCreateHomeChatSession,
@@ -593,8 +617,8 @@ internal fun PageEditorScreen(
                 onOpenAiProfile = onOpenAiProfile,
                 onOpenAiSkills = onOpenAiSkills,
                 onDismissHomeAiErrorClick = onDismissHomeAiError,
-                initialSearchTargetType = initialSearchTargetType,
-                initialSearchTargetId = initialSearchTargetId,
+                initialSearchTargetType = activeSearchTargetType,
+                initialSearchTargetId = activeSearchTargetId,
                 aiPersona = aiPersona,
                 modifier = modifier
             )
@@ -694,7 +718,7 @@ internal fun PageEditorScreen(
                 if (isAiChatSheetOpen) {
                     AiChatSheet(
                         messages = homeAiState.chatMessages,
-                        mentionPages = homeAiState.allPages,
+                        mentionCandidates = homeAiState.aiMentionCandidates,
                         persona = aiPersona,
                         isGenerating = homeAiState.isAiGeneratingChat,
                         errorMessage = homeAiState.aiChatError,
@@ -706,6 +730,7 @@ internal fun PageEditorScreen(
                         onSendMessage = { message, mentionedPageIds, images ->
                             onSendAiMessage(message, mentionedPageIds, uiState.page.id, images)
                         },
+                        onMentionQueryChange = onHomeAiMentionQueryChange,
                         onUndoAction = onUndoAiAction,
                         onClearHistory = onClearHomeAiHistory,
                         onCreateChatSession = onCreateHomeChatSession,
@@ -773,8 +798,8 @@ internal fun PageEditorScreen(
                     databaseRenderStates,
                     tableSearchInputsSnapshot,
                     tableReferences,
-                    initialSearchTargetType,
-                    initialSearchTargetId,
+                    activeSearchTargetType,
+                    activeSearchTargetId,
                 ) {
                     pageBlocks
                         .filter { block ->
@@ -785,29 +810,29 @@ internal fun PageEditorScreen(
                             block.id to block.table.buildInlineDatabaseTableRenderState(
                                 tableReferences = tableReferences,
                                 tableSearchInput = tableSearchInputsSnapshot[block.id].orEmpty(),
-                                searchTargetType = initialSearchTargetType,
-                                searchTargetId = initialSearchTargetId,
+                                searchTargetType = activeSearchTargetType,
+                                searchTargetId = activeSearchTargetId,
                             )
                         }
                 }
                 val searchTargetIndex = remember(
                     pageBlocks,
-                    initialSearchTargetType,
-                    initialSearchTargetId,
+                    activeSearchTargetType,
+                    activeSearchTargetId,
                 ) {
                     pageBlocks.indexOfSearchTarget(
-                        targetType = initialSearchTargetType,
-                        targetId = initialSearchTargetId,
+                        targetType = activeSearchTargetType,
+                        targetId = activeSearchTargetId,
                     )
                 }
 
                 LaunchedEffect(
                     uiState.isLoading,
                     searchTargetIndex,
-                    initialSearchTargetType,
-                    initialSearchTargetId,
+                    activeSearchTargetType,
+                    activeSearchTargetId,
                 ) {
-                    if (!uiState.isLoading && initialSearchTargetType == SearchTargetPageTitle) {
+                    if (!uiState.isLoading && activeSearchTargetType == SearchTargetPageTitle) {
                         pageListState.animateScrollToItem(0)
                     } else if (!uiState.isLoading && searchTargetIndex >= 0) {
                         pageListState.animateScrollToItem(searchTargetIndex + 1)
@@ -922,8 +947,8 @@ internal fun PageEditorScreen(
                                 onIndentRowPageBlock = { rowId, rowBlockId -> onIndentTableRowPageBlock(block.id, rowId, rowBlockId) },
                                 onOutdentRowPageBlock = { rowId, rowBlockId -> onOutdentTableRowPageBlock(block.id, rowId, rowBlockId) },
                                 mentionPages = homeAiState.allPages,
-                                searchTargetType = initialSearchTargetType,
-                                searchTargetId = initialSearchTargetId,
+                                searchTargetType = activeSearchTargetType,
+                                searchTargetId = activeSearchTargetId,
                             )
                         } else {
                             item(
@@ -1004,8 +1029,8 @@ internal fun PageEditorScreen(
                                     onIndentTableRowPageBlock = onIndentTableRowPageBlock,
                                     onOutdentTableRowPageBlock = onOutdentTableRowPageBlock,
                                     tableReferences = tableReferences,
-                                    searchTargetType = initialSearchTargetType,
-                                    searchTargetId = initialSearchTargetId,
+                                    searchTargetType = activeSearchTargetType,
+                                    searchTargetId = activeSearchTargetId,
                                 )
                             }
                         }
@@ -1038,3 +1063,5 @@ internal fun PageEditorScreen(
         }
     }
 }
+
+private const val SearchHighlightDurationMillis = 3_500L

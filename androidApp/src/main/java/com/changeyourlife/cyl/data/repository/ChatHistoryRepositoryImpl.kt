@@ -4,6 +4,7 @@ import com.changeyourlife.cyl.data.local.dao.ChatMessageDao
 import com.changeyourlife.cyl.data.local.entity.ChatMessageEntity
 import com.changeyourlife.cyl.data.local.entity.ChatSessionEntity
 import com.changeyourlife.cyl.data.local.entity.SyncStatus
+import com.changeyourlife.cyl.data.search.ChatSearchIndexUpdater
 import com.changeyourlife.cyl.data.sync.ChatSyncScheduler
 import com.changeyourlife.cyl.domain.model.ChatActionMetadata
 import com.changeyourlife.cyl.domain.model.ChatActionMetadataItem
@@ -23,6 +24,7 @@ import kotlinx.serialization.json.Json
 class ChatHistoryRepositoryImpl @Inject constructor(
     private val chatMessageDao: ChatMessageDao,
     private val chatSyncScheduler: ChatSyncScheduler,
+    private val chatSearchIndexUpdater: ChatSearchIndexUpdater,
 ) : ChatHistoryRepository {
     private val json = Json {
         ignoreUnknownKeys = true
@@ -62,6 +64,7 @@ class ChatHistoryRepositoryImpl @Inject constructor(
             updatedAt = now,
         )
         chatMessageDao.upsertSession(session.toEntity())
+        chatSearchIndexUpdater.rebuildChatSession(session.id)
         chatSyncScheduler.pushSession(session.id)
         return session
     }
@@ -108,6 +111,7 @@ class ChatHistoryRepositoryImpl @Inject constructor(
             createdAt = now,
         )
         chatMessageDao.upsertMessage(message.toEntity(json))
+        chatSearchIndexUpdater.rebuildChatSession(session.id)
         chatSyncScheduler.pushSession(session.id)
         chatSyncScheduler.pushMessage(message.id)
         return message
@@ -115,6 +119,7 @@ class ChatHistoryRepositoryImpl @Inject constructor(
 
     override suspend fun clearMessages(sessionId: String) {
         chatMessageDao.clearMessages(sessionId)
+        chatSearchIndexUpdater.rebuildChatSession(sessionId)
     }
 
     override suspend fun deleteSession(sessionId: String) {
@@ -122,6 +127,7 @@ class ChatHistoryRepositoryImpl @Inject constructor(
             sessionId = sessionId,
             deletedAt = System.currentTimeMillis(),
         )
+        chatSearchIndexUpdater.rebuildChatSession(sessionId)
         chatSyncScheduler.pushSession(sessionId)
     }
 
@@ -130,6 +136,7 @@ class ChatHistoryRepositoryImpl @Inject constructor(
             scopeId = scopeId,
             deletedAt = System.currentTimeMillis(),
         )
+        chatSearchIndexUpdater.rebuildChatScope(scopeId)
         chatSyncScheduler.pushPending()
     }
 }

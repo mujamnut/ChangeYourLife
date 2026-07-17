@@ -23,6 +23,31 @@ data class PageRecord(
     val deletedAt: Long?,
 )
 
+data class ContentSearchQuery(
+    val workspaceId: String,
+    val query: String,
+    val scopes: Set<String>,
+    val limit: Int,
+)
+
+data class ContentSearchResult(
+    val targetType: String,
+    val workspaceId: String,
+    val pageId: String = "",
+    val blockId: String = "",
+    val tableBlockId: String = "",
+    val rowId: String = "",
+    val columnId: String = "",
+    val propertyId: String = "",
+    val chatSessionId: String = "",
+    val chatMessageId: String = "",
+    val title: String,
+    val subtitle: String = "",
+    val snippet: String = "",
+    val score: Int = 0,
+    val updatedAt: Long = 0L,
+)
+
 interface ContentRepository {
     suspend fun listWorkspaces(userId: String, includeDeleted: Boolean = false): List<WorkspaceRecord>
 
@@ -37,6 +62,8 @@ interface ContentRepository {
     ): List<PageRecord>
 
     suspend fun getPage(userId: String, pageId: String, includeDeleted: Boolean = false): PageRecord?
+
+    suspend fun search(userId: String, query: ContentSearchQuery): List<ContentSearchResult>
 
     suspend fun upsertPage(userId: String, page: PageRecord): PageRecord?
 

@@ -3,6 +3,7 @@ package com.changeyourlife.cyl.data.repository
 import com.changeyourlife.cyl.data.local.dao.ChatMessageDao
 import com.changeyourlife.cyl.data.local.entity.ChatMessageEntity
 import com.changeyourlife.cyl.data.local.entity.ChatSessionEntity
+import com.changeyourlife.cyl.data.search.ChatSearchIndexUpdater
 import com.changeyourlife.cyl.data.sync.ChatSyncScheduler
 import com.changeyourlife.cyl.domain.model.ChatActionMetadata
 import com.changeyourlife.cyl.domain.model.ChatActionMetadataItem
@@ -20,7 +21,7 @@ class ChatHistoryRepositoryImplTest {
     @Test
     fun actionMetadataSurvivesRepositoryRecreation() = runBlocking {
         val dao = FakeChatMessageDao()
-        val firstRepository = ChatHistoryRepositoryImpl(dao, FakeChatSyncScheduler())
+        val firstRepository = ChatHistoryRepositoryImpl(dao, FakeChatSyncScheduler(), NoOpChatSearchIndexUpdater())
         val session = firstRepository.createSession(scopeId = "workspace-chat")
         val metadata = ChatActionMetadata(
             auditId = "audit-1",
@@ -63,7 +64,7 @@ class ChatHistoryRepositoryImplTest {
             actionMetadata = metadata,
         )
 
-        val recreatedRepository = ChatHistoryRepositoryImpl(dao, FakeChatSyncScheduler())
+        val recreatedRepository = ChatHistoryRepositoryImpl(dao, FakeChatSyncScheduler(), NoOpChatSearchIndexUpdater())
         val restoredMessage = recreatedRepository.observeMessages(session.id).first().single()
 
         assertEquals("assistant", restoredMessage.role)
@@ -98,7 +99,7 @@ class ChatHistoryRepositoryImplTest {
             ),
         )
 
-        val message = ChatHistoryRepositoryImpl(dao, FakeChatSyncScheduler())
+        val message = ChatHistoryRepositoryImpl(dao, FakeChatSyncScheduler(), NoOpChatSearchIndexUpdater())
             .observeMessages("session-1")
             .first()
             .single()
@@ -143,7 +144,7 @@ class ChatHistoryRepositoryImplTest {
             ),
         )
 
-        val metadata = ChatHistoryRepositoryImpl(dao, FakeChatSyncScheduler())
+        val metadata = ChatHistoryRepositoryImpl(dao, FakeChatSyncScheduler(), NoOpChatSearchIndexUpdater())
             .observeMessages("session-1")
             .first()
             .single()
@@ -305,6 +306,12 @@ class ChatHistoryRepositoryImplTest {
                     )
                 }
         }
+    }
+
+    private class NoOpChatSearchIndexUpdater : ChatSearchIndexUpdater {
+        override suspend fun rebuildChatScope(scopeId: String) = Unit
+
+        override suspend fun rebuildChatSession(sessionId: String) = Unit
     }
 
     private class FakeChatSyncScheduler : ChatSyncScheduler {

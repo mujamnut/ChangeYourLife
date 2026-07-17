@@ -11,6 +11,15 @@ import retrofit2.http.Path
 import retrofit2.http.Query
 
 interface SyncApi {
+    @GET("api/v1/search")
+    suspend fun search(
+        @Header("Authorization") authorization: String,
+        @Query("workspaceId") workspaceId: String,
+        @Query("q") query: String,
+        @Query("scope") scope: String,
+        @Query("limit") limit: Int,
+    ): SearchListResponseDto
+
     @GET("api/v1/workspaces")
     suspend fun listWorkspaces(
         @Header("Authorization") authorization: String,

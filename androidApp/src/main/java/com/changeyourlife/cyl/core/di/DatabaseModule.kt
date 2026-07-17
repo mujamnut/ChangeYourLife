@@ -11,6 +11,7 @@ import com.changeyourlife.cyl.data.local.dao.ChatMessageDao
 import com.changeyourlife.cyl.data.local.dao.PageDao
 import com.changeyourlife.cyl.data.local.dao.PageContentDao
 import com.changeyourlife.cyl.data.local.dao.ReminderDao
+import com.changeyourlife.cyl.data.local.dao.SearchIndexDao
 import com.changeyourlife.cyl.data.local.dao.SyncTombstoneDao
 import com.changeyourlife.cyl.data.local.dao.TaskDao
 import com.changeyourlife.cyl.data.local.dao.WorkspaceDao
@@ -46,6 +47,7 @@ object DatabaseModule {
             .addMigrations(MIGRATION_12_13)
             .addMigrations(MIGRATION_13_14)
             .addMigrations(MIGRATION_14_15)
+            .addMigrations(MIGRATION_15_16)
             .build()
     }
 
@@ -92,6 +94,11 @@ object DatabaseModule {
     @Provides
     fun provideAiSkillDao(database: CylDatabase): AiSkillDao {
         return database.aiSkillDao()
+    }
+
+    @Provides
+    fun provideSearchIndexDao(database: CylDatabase): SearchIndexDao {
+        return database.searchIndexDao()
     }
 
     val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -555,6 +562,55 @@ object DatabaseModule {
                 ON `ai_skills` (`syncStatus`)
                 """.trimIndent(),
             )
+        }
+    }
+
+    val MIGRATION_15_16 = object : Migration(15, 16) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `search_index` (
+                    `id` TEXT NOT NULL,
+                    `workspaceId` TEXT NOT NULL,
+                    `targetType` TEXT NOT NULL,
+                    `pageId` TEXT NOT NULL,
+                    `blockId` TEXT NOT NULL,
+                    `tableBlockId` TEXT NOT NULL,
+                    `rowId` TEXT NOT NULL,
+                    `columnId` TEXT NOT NULL,
+                    `propertyId` TEXT NOT NULL,
+                    `chatSessionId` TEXT NOT NULL,
+                    `chatMessageId` TEXT NOT NULL,
+                    `title` TEXT NOT NULL,
+                    `subtitle` TEXT NOT NULL,
+                    `snippet` TEXT NOT NULL,
+                    `normalizedText` TEXT NOT NULL,
+                    `updatedAt` INTEGER NOT NULL,
+                    `deletedAt` INTEGER,
+                    PRIMARY KEY(`id`)
+                )
+                """.trimIndent(),
+            )
+            db.execSQL(
+                """
+                CREATE INDEX IF NOT EXISTS `index_search_index_workspaceId_targetType_deletedAt`
+                ON `search_index` (`workspaceId`, `targetType`, `deletedAt`)
+                """.trimIndent(),
+            )
+            db.execSQL(
+                """
+                CREATE INDEX IF NOT EXISTS `index_search_index_workspaceId_updatedAt`
+                ON `search_index` (`workspaceId`, `updatedAt`)
+                """.trimIndent(),
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_search_index_pageId` ON `search_index` (`pageId`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_search_index_blockId` ON `search_index` (`blockId`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_search_index_tableBlockId` ON `search_index` (`tableBlockId`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_search_index_rowId` ON `search_index` (`rowId`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_search_index_columnId` ON `search_index` (`columnId`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_search_index_propertyId` ON `search_index` (`propertyId`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_search_index_chatSessionId` ON `search_index` (`chatSessionId`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_search_index_chatMessageId` ON `search_index` (`chatMessageId`)")
         }
     }
 }

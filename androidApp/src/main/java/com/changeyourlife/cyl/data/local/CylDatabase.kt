@@ -8,6 +8,7 @@ import com.changeyourlife.cyl.data.local.dao.ChatMessageDao
 import com.changeyourlife.cyl.data.local.dao.PageDao
 import com.changeyourlife.cyl.data.local.dao.PageContentDao
 import com.changeyourlife.cyl.data.local.dao.ReminderDao
+import com.changeyourlife.cyl.data.local.dao.SearchIndexDao
 import com.changeyourlife.cyl.data.local.dao.SyncTombstoneDao
 import com.changeyourlife.cyl.data.local.dao.TaskDao
 import com.changeyourlife.cyl.data.local.dao.WorkspaceDao
@@ -18,6 +19,7 @@ import com.changeyourlife.cyl.data.local.entity.ChatSessionEntity
 import com.changeyourlife.cyl.data.local.entity.PageBlockEntity
 import com.changeyourlife.cyl.data.local.entity.PageEntity
 import com.changeyourlife.cyl.data.local.entity.ReminderEntity
+import com.changeyourlife.cyl.data.local.entity.SearchIndexEntity
 import com.changeyourlife.cyl.data.local.entity.SyncTombstoneEntity
 import com.changeyourlife.cyl.data.local.entity.PagePropertyEntity
 import com.changeyourlife.cyl.data.local.entity.PageTableCellEntity
@@ -44,8 +46,9 @@ import com.changeyourlife.cyl.data.local.entity.WorkspaceEntity
         SyncTombstoneEntity::class,
         AiActionLogEntity::class,
         AiSkillEntity::class,
+        SearchIndexEntity::class,
     ],
-    version = 15,
+    version = 16,
     exportSchema = true,
 )
 abstract class CylDatabase : RoomDatabase() {
@@ -58,4 +61,5 @@ abstract class CylDatabase : RoomDatabase() {
     abstract fun syncTombstoneDao(): SyncTombstoneDao
     abstract fun aiActionLogDao(): AiActionLogDao
     abstract fun aiSkillDao(): AiSkillDao
+    abstract fun searchIndexDao(): SearchIndexDao
 }

@@ -1,6 +1,8 @@
 package com.changeyourlife.cyl.backend.data
 
 import com.changeyourlife.cyl.backend.domain.ContentRepository
+import com.changeyourlife.cyl.backend.domain.ContentSearchQuery
+import com.changeyourlife.cyl.backend.domain.ContentSearchResult
 import com.changeyourlife.cyl.backend.domain.PageRecord
 import com.changeyourlife.cyl.backend.domain.WorkspaceRecord
 import java.util.concurrent.ConcurrentHashMap
@@ -59,6 +61,34 @@ class InMemoryContentRepository : ContentRepository {
         if (!includeDeleted && page.deletedAt != null) return null
         if (!includeDeleted && workspace.deletedAt != null) return null
         return page
+    }
+
+    override suspend fun search(userId: String, query: ContentSearchQuery): List<ContentSearchResult> {
+        val normalizedQuery = query.query.trim().lowercase()
+        if (normalizedQuery.isBlank() || "Page" !in query.scopes) return emptyList()
+        return listPages(
+            userId = userId,
+            workspaceId = query.workspaceId,
+            includeDeleted = false,
+        )
+            .asSequence()
+            .mapNotNull { page ->
+                val haystack = "${page.title}\n${page.content}".lowercase()
+                if (!haystack.contains(normalizedQuery)) return@mapNotNull null
+                ContentSearchResult(
+                    targetType = "Page",
+                    workspaceId = page.workspaceId,
+                    pageId = page.id,
+                    title = page.title,
+                    subtitle = "Page",
+                    snippet = page.content.take(240),
+                    score = if (page.title.lowercase().contains(normalizedQuery)) 1000 else 500,
+                    updatedAt = page.updatedAt,
+                )
+            }
+            .sortedWith(compareByDescending<ContentSearchResult> { it.score }.thenByDescending { it.updatedAt })
+            .take(query.limit)
+            .toList()
     }
 
     override suspend fun upsertPage(userId: String, page: PageRecord): PageRecord? {

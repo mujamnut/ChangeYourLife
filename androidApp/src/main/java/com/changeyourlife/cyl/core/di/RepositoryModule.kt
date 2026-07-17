@@ -5,11 +5,14 @@ import com.changeyourlife.cyl.data.repository.AiActionLogRepositoryImpl
 import com.changeyourlife.cyl.data.repository.ChatHistoryRepositoryImpl
 import com.changeyourlife.cyl.data.repository.PageRepositoryImpl
 import com.changeyourlife.cyl.data.repository.ReminderRepositoryImpl
+import com.changeyourlife.cyl.data.repository.SearchRepositoryImpl
 import com.changeyourlife.cyl.data.repository.SyncStatusRepositoryImpl
 import com.changeyourlife.cyl.data.repository.TaskRepositoryImpl
 import com.changeyourlife.cyl.data.repository.WorkspaceRepositoryImpl
 import com.changeyourlife.cyl.data.repository.AiRepositoryImpl
 import com.changeyourlife.cyl.data.repository.AiSkillRepositoryImpl
+import com.changeyourlife.cyl.data.search.ChatSearchIndexUpdater
+import com.changeyourlife.cyl.data.search.SearchIndexRebuilder
 import com.changeyourlife.cyl.data.sync.BackgroundChatSyncScheduler
 import com.changeyourlife.cyl.data.sync.ChatSyncScheduler
 import com.changeyourlife.cyl.domain.repository.AuthRepository
@@ -17,6 +20,7 @@ import com.changeyourlife.cyl.domain.repository.AiActionLogRepository
 import com.changeyourlife.cyl.domain.repository.ChatHistoryRepository
 import com.changeyourlife.cyl.domain.repository.PageRepository
 import com.changeyourlife.cyl.domain.repository.ReminderRepository
+import com.changeyourlife.cyl.domain.repository.SearchRepository
 import com.changeyourlife.cyl.domain.repository.SyncStatusRepository
 import com.changeyourlife.cyl.domain.repository.TaskRepository
 import com.changeyourlife.cyl.domain.repository.WorkspaceRepository
@@ -63,6 +67,12 @@ abstract class RepositoryModule {
 
     @Binds
     @Singleton
+    abstract fun bindSearchRepository(
+        implementation: SearchRepositoryImpl,
+    ): SearchRepository
+
+    @Binds
+    @Singleton
     abstract fun bindAiRepository(
         implementation: AiRepositoryImpl,
     ): AiRepository
@@ -84,6 +94,12 @@ abstract class RepositoryModule {
     abstract fun bindChatSyncScheduler(
         implementation: BackgroundChatSyncScheduler,
     ): ChatSyncScheduler
+
+    @Binds
+    @Singleton
+    abstract fun bindChatSearchIndexUpdater(
+        implementation: SearchIndexRebuilder,
+    ): ChatSearchIndexUpdater
 
     @Binds
     @Singleton

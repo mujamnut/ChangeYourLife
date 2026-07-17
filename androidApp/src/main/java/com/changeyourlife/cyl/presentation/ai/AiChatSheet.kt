@@ -83,11 +83,10 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Velocity
 import com.changeyourlife.cyl.domain.repository.AiImageAttachment
-import com.changeyourlife.cyl.domain.model.Page
-import com.changeyourlife.cyl.presentation.page.EditorSuggestionController
+import com.changeyourlife.cyl.domain.model.MentionCandidate
 import com.changeyourlife.cyl.presentation.page.RichTextCommandPaletteKind
-import com.changeyourlife.cyl.presentation.page.paletteItemId
-import com.changeyourlife.cyl.presentation.page.richTextMentionPaletteItems
+import com.changeyourlife.cyl.presentation.page.RichTextCommandPaletteItem
+import com.changeyourlife.cyl.presentation.page.RichTextMentionParser
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -98,7 +97,7 @@ import kotlin.math.abs
 @Composable
 fun AiChatSheet(
     messages: List<AiChatMessage>,
-    mentionPages: List<Page>,
+    mentionCandidates: List<MentionCandidate>,
     persona: AiPersonaUiState,
     isGenerating: Boolean,
     errorMessage: String?,
@@ -108,6 +107,7 @@ fun AiChatSheet(
     enabledSkillsCount: Int = 0,
     totalSkillsCount: Int = 0,
     onSendMessage: (String, List<String>, List<AiImageAttachment>) -> Unit,
+    onMentionQueryChange: (String) -> Unit = {},
     onUndoAction: (String, String) -> Unit,
     onClearHistory: () -> Unit,
     onCreateChatSession: () -> Unit,
@@ -131,6 +131,9 @@ fun AiChatSheet(
     val inputText = inputState.text.toString()
     var selectedMentionPageIds by rememberSaveable(attachedPageId) {
         mutableStateOf(emptyList<String>())
+    }
+    var selectedMentionTitles by remember(attachedPageId) {
+        mutableStateOf(emptyMap<String, String>())
     }
     var stagedImageAttachments by remember {
         mutableStateOf(emptyList<AiImageAttachment>())
@@ -264,11 +267,9 @@ fun AiChatSheet(
         }
         remainingContent
     }
-    val mentionSuggestionState = EditorSuggestionController.resolve(
+    val activeMentionQuery = RichTextMentionParser.activeQuery(
         text = inputText,
         cursor = inputState.selection.end,
-        mentionPages = mentionPages,
-        enabledKinds = setOf(RichTextCommandPaletteKind.Mention),
     )
     var activePanel by rememberSaveable { mutableStateOf<AiComposerPanel?>(null) }
     var isMentionPickerOpen by rememberSaveable { mutableStateOf(false) }
@@ -295,8 +296,10 @@ fun AiChatSheet(
         attachedPageId,
         attachedPageTitle,
         selectedMentionPageIds,
-        mentionPages,
+        selectedMentionTitles,
+        mentionCandidates,
     ) {
+        val candidateById = mentionCandidates.associateBy { candidate -> candidate.pageId }
         buildList {
             if (!attachedPageId.isNullOrBlank()) {
                 add(
@@ -310,12 +313,15 @@ fun AiChatSheet(
             selectedMentionPageIds
                 .filterNot { id -> id == attachedPageId }
                 .distinct()
-                .mapNotNull { id -> mentionPages.firstOrNull { page -> page.id == id } }
-                .forEach { page ->
+                .forEach { pageId ->
+                    val candidate = candidateById[pageId]
+                    val title = candidate?.title
+                        ?: selectedMentionTitles[pageId]
+                        ?: "Untitled page"
                     add(
                         AiMentionChipUi(
-                            pageId = page.id,
-                            title = page.title.ifBlank { "Untitled page" },
+                            pageId = pageId,
+                            title = title.ifBlank { "Untitled page" },
                             canRemove = true,
                         ),
                     )
@@ -327,26 +333,27 @@ fun AiChatSheet(
             val message = inputText.trim()
             onSendMessage(
                 message,
-                message.resolveMentionedPageIds(
-                    pages = mentionPages,
-                    knownPageIds = selectedMentionPageIds + attachedMentionPageIds,
-                ),
+                (selectedMentionPageIds + attachedMentionPageIds)
+                    .filter { pageId -> pageId.isNotBlank() }
+                    .distinct(),
                 stagedImageAttachments,
             )
             inputState.setTextAndPlaceCursorAtEnd("")
             selectedMentionPageIds = emptyList()
+            selectedMentionTitles = emptyMap()
             stagedImageAttachments = emptyList()
             activePanel = null
             isMentionPickerOpen = false
         }
     }
-    val onSelectMentionPage: (Page) -> Unit = { page ->
+    val onSelectMentionPage: (MentionCandidate) -> Unit = { page ->
         inputState.setTextAndPlaceCursorAtEnd(
             inputText.removeActiveMentionQuery(cursor = inputState.selection.end),
         )
-        selectedMentionPageIds = (selectedMentionPageIds + page.id)
+        selectedMentionPageIds = (selectedMentionPageIds + page.pageId)
             .filter { id -> id.isNotBlank() }
             .distinct()
+        selectedMentionTitles = selectedMentionTitles + (page.pageId to page.title.ifBlank { "Untitled page" })
         isMentionPickerOpen = false
         activePanel = null
         composerScope.launch {
@@ -357,6 +364,15 @@ fun AiChatSheet(
 
     LaunchedEffect(attachedPageId) {
         inputState.setTextAndPlaceCursorAtEnd("")
+    }
+    LaunchedEffect(activeMentionQuery?.query, isMentionPickerOpen) {
+        onMentionQueryChange(
+            when {
+                isMentionPickerOpen -> ""
+                activeMentionQuery != null -> activeMentionQuery.query
+                else -> ""
+            },
+        )
     }
     fun openComposerPanel(panel: AiComposerPanel) {
         val nextPanel = if (activePanel == panel) null else panel
@@ -447,6 +463,7 @@ fun AiChatSheet(
                 mentionChips = mentionChips,
                 onRemoveMention = { pageId ->
                     selectedMentionPageIds = selectedMentionPageIds.filterNot { id -> id == pageId }
+                    selectedMentionTitles = selectedMentionTitles - pageId
                 },
                 stagedAttachments = stagedAttachmentPreviews,
                 onRemoveAttachment = { index ->
@@ -474,30 +491,25 @@ fun AiChatSheet(
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
             )
 
-            val manualMentionItems = if (isMentionPickerOpen) {
-                richTextMentionPaletteItems(mentionPages)
+            val mentionItems = if (isMentionPickerOpen || activeMentionQuery != null) {
+                mentionCandidates.toAiMentionPaletteItems()
             } else {
                 emptyList()
             }
-            val mentionItems = if (isMentionPickerOpen) {
-                manualMentionItems
-            } else {
-                mentionSuggestionState?.items.orEmpty()
-            }
             AnimatedVisibility(
-                visible = activePanel == null && !isMentionPickerOpen && mentionSuggestionState != null,
+                visible = activePanel == null && !isMentionPickerOpen && activeMentionQuery != null,
                 enter = fadeIn(),
                 exit = fadeOut(),
             ) {
                 AiMentionPickerPanel(
-                    items = mentionSuggestionState?.items.orEmpty(),
+                    items = mentionItems,
                     onSelect = { item ->
-                        val page = mentionPages.firstOrNull { candidate ->
-                            candidate.paletteItemId() == item.id
+                        val page = mentionCandidates.firstOrNull { candidate ->
+                            candidate.toPaletteItemId() == item.id
                         }
                         if (page != null) onSelectMentionPage(page)
                     },
-                    selectedItemId = mentionSuggestionState?.selectedItem?.id,
+                    selectedItemId = mentionItems.firstOrNull()?.id,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
                 )
             }
@@ -508,18 +520,18 @@ fun AiChatSheet(
                     modifier = Modifier.padding(top = 2.dp),
                 ) {
                     when {
-                        isMentionPickerOpen || mentionSuggestionState != null -> {
+                        isMentionPickerOpen || activeMentionQuery != null -> {
                             AiMentionPickerPanel(
                                 items = mentionItems,
                                 onSelect = { item ->
-                                    val page = mentionPages.firstOrNull { candidate ->
-                                        candidate.paletteItemId() == item.id
+                                    val page = mentionCandidates.firstOrNull { candidate ->
+                                        candidate.toPaletteItemId() == item.id
                                     }
                                     if (page != null) {
                                         onSelectMentionPage(page)
                                     }
                                 },
-                                selectedItemId = mentionSuggestionState?.selectedItem?.id,
+                                selectedItemId = mentionItems.firstOrNull()?.id,
                             )
                         }
                         activePanel == AiComposerPanel.Attachments -> {
@@ -1078,42 +1090,18 @@ private fun String.removeActiveMentionQuery(cursor: Int): String {
         .joinToString(" ")
 }
 
-private fun String.resolveMentionedPageIds(
-    pages: List<Page>,
-    knownPageIds: List<String>,
-): List<String> {
-    val ids = LinkedHashSet<String>()
-    knownPageIds
-        .filter { id -> id.isNotBlank() }
-        .forEach(ids::add)
+private fun List<MentionCandidate>.toAiMentionPaletteItems(): List<RichTextCommandPaletteItem> =
+    map { candidate ->
+        RichTextCommandPaletteItem(
+            id = candidate.toPaletteItemId(),
+            title = candidate.label,
+            subtitle = candidate.subtitle.ifBlank {
+                if (candidate.score > 0) "Mention page" else "Recent page"
+            },
+            leading = "@",
+            kind = RichTextCommandPaletteKind.Mention,
+            groupLabel = "Page",
+        )
+    }
 
-    val normalizedMessage = lowercase()
-    pages
-        .filter { page -> page.id.isNotBlank() && page.title.isNotBlank() }
-        .sortedByDescending { page -> page.title.length }
-        .forEach { page ->
-            val title = page.title.lowercase()
-            if (normalizedMessage.contains("@$title")) {
-                ids += page.id
-            }
-        }
-
-    Regex("@([^\\n,.;:]+)")
-        .findAll(this)
-        .map { match -> match.groupValues.getOrNull(1).orEmpty().trim().lowercase() }
-        .filter { mention -> mention.isNotBlank() }
-        .forEach { mention ->
-            pages
-                .filter { page -> page.id.isNotBlank() && page.title.isNotBlank() }
-                .sortedByDescending { page -> page.title.length }
-                .firstOrNull { page ->
-                    val title = page.title.lowercase()
-                    title == mention ||
-                        title.startsWith(mention) ||
-                        mention.startsWith(title)
-                }
-                ?.let { page -> ids += page.id }
-        }
-
-    return ids.toList()
-}
+private fun MentionCandidate.toPaletteItemId(): String = "mention:$pageId"

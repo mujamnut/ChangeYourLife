@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
@@ -27,8 +28,10 @@ import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.History
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
@@ -38,6 +41,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -60,12 +64,30 @@ internal fun AiHistoryRoute(
     sessions: List<ChatSession>,
     activeSessionId: String?,
     previews: Map<String, ChatSessionPreview>,
+    searchQuery: String,
+    searchResults: List<ChatHistorySearchResult>,
     onBack: () -> Unit,
     onCreateChatSession: () -> Unit,
     onSelectChatSession: (String) -> Unit,
     onDeleteChatSession: (String) -> Unit,
+    onSearchQueryChange: (String) -> Unit,
+    onClearSearchQuery: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val listState = rememberLazyListState()
+    val isSearching = searchQuery.isNotBlank()
+    val sortedSessions = remember(sessions) {
+        sessions.sortedByDescending { session -> session.updatedAt }
+    }
+
+    LaunchedEffect(activeSessionId, sortedSessions, isSearching) {
+        if (isSearching) return@LaunchedEffect
+        val targetIndex = sortedSessions.indexOfFirst { session -> session.id == activeSessionId }
+        if (targetIndex >= 0) {
+            listState.animateScrollToItem(targetIndex)
+        }
+    }
+
     Scaffold(
         modifier = modifier,
         containerColor = MaterialTheme.colorScheme.surface,
@@ -98,24 +120,64 @@ internal fun AiHistoryRoute(
             return@Scaffold
         }
 
-        LazyColumn(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding),
-            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
-            items(
-                items = sessions.sortedByDescending { session -> session.updatedAt },
-                key = { session -> session.id },
-            ) { session ->
-                AiHistoryRow(
-                    session = session,
-                    isActive = session.id == activeSessionId,
-                    preview = previews[session.id],
-                    onClick = { onSelectChatSession(session.id) },
-                    onDelete = { onDeleteChatSession(session.id) },
+            AiHistorySearchField(
+                query = searchQuery,
+                onQueryChange = onSearchQueryChange,
+                onClear = onClearSearchQuery,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 10.dp),
+            )
+
+            if (isSearching && searchResults.isEmpty()) {
+                AiEmptyPageState(
+                    icon = Icons.Rounded.Search,
+                    title = "No chats found",
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 20.dp),
                 )
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    state = listState,
+                    contentPadding = PaddingValues(horizontal = 20.dp, vertical = 2.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    if (isSearching) {
+                        items(
+                            items = searchResults,
+                            key = { result -> result.session.id },
+                        ) { result ->
+                            AiHistoryRow(
+                                session = result.session,
+                                isActive = result.session.id == activeSessionId,
+                                preview = previews[result.session.id],
+                                supportTextOverride = result.snippet,
+                                onClick = { onSelectChatSession(result.session.id) },
+                                onDelete = { onDeleteChatSession(result.session.id) },
+                            )
+                        }
+                    } else {
+                        items(
+                            items = sortedSessions,
+                            key = { session -> session.id },
+                        ) { session ->
+                            AiHistoryRow(
+                                session = session,
+                                isActive = session.id == activeSessionId,
+                                preview = previews[session.id],
+                                onClick = { onSelectChatSession(session.id) },
+                                onDelete = { onDeleteChatSession(session.id) },
+                            )
+                        }
+                    }
+                }
             }
         }
     }
@@ -339,15 +401,84 @@ internal fun AiFullPageHeader(
 }
 
 @Composable
+private fun AiHistorySearchField(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    onClear: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .height(44.dp)
+            .clip(RoundedCornerShape(22.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerLowest)
+            .border(
+                width = 1.dp,
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.34f),
+                shape = RoundedCornerShape(22.dp),
+            )
+            .padding(start = 14.dp, end = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Icon(
+            imageVector = Icons.Rounded.Search,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(19.dp),
+        )
+        BasicTextField(
+            value = query,
+            onValueChange = onQueryChange,
+            modifier = Modifier.weight(1f),
+            textStyle = MaterialTheme.typography.bodyMedium.copy(
+                color = MaterialTheme.colorScheme.onSurface,
+            ),
+            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+            singleLine = true,
+            decorationBox = { innerTextField ->
+                Box(contentAlignment = Alignment.CenterStart) {
+                    if (query.isBlank()) {
+                        Text(
+                            text = "Search chats",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.62f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    innerTextField()
+                }
+            },
+        )
+        if (query.isNotBlank()) {
+            IconButton(
+                onClick = onClear,
+                modifier = Modifier.size(36.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Close,
+                    contentDescription = "Clear chat search",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun AiHistoryRow(
     session: ChatSession,
     isActive: Boolean,
     preview: ChatSessionPreview?,
+    supportTextOverride: String? = null,
     onClick: () -> Unit,
     onDelete: () -> Unit,
 ) {
     val isMenuOpen = remember { mutableStateOf(false) }
-    val supportText = preview?.lastMessage?.takeIf { it.isNotBlank() }
+    val supportText = supportTextOverride?.takeIf { it.isNotBlank() }
+        ?: preview?.lastMessage?.takeIf { it.isNotBlank() }
         ?: session.updatedAt.toAiDisplayDateTime()
     Row(
         modifier = Modifier

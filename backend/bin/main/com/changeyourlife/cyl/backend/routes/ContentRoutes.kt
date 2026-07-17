@@ -1,10 +1,14 @@
 package com.changeyourlife.cyl.backend.routes
 
 import com.changeyourlife.cyl.backend.data.PageContentJsonMutator
+import com.changeyourlife.cyl.backend.domain.ContentSearchQuery
+import com.changeyourlife.cyl.backend.domain.ContentSearchResult
 import com.changeyourlife.cyl.backend.domain.ContentRepository
 import com.changeyourlife.cyl.backend.domain.PageRecord
 import com.changeyourlife.cyl.backend.domain.WorkspaceRecord
 import com.changeyourlife.cyl.backend.model.ErrorResponse
+import com.changeyourlife.cyl.backend.model.search.SearchListResponse
+import com.changeyourlife.cyl.backend.model.search.SearchResultDto
 import com.changeyourlife.cyl.backend.model.sync.PageBlockCreateRequest
 import com.changeyourlife.cyl.backend.model.sync.PageListResponse
 import com.changeyourlife.cyl.backend.model.sync.PageBlockPatchRequest
@@ -38,6 +42,34 @@ import io.ktor.server.routing.route
 fun Route.contentRoutes(contentRepository: ContentRepository) {
     authenticate("auth-jwt") {
         route("/api/v1") {
+            get("/search") {
+                val userId = call.requireUserId() ?: return@get
+                val workspaceId = call.request.queryParameters["workspaceId"]
+                if (workspaceId.isNullOrBlank()) {
+                    call.respond(HttpStatusCode.BadRequest, ErrorResponse("workspaceId is required."))
+                    return@get
+                }
+                val rawQuery = call.request.queryParameters["q"].orEmpty()
+                if (rawQuery.isBlank()) {
+                    call.respond(SearchListResponse(results = emptyList()))
+                    return@get
+                }
+                val limit = call.request.queryParameters["limit"]
+                    ?.toIntOrNull()
+                    ?.coerceIn(MinSearchLimit, MaxSearchLimit)
+                    ?: DefaultSearchLimit
+                val results = contentRepository.search(
+                    userId = userId,
+                    query = ContentSearchQuery(
+                        workspaceId = workspaceId,
+                        query = rawQuery,
+                        scopes = call.request.queryParameters["scope"].toSearchScopes(),
+                        limit = limit,
+                    ),
+                )
+                call.respond(SearchListResponse(results = results.map { result -> result.toDto() }))
+            }
+
             route("/workspaces") {
                 get {
                     val userId = call.requireUserId() ?: return@get
@@ -786,6 +818,23 @@ private fun String?.toBooleanFlag(): Boolean {
     return equals("true", ignoreCase = true) || this == "1"
 }
 
+private val DefaultSearchScopes = setOf("Page", "Block", "Table", "Row", "Property", "Column", "Cell")
+private val AllowedSearchScopes = DefaultSearchScopes + "Chat"
+private const val MinSearchLimit = 1
+private const val MaxSearchLimit = 100
+private const val DefaultSearchLimit = 25
+
+private fun String?.toSearchScopes(): Set<String> {
+    val requested = orEmpty()
+        .split(",")
+        .mapNotNull { rawScope ->
+            val scope = rawScope.trim()
+            AllowedSearchScopes.firstOrNull { allowed -> allowed.equals(scope, ignoreCase = true) }
+        }
+        .toSet()
+    return requested.ifEmpty { DefaultSearchScopes }
+}
+
 private fun WorkspaceSyncDto.validate(): String? {
     return when {
         id.isBlank() -> "Workspace id is required."
@@ -835,6 +884,26 @@ private fun PageRecord.toDto(): PageSyncDto {
         createdAt = createdAt,
         updatedAt = updatedAt,
         deletedAt = deletedAt,
+    )
+}
+
+private fun ContentSearchResult.toDto(): SearchResultDto {
+    return SearchResultDto(
+        targetType = targetType,
+        workspaceId = workspaceId,
+        pageId = pageId,
+        blockId = blockId,
+        tableBlockId = tableBlockId,
+        rowId = rowId,
+        columnId = columnId,
+        propertyId = propertyId,
+        chatSessionId = chatSessionId,
+        chatMessageId = chatMessageId,
+        title = title,
+        subtitle = subtitle,
+        snippet = snippet,
+        score = score,
+        updatedAt = updatedAt,
     )
 }
 

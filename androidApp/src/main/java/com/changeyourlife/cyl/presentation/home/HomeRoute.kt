@@ -151,13 +151,12 @@ fun HomeRoute(
         onNewWorkspaceNameChange = viewModel::updateNewWorkspaceName,
         onCreateWorkspace = viewModel::createWorkspace,
         onSendChatMessage = viewModel::sendChatMessage,
+        onAiMentionQueryChange = viewModel::updateAiMentionQuery,
         onUndoAiAction = viewModel::undoAiAction,
         onClearChatHistory = viewModel::clearChatHistory,
         onCreateChatSession = viewModel::createNewChatSession,
         onSelectChatSession = viewModel::selectChatSession,
         onDeleteChatSession = viewModel::deleteChatSession,
-        onChatHistorySearchQueryChange = viewModel::updateChatHistorySearchQuery,
-        onClearChatHistorySearchQuery = viewModel::clearChatHistorySearchQuery,
         onRetrySync = viewModel::retrySyncNow,
         onToggleAutoSync = viewModel::setAutoSyncEnabled,
         onThemeModeChange = viewModel::setThemeMode,
@@ -174,6 +173,7 @@ fun HomeRoute(
 fun HomeSearchRoute(
     onBack: () -> Unit,
     onOpenPage: (String, String, String) -> Unit,
+    onOpenChatSession: (String, String) -> Unit,
     modifier: Modifier = Modifier,
     viewModel: HomeViewModel = hiltViewModel(),
 ) {
@@ -183,7 +183,9 @@ fun HomeSearchRoute(
         uiState = uiState,
         onBack = onBack,
         onOpenPage = onOpenPage,
+        onOpenChatSession = onOpenChatSession,
         onSearchQueryChange = viewModel::updateSearchQuery,
+        onSearchScopeChange = viewModel::updateSearchScope,
         onClearSearchQuery = viewModel::clearSearchQuery,
         modifier = modifier,
     )
@@ -209,13 +211,12 @@ private fun HomeScreen(
     onNewWorkspaceNameChange: (String) -> Unit,
     onCreateWorkspace: () -> Unit,
     onSendChatMessage: (String, List<String>, List<AiImageAttachment>) -> Unit,
+    onAiMentionQueryChange: (String) -> Unit,
     onUndoAiAction: (String, String) -> Unit,
     onClearChatHistory: () -> Unit,
     onCreateChatSession: () -> Unit,
     onSelectChatSession: (String) -> Unit,
     onDeleteChatSession: (String) -> Unit,
-    onChatHistorySearchQueryChange: (String) -> Unit,
-    onClearChatHistorySearchQuery: () -> Unit,
     onRetrySync: () -> Unit,
     onToggleAutoSync: (Boolean) -> Unit,
     onThemeModeChange: (AppThemeMode) -> Unit,
@@ -246,7 +247,7 @@ private fun HomeScreen(
     if (isChatSheetOpen) {
             AiChatSheet(
                 messages = uiState.chatMessages,
-                mentionPages = uiState.allPages,
+                mentionCandidates = uiState.aiMentionCandidates,
                 persona = aiPersona,
                 isGenerating = uiState.isAiGeneratingChat,
                 errorMessage = uiState.aiChatError,
@@ -256,6 +257,7 @@ private fun HomeScreen(
                 enabledSkillsCount = uiState.aiSkills.count { skill -> skill.isEnabled },
                 totalSkillsCount = uiState.aiSkills.size,
                 onSendMessage = onSendChatMessage,
+                onMentionQueryChange = onAiMentionQueryChange,
                 onUndoAction = onUndoAiAction,
                 onClearHistory = onClearChatHistory,
                 onCreateChatSession = onCreateChatSession,
@@ -582,7 +584,9 @@ private fun HomeSearchScreen(
     uiState: HomeUiState,
     onBack: () -> Unit,
     onOpenPage: (String, String, String) -> Unit,
+    onOpenChatSession: (String, String) -> Unit,
     onSearchQueryChange: (String) -> Unit,
+    onSearchScopeChange: (HomeSearchScope) -> Unit,
     onClearSearchQuery: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -616,7 +620,7 @@ private fun HomeSearchScreen(
                             fontWeight = FontWeight.SemiBold,
                         )
                         Text(
-                            text = "Pages, tables, rows, and properties",
+                            text = "Pages, tables, rows, properties, and chats",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -630,6 +634,13 @@ private fun HomeSearchScreen(
                     resultCount = uiState.searchResults.size,
                     onQueryChange = onSearchQueryChange,
                     onClear = onClearSearchQuery,
+                )
+            }
+
+            item {
+                SearchScopeChips(
+                    selectedScope = uiState.searchScope,
+                    onScopeChange = onSearchScopeChange,
                 )
             }
 
@@ -648,11 +659,12 @@ private fun HomeSearchScreen(
 
                 items(
                     items = uiState.searchResults,
-                    key = { result -> result.page.id },
+                    key = { result -> result.id },
                 ) { result ->
                     SearchResultCard(
                         result = result,
                         onOpenPage = onOpenPage,
+                        onOpenChatSession = onOpenChatSession,
                     )
                 }
             }
@@ -1777,7 +1789,7 @@ private fun GlobalPageSearch(
             onValueChange = onQueryChange,
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
-            placeholder = { Text(text = "Search pages, tables, rows") },
+            placeholder = { Text(text = "Search pages, blocks, tables, rows") },
             leadingIcon = {
                 Icon(
                     imageVector = Icons.Rounded.Search,
@@ -1812,27 +1824,89 @@ private fun GlobalPageSearch(
 }
 
 @Composable
+private fun SearchScopeChips(
+    selectedScope: HomeSearchScope,
+    onScopeChange: (HomeSearchScope) -> Unit,
+) {
+    LazyRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        contentPadding = PaddingValues(vertical = 2.dp),
+    ) {
+        items(
+            items = HomeSearchScope.entries,
+            key = { scope -> scope.name },
+        ) { scope ->
+            FilterChip(
+                selected = selectedScope == scope,
+                onClick = { onScopeChange(scope) },
+                label = {
+                    Text(
+                        text = scope.label,
+                        maxLines = 1,
+                    )
+                },
+            )
+        }
+    }
+}
+
+@Composable
 private fun SearchResultCard(
-    result: PageSearchResult,
+    result: HomeSearchResult,
     onOpenPage: (String, String, String) -> Unit,
+    onOpenChatSession: (String, String) -> Unit,
 ) {
     Column {
         ListItem(
+            overlineContent = {
+                Text(
+                    text = result.targetLabel,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            },
             headlineContent = {
-                Text(text = result.page.title.ifBlank { "Untitled page" })
+                Text(
+                    text = result.title.ifBlank { "Untitled page" },
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             },
             supportingContent = {
-                Text(text = result.snippet)
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    if (result.subtitle.isNotBlank()) {
+                        Text(
+                            text = result.subtitle,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    if (result.snippet.isNotBlank()) {
+                        Text(
+                            text = result.snippet,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
             },
             leadingContent = {
                 Icon(
-                    imageVector = Icons.AutoMirrored.Rounded.Article,
+                    imageVector = if (result.targetType == SearchTargetChat) {
+                        Icons.Rounded.AutoAwesome
+                    } else {
+                        Icons.AutoMirrored.Rounded.Article
+                    },
                     contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             },
             modifier = Modifier.clickable {
-                onOpenPage(result.page.id, result.targetType, result.targetId)
+                if (result.targetType == SearchTargetChat && result.chatSessionId.isNotBlank()) {
+                    onOpenChatSession(result.chatSessionId, result.chatMessageId)
+                } else {
+                    onOpenPage(result.pageId, result.targetType, result.targetId)
+                }
             },
         )
         HorizontalDivider()
@@ -1869,7 +1943,7 @@ private fun SearchPromptState() {
 @Composable
 private fun EmptySearchCard() {
     ListItem(
-        headlineContent = { Text(text = "No matching pages") },
+        headlineContent = { Text(text = "No matching results") },
         supportingContent = {
             Text(text = "Try another word from a page, table, row, or property.")
         },
@@ -2001,13 +2075,12 @@ private fun HomeRoutePreview() {
             onNewWorkspaceNameChange = {},
             onCreateWorkspace = {},
             onSendChatMessage = { _, _, _ -> },
+            onAiMentionQueryChange = {},
             onUndoAiAction = { _, _ -> },
             onClearChatHistory = {},
             onCreateChatSession = {},
             onSelectChatSession = {},
             onDeleteChatSession = {},
-            onChatHistorySearchQueryChange = {},
-            onClearChatHistorySearchQuery = {},
             onRetrySync = {},
             onToggleAutoSync = {},
             onThemeModeChange = {},

@@ -307,25 +307,287 @@ Goal: table behave macam Notion/Excel, bukan semua cell sebagai text biasa.
 
 Goal: search jadi navigasi utama untuk page, block, table, row, property, dan AI context.
 
+Approach: buat local-first search dahulu. Backend full-text search hanya masuk selepas local index, navigation, highlight, mention resolver, dan AI context sudah stabil.
+
 ### Sudah Ada
 
 - Search page sudah ada.
 - Mention page di chat sudah ada.
 - Chat boleh link ke page.
+- Page/AI context sudah boleh bawa hidden page id apabila user chat dari page.
+- Page content projection sudah ada untuk block, property, table, column, row, dan cell, jadi search tidak perlu parse semua JSON dari UI.
 
 ### Belum Kukuh
 
-- Search belum indexed.
-- Belum search semua block/table row/property dengan kuat.
-- Mention resolver masih bergantung UI/client context.
+- Rich-text mention dalam page editor masih guna picker editor sedia ada; AI chat mention resolver sudah kukuh.
+- Backend search sudah ada full-text endpoint dan index, tetapi deep remote pagination/cursor sebenar belum dibuat.
+- Search result untuk chat sudah buka session; deep scroll ke message tertentu perlukan transcript/message route khusus kalau nanti dibina.
 
 ### Next Work
 
-- Buat `SearchRepository`.
-- Index local page/block/table/row/property.
-- Result boleh navigate dan highlight target.
-- AI gunakan search index yang sama.
-- Kemudian tambah backend full-text search.
+#### 5A. Search Domain Contract
+
+Goal: satu model search yang UI, mention, dan AI boleh guna bersama.
+
+Status: done.
+
+Tasks:
+
+- Done: tambah domain model:
+  - `SearchTargetType`: Page, Block, Table, Row, Property, Column, Cell, Chat.
+  - `SearchTarget`: pageId, blockId, tableBlockId, rowId, columnId, propertyId, chatSessionId, chatMessageId.
+  - `SearchResult`: title, subtitle, snippet, score, target, updatedAt.
+  - `SearchQuery`: query, workspaceId, scopes, limit, includeArchived/deleted flag.
+- Done: tambah `SearchRepository` interface di domain.
+- Done: tambah use-case:
+  - `SearchWorkspaceUseCase`
+  - `ResolveMentionUseCase`
+  - `BuildAiSearchContextUseCase`
+- Done: compile Android lulus untuk kontrak domain 5A.
+- Acceptance:
+  - UI tidak baca DAO/JSON terus.
+  - AI tidak ada search logic sendiri.
+  - Mention tidak bergantung pada substring matching raw title sahaja.
+
+#### 5B. Local Index Source
+
+Goal: search cepat dan konsisten walaupun offline.
+
+Status: done.
+
+Tasks:
+
+- Done: tambah Room table `search_index` dan schema Room version 16.
+- Done: tambah `SearchIndexEntity`, `SearchIndexDao`, `SearchRepositoryImpl`, dan `SearchIndexRebuilder`.
+- Done: `SearchRepository` sekarang ada local-first implementation yang baca `search_index`.
+- Done: lazy backfill workspace dibuat bila search pertama kali berlaku dan index masih kosong.
+- Done: page index rebuild dipanggil selepas:
+  - local `upsertPage`
+  - projected page mutation
+  - document page mutation
+  - page sync merge/pull
+  - page delete/restore/permanent delete lifecycle
+- Done: index fields minimum:
+  - workspaceId
+  - pageId
+  - targetType
+  - target ids
+  - title
+  - body/snippet
+  - normalizedText
+  - updatedAt
+  - deletedAt
+- Done: rebuild index daripada page/projection canonical:
+  - page title
+  - text/rich text blocks
+  - page properties
+  - table title
+  - column/property names
+  - row name
+  - visible typed cell display values
+  - row page content
+- Done: compile Android lulus untuk Room/search index 5B.
+- Acceptance:
+  - Search tidak parse `pages.content` di UI.
+  - Local result keluar walaupun backend offline.
+  - Deleted/trash page tidak muncul kecuali scope khas.
+
+#### 5C. Ranking And Matching
+
+Goal: result yang keluar terasa relevan, bukan sekadar contains.
+
+Status: done.
+
+Tasks:
+
+- Done: tambah query normalization:
+  - lowercase
+  - trim extra spaces
+  - Malay/English simple token split
+  - ignore punctuation ringan
+- Done: tambah `SearchRanker` reusable di data/search.
+- Done: ranking asas:
+  - exact title match paling tinggi
+  - title prefix
+  - title contains
+  - row/property/block contains
+  - recent updated boost
+  - current page/context boost
+- Done: multi-token candidate fetch supaya query seperti `makan 29` tidak bergantung pada token pertama sahaja.
+- Done: snippet:
+  - tunjuk bahagian text yang match
+  - jangan expose hidden ids
+- Done: compile Android lulus untuk ranking/matching 5C.
+- Acceptance:
+  - `budget` jumpa page Budget Tracker dahulu.
+  - `makan 29` boleh jumpa row/cell transaksi.
+  - `deadline` boleh jumpa property/column.
+
+#### 5D. Search UI Navigation
+
+Goal: search jadi navigasi utama.
+
+Status: done.
+
+Tasks:
+
+- Done: Search screen guna indexed search result list yang sama untuk semua scope.
+- Done: Add scope chips:
+  - All
+  - Pages
+  - Blocks
+  - Tables
+  - Rows
+  - Properties
+  - Chats nanti
+- Done: Result tap behavior:
+  - Page: buka page.
+  - Block: buka page dan scroll/highlight block.
+  - Table: buka page dan scroll/highlight database.
+  - Row: buka page, scroll database, buka/flash row atau row sheet.
+- Done: Cell result buka page dan highlight row.
+- Done: Column/table result buka page dan scroll database block.
+- Done: Property result buka page.
+- Done: tambah navigation payload dalam route/saved state.
+- Done: highlight search auto-clear selepas beberapa saat.
+- Done: compile Android lulus untuk Search UI Navigation 5D.
+- Acceptance:
+  - User tidak perlu cari manual selepas tekan result.
+  - Highlight auto hilang selepas beberapa saat.
+  - Tiada overlay/card berat.
+
+#### 5E. Mention Resolver
+
+Goal: `@` mention tepat dan tidak false positive.
+
+Status: done.
+
+Tasks:
+
+- Done: AI chat mention picker guna `ResolveMentionUseCase`.
+- Done: mention query di Home/Page/Database AI chat disambung ke satu resolver yang sama.
+- Done: ranking mention:
+  - exact title
+  - prefix title
+  - recent page
+  - current workspace only
+- Done: jika multiple same title:
+  - tunjuk subtitle/updatedAt supaya user pilih yang betul.
+  - simpan hidden id, bukan hanya title.
+- Done: AI chat mention:
+  - chip UI tetap tunjuk title.
+  - hidden context hantar id + title + minimal page summary.
+- Done: raw/fuzzy text mention matching dalam AI composer dibuang supaya prompt biasa tidak tersalah target page.
+- Done: compile Android lulus untuk Mention Resolver 5E.
+- Acceptance:
+  - Done: page nama mirip tidak auto-target melalui substring/fuzzy raw text.
+  - Done: multiple selected `@Page` dalam satu prompt dihantar sebagai structured hidden page ids.
+  - Done: model tidak perlu nampak internal id dalam reply.
+  - Note: rich-text mention dalam page editor kekal guna editor mention picker sedia ada; 5E ini menstabilkan AI chat mention resolver dahulu.
+
+#### 5F. AI Search Context
+
+Goal: AI boleh cari data sebelum jawab/edit, tetapi masih guna sumber yang sama dengan UI.
+
+Status: done.
+
+Tasks:
+
+- Done: `BuildAiSearchContextUseCase` ambil top N local search result untuk prompt yang sesuai.
+- Done: Home/Page/Database AI chat sekarang inject search context dari use-case yang sama dengan Search UI.
+- Done: legacy direct search reply lama dibuang supaya AI tidak bypass model dengan jawapan hardcoded.
+- Done: search context skip prompt gambar/lampiran supaya prompt vision tidak tersalah jadi local search.
+- Done: AI context format:
+  - Page match
+  - Table/row/property match
+  - snippet ringkas
+  - hidden target ids untuk executor
+- Done: bezakan dua use case:
+  - chat/planning: context untuk jawab.
+  - edit/action: context untuk target resolution.
+- Done: search result hanya dihantar sebagai private system context; action tetap datang dari backend AI result dan executor Android masih validate target.
+- Done: chat answer yang guna search context dapat page/row/table links supaya user boleh navigate ke match.
+- Done: compile Android lulus untuk AI Search Context 5F.
+- Acceptance:
+  - Done: prompt seperti `berapa makan bulan 7` sekarang boleh diberi top row/table/page match sebagai private AI context.
+  - Done: prompt seperti `ubah status row fuel` boleh dapat target row/column/table ids sebagai private context, tetapi executor tetap reject jika action samar.
+  - Done: jika ambiguous, system context arahkan AI minta clarification, bukan edit target salah.
+
+#### 5G. Chat History Search
+
+Goal: search chat lama tanpa mengganggu prompt AI.
+
+Status: done untuk local search utama.
+
+Tasks:
+
+- Done: chat session dan chat message sekarang masuk `search_index` melalui `SearchIndexRebuilder`.
+- Done: index chat refresh pada create session, append message, clear/delete session, pull sync, dan push sync response.
+- Done: `SearchRepository` expose chat result melalui scope `Chats` dan `All` di search screen.
+- Done: result chat pilih session yang match, buka Chat history, dan auto-scroll ke session aktif.
+- Done: AI search context kekal guna `SearchTargetType.aiContextScopes()` tanpa `Chat`, jadi prompt seperti `apa text dalam gambar` tidak ditafsir sebagai local chat history search.
+- Acceptance:
+  - Done: chat history searchable dari search screen.
+  - Done: AI prompt image/chat tidak lagi tersalah jadi search result.
+  - Note: Chat history page sekarang ialah list session; result search scroll ke session aktif. Deep scroll ke mesej tertentu perlukan transcript route/message view khusus kalau nanti kita bina.
+
+#### 5H. Backend Full-Text Search
+
+Goal: cross-device search kuat selepas local core stabil.
+
+Status: done untuk MVP backend full-text + Android local-first enrich.
+
+Tasks:
+
+- Done: tambah backend full-text search source atas `pages.content` sebagai fallback utama dan projection tables bila tersedia/populated.
+- Done: tambah endpoint:
+  - `GET /api/v1/search?q=&workspaceId=&scope=&limit=&cursor=`
+- Done: response guna contract mirip `SearchResult` (`targetType`, target ids, title, subtitle, snippet, score, updatedAt).
+- Done: PostgreSQL:
+  - GIN index untuk `tsvector`.
+  - B-tree/partial index untuk `workspace_id`, `deleted_at`, `updated_at`.
+  - ownership check wajib.
+- Done: backend query support `Page`, `Block`, `Table`, `Row`, `Property`, `Column`, dan `Cell`; precision block/row/cell ikut projection table yang tersedia, sementara page JSON fallback tetap memastikan remote search tidak kosong.
+- Done: In-memory backend fallback support page search untuk dev/test.
+- Done: Android:
+  - local-first result dahulu.
+  - remote enrich/refresh bila online.
+- Done: targeted backend route regression test untuk owned page result dan user isolation.
+- Done: backend compile, Android compile, dan targeted backend test lulus.
+- Acceptance:
+  - Done: backend tidak leak data user lain.
+  - Done: search besar tidak tarik semua page JSON ke client; server query DB + indexes.
+  - Partial: API ada `limit`; cursor pagination belum dibuat kerana result MVP masih cukup kecil dan local-first.
+
+#### 5I. Regression Tests
+
+Goal: bug search/mention/AI target tidak berulang.
+
+Status: done untuk regression coverage utama.
+
+Tests:
+
+- Done: search index rebuild dari page text, table row, property, row page content, table/cell/column targets.
+- Done: search index delete/restore lifecycle update `deletedAt` supaya trash item tidak muncul bila query default `includeDeleted=false`.
+- Done: ranking exact title > contains > body-only match.
+- Done: current page boost untuk result berdekatan.
+- Done: mention resolver kekalkan duplicate title sebagai page id berlainan dan ikut ranked candidate.
+- Done: navigation target untuk block/table/row/property/cell dibina dalam `SearchIndexEntity` dengan typed ids.
+- Done: AI context builder guna non-chat scopes, `includeDeleted=false`, dan hidden ids hanya berada dalam private `Target:` line.
+- Done: targeted Android unit tests lulus:
+  - `SearchIndexRebuilderTest`
+  - `SearchRankerTest`
+  - `SearchUseCaseRegressionTest`
+- Done: backend search ownership isolation test sudah ada di `ApplicationTest`.
+
+#### Done Criteria Milestone 5
+
+- Search UI, mention picker, dan AI context guna repository/use-case yang sama.
+- Search local berfungsi offline untuk page/block/table/row/property.
+- Result boleh navigate + highlight target.
+- Mention menyimpan hidden id dan tidak bergantung title string sahaja.
+- AI boleh guna search context untuk jawab dan target edit dengan lebih tepat.
+- Backend full-text search MVP sudah ada; deep cursor pagination kekal enhancement production scale.
 
 ## Milestone 6: Chat History Core
 
@@ -345,17 +607,20 @@ Goal: chat history bukan sekadar message list, tapi audit trail untuk AI work.
 - Chat UI model sekarang observe `undoState`, jadi action yang sudah `Applied` tidak lagi tunjuk button undo.
 - Action log sekarang sync ke backend melalui `/api/v1/ai-action-logs`, termasuk `undoCommandsJson`, `undoState`, provider/model, schema metadata, dan execution messages.
 - Chat session dan chat message sekarang sync ke backend melalui `/api/v1/chat-sessions` dan `/api/v1/chat-messages`, jadi conversation history boleh survive reinstall bila backend token/database sama.
+- Dedicated Chat History page sekarang ada search field untuk session/title/message/attachment/page-link, dengan result sebagai session list + snippet supaya history kekal kemas.
+- Chat history search logic sudah diextract ke helper testable `ChatHistorySearch`, bukan lagi private ViewModel helper.
+- Regression test cover blank query, message match, multi-source match, dan ranking title match.
 
 ### Belum Kukuh
 
 - Chat sudah ada backend sync untuk session/message.
 - Model/mode/action metadata dalam `chat_messages` ikut sync sebagai JSON, dan action log juga sync backend.
 - Undo AI action sudah boleh apply untuk payload command yang valid, UI observe `undoState`, state action log sync, dan conversation history boleh dipulihkan dari backend.
-- Belum ada dedicated chat full-text search dan belum ada delete lifecycle message-level; clear chat sekarang bergantung pada soft-delete session.
+- Belum ada delete lifecycle message-level; clear chat sekarang bergantung pada soft-delete session.
 
 ### Next Work
 
-- Tambah chat search.
+- Tambah message-level delete/restore lifecycle kalau mahu history audit lebih lengkap.
 
 ## Milestone 7: Media/File Core
 

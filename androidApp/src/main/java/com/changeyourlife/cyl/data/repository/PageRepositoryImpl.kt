@@ -11,6 +11,7 @@ import com.changeyourlife.cyl.data.local.mapper.toContentProjection
 import com.changeyourlife.cyl.data.local.mapper.toDomain
 import com.changeyourlife.cyl.data.local.mapper.toEntity
 import com.changeyourlife.cyl.data.local.mapper.toDocument
+import com.changeyourlife.cyl.data.search.SearchIndexRebuilder
 import com.changeyourlife.cyl.data.sync.BackgroundSyncQueue
 import com.changeyourlife.cyl.data.sync.SessionSyncCoordinator
 import com.changeyourlife.cyl.domain.model.Page
@@ -55,6 +56,7 @@ class PageRepositoryImpl @Inject constructor(
     private val syncTombstoneDao: SyncTombstoneDao,
     private val sessionSyncCoordinator: SessionSyncCoordinator,
     private val backgroundSyncQueue: BackgroundSyncQueue,
+    private val searchIndexRebuilder: SearchIndexRebuilder,
 ) : PageRepository {
     override fun observePages(workspaceId: String): Flow<List<Page>> {
         return pageDao.observePages(workspaceId)
@@ -695,18 +697,22 @@ class PageRepositoryImpl @Inject constructor(
     }
 
     override suspend fun deletePage(pageId: String) {
+        val deletedAt = System.currentTimeMillis()
         pageDao.softDeletePageTree(
             pageId = pageId,
-            deletedAt = System.currentTimeMillis(),
+            deletedAt = deletedAt,
         )
+        searchIndexRebuilder.markPageTreeDeleted(pageId = pageId, deletedAt = deletedAt)
         backgroundSyncQueue.enqueue("deletePage:$pageId") { this.deletePage(pageId) }
     }
 
     override suspend fun restorePage(pageId: String) {
+        val restoredAt = System.currentTimeMillis()
         pageDao.restorePageTree(
             pageId = pageId,
-            restoredAt = System.currentTimeMillis(),
+            restoredAt = restoredAt,
         )
+        searchIndexRebuilder.markPageTreeRestored(pageId = pageId, restoredAt = restoredAt)
         backgroundSyncQueue.enqueue("restorePage:$pageId") { this.restorePage(pageId) }
     }
 
@@ -720,6 +726,7 @@ class PageRepositoryImpl @Inject constructor(
                 createdAt = now,
             ),
         )
+        searchIndexRebuilder.deletePageTree(pageId)
         pageDao.deletePageTreePermanently(pageId)
         backgroundSyncQueue.enqueue("deletePagePermanently:$pageId") {
             this.deletePagePermanently(pageId)
@@ -755,6 +762,7 @@ class PageRepositoryImpl @Inject constructor(
                 cells = projection.cells,
             )
         }
+        searchIndexRebuilder.rebuildPage(page)
     }
 
     private suspend fun mutateProjectedPage(
@@ -776,6 +784,10 @@ class PageRepositoryImpl @Inject constructor(
             syncStatus = SyncStatus.PendingPush,
         )
         pageDao.upsertPage(updatedPage)
+        searchIndexRebuilder.rebuildPage(
+            page = updatedPage,
+            document = updatedDocument,
+        )
         enqueueRemotePageMutation(
             name = "mutateProjectedPage:$pageId",
             policy = remoteSyncPolicy,
