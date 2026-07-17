@@ -2,6 +2,7 @@ package com.changeyourlife.cyl.backend.service
 
 import com.changeyourlife.cyl.backend.config.WebSearchConfig
 import java.net.URI
+import java.net.URLDecoder
 import java.net.URLEncoder
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
@@ -57,6 +58,7 @@ class WebSearchService(
         val failures = mutableListOf<String>()
         val providers = buildList {
             add("jina")
+            add("duckduckgo_lite")
             if (!config.exaApiKey.isNullOrBlank()) add("exa")
             if (!config.tavilyApiKey.isNullOrBlank()) add("tavily")
         }
@@ -66,6 +68,7 @@ class WebSearchService(
             val context = runCatching {
                 when (provider) {
                     "jina" -> searchJina(normalizedQuery, cappedLimit)
+                    "duckduckgo_lite" -> searchDuckDuckGoLite(normalizedQuery, cappedLimit)
                     "exa" -> searchExa(normalizedQuery, cappedLimit)
                     "tavily" -> searchTavily(normalizedQuery, cappedLimit)
                     else -> WebSearchContext(query = normalizedQuery, status = "skipped")
@@ -104,7 +107,7 @@ class WebSearchService(
     private fun searchJina(query: String, limit: Int): WebSearchContext {
         val request = HttpRequest.newBuilder()
             .uri(URI.create("https://s.jina.ai/?q=${query.urlEncoded()}"))
-            .timeout(Duration.ofMillis(config.timeoutMs))
+            .timeout(Duration.ofMillis(minOf(config.timeoutMs, JinaSearchTimeoutMillis)))
             .header("Accept", "application/json")
             .apply {
                 if (!config.jinaApiKey.isNullOrBlank()) {
@@ -122,6 +125,26 @@ class WebSearchService(
             provider = "jina",
             status = "succeeded",
             results = parseSearchResults(response.body(), provider = "jina", limit = limit),
+        )
+    }
+
+    private fun searchDuckDuckGoLite(query: String, limit: Int): WebSearchContext {
+        val request = HttpRequest.newBuilder()
+            .uri(URI.create("https://lite.duckduckgo.com/lite/?q=${query.urlEncoded()}"))
+            .timeout(Duration.ofMillis(minOf(config.timeoutMs, DuckDuckGoSearchTimeoutMillis)))
+            .header("Accept", "text/html,application/xhtml+xml")
+            .header("User-Agent", "CYLBot/1.0 (+https://changeyourlife.app)")
+            .GET()
+            .build()
+        val response = httpClient.send(request, HttpResponse.BodyHandlers.ofString())
+        if (response.statusCode() !in 200..299) {
+            throw IllegalStateException("HTTP ${response.statusCode()} - ${response.body().take(MaxErrorBodyChars)}")
+        }
+        return WebSearchContext(
+            query = query,
+            provider = "duckduckgo_lite",
+            status = "succeeded",
+            results = parseDuckDuckGoLiteResults(response.body(), limit),
         )
     }
 
@@ -217,6 +240,41 @@ class WebSearchService(
         }
     }
 
+    private fun parseDuckDuckGoLiteResults(body: String, limit: Int): List<WebSearchResult> {
+        val matches = DuckDuckGoResultLinkRegex.findAll(body).toList()
+        if (matches.isEmpty()) return emptyList()
+
+        return matches.mapIndexedNotNull { index, match ->
+            val href = match.groupValues.getOrNull(1).orEmpty().htmlDecode()
+            val title = match.groupValues.getOrNull(2).orEmpty()
+                .stripHtml()
+                .htmlDecode()
+                .cleanWebField()
+            val nextStart = matches.getOrNull(index + 1)?.range?.first ?: body.length
+            val section = body.substring(match.range.last + 1, nextStart)
+            val snippet = DuckDuckGoSnippetRegex.find(section)
+                ?.groupValues
+                ?.getOrNull(1)
+                .orEmpty()
+                .stripHtml()
+                .htmlDecode()
+                .cleanWebField()
+            val url = href.resolveDuckDuckGoRedirectUrl()
+            if (title.isBlank() && url.isBlank()) {
+                null
+            } else {
+                WebSearchResult(
+                    title = title.ifBlank { url.ifBlank { "Web result" } }.take(MaxTitleChars),
+                    url = url.take(MaxUrlChars),
+                    snippet = snippet.take(MaxSnippetChars),
+                    provider = "duckduckgo_lite",
+                )
+            }
+        }
+            .distinctBy { result -> result.url.ifBlank { result.title } }
+            .take(limit)
+    }
+
     private fun JsonObject.searchResultArrays(): List<JsonArray> {
         val directKeys = listOf("data", "results", "organic_results", "items", "documents")
         val directArrays = directKeys.mapNotNull { key -> get(key)?.jsonArrayOrNull() }
@@ -266,8 +324,52 @@ class WebSearchService(
     private fun String.urlEncoded(): String =
         URLEncoder.encode(this, StandardCharsets.UTF_8)
 
+    private fun String.urlDecoded(): String =
+        runCatching { URLDecoder.decode(this, StandardCharsets.UTF_8) }.getOrDefault(this)
+
     private fun String.cleanWebField(): String =
         replace(Regex("\\s+"), " ").trim()
+
+    private fun String.stripHtml(): String =
+        replace(Regex("(?is)<script.*?</script>"), " ")
+            .replace(Regex("(?is)<style.*?</style>"), " ")
+            .replace(Regex("(?is)<[^>]+>"), " ")
+
+    private fun String.htmlDecode(): String {
+        val namedDecoded = replace("&amp;", "&")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&quot;", "\"")
+            .replace("&#39;", "'")
+            .replace("&nbsp;", " ")
+        return HtmlNumericEntityRegex.replace(namedDecoded) { match ->
+            val raw = match.groupValues.getOrNull(1).orEmpty()
+            val codePoint = if (raw.startsWith("x", ignoreCase = true)) {
+                raw.drop(1).toIntOrNull(radix = 16)
+            } else {
+                raw.toIntOrNull()
+            }
+            codePoint
+                ?.takeIf { value -> value > 0 }
+                ?.let { value -> String(Character.toChars(value)) }
+                ?.ifBlank { match.value }
+                ?: match.value
+        }
+    }
+
+    private fun String.resolveDuckDuckGoRedirectUrl(): String {
+        val normalized = when {
+            startsWith("//") -> "https:$this"
+            startsWith("/") -> "https://duckduckgo.com$this"
+            else -> this
+        }
+        val redirected = Regex("[?&]uddg=([^&]+)").find(normalized)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.urlDecoded()
+            .orEmpty()
+        return redirected.ifBlank { normalized }
+    }
 
     private fun String.normalizeWebSearchQuery(): String =
         replace(Regex("\\s+"), " ")
@@ -295,6 +397,13 @@ class WebSearchService(
         private const val MaxWarningChars = 500
         private const val MaxErrorChars = 220
         private const val MaxErrorBodyChars = 500
+        private const val JinaSearchTimeoutMillis = 5_000L
+        private const val DuckDuckGoSearchTimeoutMillis = 8_000L
+        private val DuckDuckGoResultLinkRegex =
+            Regex("(?is)<a[^>]+class=[\"'][^\"']*result-link[^\"']*[\"'][^>]+href=[\"']([^\"']+)[\"'][^>]*>(.*?)</a>")
+        private val DuckDuckGoSnippetRegex =
+            Regex("(?is)<(?:td|span|div)[^>]+class=[\"'][^\"']*(?:result-snippet|result__snippet)[^\"']*[\"'][^>]*>(.*?)</(?:td|span|div)>")
+        private val HtmlNumericEntityRegex = Regex("&#(x?[0-9a-fA-F]+);")
     }
 }
 
