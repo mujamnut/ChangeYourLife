@@ -63,35 +63,43 @@ class WebSearchService(
             if (!config.tavilyApiKey.isNullOrBlank()) add("tavily")
         }
 
+        val queryCandidates = normalizedQuery.toSearchQueryCandidates()
         providers.forEach { provider ->
-            logger.info("Web search started: provider={}, query='{}'", provider, normalizedQuery.take(160))
-            val context = runCatching {
-                when (provider) {
-                    "jina" -> searchJina(normalizedQuery, cappedLimit)
-                    "duckduckgo_lite" -> searchDuckDuckGoLite(normalizedQuery, cappedLimit)
-                    "exa" -> searchExa(normalizedQuery, cappedLimit)
-                    "tavily" -> searchTavily(normalizedQuery, cappedLimit)
-                    else -> WebSearchContext(query = normalizedQuery, status = "skipped")
-                }
-            }.onFailure { error ->
-                val message = error.compactWebSearchError()
-                failures += "$provider: $message"
-                logger.warn("Web search provider failed: provider={}, error={}", provider, message)
-            }.getOrNull()
+            queryCandidates.forEach { queryCandidate ->
+                logger.info("Web search started: provider={}, query='{}'", provider, queryCandidate.take(160))
+                val context = runCatching {
+                    when (provider) {
+                        "jina" -> searchJina(queryCandidate, cappedLimit)
+                        "duckduckgo_lite" -> searchDuckDuckGoLite(queryCandidate, cappedLimit)
+                        "exa" -> searchExa(queryCandidate, cappedLimit)
+                        "tavily" -> searchTavily(queryCandidate, cappedLimit)
+                        else -> WebSearchContext(query = queryCandidate, status = "skipped")
+                    }
+                }.onFailure { error ->
+                    val message = error.compactWebSearchError()
+                    failures += "$provider/$queryCandidate: $message"
+                    logger.warn("Web search provider failed: provider={}, query='{}', error={}", provider, queryCandidate.take(160), message)
+                }.getOrNull()
 
-            if (context != null && context.results.isNotEmpty()) {
-                logger.info(
-                    "Web search completed: provider={}, status={}, results={}, query='{}'",
-                    context.provider,
-                    context.status,
-                    context.results.size,
-                    normalizedQuery.take(160),
-                )
-                cache[cacheKey] = CachedWebSearch(
-                    context = context.copy(cached = false),
-                    createdAtMillis = now,
-                )
-                return context
+                if (context != null && context.results.isNotEmpty()) {
+                    val rankedContext = context.copy(
+                        query = normalizedQuery,
+                        results = context.results.rankForWebQuery(normalizedQuery),
+                    )
+                    logger.info(
+                        "Web search completed: provider={}, status={}, results={}, query='{}', effectiveQuery='{}'",
+                        rankedContext.provider,
+                        rankedContext.status,
+                        rankedContext.results.size,
+                        normalizedQuery.take(160),
+                        queryCandidate.take(160),
+                    )
+                    cache[cacheKey] = CachedWebSearch(
+                        context = rankedContext.copy(cached = false),
+                        createdAtMillis = now,
+                    )
+                    return rankedContext
+                }
             }
         }
 
@@ -376,6 +384,54 @@ class WebSearchService(
             .trim()
             .take(MaxQueryChars)
 
+    private fun String.toSearchQueryCandidates(): List<String> {
+        val lower = lowercase()
+        val candidates = mutableListOf<String>()
+        val asksOpenAiModel = lower.contains("openai") &&
+            (lower.contains("model") || lower.contains("gpt") || lower.contains("chatgpt"))
+        val asksFreshness = FreshnessTerms.any { term -> lower.contains(term) }
+        if (asksOpenAiModel && asksFreshness) {
+            candidates += "site:openai.com/index OpenAI latest GPT model 2026"
+            candidates += "site:help.openai.com OpenAI model release notes latest GPT 2026"
+            candidates += "site:platform.openai.com/docs/models OpenAI latest GPT model"
+        }
+        candidates += this
+        return candidates
+            .map { candidate -> candidate.normalizeWebSearchQuery() }
+            .filter { candidate -> candidate.isNotBlank() }
+            .distinct()
+            .take(MaxQueryCandidates)
+    }
+
+    private fun List<WebSearchResult>.rankForWebQuery(query: String): List<WebSearchResult> {
+        if (isEmpty()) return this
+        return sortedWith(
+            compareByDescending<WebSearchResult> { result -> result.scoreForQuery(query) }
+                .thenBy { result -> result.title },
+        )
+    }
+
+    private fun WebSearchResult.scoreForQuery(query: String): Int {
+        val lowerQuery = query.lowercase()
+        val lowerText = listOf(title, url, snippet, content)
+            .joinToString(separator = " ")
+            .lowercase()
+        var score = 0
+        if (lowerQuery.contains("openai")) {
+            if (url.contains("openai.com", ignoreCase = true)) score += 100
+            if (url.contains("platform.openai.com", ignoreCase = true)) score += 110
+            if (url.contains("help.openai.com", ignoreCase = true)) score += 105
+            if (url.contains("/index/", ignoreCase = true)) score += 20
+        }
+        if (FreshnessTerms.any { term -> lowerQuery.contains(term) }) {
+            if (lowerText.contains("2026")) score += 40
+            if (lowerText.contains("latest") || lowerText.contains("terbaru") || lowerText.contains("terkini")) score += 25
+            if (lowerText.contains("gpt-5") || lowerText.contains("gpt 5")) score += 40
+            if (lowerText.contains("gpt-4.1") && !lowerText.contains("gpt-5")) score -= 25
+        }
+        return score
+    }
+
     private fun Throwable.compactWebSearchError(): String =
         (localizedMessage ?: message ?: this::class.simpleName.orEmpty())
             .replace(Regex("\\s+"), " ")
@@ -399,6 +455,19 @@ class WebSearchService(
         private const val MaxErrorBodyChars = 500
         private const val JinaSearchTimeoutMillis = 5_000L
         private const val DuckDuckGoSearchTimeoutMillis = 8_000L
+        private const val MaxQueryCandidates = 4
+        private val FreshnessTerms = listOf(
+            "latest",
+            "terkini",
+            "terbaru",
+            "paling baru",
+            "current",
+            "recent",
+            "sekarang",
+            "hari ini",
+            "today",
+            "2026",
+        )
         private val DuckDuckGoResultLinkRegex =
             Regex("(?is)<a[^>]+class=[\"'][^\"']*result-link[^\"']*[\"'][^>]+href=[\"']([^\"']+)[\"'][^>]*>(.*?)</a>")
         private val DuckDuckGoSnippetRegex =
