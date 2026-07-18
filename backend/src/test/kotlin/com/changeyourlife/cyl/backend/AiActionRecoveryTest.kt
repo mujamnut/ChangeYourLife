@@ -83,6 +83,52 @@ class AiActionRecoveryTest {
     }
 
     @Test
+    fun normalizesEmptyCellUpdateIntoExplicitClearCellAction() {
+        val result = service.recoverActionFromModelReply(
+            reply = """
+                {
+                  "reply": "Siap",
+                  "actions": [
+                    {
+                      "type": "UPDATE_TABLE_CELL",
+                      "targetTitle": "Monthly Expenses",
+                      "rowTitle": "bulan 4",
+                      "columnName": "Month"
+                    }
+                  ]
+                }
+            """.trimIndent(),
+            prompt = "padam cell bulan 4",
+            pages = listOf(
+                AiPageContext(
+                    id = "page-monthly",
+                    title = "Monthly Expenses",
+                    blocks = listOf(
+                        AiBlockContext(
+                            id = "table-primary",
+                            type = "DatabaseTable",
+                            tableTitle = "First table",
+                        ),
+                        AiBlockContext(
+                            id = "table-secondary",
+                            type = "DatabaseTable",
+                            tableTitle = "Second table",
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        val action = assertNotNull(result).actions.single()
+        assertEquals(emptyList(), result.validationIssues)
+        assertEquals("CLEAR_TABLE_CELL", action.type)
+        assertEquals("Monthly Expenses", action.targetTitle)
+        assertEquals("", action.tableTitle)
+        assertEquals("bulan 4", action.rowTitle)
+        assertEquals("Month", action.columnName)
+    }
+
+    @Test
     fun recoversMalayExpenseRowWithTodayDate() {
         val result = service.recoverActionFromPrompt(
             prompt = "saya guna 29 ringgit harini beli makeup",

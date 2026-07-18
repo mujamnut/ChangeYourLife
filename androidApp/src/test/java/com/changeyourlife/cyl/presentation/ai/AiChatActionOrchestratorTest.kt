@@ -325,6 +325,46 @@ class AiChatActionOrchestratorTest {
         assertEquals(listOf(0), result.actionMetadata.validationIssues.map { it.actionIndex })
     }
 
+    @Test
+    fun missingCellRowReturnsSpecificClarificationWithoutFailurePrefix() = runBlocking {
+        var executorCalled = false
+
+        val result = AiChatActionOrchestrator.orchestrate(
+            workspaceId = "workspace-1",
+            scopedTargetPage = page(),
+            prompt = "padam cell bulan 4",
+            backendResult = ChatActionResult(
+                reply = "Siap.",
+                actions = listOf(
+                    ChatAction(
+                        type = "CLEAR_TABLE_CELL",
+                        title = "",
+                        tableTitle = "Transactions",
+                        columnName = "Month",
+                    ),
+                ),
+                validationIssues = listOf(
+                    ChatActionValidationIssue(
+                        actionIndex = 0,
+                        field = "rowTitle",
+                        code = "missing_required_field",
+                        message = "Cell update needs a row.",
+                    ),
+                ),
+            ),
+        ) { _, _, _ ->
+            executorCalled = true
+            AiActionExecutionResult()
+        }
+
+        assertTrue(!executorCalled)
+        assertEquals(
+            "Nyatakan row yang dimaksudkan, contohnya nama transaksi.",
+            result.reply,
+        )
+        assertEquals(emptyList<String>(), result.actionMetadata.executedActions.map { action -> action.type })
+    }
+
     private fun page(): Page {
         return Page(
             id = "page-1",

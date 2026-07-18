@@ -388,6 +388,98 @@ class AiPageActionExecutorTest {
     }
 
     @Test
+    fun clearsCellFromOnlyTableWithUniqueRowAndColumnMatch() = runBlocking {
+        val archiveNameColumn = PageTableColumn(id = "archive-name", name = "Name")
+        val archiveMonthColumn = PageTableColumn(id = "archive-month", name = "Month")
+        val planNameColumn = PageTableColumn(id = "plan-name", name = "Name")
+        val planMonthColumn = PageTableColumn(id = "plan-month", name = "Month")
+        val document = PageBlockDocument(
+            blocks = listOf(
+                PageBlock(
+                    id = "archive-table",
+                    type = PageBlockType.DatabaseTable,
+                    table = PageTable(
+                        title = "Archive",
+                        columns = listOf(archiveNameColumn, archiveMonthColumn),
+                        rows = listOf(
+                            PageTableRow(
+                                id = "archive-food",
+                                cells = mapOf(
+                                    archiveNameColumn.id to "Food",
+                                    archiveMonthColumn.id to "2026-04",
+                                ),
+                            ),
+                            PageTableRow(
+                                id = "archive-fuel",
+                                cells = mapOf(
+                                    archiveNameColumn.id to "Fuel",
+                                    archiveMonthColumn.id to "2026-04",
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+                PageBlock(
+                    id = "plan-table",
+                    type = PageBlockType.DatabaseTable,
+                    table = PageTable(
+                        title = "Plans",
+                        columns = listOf(planNameColumn, planMonthColumn),
+                        rows = listOf(
+                            PageTableRow(
+                                id = "plan-april",
+                                cells = mapOf(
+                                    planNameColumn.id to "April plan",
+                                    planMonthColumn.id to "2026-04",
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val page = Page(
+            id = "page-1",
+            workspaceId = "workspace-1",
+            parentPageId = null,
+            title = "Planning",
+            content = PageBlockCodec.encodeDocument(document),
+            sortOrder = 0,
+            createdAt = 1000,
+            updatedAt = 1000,
+            deletedAt = null,
+        )
+        val executor = AiPageActionExecutor(
+            pageRepository = FakePageRepository(page, document),
+            taskRepository = FakeTaskRepository(),
+            reminderRepository = FakeReminderRepository(),
+            applyEditorCommandUseCase = ApplyEditorCommandUseCase(),
+        )
+
+        val result = executor.executeOnPage(
+            page = page,
+            title = page.title,
+            document = document,
+            actions = listOf(
+                ChatAction(
+                    type = "CLEAR_TABLE_CELL",
+                    title = "",
+                    rowTitle = "bulan 4",
+                    columnName = "Month",
+                ),
+            ),
+        )
+
+        val updatedDocument = requireNotNull(result.updatedDocument)
+        val archiveTable = updatedDocument.blocks.first { block -> block.id == "archive-table" }.table
+        val planTable = updatedDocument.blocks.first { block -> block.id == "plan-table" }.table
+        assertEquals(emptyList<AiPageActionValidationIssue>(), result.validationIssues)
+        assertEquals(listOf(0), result.executedActionIndexes)
+        assertEquals("2026-04", archiveTable.rows.first().cells[archiveMonthColumn.id])
+        assertEquals("", planTable.rows.single().cells[planMonthColumn.id])
+    }
+
+    @Test
     fun addsMalayExpenseRowToExistingTable() = runBlocking {
         val nameColumn = PageTableColumn(id = "column-name", name = "Name")
         val amountColumn = PageTableColumn(

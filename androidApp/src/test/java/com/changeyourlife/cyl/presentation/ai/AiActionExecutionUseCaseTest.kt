@@ -202,6 +202,7 @@ class AiActionExecutionUseCaseTest {
             actions = listOf(
                 ChatAction(
                     type = "ADD_BLOCK",
+                    title = "",
                     targetTitle = "Other",
                     content = "Edit the requested page",
                 ),
@@ -235,11 +236,13 @@ class AiActionExecutionUseCaseTest {
             actions = listOf(
                 ChatAction(
                     type = "ADD_BLOCK",
+                    title = "",
                     targetTitle = "First",
                     content = "First change",
                 ),
                 ChatAction(
                     type = "ADD_BLOCK",
+                    title = "",
                     targetTitle = "Second",
                     content = "Second change",
                 ),

@@ -4,6 +4,7 @@ import com.changeyourlife.cyl.backend.config.AppConfig
 import com.changeyourlife.cyl.backend.config.DatabaseConfig
 import com.changeyourlife.cyl.backend.config.EmailConfig
 import com.changeyourlife.cyl.backend.config.JwtConfig
+import com.changeyourlife.cyl.backend.config.WebSearchConfig
 import com.changeyourlife.cyl.backend.service.AiService
 import com.changeyourlife.cyl.backend.model.ai.ChatMessage
 import com.changeyourlife.cyl.backend.model.ai.ChatWithActionsResponse
@@ -1232,6 +1233,7 @@ class ApplicationTest {
             openRouterApiKey = null,
             openRouterModel = "test-model",
             openRouterVisionModels = listOf("test-vision-model"),
+            webSearch = WebSearchConfig(enabled = false),
         )
     }
 }

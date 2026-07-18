@@ -65,7 +65,16 @@ class AiModelActionNormalizer(
         pages: List<AiPageContext>,
         prompt: String,
     ): AiService.AiActionItem {
-        val normalizedType = type.normalizedActionType()
+        val rawNormalizedType = type.normalizedActionType()
+        val normalizedType = when {
+            rawNormalizedType in clearTableCellAliases -> "CLEAR_TABLE_CELL"
+            rawNormalizedType == "UPDATE_TABLE_CELL" &&
+                prompt.looksLikeClearCellRequest() &&
+                value.isBlank() &&
+                content.isBlank() &&
+                cellValues.isEmpty() -> "CLEAR_TABLE_CELL"
+            else -> rawNormalizedType
+        }
         val explicitTarget = targetTitle.cleanAiPageTitle()
             .ifBlank { title.cleanAiPageTitle().takeIf { normalizedType != "CREATE_DATABASE" }.orEmpty() }
         val targetPage = AiPageTargetMatcher.findPageByAiTitle(pages, explicitTarget)
@@ -74,7 +83,11 @@ class AiModelActionNormalizer(
             type = normalizedType,
             targetTitle = targetPage?.title ?: explicitTarget,
             tableTitle = tableTitle.ifBlank {
-                if (normalizedType in tableRowActionTypes) targetPage?.defaultTableTitle().orEmpty() else ""
+                if (normalizedType in tableRowActionTypes && normalizedType !in cellActionTypes) {
+                    targetPage?.defaultTableTitle().orEmpty()
+                } else {
+                    ""
+                }
             },
         )
     }
@@ -251,6 +264,16 @@ class AiModelActionNormalizer(
     private fun String.withoutMentionContext(): String =
         substringBefore("CYL_MENTION_CONTEXT:").trim()
 
+    private fun String.looksLikeClearCellRequest(): Boolean {
+        val words = withoutMentionContext()
+            .lowercase()
+            .split(Regex("[^a-z0-9]+"))
+            .filter(String::isNotBlank)
+            .toSet()
+        return words.any { word -> word in clearMutationWords } &&
+            words.any { word -> word in cellTargetWords }
+    }
+
     private fun String.looksLikePageMutationRequest(): Boolean {
         val value = lowercase()
         val mutationIntent = listOf(
@@ -404,7 +427,12 @@ class AiModelActionNormalizer(
             "UPDATE_TABLE_ROW",
             "DELETE_TABLE_ROW",
             "UPDATE_TABLE_CELL",
+            "CLEAR_TABLE_CELL",
         )
+        val cellActionTypes = setOf("UPDATE_TABLE_CELL", "CLEAR_TABLE_CELL")
+        val clearTableCellAliases = setOf("CLEAR_TABLE_CELL", "DELETE_TABLE_CELL", "EMPTY_TABLE_CELL")
+        val clearMutationWords = setOf("clear", "delete", "empty", "hapus", "kosongkan", "padam", "remove")
+        val cellTargetWords = setOf("cell", "sel")
         val legacyEnvelopeKeys = setOf("page", "targetpage", "targettitle", "action", "data", "rows", "row", "table", "tabletitle")
         val ignoredLegacyDataKeys = setOf("id", "rowid", "row_id", "uuid")
     }

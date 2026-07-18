@@ -644,10 +644,11 @@ class AiPageActionExecutor @Inject constructor(
                         "Deleted row content from ${rowTitle.ifBlank { action.rowId }} in ${update.tableTitle}"
                     }
 
-                    "UPDATE_TABLE_CELL" -> {
+                    "UPDATE_TABLE_CELL", "CLEAR_TABLE_CELL" -> {
                         val columnName = action.columnName.ifBlank { action.propertyName }
                         val rowTitle = action.rowTitle.ifBlank { action.title }
-                        val value = action.resolvedTableCellUpdateValue(columnName)
+                        val isClearAction = actionType == "CLEAR_TABLE_CELL"
+                        val value = if (isClearAction) "" else action.resolvedTableCellUpdateValue(columnName)
                         if (!documentChanged && action.rowId.isNotBlank() && action.columnId.isNotBlank()) {
                             val updated = pageRepository.updateTableCellValue(
                                 pageId = page.id,
@@ -660,7 +661,11 @@ class AiPageActionExecutor @Inject constructor(
                                 workingDocument = refreshedDocument
                             }
                             directPageChanged = true
-                            "Updated ${columnName.ifBlank { action.columnId }} for ${rowTitle.ifBlank { action.rowId }}"
+                            if (isClearAction) {
+                                "Cleared ${columnName.ifBlank { action.columnId }} for ${rowTitle.ifBlank { action.rowId }}"
+                            } else {
+                                "Updated ${columnName.ifBlank { action.columnId }} for ${rowTitle.ifBlank { action.rowId }}"
+                            }
                         } else {
                             val update = workingDocument.updateMatchingTable(action, actionIndex, undoCommands) { block ->
                                 block.updateCellByNames(
@@ -673,7 +678,11 @@ class AiPageActionExecutor @Inject constructor(
                             }
                             workingDocument = update.document
                             documentChanged = true
-                            "Updated ${columnName.ifBlank { action.columnId }} for ${rowTitle.ifBlank { action.rowId }} in ${update.tableTitle}"
+                            if (isClearAction) {
+                                "Cleared ${columnName.ifBlank { action.columnId }} for ${rowTitle.ifBlank { action.rowId }} in ${update.tableTitle}"
+                            } else {
+                                "Updated ${columnName.ifBlank { action.columnId }} for ${rowTitle.ifBlank { action.rowId }} in ${update.tableTitle}"
+                            }
                         }
                     }
 
@@ -1449,7 +1458,7 @@ private fun PageBlockDocument.validateActionTarget(
             rowPageBlockIssue(table)
         }
 
-        "UPDATE_TABLE_CELL" -> {
+        "UPDATE_TABLE_CELL", "CLEAR_TABLE_CELL" -> {
             val table = targetTable() ?: return tableIssue()
             rowIssue(table) ?: columnIssue(table) ?: tableDateCellIssue(table)
         }
@@ -1811,7 +1820,12 @@ private fun List<PageBlock>.findMatchingTable(action: ChatAction): PageBlock? {
     if (action.blockId.isNotBlank()) {
         firstOrNull { block -> block.id == action.blockId && block.type == PageBlockType.DatabaseTable }?.let { return it }
     }
-    val tableName = action.tableTitle.ifBlank { action.title }
+    val actionType = action.normalizedExecutionType()
+    val tableName = if (actionType in cellTargetActionTypes) {
+        action.tableTitle
+    } else {
+        action.tableTitle.ifBlank { action.title }
+    }
     if (tableName.isNotBlank()) {
         firstOrNull { block ->
             block.type == PageBlockType.DatabaseTable && block.table.title.equals(tableName, ignoreCase = true)
@@ -1820,12 +1834,24 @@ private fun List<PageBlock>.findMatchingTable(action: ChatAction): PageBlock? {
             block.type == PageBlockType.DatabaseTable && block.table.title.contains(tableName, ignoreCase = true)
         }?.let { return it }
     }
-    if (action.type.trim().uppercase().replace(' ', '_') == "ADD_TABLE_ROW" && tableName.isBlank()) {
+    if (actionType == "ADD_TABLE_ROW" && tableName.isBlank()) {
         firstOrNull { block -> block.isTransactionLedgerTable() }?.let { return it }
     }
-    return filter { block -> block.type == PageBlockType.DatabaseTable }.singleOrNull()
-        ?: firstOrNull { block -> block.type == PageBlockType.DatabaseTable }
+    val databaseTables = filter { block -> block.type == PageBlockType.DatabaseTable }
+    if (actionType in cellTargetActionTypes && tableName.isBlank()) {
+        val rowTitle = action.rowTitle.ifBlank { action.title }
+        val columnName = action.columnName.ifBlank { action.propertyName }
+        val matchingTables = databaseTables.filter { block ->
+            block.table.resolveRow(action.rowId, rowTitle) is AiRowResolution.Found &&
+                block.table.findColumn(action.columnId, columnName) != null
+        }
+        matchingTables.singleOrNull()?.let { return it }
+        if (databaseTables.size > 1) return null
+    }
+    return databaseTables.singleOrNull() ?: databaseTables.firstOrNull()
 }
+
+private val cellTargetActionTypes = setOf("UPDATE_TABLE_CELL", "CLEAR_TABLE_CELL")
 
 private fun PageBlockDocument.upsertProperty(
     name: String,

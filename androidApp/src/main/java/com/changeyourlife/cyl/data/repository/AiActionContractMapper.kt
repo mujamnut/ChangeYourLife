@@ -201,7 +201,7 @@ private sealed interface AiActionContract {
     }
 
     data object TableCell : AiActionContract {
-        override val types = setOf("UPDATE_TABLE_CELL")
+        override val types = setOf("UPDATE_TABLE_CELL", "CLEAR_TABLE_CELL")
         override val allowedFields = TableTarget + RowTarget + ColumnTarget + setOf("title", "propertyName", "value", "content", "cellValues")
     }
 

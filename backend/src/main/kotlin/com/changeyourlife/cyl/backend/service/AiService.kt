@@ -423,7 +423,7 @@ class AiService(
             ADD_PROPERTY, UPDATE_PROPERTY, DELETE_PROPERTY,
             CREATE_DATABASE, CREATE_TABLE, RENAME_TABLE, ADD_TABLE_COLUMN, DELETE_TABLE_COLUMN,
             RENAME_TABLE_COLUMN, UPDATE_TABLE_COLUMN_TYPE, UPDATE_TABLE_COLUMN_CONFIG,
-            ADD_TABLE_ROW, UPDATE_TABLE_ROW, DELETE_TABLE_ROW, UPDATE_TABLE_CELL,
+            ADD_TABLE_ROW, UPDATE_TABLE_ROW, DELETE_TABLE_ROW, UPDATE_TABLE_CELL, CLEAR_TABLE_CELL,
             ADD_ROW_PAGE_BLOCK, UPDATE_ROW_PAGE_BLOCK, DELETE_ROW_PAGE_BLOCK,
             CHANGE_TABLE_VIEW, SET_TABLE_VIEW_CONFIG, SORT_TABLE, FILTER_TABLE, GROUP_TABLE.
 
@@ -449,7 +449,9 @@ class AiService(
             - For date words like harini/today, use the client date.
             - For money like "29 ringgit", put the numeric value in an amount/price/cost column if such column exists or create a Number column.
             - To change one existing cell, use UPDATE_TABLE_CELL with the exact table, row, column, and value. Text and Number cells are editable data: never convert them to Select/Status or modify dropdown options unless the user explicitly asks to change the property type/options.
-            - To change several cells in one existing row, use UPDATE_TABLE_ROW with cellValues. To intentionally clear one cell, use UPDATE_TABLE_CELL with cellValues containing that column and an empty string.
+            - To intentionally clear/delete one cell value, use CLEAR_TABLE_CELL with its exact rowId/rowTitle and columnId/columnName. Do not delete the row or column.
+            - If a value such as "bulan 4" uniquely identifies one existing cell, use its hidden rowId and columnId. If several cells match, ask which table/row instead of guessing.
+            - To change several cells in one existing row, use UPDATE_TABLE_ROW with cellValues.
             - For update/delete/move row actions, prefer the exact rowId from CYL_SEARCH_CONTEXT when available. If the user identifies a row by another property such as Month, resolve that search result to its rowId instead of inventing a row title.
             - For table creation, infer sensible columns and rows from the user's intent instead of using fixed templates.
             - Do not set table sort, filter, group, hidden columns, or view rules when creating a page/table unless the user explicitly asks for those controls. A normal monthly expenses request should create data/schema only; user can filter/sort/group manually later.
@@ -474,6 +476,9 @@ class AiService(
 
             User: dalam row makeup ubah Notes jadi beli di kedai
             JSON: {"reply":"Siap - saya kemas kini catatan itu.","actions":[{"type":"UPDATE_TABLE_CELL","tableTitle":"Transactions","rowTitle":"makeup","columnName":"Notes","value":"beli di kedai"}]}
+
+            User: padam cell Month untuk row April
+            JSON: {"reply":"Siap - saya kosongkan cell itu.","actions":[{"type":"CLEAR_TABLE_CELL","tableTitle":"Monthly Summary","rowTitle":"April","columnName":"Month"}]}
 
             User: @Budget Tracker ubah nama table jadi Expenses
             JSON: {"reply":"Siap - saya rename table itu.","actions":[{"type":"RENAME_TABLE","targetTitle":"Budget Tracker","title":"Expenses"}]}
