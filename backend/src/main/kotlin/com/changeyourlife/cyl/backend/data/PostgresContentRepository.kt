@@ -15,6 +15,8 @@ import kotlinx.coroutines.withContext
 class PostgresContentRepository(
     private val dataSource: DataSource,
 ) : ContentRepository {
+    private val projectionWriter = PostgresPageContentProjectionWriter()
+
     override suspend fun listWorkspaces(userId: String, includeDeleted: Boolean): List<WorkspaceRecord> =
         withContext(Dispatchers.IO) {
             dataSource.connection.use { connection ->
@@ -245,38 +247,56 @@ class PostgresContentRepository(
             }
 
             val saved = dataSource.connection.use { connection ->
-                connection.prepareStatement(
-                    """
-                    INSERT INTO pages (
-                        id, workspace_id, parent_page_id, title, content, sort_order,
-                        created_at, updated_at, deleted_at
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT (id) DO UPDATE SET
-                        workspace_id = EXCLUDED.workspace_id,
-                        parent_page_id = EXCLUDED.parent_page_id,
-                        title = EXCLUDED.title,
-                        content = EXCLUDED.content,
-                        sort_order = EXCLUDED.sort_order,
-                        updated_at = EXCLUDED.updated_at,
-                        deleted_at = EXCLUDED.deleted_at
-                    WHERE pages.updated_at < EXCLUDED.updated_at
-                    RETURNING id, workspace_id, parent_page_id, title, content, sort_order,
-                              created_at, updated_at, deleted_at
-                    """.trimIndent(),
-                ).use { statement ->
-                    statement.setString(1, page.id)
-                    statement.setString(2, serverWorkspaceId)
-                    statement.setString(3, page.parentPageId)
-                    statement.setString(4, page.title)
-                    statement.setString(5, page.content)
-                    statement.setInt(6, page.sortOrder)
-                    statement.setLong(7, page.createdAt)
-                    statement.setLong(8, page.updatedAt)
-                    statement.setNullableLong(9, page.deletedAt)
-                    statement.executeQuery().use { resultSet ->
-                        if (resultSet.next()) resultSet.toPageRecord(workspaceId = page.workspaceId) else null
+                connection.autoCommit = false
+                try {
+                    val persisted = connection.prepareStatement(
+                        """
+                        INSERT INTO pages (
+                            id, workspace_id, parent_page_id, title, content, sort_order,
+                            created_at, updated_at, deleted_at
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT (id) DO UPDATE SET
+                            workspace_id = EXCLUDED.workspace_id,
+                            parent_page_id = EXCLUDED.parent_page_id,
+                            title = EXCLUDED.title,
+                            content = EXCLUDED.content,
+                            sort_order = EXCLUDED.sort_order,
+                            updated_at = EXCLUDED.updated_at,
+                            deleted_at = EXCLUDED.deleted_at
+                        WHERE pages.updated_at < EXCLUDED.updated_at
+                        RETURNING id, workspace_id, parent_page_id, title, content, sort_order,
+                                  created_at, updated_at, deleted_at
+                        """.trimIndent(),
+                    ).use { statement ->
+                        statement.setString(1, page.id)
+                        statement.setString(2, serverWorkspaceId)
+                        statement.setString(3, page.parentPageId)
+                        statement.setString(4, page.title)
+                        statement.setString(5, page.content)
+                        statement.setInt(6, page.sortOrder)
+                        statement.setLong(7, page.createdAt)
+                        statement.setLong(8, page.updatedAt)
+                        statement.setNullableLong(9, page.deletedAt)
+                        statement.executeQuery().use { resultSet ->
+                            if (resultSet.next()) {
+                                resultSet.toPageRecord(workspaceId = page.workspaceId)
+                            } else {
+                                null
+                            }
+                        }
                     }
+                    persisted?.let { savedPage ->
+                        projectionWriter.replace(
+                            connection = connection,
+                            source = savedPage.toProjectionSource(),
+                        )
+                    }
+                    connection.commit()
+                    persisted
+                } catch (error: Throwable) {
+                    runCatching { connection.rollback() }
+                    throw error
                 }
             }
             saved ?: getPage(userId = userId, pageId = page.id, includeDeleted = true)
@@ -378,22 +398,40 @@ class PostgresContentRepository(
     ): Boolean {
         val updatedAt = restoredAt ?: deletedAt ?: System.currentTimeMillis()
         dataSource.connection.use { connection ->
-            connection.prepareStatement(
-                """
-                UPDATE pages
-                SET deleted_at = ?, updated_at = ?
-                WHERE (id = ? OR parent_page_id = ?)
-                  AND workspace_id IN (
-                      SELECT id FROM workspaces WHERE user_id = ?
-                  )
-                """.trimIndent(),
-            ).use { statement ->
-                statement.setNullableLong(1, deletedAt)
-                statement.setLong(2, updatedAt)
-                statement.setString(3, pageId)
-                statement.setString(4, pageId)
-                statement.setString(5, userId)
-                return statement.executeUpdate() > 0
+            connection.autoCommit = false
+            try {
+                val updatedPages = connection.prepareStatement(
+                    """
+                    UPDATE pages
+                    SET deleted_at = ?, updated_at = ?
+                    WHERE (id = ? OR parent_page_id = ?)
+                      AND workspace_id IN (
+                          SELECT id FROM workspaces WHERE user_id = ?
+                      )
+                    RETURNING id, content, created_at, updated_at, deleted_at
+                    """.trimIndent(),
+                ).use { statement ->
+                    statement.setNullableLong(1, deletedAt)
+                    statement.setLong(2, updatedAt)
+                    statement.setString(3, pageId)
+                    statement.setString(4, pageId)
+                    statement.setString(5, userId)
+                    statement.executeQuery().use { resultSet ->
+                        buildList {
+                            while (resultSet.next()) {
+                                add(resultSet.toProjectionSource())
+                            }
+                        }
+                    }
+                }
+                updatedPages.forEach { source ->
+                    projectionWriter.replace(connection, source)
+                }
+                connection.commit()
+                return updatedPages.isNotEmpty()
+            } catch (error: Throwable) {
+                runCatching { connection.rollback() }
+                throw error
             }
         }
     }
@@ -456,6 +494,12 @@ class PostgresContentRepository(
                     statement.executeQuery().use { resultSet ->
                         if (resultSet.next()) resultSet.toPageRecord() else null
                     }
+                }
+                saved?.let { savedPage ->
+                    projectionWriter.replace(
+                        connection = connection,
+                        source = savedPage.toProjectionSource(),
+                    )
                 }
                 connection.commit()
                 saved
@@ -804,6 +848,26 @@ private fun ResultSet.toPageRecord(workspaceId: String): PageRecord {
         createdAt = getLong("created_at"),
         updatedAt = getLong("updated_at"),
         deletedAt = getNullableLong("deleted_at"),
+    )
+}
+
+private fun ResultSet.toProjectionSource(): PageProjectionSource {
+    return PageProjectionSource(
+        pageId = getString("id"),
+        content = getString("content"),
+        createdAt = getLong("created_at"),
+        updatedAt = getLong("updated_at"),
+        deletedAt = getNullableLong("deleted_at"),
+    )
+}
+
+private fun PageRecord.toProjectionSource(): PageProjectionSource {
+    return PageProjectionSource(
+        pageId = id,
+        content = content,
+        createdAt = createdAt,
+        updatedAt = updatedAt,
+        deletedAt = deletedAt,
     )
 }
 

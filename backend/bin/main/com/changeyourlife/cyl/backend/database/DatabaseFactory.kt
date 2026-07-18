@@ -1,11 +1,15 @@
 package com.changeyourlife.cyl.backend.database
 
 import com.changeyourlife.cyl.backend.config.DatabaseConfig
+import com.changeyourlife.cyl.backend.data.PostgresPageContentProjectionBackfill
 import com.zaxxer.hikari.HikariConfig
 import com.zaxxer.hikari.HikariDataSource
 import org.flywaydb.core.Flyway
+import org.slf4j.LoggerFactory
 
 object DatabaseFactory {
+    private val logger = LoggerFactory.getLogger(DatabaseFactory::class.java)
+
     fun createDataSource(config: DatabaseConfig): HikariDataSource {
         require(config.isConfigured) {
             "DATABASE_URL must be configured before creating the PostgreSQL data source."
@@ -31,6 +35,10 @@ object DatabaseFactory {
             .baselineOnMigrate(true)
             .load()
             .migrate()
+
+        val rebuiltPages = PostgresPageContentProjectionBackfill(dataSource).run()
+        if (rebuiltPages > 0) {
+            logger.info("Rebuilt PostgreSQL content projection for {} page(s).", rebuiltPages)
+        }
     }
 }
-
