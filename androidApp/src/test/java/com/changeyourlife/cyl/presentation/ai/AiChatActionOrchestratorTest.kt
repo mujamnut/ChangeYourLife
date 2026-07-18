@@ -232,7 +232,10 @@ class AiChatActionOrchestratorTest {
         }
 
         assertEquals(listOf("ADD_TABLE_ROW", "UPDATE_BLOCK"), result.actionMetadata.proposedActions.map { it.type })
-        assertEquals("Siap.\n\nFailed UPDATE_BLOCK: Could not find block", result.reply)
+        assertEquals(
+            "Sebahagian perubahan sudah dibuat.\n\nPerubahan itu tidak dapat disimpan.",
+            result.reply,
+        )
         assertEquals(listOf("ADD_TABLE_ROW"), result.actionMetadata.executedActions.map { it.type })
         assertEquals(listOf(1), result.actionMetadata.validationIssues.map { it.actionIndex })
     }

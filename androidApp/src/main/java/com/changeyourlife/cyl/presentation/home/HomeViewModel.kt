@@ -890,7 +890,12 @@ class HomeViewModel @Inject constructor(
                             sessionId = session.id,
                             role = "assistant",
                             content = orchestration.reply.sanitizeAiUserVisibleText(),
-                            pageLinks = (orchestration.pageLinks + searchPageLinks)
+                            pageLinks = (
+                                orchestration.pageLinks +
+                                    searchPageLinks.takeIf {
+                                        orchestration.actionMetadata.proposedActions.isEmpty()
+                                    }.orEmpty()
+                                )
                                 .distinctBy { link -> "${link.pageId}:${link.targetType}:${link.targetId}" }
                                 .toDomainChatPageLinks(),
                             actionMetadata = orchestration.actionMetadata,

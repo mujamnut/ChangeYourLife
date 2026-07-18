@@ -30,6 +30,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -39,9 +40,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.changeyourlife.cyl.domain.model.PageTable
@@ -61,15 +64,50 @@ internal fun RowPageTitleEditor(
     modifier: Modifier = Modifier,
 ) {
     val textColor = MaterialTheme.colorScheme.onSurface
+    var fieldValue by remember {
+        mutableStateOf(
+            TextFieldValue(
+                text = title,
+                selection = TextRange(title.length),
+            ),
+        )
+    }
+    var pendingTitle by remember { mutableStateOf<String?>(null) }
+    var isFocused by remember { mutableStateOf(false) }
+
+    LaunchedEffect(title, isFocused) {
+        when {
+            title == pendingTitle -> {
+                if (!isFocused) pendingTitle = null
+            }
+            pendingTitle != null -> Unit
+            fieldValue.text != title -> {
+                fieldValue = TextFieldValue(
+                    text = title,
+                    selection = fieldValue.selection.coerceInText(title),
+                )
+            }
+        }
+    }
+
     BasicTextField(
-        value = title,
-        onValueChange = { nextTitle -> onTitleChange(nextTitle.toSingleLineTableCellValue()) },
+        value = fieldValue,
+        onValueChange = { nextValue ->
+            val nextTitle = nextValue.text.toSingleLineTableCellValue()
+            fieldValue = nextValue.copy(
+                text = nextTitle,
+                selection = nextValue.selection.coerceInText(nextTitle),
+            )
+            pendingTitle = nextTitle
+            onTitleChange(nextTitle)
+        },
         enabled = enabled,
         singleLine = true,
         modifier = modifier
             .heightIn(min = 50.dp)
             .padding(end = 10.dp)
             .onFocusChanged { focusState ->
+                isFocused = focusState.isFocused
                 if (focusState.isFocused) onFocusTitle()
             },
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
@@ -83,7 +121,7 @@ internal fun RowPageTitleEditor(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.CenterStart,
             ) {
-                if (title.isBlank()) {
+                if (fieldValue.text.isBlank()) {
                     Text(
                         text = "Untitled row",
                         maxLines = 1,
@@ -104,6 +142,7 @@ internal fun RowPagePropertyList(
     table: PageTable,
     row: PageTableRow,
     tableReferences: List<PageTableReference>,
+    cellValueOverrides: Map<String, String> = emptyMap(),
     onAddProperty: () -> Unit,
     onEditProperty: (PageTableColumn) -> Unit,
     onCellChange: (String, String) -> Unit,
@@ -191,6 +230,7 @@ internal fun RowPagePropertyList(
                     row = row,
                     column = column,
                     tableReferences = tableReferences,
+                    value = cellValueOverrides[column.id] ?: row.cellText(column),
                     onValueChange = { value -> onCellChange(column.id, value) },
                     onRelationValueChange = { relationRowIds -> onRelationCellChange(column.id, relationRowIds) },
                     onDateSettingsChange = { dateFormat, timeFormat, reminder, timezoneLabel ->
@@ -218,6 +258,7 @@ private fun RowPagePropertyItem(
     row: PageTableRow,
     column: PageTableColumn,
     tableReferences: List<PageTableReference>,
+    value: String,
     onValueChange: (String) -> Unit,
     onRelationValueChange: (List<String>) -> Unit,
     onDateSettingsChange: (
@@ -278,7 +319,7 @@ private fun RowPagePropertyItem(
             row = row,
             column = column,
             tableReferences = tableReferences,
-            value = row.cellText(column),
+            value = value,
             onValueChange = onValueChange,
             onRelationValueChange = onRelationValueChange,
             onDateSettingsChange = onDateSettingsChange,

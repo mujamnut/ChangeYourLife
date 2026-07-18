@@ -15,7 +15,6 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.content.MediaType
 import androidx.compose.foundation.content.ReceiveContentListener
 import androidx.compose.foundation.content.consume
@@ -38,10 +37,14 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.SheetState
@@ -376,6 +379,7 @@ fun AiChatSheet(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
+        sheetGesturesEnabled = false,
     ) {
         Column(
             modifier = Modifier
@@ -659,19 +663,11 @@ private fun AiChatMessageList(
                             modifier = if (isUser) {
                                 Modifier
                                     .clip(RoundedCornerShape(12.dp))
-                                    .combinedClickable(
-                                        onClick = {},
-                                        onLongClick = { context.copyAiChatMessage(messageText) },
-                                    )
                                     .background(MaterialTheme.colorScheme.primaryContainer)
                                     .padding(horizontal = 12.dp, vertical = 8.dp)
                             } else {
                                 Modifier
                                     .fillMaxWidth()
-                                    .combinedClickable(
-                                        onClick = {},
-                                        onLongClick = { context.copyAiChatMessage(messageText) },
-                                    )
                                     .padding(horizontal = 2.dp, vertical = 5.dp)
                             },
                             color = if (isUser) {
@@ -687,6 +683,19 @@ private fun AiChatMessageList(
                             links = message.pageLinks,
                             onOpenPage = onOpenPage,
                         )
+                    }
+                    if (!isUser && messageText.isNotBlank()) {
+                        IconButton(
+                            onClick = { context.copyAiChatMessage(messageText) },
+                            modifier = Modifier.size(28.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.ContentCopy,
+                                contentDescription = "Copy response",
+                                modifier = Modifier.size(15.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
                 }
             }

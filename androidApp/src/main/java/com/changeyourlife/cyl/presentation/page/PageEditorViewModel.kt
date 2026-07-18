@@ -82,6 +82,8 @@ class PageEditorViewModel @Inject constructor(
     private val _pendingChanges = MutableStateFlow<PageBlockDocument?>(null)
     private val _pendingGranularDocumentSave = MutableStateFlow<PendingGranularDocumentSave?>(null)
     private val _pendingTitle = MutableStateFlow<String?>(null)
+    private val _lastCommittedDocument = MutableStateFlow<CommittedEditorDocument?>(null)
+    private val _lastCommittedTitle = MutableStateFlow<CommittedEditorTitle?>(null)
     private val _canUndoEditorChange = MutableStateFlow(false)
     private val reminderSyncedPageIds = mutableSetOf<String>()
     private val budgetMigratedPageIds = mutableSetOf<String>()
@@ -146,24 +148,50 @@ class PageEditorViewModel @Inject constructor(
         }
     }
 
+    private val localEditorOverlayState = combine(
+        _pendingChanges,
+        _lastCommittedDocument,
+        _pendingTitle,
+        _lastCommittedTitle,
+        _canUndoEditorChange,
+    ) { pendingDoc, committedDocument, pendingTitle, committedTitle, canUndoEditorChange ->
+        LocalEditorOverlayState(
+            pendingDocument = pendingDoc,
+            committedDocument = committedDocument,
+            pendingTitle = pendingTitle,
+            committedTitle = committedTitle,
+            canUndoEditorChange = canUndoEditorChange,
+        )
+    }
+
     private val baseUiState: StateFlow<PageEditorUiState> = combine(
         _dbState,
-        _pendingChanges,
-        _pendingTitle,
-        _canUndoEditorChange,
-    ) { dbState, pendingDoc, pendingTitle, canUndoEditorChange ->
+        localEditorOverlayState,
+    ) { dbState, overlay ->
         if (dbState.page != null) {
+            // Read the latest values directly so a cross-flow scheduling race cannot expose
+            // the repository snapshot between committing and clearing a pending edit.
+            val pendingDocument = _pendingChanges.value
+            val pendingTitle = _pendingTitle.value
+            val observedUpdatedAt = dbState.page.updatedAt
+            val committedDocument = _lastCommittedDocument.value
+                ?.takeIf { committed -> observedUpdatedAt < committed.pageUpdatedAt }
+                ?.document
+            val committedTitle = _lastCommittedTitle.value
+                ?.takeIf { committed -> observedUpdatedAt < committed.pageUpdatedAt }
+                ?.title
+            val visibleDocument = pendingDocument ?: committedDocument
             dbState.copy(
-                title = pendingTitle ?: dbState.title,
-                properties = pendingDoc?.properties ?: dbState.properties,
-                blocks = pendingDoc?.blocks ?: dbState.blocks,
-                isSaving = pendingDoc != null || pendingTitle != null,
-                canUndoEditorChange = canUndoEditorChange,
+                title = pendingTitle ?: committedTitle ?: dbState.title,
+                properties = visibleDocument?.properties ?: dbState.properties,
+                blocks = visibleDocument?.blocks ?: dbState.blocks,
+                isSaving = pendingDocument != null || pendingTitle != null,
+                canUndoEditorChange = overlay.canUndoEditorChange,
             )
         } else {
             dbState.copy(
-                isSaving = pendingDoc != null || pendingTitle != null,
-                canUndoEditorChange = canUndoEditorChange,
+                isSaving = overlay.pendingDocument != null || overlay.pendingTitle != null,
+                canUndoEditorChange = overlay.canUndoEditorChange,
             )
         }
     }.stateIn(
@@ -364,8 +392,12 @@ class PageEditorViewModel @Inject constructor(
         pageRepository.upsertPage(
             page.copy(
                 content = encodedContent,
-                updatedAt = System.currentTimeMillis(),
+                updatedAt = maxOf(System.currentTimeMillis(), page.updatedAt + 1L),
             ),
+        )
+        captureCommittedDocument(
+            fallbackDocument = normalizedDoc,
+            fallbackUpdatedAt = page.updatedAt + 1L,
         )
         _pendingGranularDocumentSave.value = null
         if (_pendingChanges.value == pendingDoc) {
@@ -457,6 +489,10 @@ class PageEditorViewModel @Inject constructor(
             }
         }
 
+        captureCommittedDocument(
+            fallbackDocument = normalizedDoc,
+            fallbackUpdatedAt = page.updatedAt + 1L,
+        )
         if (_pendingGranularDocumentSave.value == pendingSave) {
             _pendingGranularDocumentSave.value = null
         }
@@ -564,12 +600,31 @@ class PageEditorViewModel @Inject constructor(
         pageRepository.upsertPage(
             page.copy(
                 title = pendingTitle,
-                updatedAt = System.currentTimeMillis(),
+                updatedAt = maxOf(System.currentTimeMillis(), page.updatedAt + 1L),
             ),
+        )
+        val committedPage = pageRepository.getPage(pageId)
+        _lastCommittedTitle.value = CommittedEditorTitle(
+            title = committedPage?.title ?: pendingTitle,
+            pageUpdatedAt = committedPage?.updatedAt ?: (page.updatedAt + 1L),
         )
         if (_pendingTitle.value == pendingTitle) {
             _pendingTitle.value = null
         }
+    }
+
+    private suspend fun captureCommittedDocument(
+        fallbackDocument: PageBlockDocument,
+        fallbackUpdatedAt: Long,
+    ) {
+        val committedPage = pageRepository.getPage(pageId)
+        val committedDocument = committedPage
+            ?.let { page -> processEditorDocument(page.content).synced }
+            ?: fallbackDocument
+        _lastCommittedDocument.value = CommittedEditorDocument(
+            document = committedDocument,
+            pageUpdatedAt = committedPage?.updatedAt ?: fallbackUpdatedAt,
+        )
     }
 
     private fun currentDocument(currentUiState: PageEditorUiState = uiState.value): PageBlockDocument? {
@@ -2555,6 +2610,24 @@ class PageEditorViewModel @Inject constructor(
 private data class ProcessedEditorDocument(
     val normalized: PageBlockDocument,
     val synced: PageBlockDocument,
+)
+
+private data class CommittedEditorDocument(
+    val document: PageBlockDocument,
+    val pageUpdatedAt: Long,
+)
+
+private data class CommittedEditorTitle(
+    val title: String,
+    val pageUpdatedAt: Long,
+)
+
+private data class LocalEditorOverlayState(
+    val pendingDocument: PageBlockDocument?,
+    val committedDocument: CommittedEditorDocument?,
+    val pendingTitle: String?,
+    val committedTitle: CommittedEditorTitle?,
+    val canUndoEditorChange: Boolean,
 )
 
 private sealed interface LoadedEditorPageState {

@@ -1,8 +1,11 @@
 package com.changeyourlife.cyl.presentation.home
 
+import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.ContextWrapper
+import android.view.WindowManager
 import android.widget.Toast
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -69,6 +72,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -83,9 +87,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import com.changeyourlife.cyl.data.local.session.AppThemeMode
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -596,6 +603,8 @@ private fun HomeSearchScreen(
     onClearSearchQuery: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    HomeSearchKeyboardOverlayMode()
+
     Scaffold(
         modifier = modifier,
         bottomBar = {
@@ -1794,6 +1803,23 @@ private fun HomeSearchBottomBar(
     onQueryChange: (String) -> Unit,
     onClear: () -> Unit,
 ) {
+    var textFieldValue by remember {
+        mutableStateOf(
+            TextFieldValue(
+                text = query,
+                selection = TextRange(query.length),
+            ),
+        )
+    }
+    LaunchedEffect(query) {
+        if (query != textFieldValue.text) {
+            textFieldValue = TextFieldValue(
+                text = query,
+                selection = TextRange(query.length),
+            )
+        }
+    }
+
     CylFloatingChromeSurface(
         modifier = Modifier
             .fillMaxWidth()
@@ -1816,8 +1842,13 @@ private fun HomeSearchBottomBar(
                 modifier = Modifier.size(22.dp),
             )
             BasicTextField(
-                value = query,
-                onValueChange = onQueryChange,
+                value = textFieldValue,
+                onValueChange = { nextValue ->
+                    textFieldValue = nextValue
+                    if (nextValue.text != query) {
+                        onQueryChange(nextValue.text)
+                    }
+                },
                 modifier = Modifier
                     .weight(1f)
                     .height(44.dp),
@@ -1831,7 +1862,7 @@ private fun HomeSearchBottomBar(
                         modifier = Modifier.fillMaxSize(),
                         contentAlignment = Alignment.CenterStart,
                     ) {
-                        if (query.isBlank()) {
+                        if (textFieldValue.text.isBlank()) {
                             Text(
                                 text = "Search pages, blocks, tables, rows",
                                 style = MaterialTheme.typography.bodyLarge,
@@ -1844,7 +1875,7 @@ private fun HomeSearchBottomBar(
                     }
                 },
             )
-            if (query.isNotBlank()) {
+            if (textFieldValue.text.isNotBlank()) {
                 Text(
                     text = resultCount.toString(),
                     style = MaterialTheme.typography.labelMedium,
@@ -1862,6 +1893,32 @@ private fun HomeSearchBottomBar(
             }
         }
     }
+}
+
+@Composable
+private fun HomeSearchKeyboardOverlayMode() {
+    val view = LocalView.current
+    DisposableEffect(view) {
+        val window = view.context.findActivity()?.window
+        if (window == null) {
+            onDispose { }
+        } else {
+            val originalSoftInputMode = window.attributes.softInputMode
+            val overlaySoftInputMode = (originalSoftInputMode and
+                WindowManager.LayoutParams.SOFT_INPUT_MASK_ADJUST.inv()) or
+                WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING
+            window.setSoftInputMode(overlaySoftInputMode)
+            onDispose {
+                window.setSoftInputMode(originalSoftInputMode)
+            }
+        }
+    }
+}
+
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
 }
 
 @Composable

@@ -104,6 +104,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -233,7 +234,10 @@ internal fun TableRowPageSheet(
     onDismiss: () -> Unit,
 ) {
     val titleColumn = table.titleColumn()
-    val title = row.cellText(titleColumn)
+    val optimisticCellValues = remember(row.id) { mutableStateMapOf<String, String>() }
+    val title = titleColumn?.let { column ->
+        optimisticCellValues[column.id] ?: row.cellText(column)
+    }.orEmpty()
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val density = LocalDensity.current
     val isKeyboardVisible = WindowInsets.ime.getBottom(density) > 0
@@ -249,6 +253,29 @@ internal fun TableRowPageSheet(
     var pendingFocusBeforeAdd by remember(row.id) { mutableStateOf<Set<String>?>(null) }
     var rowFocusRequestSequence by remember(row.id) { mutableStateOf(0L) }
     var rowEditorFocusRequest by remember(row.id) { mutableStateOf<EditorBlockFocusRequest?>(null) }
+
+    fun updateCellOptimistically(columnId: String, value: String) {
+        val column = table.columns.firstOrNull { candidate -> candidate.id == columnId }
+        val canonicalValue = row.cellText(column)
+        if (column == null || value == canonicalValue) {
+            optimisticCellValues.remove(columnId)
+        } else {
+            optimisticCellValues[columnId] = value
+        }
+        onCellChange(row.id, columnId, value)
+    }
+
+    fun updateRelationCellOptimistically(columnId: String, relationRowIds: List<String>) {
+        val value = relationRowIds.toRelationCellValue()
+        val column = table.columns.firstOrNull { candidate -> candidate.id == columnId }
+        val canonicalValue = row.cellText(column)
+        if (column == null || value == canonicalValue) {
+            optimisticCellValues.remove(columnId)
+        } else {
+            optimisticCellValues[columnId] = value
+        }
+        onRelationCellChange(row.id, columnId, relationRowIds)
+    }
 
     fun requestRowEditorFocus(blockId: String?) {
         if (blockId.isNullOrBlank()) return
@@ -312,6 +339,16 @@ internal fun TableRowPageSheet(
             !row.blocks.containsFocusableEditorBlock(currentFocusRequest.blockId)
         ) {
             rowEditorFocusRequest = null
+        }
+    }
+
+    LaunchedEffect(row, table.columns) {
+        val columnsById = table.columns.associateBy { column -> column.id }
+        optimisticCellValues.entries.toList().forEach { (columnId, pendingValue) ->
+            val column = columnsById[columnId]
+            if (column == null || row.cellText(column) == pendingValue) {
+                optimisticCellValues.remove(columnId)
+            }
         }
     }
 
@@ -431,7 +468,7 @@ internal fun TableRowPageSheet(
                     onFocusTitle = ::clearRowEditorFocus,
                     onTitleChange = { nextTitle ->
                         titleColumn?.let { column ->
-                            onCellChange(row.id, column.id, nextTitle)
+                            updateCellOptimistically(column.id, nextTitle)
                         }
                     },
                     modifier = Modifier.weight(1f),
@@ -461,9 +498,10 @@ internal fun TableRowPageSheet(
                     clearRowEditorFocus()
                     editingPropertyColumnId = column.id
                 },
-                onCellChange = { columnId, value -> onCellChange(row.id, columnId, value) },
+                cellValueOverrides = optimisticCellValues,
+                onCellChange = ::updateCellOptimistically,
                 onRelationCellChange = { columnId, relationRowIds ->
-                    onRelationCellChange(row.id, columnId, relationRowIds)
+                    updateRelationCellOptimistically(columnId, relationRowIds)
                 },
                 onColumnDateSettingsChange = onColumnDateSettingsChange,
                 onFocusProperties = ::clearRowEditorFocus,

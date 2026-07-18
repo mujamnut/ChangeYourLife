@@ -130,9 +130,11 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -355,13 +357,46 @@ internal fun PageTitleEditor(
     onTitleChange: (String) -> Unit,
     onFocusChanged: (Boolean) -> Unit,
 ) {
+    var fieldValue by remember {
+        mutableStateOf(
+            TextFieldValue(
+                text = title,
+                selection = TextRange(title.length),
+            ),
+        )
+    }
+    var pendingTitle by remember { mutableStateOf<String?>(null) }
+    var isFocused by remember { mutableStateOf(false) }
+
+    LaunchedEffect(title, isFocused) {
+        when {
+            title == pendingTitle -> {
+                if (!isFocused) pendingTitle = null
+            }
+            pendingTitle != null -> Unit
+            fieldValue.text != title -> {
+                fieldValue = TextFieldValue(
+                    text = title,
+                    selection = fieldValue.selection.coerceInText(title),
+                )
+            }
+        }
+    }
+
     BasicTextField(
-        value = title,
-        onValueChange = onTitleChange,
+        value = fieldValue,
+        onValueChange = { nextValue ->
+            fieldValue = nextValue
+            pendingTitle = nextValue.text
+            onTitleChange(nextValue.text)
+        },
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 58.dp)
-            .onFocusChanged { focusState -> onFocusChanged(focusState.isFocused) },
+            .onFocusChanged { focusState ->
+                isFocused = focusState.isFocused
+                onFocusChanged(focusState.isFocused)
+            },
         singleLine = false,
         textStyle = MaterialTheme.typography.headlineMedium.copy(
             fontWeight = FontWeight.SemiBold,

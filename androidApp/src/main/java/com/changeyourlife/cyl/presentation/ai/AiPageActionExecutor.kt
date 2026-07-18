@@ -596,7 +596,7 @@ class AiPageActionExecutor @Inject constructor(
                     }
 
                     "ADD_ROW_PAGE_BLOCK", "APPEND_ROW_PAGE_BLOCK", "ADD_TABLE_ROW_BLOCK" -> {
-                        val rowTitle = action.rowTitle.ifBlank { action.targetTitle }.ifBlank { action.title }
+                        val rowTitle = action.rowTitle.ifBlank { action.title }
                         if (rowTitle.isBlank() && action.rowId.isBlank()) error("Missing row target")
                         val rowBlock = action.toPageBlock()
                         val update = workingDocument.updateMatchingTable(action, actionIndex, undoCommands) { block ->
@@ -613,7 +613,7 @@ class AiPageActionExecutor @Inject constructor(
 
                     "UPDATE_ROW_PAGE_BLOCK", "EDIT_ROW_PAGE_BLOCK", "UPDATE_TABLE_ROW_BLOCK",
                     "CHECK_ROW_PAGE_BLOCK", "UNCHECK_ROW_PAGE_BLOCK" -> {
-                        val rowTitle = action.rowTitle.ifBlank { action.targetTitle }.ifBlank { action.title }
+                        val rowTitle = action.rowTitle.ifBlank { action.title }
                         if (rowTitle.isBlank() && action.rowId.isBlank()) error("Missing row target")
                         val update = workingDocument.updateMatchingTable(action, actionIndex, undoCommands) { block ->
                             block.updateRowPageBlock(
@@ -629,7 +629,7 @@ class AiPageActionExecutor @Inject constructor(
                     }
 
                     "DELETE_ROW_PAGE_BLOCK", "DELETE_TABLE_ROW_BLOCK" -> {
-                        val rowTitle = action.rowTitle.ifBlank { action.targetTitle }.ifBlank { action.title }
+                        val rowTitle = action.rowTitle.ifBlank { action.title }
                         if (rowTitle.isBlank() && action.rowId.isBlank()) error("Missing row target")
                         val update = workingDocument.updateMatchingTable(action, actionIndex, undoCommands) { block ->
                             block.deleteRowPageBlock(
@@ -1340,20 +1340,25 @@ private fun PageBlockDocument.validateActionTarget(
     }
 
     fun rowIssue(table: PageBlock): AiPageActionValidationIssue? {
-        val rowTitle = action.rowTitle.ifBlank { action.targetTitle }.ifBlank { action.title }
-        return if (table.table.findRow(action.rowId, rowTitle) == null) {
-            targetNotFound(
+        val rowTitle = action.rowTitle.ifBlank { action.title }
+        return when (table.table.resolveRow(action.rowId, rowTitle)) {
+            is AiRowResolution.Found -> null
+            AiRowResolution.Ambiguous -> AiPageActionValidationIssue(
+                actionIndex = actionIndex,
+                field = "rowTitle",
+                code = "ambiguous_target",
+                message = "More than one row matches: ${rowTitle.ifBlank { action.rowId }}.",
+            )
+            AiRowResolution.Missing -> targetNotFound(
                 field = "rowTitle",
                 targetKind = "row",
                 targetLabel = rowTitle,
             )
-        } else {
-            null
         }
     }
 
     fun rowPageBlockIssue(table: PageBlock): AiPageActionValidationIssue? {
-        val rowTitle = action.rowTitle.ifBlank { action.targetTitle }.ifBlank { action.title }
+        val rowTitle = action.rowTitle.ifBlank { action.title }
         val row = table.table.findRow(action.rowId, rowTitle)
             ?: return rowIssue(table)
         val effectiveAction = action.copy(blockId = action.rowBlockId.ifBlank { action.blockId })
@@ -2347,19 +2352,190 @@ private fun PageTable.findColumn(columnId: String = "", columnName: String): Pag
 }
 
 private fun PageTable.findRow(rowId: String = "", rowTitle: String): PageTableRow? {
-    if (rowId.isNotBlank()) rows.firstOrNull { row -> row.id == rowId }?.let { return it }
-    if (rowTitle.isBlank()) return null
-    val titleColumn = columns.firstOrNull()
-    return rows.firstOrNull { row -> row.cellText(titleColumn).equals(rowTitle, ignoreCase = true) }
-        ?: rows.firstOrNull { row ->
-            val cellText = row.cellText(titleColumn)
-            cellText.isNotBlank() && (cellText.contains(rowTitle, ignoreCase = true) || rowTitle.contains(cellText, ignoreCase = true))
+    return (resolveRow(rowId = rowId, rowTitle = rowTitle) as? AiRowResolution.Found)?.row
+}
+
+private fun PageTable.resolveRow(
+    rowId: String = "",
+    rowTitle: String,
+): AiRowResolution {
+    if (rowId.isNotBlank()) {
+        rows.firstOrNull { row -> row.id == rowId }?.let { row ->
+            return AiRowResolution.Found(row)
         }
+    }
+    val target = rowTitle.trim()
+    if (target.isBlank()) return AiRowResolution.Missing
+    val titleColumn = columns.firstOrNull()
+    val targetKey = target.normalizedAiKey()
+
+    rows.resolveUniqueRow { row ->
+        row.cellText(titleColumn).normalizedAiKey() == targetKey
+    }.unlessMissing()?.let { return it }
+
+    val targetMonth = target.toAiMonthReferenceOrNull()
+    if (targetMonth != null) {
+        rows.resolveUniqueRow { row ->
+            row.cellText(titleColumn)
+                .toAiMonthReferenceOrNull()
+                ?.matches(targetMonth) == true
+        }.unlessMissing()?.let { return it }
+    }
+
+    rows.resolveUniqueRow { row ->
+        row.searchableCellTexts().any { value -> value.normalizedAiKey() == targetKey }
+    }.unlessMissing()?.let { return it }
+
+    if (targetMonth != null) {
+        rows.resolveUniqueRow { row ->
+            row.searchableCellTexts().any { value ->
+                value.toAiMonthReferenceOrNull()?.matches(targetMonth) == true
+            }
+        }.unlessMissing()?.let { return it }
+    }
+
+    rows.resolveUniqueRow { row ->
+        val titleKey = row.cellText(titleColumn).normalizedAiKey()
+        titleKey.isNotBlank() &&
+            targetKey.isNotBlank() &&
+            (titleKey.contains(targetKey) || targetKey.contains(titleKey))
+    }.unlessMissing()?.let { return it }
+
+    return rows.resolveUniqueRow { row ->
+        row.searchableCellTexts().any { value ->
+            val valueKey = value.normalizedAiKey()
+            valueKey.isNotBlank() &&
+                targetKey.isNotBlank() &&
+                (valueKey.contains(targetKey) || targetKey.contains(valueKey))
+        }
+    }
 }
 
 private fun PageTableRow.cellText(column: PageTableColumn?): String {
     return column?.let { tableColumn -> cells[tableColumn.id] }.orEmpty().trim()
 }
+
+private fun PageTableRow.searchableCellTexts(): Sequence<String> =
+    cells.values.asSequence()
+        .map(String::trim)
+        .filter(String::isNotBlank)
+
+private sealed interface AiRowResolution {
+    data class Found(val row: PageTableRow) : AiRowResolution
+    data object Missing : AiRowResolution
+    data object Ambiguous : AiRowResolution
+}
+
+private fun AiRowResolution.unlessMissing(): AiRowResolution? =
+    takeUnless { resolution -> resolution == AiRowResolution.Missing }
+
+private inline fun List<PageTableRow>.resolveUniqueRow(
+    predicate: (PageTableRow) -> Boolean,
+): AiRowResolution {
+    var match: PageTableRow? = null
+    for (row in this) {
+        if (!predicate(row)) continue
+        if (match != null) return AiRowResolution.Ambiguous
+        match = row
+    }
+    return match?.let { row -> AiRowResolution.Found(row) } ?: AiRowResolution.Missing
+}
+
+private data class AiMonthReference(
+    val year: Int?,
+    val month: Int,
+) {
+    fun matches(other: AiMonthReference): Boolean {
+        return month == other.month &&
+            (year == null || other.year == null || year == other.year)
+    }
+}
+
+private fun String.toAiMonthReferenceOrNull(): AiMonthReference? {
+    val value = trim().lowercase(Locale.ROOT)
+    if (value.isBlank()) return null
+
+    AiYearMonthRegex.find(value)?.let { match ->
+        val month = match.groupValues[2].toIntOrNull() ?: return@let
+        return AiMonthReference(
+            year = match.groupValues[1].toIntOrNull(),
+            month = month,
+        )
+    }
+    AiNamedMonthNumberRegex.find(value)?.let { match ->
+        val month = match.groupValues[1].toIntOrNull() ?: return@let
+        return AiMonthReference(
+            year = match.groupValues[2].toIntOrNull(),
+            month = month,
+        )
+    }
+
+    val normalizedWords = value
+        .replace(Regex("[^a-z0-9]+"), " ")
+        .trim()
+        .split(Regex("\\s+"))
+    val month = normalizedWords
+        .firstNotNullOfOrNull { word -> AiMonthNames[word] }
+        ?: return null
+    val year = normalizedWords
+        .firstNotNullOfOrNull { word ->
+            word.toIntOrNull()?.takeIf { number -> number in 1900..2999 }
+        }
+    return AiMonthReference(year = year, month = month)
+}
+
+private val AiYearMonthRegex by lazy {
+    Regex("""(?<!\d)(\d{4})[-/.](0?[1-9]|1[0-2])(?:[-/.]\d{1,2})?(?!\d)""")
+}
+
+private val AiNamedMonthNumberRegex by lazy {
+    Regex(
+        """\b(?:bulan|month|bln)\s*(?:ke[-\s]*)?(0?[1-9]|1[0-2])(?:\s*(?:tahun|year)?\s*(\d{4}))?\b""",
+        RegexOption.IGNORE_CASE,
+    )
+}
+
+private val AiMonthNames = mapOf(
+    "january" to 1,
+    "januari" to 1,
+    "jan" to 1,
+    "february" to 2,
+    "februari" to 2,
+    "feb" to 2,
+    "march" to 3,
+    "maret" to 3,
+    "mac" to 3,
+    "mar" to 3,
+    "april" to 4,
+    "apr" to 4,
+    "may" to 5,
+    "mei" to 5,
+    "june" to 6,
+    "juni" to 6,
+    "jun" to 6,
+    "july" to 7,
+    "juli" to 7,
+    "julai" to 7,
+    "jul" to 7,
+    "august" to 8,
+    "agustus" to 8,
+    "ogos" to 8,
+    "agu" to 8,
+    "aug" to 8,
+    "september" to 9,
+    "sep" to 9,
+    "october" to 10,
+    "oktober" to 10,
+    "okt" to 10,
+    "oct" to 10,
+    "november" to 11,
+    "nov" to 11,
+    "december" to 12,
+    "disember" to 12,
+    "desember" to 12,
+    "dis" to 12,
+    "dec" to 12,
+)
 
 private fun PageTableColumn.withActionConfig(
     action: ChatAction,

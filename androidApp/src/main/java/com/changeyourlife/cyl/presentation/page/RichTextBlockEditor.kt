@@ -80,6 +80,11 @@ data class RichTextToolbarUiState(
     val onInsertMentionTrigger: () -> Unit = {},
 )
 
+private data class PendingRichTextDraft(
+    val text: String,
+    val spans: List<PageTextSpan>,
+)
+
 @Composable
 fun RichTextToolbarHost(
     state: RichTextToolbarUiState,
@@ -140,6 +145,9 @@ fun CylRichTextBlockEditor(
     val keyboardController = LocalSoftwareKeyboardController.current
     var currentSpans by remember(block.id) {
         mutableStateOf(RichTextSpanEngine.normalize(block.richTextSpans, block.text))
+    }
+    var pendingDraft by remember(block.id) {
+        mutableStateOf<PendingRichTextDraft?>(null)
     }
     var typingFormats by remember(block.id) {
         mutableStateOf(RichTextFormatSet())
@@ -204,6 +212,10 @@ fun CylRichTextBlockEditor(
             composition = nextState.value.composition,
         )
         if (notifyChange) {
+            pendingDraft = PendingRichTextDraft(
+                text = nextState.value.text,
+                spans = normalized,
+            )
             onRichTextChange(blockId, nextState.value.text, normalized)
         }
     }
@@ -218,6 +230,10 @@ fun CylRichTextBlockEditor(
         fieldValue = TextFieldValue(
             annotatedString = buildRichTextAnnotatedString(nextText, normalized),
             selection = selection.coerceInText(nextText),
+        )
+        pendingDraft = PendingRichTextDraft(
+            text = nextText,
+            spans = normalized,
         )
         onRichTextChange(blockId, nextText, normalized)
     }
@@ -405,14 +421,25 @@ fun CylRichTextBlockEditor(
         commitState(nextState, notifyChange = changedSpans)
     }
 
-    LaunchedEffect(block.text, block.richTextSpans) {
+    LaunchedEffect(block.text, block.richTextSpans, isFocused) {
         val normalized = RichTextSpanEngine.normalize(block.richTextSpans, block.text)
-        if (fieldValue.text != block.text || currentSpans != normalized) {
-            currentSpans = normalized
-            fieldValue = TextFieldValue(
-                annotatedString = buildRichTextAnnotatedString(block.text, normalized),
-                selection = fieldValue.selection.coerceInText(block.text),
-            )
+        val incomingDraft = PendingRichTextDraft(
+            text = block.text,
+            spans = normalized,
+        )
+        val localPendingDraft = pendingDraft
+        when {
+            localPendingDraft == incomingDraft -> {
+                if (!isFocused) pendingDraft = null
+            }
+            localPendingDraft != null -> Unit
+            fieldValue.text != block.text || currentSpans != normalized -> {
+                currentSpans = normalized
+                fieldValue = TextFieldValue(
+                    annotatedString = buildRichTextAnnotatedString(block.text, normalized),
+                    selection = fieldValue.selection.coerceInText(block.text),
+                )
+            }
         }
     }
 

@@ -412,7 +412,8 @@ class AiService(
             If the user is only chatting, asking questions, brainstorming, or planning, keep "actions" empty.
             If the user asks to create, update, delete, rename, add a row, edit a table, edit a page, or change a property, produce CYL actions.
             Do not answer with markdown tables when the user wants data created in the app. Convert the idea into table/page actions.
-            Do not expose internal ids. Use page/table/block/row/column names from context.
+            Internal ids supplied by CYL context may be used inside action fields such as rowId, blockId, or columnId.
+            Never expose those ids in the user-visible reply.
             If CYL_WEB_CONTEXT is present, use those web results for current/live questions and cite URLs when useful.
             If CYL_WEB_CONTEXT says no reliable web result is available, say the web source could not retrieve results. Do not claim you cannot browse based only on model limitations.
 
@@ -428,7 +429,7 @@ class AiService(
 
             Main fields you may use:
             targetTitle, title, content, blockType, blockText, propertyName, propertyType, value,
-            tableTitle, tableView, columnName, newColumnName, columnType, rowTitle, newRowTitle,
+            tableTitle, tableView, columnId, columnName, newColumnName, columnType, rowId, rowTitle, newRowTitle,
             cellValues, tableColumns, tableRows, options, formula, sortDirection, filterQuery, groupByColumnName,
             textToFormat, format, linkUrl, color, highlight, rangeStart, rangeEnd.
 
@@ -446,6 +447,7 @@ class AiService(
             - For money like "29 ringgit", put the numeric value in an amount/price/cost column if such column exists or create a Number column.
             - To change one existing cell, use UPDATE_TABLE_CELL with the exact table, row, column, and value. Text and Number cells are editable data: never convert them to Select/Status or modify dropdown options unless the user explicitly asks to change the property type/options.
             - To change several cells in one existing row, use UPDATE_TABLE_ROW with cellValues. To intentionally clear one cell, use UPDATE_TABLE_CELL with cellValues containing that column and an empty string.
+            - For update/delete/move row actions, prefer the exact rowId from CYL_SEARCH_CONTEXT when available. If the user identifies a row by another property such as Month, resolve that search result to its rowId instead of inventing a row title.
             - For table creation, infer sensible columns and rows from the user's intent instead of using fixed templates.
             - Do not set table sort, filter, group, hidden columns, or view rules when creating a page/table unless the user explicitly asks for those controls. A normal monthly expenses request should create data/schema only; user can filter/sort/group manually later.
             - For monthly expenses/budget with salary and spending data, prefer a transaction ledger plus summary:

@@ -1990,6 +1990,7 @@ internal fun PageEditorScreenPreview() {
             onTableSortChange = { _, _, _ -> },
             onTableFilterChange = { _, _ -> },
             onTableGroupChange = { _, _ -> },
+            onTableSearchQueryChange = { _, _ -> },
             onTableColumnNameChange = { _, _, _ -> },
             onTableColumnTypeChange = { _, _, _ -> },
             onTableColumnConfigChange = { _, _, _ -> },

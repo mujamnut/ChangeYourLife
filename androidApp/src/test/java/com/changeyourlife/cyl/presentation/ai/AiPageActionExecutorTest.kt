@@ -238,6 +238,156 @@ class AiPageActionExecutorTest {
     }
 
     @Test
+    fun deletesMonthSummaryRowFromMalayMonthReferenceWithoutDeletingTransactions() = runBlocking {
+        val nameColumn = PageTableColumn(id = "column-name", name = "Name")
+        val monthColumn = PageTableColumn(
+            id = "column-month",
+            name = "Month",
+            type = PageTableColumnType.Select,
+        )
+        val tableBlock = PageBlock(
+            id = "block-table",
+            type = PageBlockType.DatabaseTable,
+            table = PageTable(
+                title = "Transactions",
+                columns = listOf(nameColumn, monthColumn),
+                rows = listOf(
+                    PageTableRow(
+                        id = "row-month-summary",
+                        cells = mapOf(
+                            nameColumn.id to "2026-04",
+                            monthColumn.id to "2026-04",
+                        ),
+                    ),
+                    PageTableRow(
+                        id = "row-food",
+                        cells = mapOf(
+                            nameColumn.id to "Makan",
+                            monthColumn.id to "2026-04",
+                        ),
+                    ),
+                    PageTableRow(
+                        id = "row-fuel",
+                        cells = mapOf(
+                            nameColumn.id to "Minyak",
+                            monthColumn.id to "2026-04",
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val document = PageBlockDocument(blocks = listOf(tableBlock))
+        val page = Page(
+            id = "page-1",
+            workspaceId = "workspace-1",
+            parentPageId = null,
+            title = "Monthly Expenses",
+            content = PageBlockCodec.encodeDocument(document),
+            sortOrder = 0,
+            createdAt = 1000,
+            updatedAt = 1000,
+            deletedAt = null,
+        )
+        val executor = AiPageActionExecutor(
+            pageRepository = FakePageRepository(page, document),
+            taskRepository = FakeTaskRepository(),
+            reminderRepository = FakeReminderRepository(),
+            applyEditorCommandUseCase = ApplyEditorCommandUseCase(),
+        )
+
+        val result = executor.executeOnPage(
+            page = page,
+            title = page.title,
+            document = document,
+            actions = listOf(
+                ChatAction(
+                    type = "DELETE_TABLE_ROW",
+                    title = "",
+                    tableTitle = "Transactions",
+                    rowTitle = "bulan 4",
+                ),
+            ),
+        )
+
+        assertEquals(emptyList<AiPageActionValidationIssue>(), result.validationIssues)
+        assertEquals(listOf(0), result.executedActionIndexes)
+        assertEquals(
+            listOf("row-food", "row-fuel"),
+            requireNotNull(result.updatedDocument).table.rows.map(PageTableRow::id),
+        )
+    }
+
+    @Test
+    fun rejectsMonthReferenceWhenSeveralTransactionRowsMatch() = runBlocking {
+        val nameColumn = PageTableColumn(id = "column-name", name = "Name")
+        val monthColumn = PageTableColumn(
+            id = "column-month",
+            name = "Month",
+            type = PageTableColumnType.Select,
+        )
+        val tableBlock = PageBlock(
+            id = "block-table",
+            type = PageBlockType.DatabaseTable,
+            table = PageTable(
+                title = "Transactions",
+                columns = listOf(nameColumn, monthColumn),
+                rows = listOf(
+                    PageTableRow(
+                        id = "row-food",
+                        cells = mapOf(
+                            nameColumn.id to "Makan",
+                            monthColumn.id to "2026-04",
+                        ),
+                    ),
+                    PageTableRow(
+                        id = "row-fuel",
+                        cells = mapOf(
+                            nameColumn.id to "Minyak",
+                            monthColumn.id to "2026-04",
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val document = PageBlockDocument(blocks = listOf(tableBlock))
+        val page = Page(
+            id = "page-1",
+            workspaceId = "workspace-1",
+            parentPageId = null,
+            title = "Monthly Expenses",
+            content = PageBlockCodec.encodeDocument(document),
+            sortOrder = 0,
+            createdAt = 1000,
+            updatedAt = 1000,
+            deletedAt = null,
+        )
+        val executor = AiPageActionExecutor(
+            pageRepository = FakePageRepository(page, document),
+            taskRepository = FakeTaskRepository(),
+            reminderRepository = FakeReminderRepository(),
+            applyEditorCommandUseCase = ApplyEditorCommandUseCase(),
+        )
+
+        val result = executor.executeOnPage(
+            page = page,
+            title = page.title,
+            document = document,
+            actions = listOf(
+                ChatAction(
+                    type = "DELETE_TABLE_ROW",
+                    title = "",
+                    tableTitle = "Transactions",
+                    rowTitle = "bulan 4",
+                ),
+            ),
+        )
+
+        assertEquals("ambiguous_target", result.validationIssues.single().code)
+        assertEquals(emptyList<Int>(), result.executedActionIndexes)
+        assertNull(result.updatedDocument)
+    }
+
+    @Test
     fun addsMalayExpenseRowToExistingTable() = runBlocking {
         val nameColumn = PageTableColumn(id = "column-name", name = "Name")
         val amountColumn = PageTableColumn(

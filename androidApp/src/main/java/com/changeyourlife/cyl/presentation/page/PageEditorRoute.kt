@@ -240,6 +240,7 @@ fun PageEditorRoute(
         onTableSortChange = viewModel::updateTableSort,
         onTableFilterChange = viewModel::updateTableFilter,
         onTableGroupChange = viewModel::updateTableGroup,
+        onTableSearchQueryChange = viewModel::updateTableSearchQuery,
         onTableColumnNameChange = viewModel::updateTableColumnName,
         onTableColumnTypeChange = viewModel::updateTableColumnType,
         onTableColumnConfigChange = viewModel::updateTableColumnConfig,
@@ -334,6 +335,7 @@ internal fun PageEditorScreen(
     onTableSortChange: (String, String, PageTableSortDirection) -> Unit,
     onTableFilterChange: (String, PageTableFilter) -> Unit,
     onTableGroupChange: (String, String) -> Unit,
+    onTableSearchQueryChange: (String, String) -> Unit,
     onTableColumnNameChange: (String, String, String) -> Unit,
     onTableColumnTypeChange: (String, String, PageTableColumnType) -> Unit,
     onTableColumnConfigChange: (String, String, PageTableColumnConfig) -> Unit,
@@ -404,7 +406,6 @@ internal fun PageEditorScreen(
     var editorFocusRequest by remember { mutableStateOf<EditorBlockFocusRequest?>(null) }
     val pageListState = rememberLazyListState()
     val tableHorizontalScrollStates = remember { androidx.compose.runtime.mutableStateMapOf<String, androidx.compose.foundation.ScrollState>() }
-    val tableSearchInputs = remember { androidx.compose.runtime.mutableStateMapOf<String, String>() }
     val tableOpenRowIds = remember { androidx.compose.runtime.mutableStateMapOf<String, String?>() }
     val tableActiveEditingCellKeys = remember { androidx.compose.runtime.mutableStateMapOf<String, String?>() }
     val density = LocalDensity.current
@@ -561,7 +562,7 @@ internal fun PageEditorScreen(
                 tableReferences = tableReferences,
                 databaseRenderStates = uiState.databaseRenderStates,
                 tableHorizontalScrollStates = tableHorizontalScrollStates,
-                onSearchQueryChange = { tableBlockId, query -> tableSearchInputs[tableBlockId] = query },
+                onSearchQueryChange = onTableSearchQueryChange,
                 tableOpenRowIds = tableOpenRowIds,
                 tableActiveEditingCellKeys = tableActiveEditingCellKeys,
                 onBack = onBack,
@@ -787,11 +788,9 @@ internal fun PageEditorScreen(
                     (currentPageTables + otherPageTables).distinctBy { reference -> reference.blockId }
                 }
                 val databaseRenderStates = uiState.databaseRenderStates
-                val tableSearchInputsSnapshot = tableSearchInputs.toMap()
                 val fallbackDatabaseRenderStates = remember(
                     pageBlocks,
                     databaseRenderStates,
-                    tableSearchInputsSnapshot,
                     tableReferences,
                     activeSearchTargetType,
                     activeSearchTargetId,
@@ -804,7 +803,7 @@ internal fun PageEditorScreen(
                         .associate { block ->
                             block.id to block.table.buildInlineDatabaseTableRenderState(
                                 tableReferences = tableReferences,
-                                tableSearchInput = tableSearchInputsSnapshot[block.id].orEmpty(),
+                                tableSearchInput = "",
                                 searchTargetType = activeSearchTargetType,
                                 searchTargetId = activeSearchTargetId,
                             )
@@ -876,15 +875,15 @@ internal fun PageEditorScreen(
                             val scrollState = tableHorizontalScrollStates.getOrPut(tableUiStateKey) {
                                 androidx.compose.foundation.ScrollState(0)
                             }
-                            val searchInput = tableSearchInputs[tableUiStateKey] ?: ""
                             val openRowId = tableOpenRowIds[tableUiStateKey]
                             val activeEditingCellKey = tableActiveEditingCellKeys[tableUiStateKey]
                             val renderState = databaseRenderStates[block.id]
                                 ?: fallbackDatabaseRenderStates.getValue(block.id)
+                            val searchInput = renderState.tableSearchQuery
                             inlineDatabaseTableBlockEditor(
                                 horizontalScrollState = scrollState,
                                 tableSearchInput = searchInput,
-                                onSearchQueryChange = { query -> tableSearchInputs[tableUiStateKey] = query },
+                                onSearchQueryChange = { query -> onTableSearchQueryChange(block.id, query) },
                                 openRowId = openRowId,
                                 onOpenRowIdChange = { rowId -> tableOpenRowIds[tableUiStateKey] = rowId },
                                 tableBlockId = block.id,

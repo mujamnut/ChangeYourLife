@@ -122,6 +122,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -148,9 +149,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.FontFamily
@@ -719,21 +722,42 @@ internal fun TableSearchField(
 ) {
     val focusRequester = remember { FocusRequester() }
     var hasFocused by remember { mutableStateOf(false) }
+    var textFieldValue by remember {
+        mutableStateOf(
+            TextFieldValue(
+                text = query,
+                selection = TextRange(query.length),
+            ),
+        )
+    }
 
     LaunchedEffect(Unit) {
         focusRequester.requestFocus()
     }
+    LaunchedEffect(query) {
+        if (query != textFieldValue.text) {
+            textFieldValue = TextFieldValue(
+                text = query,
+                selection = TextRange(query.length),
+            )
+        }
+    }
 
     BasicTextField(
-        value = query,
-        onValueChange = onQueryChange,
+        value = textFieldValue,
+        onValueChange = { nextValue ->
+            textFieldValue = nextValue
+            if (nextValue.text != query) {
+                onQueryChange(nextValue.text)
+            }
+        },
         modifier = modifier
             .height(42.dp)
             .focusRequester(focusRequester)
             .onFocusChanged { focusState ->
                 if (focusState.isFocused) {
                     hasFocused = true
-                } else if (hasFocused && query.isBlank()) {
+                } else if (hasFocused && textFieldValue.text.isBlank()) {
                     onEmptyBlur()
                 }
             },
@@ -744,7 +768,7 @@ internal fun TableSearchField(
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
         keyboardActions = KeyboardActions(
             onSearch = {
-                if (query.isBlank()) {
+                if (textFieldValue.text.isBlank()) {
                     onEmptyBlur()
                 }
             },
@@ -770,7 +794,7 @@ internal fun TableSearchField(
                     modifier = Modifier.weight(1f),
                     contentAlignment = Alignment.CenterStart,
                 ) {
-                    if (query.isBlank()) {
+                    if (textFieldValue.text.isBlank()) {
                         Text(
                             text = "Search database",
                             style = MaterialTheme.typography.bodyMedium,
@@ -4503,6 +4527,7 @@ internal fun TableDataRow(
     val primaryColumnId = columns.firstOrNull()?.id
     var isActionSheetOpen by remember(row.id) { mutableStateOf(false) }
     var isDragging by remember(row.id) { mutableStateOf(false) }
+    val optimisticCellValues = remember(row.id) { mutableStateMapOf<String, String>() }
     val tableColors = TableGridTokens.colors()
     val context = LocalContext.current
     val density = LocalDensity.current
@@ -4535,6 +4560,16 @@ internal fun TableDataRow(
             }
     } else {
         Modifier
+    }
+
+    LaunchedEffect(row, columns) {
+        val columnsById = columns.associateBy { column -> column.id }
+        optimisticCellValues.entries.toList().forEach { (columnId, pendingValue) ->
+            val column = columnsById[columnId]
+            if (column == null || row.cellText(column) == pendingValue) {
+                optimisticCellValues.remove(columnId)
+            }
+        }
     }
 
     if (isActionSheetOpen) {
@@ -4624,11 +4659,39 @@ internal fun TableDataRow(
             columnRenderWindow.columns.forEach { column ->
             val columnWidth = columnWidths[column.id] ?: TableCellWidth
             val cellKey = tableCellKey(row.id, column.id)
-            val onCellValueChange = remember(row.id, column.id, onCellChange) {
-                { value: String -> onCellChange(row.id, column.id, value) }
+            val canonicalCellValue = row.cellText(column)
+            val optimisticCellValue = optimisticCellValues[column.id]
+            val effectiveCellValue = optimisticCellValue ?: canonicalCellValue
+            val onCellValueChange = remember(
+                row.id,
+                column.id,
+                canonicalCellValue,
+                onCellChange,
+            ) {
+                { value: String ->
+                    if (value == canonicalCellValue) {
+                        optimisticCellValues.remove(column.id)
+                    } else {
+                        optimisticCellValues[column.id] = value
+                    }
+                    onCellChange(row.id, column.id, value)
+                }
             }
-            val onCellRelationValueChange = remember(row.id, column.id, onRelationCellChange) {
-                { relationRowIds: List<String> -> onRelationCellChange(row.id, column.id, relationRowIds) }
+            val onCellRelationValueChange = remember(
+                row.id,
+                column.id,
+                canonicalCellValue,
+                onRelationCellChange,
+            ) {
+                { relationRowIds: List<String> ->
+                    val value = relationRowIds.toRelationCellValue()
+                    if (value == canonicalCellValue) {
+                        optimisticCellValues.remove(column.id)
+                    } else {
+                        optimisticCellValues[column.id] = value
+                    }
+                    onRelationCellChange(row.id, column.id, relationRowIds)
+                }
             }
             val onCellDateSettingsChange = remember(column.id, onColumnDateSettingsChange) {
                 { dateFormat: PageTableDateFormat, timeFormat: PageTableTimeFormat, reminder: PageTableDateReminder, timezoneLabel: String ->
@@ -4646,11 +4709,12 @@ internal fun TableDataRow(
                         column = column,
                         tableReferences = tableReferences,
                         width = columnWidth,
+                        valueOverride = optimisticCellValue,
                         onEdit = {
                             when (column.type) {
                                 PageTableColumnType.Checkbox -> {
                                     onCellValueChange(
-                                        if (row.cellText(column) == CheckboxValueChecked) ""
+                                        if (effectiveCellValue == CheckboxValueChecked) ""
                                         else CheckboxValueChecked,
                                     )
                                 }
@@ -4667,7 +4731,7 @@ internal fun TableDataRow(
                         table = table,
                         tableReferences = tableReferences,
                         relationTitleCache = relationTitleCache,
-                        value = row.cellText(column),
+                        value = effectiveCellValue,
                         onValueChange = onCellValueChange,
                         onRelationValueChange = onCellRelationValueChange,
                         currentPageId = pageId,
@@ -4682,18 +4746,19 @@ internal fun TableDataRow(
                     )
                 }
             } else {
-                val isRequiredEmpty = column.config.isRequired && row.cellText(column).isBlank()
+                val isRequiredEmpty = column.config.isRequired && effectiveCellValue.isBlank()
                 if (activeEditingCellKey != cellKey) {
                     LightweightTableCell(
                         table = table,
                         row = row,
                         column = column,
                         tableReferences = tableReferences,
+                        valueOverride = optimisticCellValue,
                         onClick = when (column.type) {
                             PageTableColumnType.Checkbox -> {
                                 {
                                     onCellValueChange(
-                                        if (row.cellText(column) == CheckboxValueChecked) ""
+                                        if (effectiveCellValue == CheckboxValueChecked) ""
                                         else CheckboxValueChecked,
                                     )
                                 }
@@ -4719,7 +4784,7 @@ internal fun TableDataRow(
                         table = table,
                         tableReferences = tableReferences,
                         relationTitleCache = relationTitleCache,
-                        value = row.cellText(column),
+                        value = effectiveCellValue,
                         onValueChange = onCellValueChange,
                         onRelationValueChange = onCellRelationValueChange,
                         currentPageId = pageId,
@@ -5066,6 +5131,7 @@ private fun LightweightPrimaryTableCell(
     column: PageTableColumn,
     tableReferences: List<PageTableReference>,
     width: Dp,
+    valueOverride: String? = null,
     onEdit: () -> Unit,
     onOpenRow: () -> Unit,
 ) {
@@ -5080,6 +5146,7 @@ private fun LightweightPrimaryTableCell(
             row = row,
             column = column,
             tableReferences = tableReferences,
+            valueOverride = valueOverride,
             onClick = onEdit,
             modifier = Modifier
                 .fillMaxWidth()
@@ -5100,11 +5167,20 @@ private fun LightweightTableCell(
     row: PageTableRow,
     column: PageTableColumn,
     tableReferences: List<PageTableReference>,
+    valueOverride: String? = null,
     onClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
-    val displayText = remember(row, column, tableReferences) {
-        table.displayCellText(row, column, tableReferences)
+    val displayText = remember(row, column, tableReferences, valueOverride) {
+        if (valueOverride == null) {
+            table.displayCellText(row, column, tableReferences)
+        } else {
+            val displayRow = row.copy(
+                cells = row.cells + (column.id to valueOverride),
+                cellValues = row.cellValues - column.id,
+            )
+            table.displayCellText(displayRow, column, tableReferences)
+        }
     }
     val baseStyle = MaterialTheme.typography.bodyMedium
     val textColor = MaterialTheme.colorScheme.onSurface
@@ -6198,6 +6274,15 @@ private fun TablePlainTextCellEditor(
 ) {
     val focusRequester = remember { FocusRequester() }
     var hasReceivedFocus by remember { mutableStateOf(false) }
+    var lastSubmittedText by remember { mutableStateOf(value) }
+    var textFieldValue by remember {
+        mutableStateOf(
+            TextFieldValue(
+                text = value,
+                selection = TextRange(value.length),
+            ),
+        )
+    }
 
     val baseStyle = MaterialTheme.typography.bodyMedium
     val onSurfaceColor = MaterialTheme.colorScheme.onSurface
@@ -6217,10 +6302,37 @@ private fun TablePlainTextCellEditor(
         }
     }
 
+    fun submitTextIfChanged(text: String) {
+        val submittedText = text.toSingleLineTableCellValue()
+        if (submittedText != lastSubmittedText || submittedText != value) {
+            lastSubmittedText = submittedText
+            onValueChange(submittedText)
+        }
+    }
+
+    fun requestFinishEditing() {
+        submitTextIfChanged(textFieldValue.text)
+        onEditingChange(false)
+    }
+
+    LaunchedEffect(value, isEditing) {
+        if (!isEditing && value != textFieldValue.text) {
+            textFieldValue = TextFieldValue(
+                text = value,
+                selection = TextRange(value.length),
+            )
+        }
+        if (!isEditing || value == textFieldValue.text) {
+            lastSubmittedText = value
+        }
+    }
+
     if (isEditing) {
         BasicTextField(
-            value = value,
-            onValueChange = onValueChange,
+            value = textFieldValue,
+            onValueChange = { nextValue ->
+                textFieldValue = nextValue
+            },
             modifier = modifier
                 .then(cellHeightModifier)
                 .focusRequester(focusRequester)
@@ -6229,7 +6341,7 @@ private fun TablePlainTextCellEditor(
                         hasReceivedFocus = true
                     } else if (hasReceivedFocus) {
                         hasReceivedFocus = false
-                        onEditingChange(false)
+                        requestFinishEditing()
                     }
                 },
             singleLine = !column.config.wrapContent,
@@ -6246,7 +6358,7 @@ private fun TablePlainTextCellEditor(
             keyboardActions = KeyboardActions(
                 onDone = {
                     hasReceivedFocus = false
-                    onEditingChange(false)
+                    requestFinishEditing()
                 },
             ),
             decorationBox = { innerTextField ->
@@ -7011,7 +7123,7 @@ private fun RelationRowPickerSheet(
     }
 }
 
-private fun List<String>.toRelationCellValue(): String {
+internal fun List<String>.toRelationCellValue(): String {
     return filter { value -> value.isNotBlank() }
         .distinct()
         .joinToString(",")
@@ -7143,6 +7255,7 @@ internal fun androidx.compose.foundation.lazy.LazyListScope.inlineDatabaseTableB
     mentionPages: List<Page> = emptyList(),
     searchTargetType: String = "",
     searchTargetId: String = "",
+    renderRowPageSheetHost: Boolean = true,
 
 ) {
     val visibleColumns = renderState.visibleColumns
@@ -7481,78 +7594,78 @@ internal fun androidx.compose.foundation.lazy.LazyListScope.inlineDatabaseTableB
         }
     }
 
-    // Handle the open row sheet as a separate item
-    item(
-        key = "$tableBlockId-sheet",
-        contentType = "database-row-sheet-host",
-    ) {
-        val currentOpenRowId = openRowId
-        if (currentOpenRowId != null) {
-            val openRow = table.rows.firstOrNull { row -> row.id == currentOpenRowId }
-            if (openRow != null) {
-                TableRowPageSheet(
-                    currentTableBlockId = tableBlockId,
-                    currentPageId = pageId,
-                    table = table,
-                    row = openRow,
-                    syncState = syncState,
-                    isSaving = isSaving,
-                    tableReferences = tableReferences,
-                    searchTargetType = searchTargetType,
-                    searchTargetId = searchTargetId,
-                    onSortChange = onSortChange,
-                    onFilterChange = onFilterChange,
-                    onGroupChange = onGroupChange,
-                    onColumnNameChange = onColumnNameChange,
-                    onColumnTypeChange = onColumnTypeChange,
-                    onColumnConfigChange = onColumnConfigChange,
-                    onCellChange = onCellChange,
-                    onRelationCellChange = onRelationCellChange,
-                    onAddRelationTargetRow = onAddRelationTargetRow,
-                    onAddColumn = onAddColumn,
-                    onInsertColumn = onInsertColumn,
-                    onDuplicateColumn = onDuplicateColumn,
-                    onDeleteColumn = onDeleteColumn,
-                    onColumnDateSettingsChange = onColumnDateSettingsChange,
-                    onColumnFormulaChange = onColumnFormulaChange,
-                    onColumnRelationTargetChange = onColumnRelationTargetChange,
-                    onColumnRollupChange = onColumnRollupChange,
-                    onAddRow = onAddRow,
-                    onBlockTextChange = { rowBlockId, text ->
-                        onRowBlockTextChange(openRow.id, rowBlockId, text)
-                    },
-                    onBlockRichTextChange = { rowBlockId, text, spans ->
-                        onRowBlockRichTextChange(openRow.id, rowBlockId, text, spans)
-                    },
-                    onBlockPasteBlocks = { rowBlockId, pasteBlocks ->
-                        onRowBlockPasteBlocks(openRow.id, rowBlockId, pasteBlocks)
-                    },
-                    onBlockTypeChange = { rowBlockId, type ->
-                        onRowBlockTypeChange(openRow.id, rowBlockId, type)
-                    },
-                    onBlockMediaAdd = { rowBlockId, attachments ->
-                        onRowBlockMediaAdd(openRow.id, rowBlockId, attachments)
-                    },
-                    onBlockMediaRemove = { rowBlockId, attachmentId ->
-                        onRowBlockMediaRemove(openRow.id, rowBlockId, attachmentId)
-                    },
-                    onToggleTodo = { rowBlockId -> onToggleRowTodoBlock(openRow.id, rowBlockId) },
-                    onAddBlock = { type -> onAddRowPageBlock(openRow.id, type) },
-                    onInsertBlockNear = { rowBlockId, type, position ->
-                        onInsertRowPageBlockNear(openRow.id, rowBlockId, type, position)
-                    },
-                    onCreateLinkedPage = { rowBlockId -> onCreateRowLinkedPage(openRow.id, rowBlockId) },
-                    onDeleteBlock = { rowBlockId -> onDeleteRowPageBlock(openRow.id, rowBlockId) },
-                    onMoveBlockUp = { rowBlockId -> onMoveRowPageBlockUp(openRow.id, rowBlockId) },
-                    onMoveBlockDown = { rowBlockId -> onMoveRowPageBlockDown(openRow.id, rowBlockId) },
-                    onIndentBlock = { rowBlockId -> onIndentRowPageBlock(openRow.id, rowBlockId) },
-                    onOutdentBlock = { rowBlockId -> onOutdentRowPageBlock(openRow.id, rowBlockId) },
-                    mentionPages = mentionPages,
-                    onDismiss = { onOpenRowIdChange(null) },
-                )
-            } else {
-                // Clear state if row deleted
-                onOpenRowIdChange(null)
+    if (renderRowPageSheetHost) {
+        item(
+            key = "$tableBlockId-sheet",
+            contentType = "database-row-sheet-host",
+        ) {
+            val currentOpenRowId = openRowId
+            if (currentOpenRowId != null) {
+                val openRow = table.rows.firstOrNull { row -> row.id == currentOpenRowId }
+                if (openRow != null) {
+                    TableRowPageSheet(
+                        currentTableBlockId = tableBlockId,
+                        currentPageId = pageId,
+                        table = table,
+                        row = openRow,
+                        syncState = syncState,
+                        isSaving = isSaving,
+                        tableReferences = tableReferences,
+                        searchTargetType = searchTargetType,
+                        searchTargetId = searchTargetId,
+                        onSortChange = onSortChange,
+                        onFilterChange = onFilterChange,
+                        onGroupChange = onGroupChange,
+                        onColumnNameChange = onColumnNameChange,
+                        onColumnTypeChange = onColumnTypeChange,
+                        onColumnConfigChange = onColumnConfigChange,
+                        onCellChange = onCellChange,
+                        onRelationCellChange = onRelationCellChange,
+                        onAddRelationTargetRow = onAddRelationTargetRow,
+                        onAddColumn = onAddColumn,
+                        onInsertColumn = onInsertColumn,
+                        onDuplicateColumn = onDuplicateColumn,
+                        onDeleteColumn = onDeleteColumn,
+                        onColumnDateSettingsChange = onColumnDateSettingsChange,
+                        onColumnFormulaChange = onColumnFormulaChange,
+                        onColumnRelationTargetChange = onColumnRelationTargetChange,
+                        onColumnRollupChange = onColumnRollupChange,
+                        onAddRow = onAddRow,
+                        onBlockTextChange = { rowBlockId, text ->
+                            onRowBlockTextChange(openRow.id, rowBlockId, text)
+                        },
+                        onBlockRichTextChange = { rowBlockId, text, spans ->
+                            onRowBlockRichTextChange(openRow.id, rowBlockId, text, spans)
+                        },
+                        onBlockPasteBlocks = { rowBlockId, pasteBlocks ->
+                            onRowBlockPasteBlocks(openRow.id, rowBlockId, pasteBlocks)
+                        },
+                        onBlockTypeChange = { rowBlockId, type ->
+                            onRowBlockTypeChange(openRow.id, rowBlockId, type)
+                        },
+                        onBlockMediaAdd = { rowBlockId, attachments ->
+                            onRowBlockMediaAdd(openRow.id, rowBlockId, attachments)
+                        },
+                        onBlockMediaRemove = { rowBlockId, attachmentId ->
+                            onRowBlockMediaRemove(openRow.id, rowBlockId, attachmentId)
+                        },
+                        onToggleTodo = { rowBlockId -> onToggleRowTodoBlock(openRow.id, rowBlockId) },
+                        onAddBlock = { type -> onAddRowPageBlock(openRow.id, type) },
+                        onInsertBlockNear = { rowBlockId, type, position ->
+                            onInsertRowPageBlockNear(openRow.id, rowBlockId, type, position)
+                        },
+                        onCreateLinkedPage = { rowBlockId -> onCreateRowLinkedPage(openRow.id, rowBlockId) },
+                        onDeleteBlock = { rowBlockId -> onDeleteRowPageBlock(openRow.id, rowBlockId) },
+                        onMoveBlockUp = { rowBlockId -> onMoveRowPageBlockUp(openRow.id, rowBlockId) },
+                        onMoveBlockDown = { rowBlockId -> onMoveRowPageBlockDown(openRow.id, rowBlockId) },
+                        onIndentBlock = { rowBlockId -> onIndentRowPageBlock(openRow.id, rowBlockId) },
+                        onOutdentBlock = { rowBlockId -> onOutdentRowPageBlock(openRow.id, rowBlockId) },
+                        mentionPages = mentionPages,
+                        onDismiss = { onOpenRowIdChange(null) },
+                    )
+                } else {
+                    onOpenRowIdChange(null)
+                }
             }
         }
     }

@@ -157,10 +157,19 @@ internal fun PageDatabaseSurface(
     val scrollState = tableHorizontalScrollStates[tableUiStateKey]
         ?: ScrollState(0).also { tableHorizontalScrollStates[tableUiStateKey] = it }
     val openRowId = tableOpenRowIds[tableUiStateKey]
+    val openRow = remember(table.rows, openRowId) {
+        openRowId?.let { rowId -> table.rows.firstOrNull { row -> row.id == rowId } }
+    }
     val activeEditingCellKey = tableActiveEditingCellKeys[tableUiStateKey]
 
     LaunchedEffect(tableUiStateKey) {
         scrollState.scrollTo(0)
+    }
+
+    LaunchedEffect(openRowId, openRow) {
+        if (openRowId != null && openRow == null) {
+            tableOpenRowIds[tableUiStateKey] = null
+        }
     }
 
     val fallbackRenderState = remember(
@@ -525,6 +534,134 @@ internal fun PageDatabaseSurface(
                 searchTargetType = initialSearchTargetType,
                 searchTargetId = initialSearchTargetId,
                 isFullPage = true,
+                renderRowPageSheetHost = false,
+            )
+        }
+
+        if (openRow != null) {
+            TableRowPageSheet(
+                currentTableBlockId = tableBlockId,
+                currentPageId = pageId,
+                table = table,
+                row = openRow,
+                syncState = uiState.syncState,
+                isSaving = uiState.isSaving,
+                tableReferences = tableReferences,
+                searchTargetType = initialSearchTargetType,
+                searchTargetId = initialSearchTargetId,
+                onSortChange = { columnId, direction ->
+                    onTableSortChange(tableBlockId, columnId, direction)
+                },
+                onFilterChange = { filter -> onTableFilterChange(tableBlockId, filter) },
+                onGroupChange = { columnId -> onTableGroupChange(tableBlockId, columnId) },
+                onColumnNameChange = { columnId, name ->
+                    onTableColumnNameChange(tableBlockId, columnId, name)
+                },
+                onColumnTypeChange = { columnId, type ->
+                    onTableColumnTypeChange(tableBlockId, columnId, type)
+                },
+                onColumnConfigChange = { columnId, config ->
+                    onTableColumnConfigChange(tableBlockId, columnId, config)
+                },
+                onCellChange = { rowId, columnId, value ->
+                    onTableCellChange(tableBlockId, rowId, columnId, value)
+                },
+                onRelationCellChange = { rowId, columnId, relationRowIds ->
+                    onTableRelationCellChange(tableBlockId, rowId, columnId, relationRowIds)
+                },
+                onAddRelationTargetRow = { targetTableBlockId ->
+                    onAddTableRow(targetTableBlockId)
+                },
+                onAddColumn = { name, type -> onAddTableColumn(tableBlockId, name, type) },
+                onInsertColumn = { columnId, side ->
+                    onInsertTableColumn(tableBlockId, columnId, side)
+                },
+                onDuplicateColumn = { columnId ->
+                    onDuplicateTableColumn(tableBlockId, columnId)
+                },
+                onDeleteColumn = { columnId -> onDeleteTableColumn(tableBlockId, columnId) },
+                onColumnDateSettingsChange = { columnId, dateFormat, timeFormat, reminder, timezoneLabel ->
+                    onTableColumnDateSettingsChange(
+                        tableBlockId,
+                        columnId,
+                        dateFormat,
+                        timeFormat,
+                        reminder,
+                        timezoneLabel,
+                    )
+                },
+                onColumnFormulaChange = { columnId, formula ->
+                    onTableColumnFormulaChange(tableBlockId, columnId, formula)
+                },
+                onColumnRelationTargetChange = { columnId, targetTableId ->
+                    onTableColumnRelationTargetChange(tableBlockId, columnId, targetTableId)
+                },
+                onColumnRollupChange = { columnId, relationColumnId, targetColumnId, aggregation ->
+                    onTableColumnRollupChange(
+                        tableBlockId,
+                        columnId,
+                        relationColumnId,
+                        targetColumnId,
+                        aggregation,
+                    )
+                },
+                onAddRow = { onAddTableRow(tableBlockId) },
+                onBlockTextChange = { rowBlockId, text ->
+                    onTableRowBlockTextChange(tableBlockId, openRow.id, rowBlockId, text)
+                },
+                onBlockRichTextChange = { rowBlockId, text, spans ->
+                    onTableRowBlockRichTextChange(tableBlockId, openRow.id, rowBlockId, text, spans)
+                },
+                onBlockPasteBlocks = { rowBlockId, pasteBlocks ->
+                    onTableRowBlockPasteBlocks(tableBlockId, openRow.id, rowBlockId, pasteBlocks)
+                },
+                onBlockTypeChange = { rowBlockId, type ->
+                    onTableRowBlockTypeChange(tableBlockId, openRow.id, rowBlockId, type)
+                },
+                onBlockMediaAdd = { rowBlockId, attachments ->
+                    onTableRowBlockMediaAdd(tableBlockId, openRow.id, rowBlockId, attachments)
+                },
+                onBlockMediaRemove = { rowBlockId, attachmentId ->
+                    onTableRowBlockMediaRemove(
+                        tableBlockId,
+                        openRow.id,
+                        rowBlockId,
+                        attachmentId,
+                    )
+                },
+                onToggleTodo = { rowBlockId ->
+                    onToggleTableRowTodoBlock(tableBlockId, openRow.id, rowBlockId)
+                },
+                onAddBlock = { type -> onAddTableRowPageBlock(tableBlockId, openRow.id, type) },
+                onInsertBlockNear = { rowBlockId, type, position ->
+                    onInsertTableRowPageBlockNear(
+                        tableBlockId,
+                        openRow.id,
+                        rowBlockId,
+                        type,
+                        position,
+                    )
+                },
+                onCreateLinkedPage = { rowBlockId ->
+                    onCreateLinkedChildPageFromTableRowBlock(tableBlockId, openRow.id, rowBlockId)
+                },
+                onDeleteBlock = { rowBlockId ->
+                    onDeleteTableRowPageBlock(tableBlockId, openRow.id, rowBlockId)
+                },
+                onMoveBlockUp = { rowBlockId ->
+                    onMoveTableRowPageBlockUp(tableBlockId, openRow.id, rowBlockId)
+                },
+                onMoveBlockDown = { rowBlockId ->
+                    onMoveTableRowPageBlockDown(tableBlockId, openRow.id, rowBlockId)
+                },
+                onIndentBlock = { rowBlockId ->
+                    onIndentTableRowPageBlock(tableBlockId, openRow.id, rowBlockId)
+                },
+                onOutdentBlock = { rowBlockId ->
+                    onOutdentTableRowPageBlock(tableBlockId, openRow.id, rowBlockId)
+                },
+                mentionPages = homeAiState.allPages,
+                onDismiss = { tableOpenRowIds[tableUiStateKey] = null },
             )
         }
     }
