@@ -4,6 +4,7 @@ import com.changeyourlife.cyl.backend.data.PageContentJsonMutator
 import com.changeyourlife.cyl.backend.domain.ContentSearchQuery
 import com.changeyourlife.cyl.backend.domain.ContentSearchResult
 import com.changeyourlife.cyl.backend.domain.ContentRepository
+import com.changeyourlife.cyl.backend.domain.PageMutationResult
 import com.changeyourlife.cyl.backend.domain.PageRecord
 import com.changeyourlife.cyl.backend.domain.WorkspaceRecord
 import com.changeyourlife.cyl.backend.model.ErrorResponse
@@ -15,6 +16,7 @@ import com.changeyourlife.cyl.backend.model.sync.PageBlockPatchRequest
 import com.changeyourlife.cyl.backend.model.sync.PageElementPositionPatchRequest
 import com.changeyourlife.cyl.backend.model.sync.PagePropertyCreateRequest
 import com.changeyourlife.cyl.backend.model.sync.PagePropertyValuePatchRequest
+import com.changeyourlife.cyl.backend.model.sync.PageRevisionConflictResponse
 import com.changeyourlife.cyl.backend.model.sync.PageSyncDto
 import com.changeyourlife.cyl.backend.model.sync.PageTableColumnCreateRequest
 import com.changeyourlife.cyl.backend.model.sync.PageTableColumnPatchRequest
@@ -24,6 +26,7 @@ import com.changeyourlife.cyl.backend.model.sync.PageTableRowCreateRequest
 import com.changeyourlife.cyl.backend.model.sync.PageTableRowPatchRequest
 import com.changeyourlife.cyl.backend.model.sync.WorkspaceListResponse
 import com.changeyourlife.cyl.backend.model.sync.WorkspaceSyncDto
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.call
 import io.ktor.server.auth.authenticate
@@ -160,6 +163,7 @@ fun Route.contentRoutes(contentRepository: ContentRepository) {
                     if (page == null) {
                         call.respond(HttpStatusCode.NotFound, ErrorResponse("Page not found."))
                     } else {
+                        call.response.headers.append(HttpHeaders.ETag, page.revision.toPageEtag())
                         call.respond(page.toDto())
                     }
                 }
@@ -180,15 +184,14 @@ fun Route.contentRoutes(contentRepository: ContentRepository) {
                         call.respond(HttpStatusCode.BadRequest, ErrorResponse(validationError))
                         return@put
                     }
-                    val saved = contentRepository.upsertPage(
+                    val result = contentRepository.upsertPage(
                         userId = userId,
                         page = request.toRecord(),
                     )
-                    if (saved == null) {
-                        call.respond(HttpStatusCode.Forbidden, ErrorResponse("Page workspace is not accessible."))
-                        return@put
-                    }
-                    call.respond(saved.toDto())
+                    call.respondPageMutationResult(
+                        result = result,
+                        rejectedMessage = "Page could not be saved.",
+                    )
                 }
 
                 post("/{id}/blocks") {
@@ -331,18 +334,18 @@ fun Route.contentRoutes(contentRepository: ContentRepository) {
                         call.respond(HttpStatusCode.BadRequest, ErrorResponse("propertyId or propertyName is required."))
                         return@patch
                     }
-                    val saved = contentRepository.updatePagePropertyValue(
+                    call.respondPageContentMutation(
+                        contentRepository = contentRepository,
                         userId = userId,
                         pageId = id,
-                        propertyId = request.propertyId,
-                        propertyName = request.propertyName,
-                        value = request.value,
-                        updatedAt = System.currentTimeMillis(),
-                    )
-                    if (saved == null) {
-                        call.respond(HttpStatusCode.NotFound, ErrorResponse("Page property not found."))
-                    } else {
-                        call.respond(saved.toDto())
+                        notFoundMessage = "Page property not found.",
+                    ) { content ->
+                        PageContentJsonMutator.updatePropertyValue(
+                            content = content,
+                            propertyId = request.propertyId,
+                            propertyName = request.propertyName,
+                            value = request.value,
+                        )
                     }
                 }
 
@@ -695,19 +698,19 @@ fun Route.contentRoutes(contentRepository: ContentRepository) {
                         call.respond(HttpStatusCode.BadRequest, ErrorResponse("rowId and columnId are required."))
                         return@patch
                     }
-                    val saved = contentRepository.updatePageTableCellValue(
+                    call.respondPageContentMutation(
+                        contentRepository = contentRepository,
                         userId = userId,
                         pageId = id,
-                        rowId = request.rowId,
-                        columnId = request.columnId,
-                        value = request.value,
-                        valueJson = request.valueJson,
-                        updatedAt = System.currentTimeMillis(),
-                    )
-                    if (saved == null) {
-                        call.respond(HttpStatusCode.NotFound, ErrorResponse("Page table cell not found."))
-                    } else {
-                        call.respond(saved.toDto())
+                        notFoundMessage = "Page table cell not found.",
+                    ) { content ->
+                        PageContentJsonMutator.updateTableCellValue(
+                            content = content,
+                            rowId = request.rowId,
+                            columnId = request.columnId,
+                            value = request.value,
+                            valueJson = request.valueJson,
+                        )
                     }
                 }
 
@@ -717,16 +720,14 @@ fun Route.contentRoutes(contentRepository: ContentRepository) {
                         HttpStatusCode.BadRequest,
                         ErrorResponse("Missing page id."),
                     )
-                    val restored = contentRepository.restorePage(
+                    val expectedRevision = call.requireExpectedPageRevision() ?: return@post
+                    val result = contentRepository.restorePage(
                         userId = userId,
                         pageId = id,
+                        expectedRevision = expectedRevision,
                         restoredAt = System.currentTimeMillis(),
                     )
-                    if (restored) {
-                        call.respond(HttpStatusCode.NoContent)
-                    } else {
-                        call.respond(HttpStatusCode.NotFound, ErrorResponse("Page not found."))
-                    }
+                    call.respondPageMutationResult(result, rejectedMessage = "Page could not be restored.")
                 }
 
                 delete("/{id}") {
@@ -735,16 +736,14 @@ fun Route.contentRoutes(contentRepository: ContentRepository) {
                         HttpStatusCode.BadRequest,
                         ErrorResponse("Missing page id."),
                     )
-                    val deleted = contentRepository.softDeletePage(
+                    val expectedRevision = call.requireExpectedPageRevision() ?: return@delete
+                    val result = contentRepository.softDeletePage(
                         userId = userId,
                         pageId = id,
+                        expectedRevision = expectedRevision,
                         deletedAt = System.currentTimeMillis(),
                     )
-                    if (deleted) {
-                        call.respond(HttpStatusCode.NoContent)
-                    } else {
-                        call.respond(HttpStatusCode.NotFound, ErrorResponse("Page not found."))
-                    }
+                    call.respondPageMutationResult(result, rejectedMessage = "Page could not be deleted.")
                 }
 
                 delete("/{id}/permanent") {
@@ -753,15 +752,13 @@ fun Route.contentRoutes(contentRepository: ContentRepository) {
                         HttpStatusCode.BadRequest,
                         ErrorResponse("Missing page id."),
                     )
-                    val deleted = contentRepository.deletePagePermanently(
+                    val expectedRevision = call.requireExpectedPageRevision() ?: return@delete
+                    val result = contentRepository.deletePagePermanently(
                         userId = userId,
                         pageId = id,
+                        expectedRevision = expectedRevision,
                     )
-                    if (deleted) {
-                        call.respond(HttpStatusCode.NoContent)
-                    } else {
-                        call.respond(HttpStatusCode.NotFound, ErrorResponse("Page not found."))
-                    }
+                    call.respondPageMutationResult(result, rejectedMessage = "Page could not be permanently deleted.")
                 }
             }
         }
@@ -784,35 +781,79 @@ private suspend fun io.ktor.server.application.ApplicationCall.respondPageConten
     notFoundMessage: String,
     transform: (String) -> String?,
 ) {
-    val page = contentRepository.getPage(
+    val expectedRevision = requireExpectedPageRevision() ?: return
+    val result = contentRepository.mutatePageContent(
         userId = userId,
         pageId = pageId,
-        includeDeleted = false,
+        expectedRevision = expectedRevision,
+        updatedAt = System.currentTimeMillis(),
+        transform = transform,
     )
-    if (page == null) {
-        respond(HttpStatusCode.NotFound, ErrorResponse("Page not found."))
-        return
-    }
-
-    val updatedContent = transform(page.content)
-    if (updatedContent == null) {
-        respond(HttpStatusCode.NotFound, ErrorResponse(notFoundMessage))
-        return
-    }
-
-    val saved = contentRepository.upsertPage(
-        userId = userId,
-        page = page.copy(
-            content = updatedContent,
-            updatedAt = System.currentTimeMillis(),
-        ),
+    respondPageMutationResult(
+        result = result,
+        rejectedMessage = notFoundMessage,
     )
-    if (saved == null) {
-        respond(HttpStatusCode.Forbidden, ErrorResponse("Page workspace is not accessible."))
-    } else {
-        respond(saved.toDto())
+}
+
+private suspend fun io.ktor.server.application.ApplicationCall.respondPageMutationResult(
+    result: PageMutationResult,
+    rejectedMessage: String,
+) {
+    when (result) {
+        is PageMutationResult.Applied -> {
+            response.headers.append(HttpHeaders.ETag, result.page.revision.toPageEtag())
+            respond(result.page.toDto())
+        }
+
+        is PageMutationResult.Conflict -> {
+            response.headers.append(HttpHeaders.ETag, result.currentPage.revision.toPageEtag())
+            respond(
+                HttpStatusCode.Conflict,
+                PageRevisionConflictResponse(
+                    expectedRevision = result.expectedRevision,
+                    actualRevision = result.currentPage.revision,
+                    currentPage = result.currentPage.toDto(),
+                ),
+            )
+        }
+
+        PageMutationResult.NotFound -> {
+            respond(HttpStatusCode.NotFound, ErrorResponse("Page not found."))
+        }
+
+        PageMutationResult.Forbidden -> {
+            respond(HttpStatusCode.Forbidden, ErrorResponse("Page workspace is not accessible."))
+        }
+
+        PageMutationResult.Rejected -> {
+            respond(HttpStatusCode.NotFound, ErrorResponse(rejectedMessage))
+        }
+
+        PageMutationResult.PermanentlyDeleted -> {
+            respond(HttpStatusCode.NoContent)
+        }
     }
 }
+
+private suspend fun io.ktor.server.application.ApplicationCall.requireExpectedPageRevision(): Long? {
+    val rawRevision = request.headers[HttpHeaders.IfMatch]
+        ?.trim()
+        ?.removePrefix("W/")
+        ?.trim()
+        ?.removeSurrounding("\"")
+    val revision = rawRevision?.toLongOrNull()?.takeIf { value -> value >= 0L }
+    if (revision == null) {
+        respond(
+            PreconditionRequiredStatus,
+            ErrorResponse("A valid If-Match page revision is required."),
+        )
+    }
+    return revision
+}
+
+private fun Long.toPageEtag(): String = "\"$this\""
+
+private val PreconditionRequiredStatus = HttpStatusCode(428, "Precondition Required")
 
 private fun String?.toBooleanFlag(): Boolean {
     return equals("true", ignoreCase = true) || this == "1"
@@ -848,6 +889,7 @@ private fun PageSyncDto.validate(): String? {
         id.isBlank() -> "Page id is required."
         workspaceId.isBlank() -> "workspaceId is required."
         title.isBlank() -> "Page title is required."
+        revision < 0L -> "Page revision cannot be negative."
         else -> null
     }
 }
@@ -884,6 +926,7 @@ private fun PageRecord.toDto(): PageSyncDto {
         createdAt = createdAt,
         updatedAt = updatedAt,
         deletedAt = deletedAt,
+        revision = revision,
     )
 }
 
@@ -918,5 +961,6 @@ private fun PageSyncDto.toRecord(): PageRecord {
         createdAt = createdAt,
         updatedAt = updatedAt,
         deletedAt = deletedAt,
+        revision = revision,
     )
 }

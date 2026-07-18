@@ -5,6 +5,7 @@ import com.changeyourlife.cyl.backend.data.PostgresContentRepository
 import com.changeyourlife.cyl.backend.data.PostgresPageContentProjectionBackfill
 import com.changeyourlife.cyl.backend.database.DatabaseFactory
 import com.changeyourlife.cyl.backend.domain.ContentSearchQuery
+import com.changeyourlife.cyl.backend.domain.PageMutationResult
 import com.changeyourlife.cyl.backend.domain.PageRecord
 import com.changeyourlife.cyl.backend.domain.WorkspaceRecord
 import java.net.URI
@@ -13,6 +14,7 @@ import java.nio.charset.StandardCharsets
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -87,9 +89,8 @@ class PostgresContentRepositoryIntegrationTest {
                     updatedAt = 300L,
                     deletedAt = null,
                 ),
-            )
+            ).appliedPage()
 
-            assertNotNull(firstPage)
             assertEquals(firstPage.id, repository.listPages(firstUserId, sharedClientWorkspaceId).single().id)
             assertTrue(repository.listPages(secondUserId, sharedClientWorkspaceId).isEmpty())
             assertNull(repository.getPage(secondUserId, firstPage.id))
@@ -141,8 +142,7 @@ class PostgresContentRepositoryIntegrationTest {
                 rowName = "Fuel",
                 rowNote = "Motorcycle receipt",
             )
-            assertNotNull(
-                repository.upsertPage(
+            val initialPage = repository.upsertPage(
                     userId = userId,
                     page = PageRecord(
                         id = pageId,
@@ -155,8 +155,18 @@ class PostgresContentRepositoryIntegrationTest {
                         updatedAt = 200,
                         deletedAt = null,
                     ),
+                ).appliedPage()
+
+            val staleWrite = repository.upsertPage(
+                userId = userId,
+                page = initialPage.copy(
+                    title = "Stale overwrite",
+                    revision = 0L,
                 ),
             )
+            val staleConflict = assertIs<PageMutationResult.Conflict>(staleWrite)
+            assertEquals(initialPage.revision, staleConflict.currentPage.revision)
+            assertEquals("July budget", staleConflict.currentPage.title)
 
             val fuelResults = repository.search(
                 userId = userId,
@@ -182,8 +192,7 @@ class PostgresContentRepositoryIntegrationTest {
                 ).map { result -> result.tableBlockId },
             )
 
-            assertNotNull(
-                repository.upsertPage(
+            val replacedPage = repository.upsertPage(
                     userId = userId,
                     page = PageRecord(
                         id = pageId,
@@ -202,9 +211,9 @@ class PostgresContentRepositoryIntegrationTest {
                         createdAt = 200,
                         updatedAt = 300,
                         deletedAt = null,
+                        revision = initialPage.revision,
                     ),
-                ),
-            )
+                ).appliedPage()
 
             assertTrue(
                 repository.search(
@@ -230,17 +239,16 @@ class PostgresContentRepositoryIntegrationTest {
                 ).map { result -> result.rowId },
             )
 
-            assertNotNull(
-                repository.updatePageTableCellValue(
+            val cellUpdatedPage = repository.updatePageTableCellValue(
                     userId = userId,
                     pageId = pageId,
                     rowId = rowId,
                     columnId = nameColumnId,
                     value = "Bus",
                     valueJson = null,
+                    expectedRevision = replacedPage.revision,
                     updatedAt = 400,
-                ),
-            )
+                ).appliedPage()
             assertTrue(
                 repository.search(
                     userId = userId,
@@ -265,7 +273,12 @@ class PostgresContentRepositoryIntegrationTest {
                 ).map { result -> result.rowId },
             )
 
-            assertTrue(repository.softDeletePage(userId, pageId, deletedAt = 500))
+            val deletedPage = repository.softDeletePage(
+                userId = userId,
+                pageId = pageId,
+                expectedRevision = cellUpdatedPage.revision,
+                deletedAt = 500,
+            ).appliedPage()
             assertTrue(
                 repository.search(
                     userId = userId,
@@ -278,7 +291,12 @@ class PostgresContentRepositoryIntegrationTest {
                 ).isEmpty(),
             )
 
-            assertTrue(repository.restorePage(userId, pageId, restoredAt = 600))
+            repository.restorePage(
+                userId = userId,
+                pageId = pageId,
+                expectedRevision = deletedPage.revision,
+                restoredAt = 600,
+            ).appliedPage()
             assertEquals(
                 listOf(rowId),
                 repository.search(
@@ -403,6 +421,10 @@ class PostgresContentRepositoryIntegrationTest {
         val username: String?,
         val password: String?,
     )
+}
+
+private fun PageMutationResult.appliedPage(): PageRecord {
+    return assertIs<PageMutationResult.Applied>(this).page
 }
 
 private fun databasePageContent(

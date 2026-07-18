@@ -14,8 +14,13 @@ import org.junit.Test
 class PageContentConflictMergerTest {
     @Test
     fun mergesDisjointLocalAndRemoteContentChanges() {
-        val localPage = page(updatedAt = 1500L, remoteUpdatedAt = 1000L)
-        val remotePage = page(updatedAt = 1700L, remoteUpdatedAt = 1700L, syncStatus = SyncStatus.Synced)
+        val localPage = page(updatedAt = 1500L, remoteUpdatedAt = 1000L, revision = 6L)
+        val remotePage = page(
+            updatedAt = 1700L,
+            remoteUpdatedAt = 1700L,
+            syncStatus = SyncStatus.Synced,
+            revision = 7L,
+        )
         val localSnapshot = snapshot(
             block = block(text = "local note", updatedAt = 1500L),
             property = property(value = "old", updatedAt = 1000L),
@@ -37,6 +42,7 @@ class PageContentConflictMergerTest {
         val document = PageContentCodec.decodeDocument(merged.content)
 
         assertEquals(SyncStatus.PendingPush, merged.syncStatus)
+        assertEquals(7L, merged.revision)
         assertEquals(1700L, merged.remoteUpdatedAt)
         assertEquals("local note", document.blocks.single().text)
         assertEquals("remote date", document.properties.single().value)
@@ -81,6 +87,7 @@ class PageContentConflictMergerTest {
         updatedAt: Long,
         remoteUpdatedAt: Long,
         syncStatus: String = SyncStatus.PendingPush,
+        revision: Long = 0L,
     ): PageEntity {
         return PageEntity(
             id = PageId,
@@ -95,6 +102,7 @@ class PageContentConflictMergerTest {
             syncStatus = syncStatus,
             remoteUpdatedAt = remoteUpdatedAt,
             lastSyncedAt = 1000L,
+            revision = revision,
         )
     }
 

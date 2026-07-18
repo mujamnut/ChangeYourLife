@@ -1,5 +1,7 @@
 package com.changeyourlife.cyl.data.sync
 
+import androidx.room.withTransaction
+import com.changeyourlife.cyl.data.local.CylDatabase
 import com.changeyourlife.cyl.data.local.dao.AiActionLogDao
 import com.changeyourlife.cyl.data.local.dao.AiSkillDao
 import com.changeyourlife.cyl.data.local.dao.ChatMessageDao
@@ -64,6 +66,7 @@ import retrofit2.HttpException
 
 @Singleton
 class SessionSyncCoordinator @Inject constructor(
+    private val database: CylDatabase,
     private val workspaceDao: WorkspaceDao,
     private val pageDao: PageDao,
     private val pageContentDao: PageContentDao,
@@ -242,15 +245,21 @@ class SessionSyncCoordinator @Inject constructor(
 
     suspend fun pushPage(page: PageEntity) {
         val header = authHeader() ?: return
+        val pushedPage = pageDao.getPage(page.id) ?: page
         runCatching {
             syncApi.upsertPage(
                 authorization = header,
-                id = page.id,
-                page = page.toDomain().toSyncDto(),
+                id = pushedPage.id,
+                page = pushedPage.toDomain().toSyncDto(),
             )
         }.onSuccess { remotePage ->
-            persistPushResponse(remotePage = remotePage, pushedPage = page)
-        }.onFailure(::handleSyncFailure)
+            persistPushResponse(remotePage = remotePage, pushedPage = pushedPage)
+        }.onFailure { error ->
+            handleSyncFailure(error)
+            if (error.isPageRevisionConflict()) {
+                refreshPage(pageId = pushedPage.id, includeDeleted = true)
+            }
+        }
     }
 
     suspend fun pushAiActionLog(actionLog: AiActionLogEntity) {
@@ -340,6 +349,7 @@ class SessionSyncCoordinator @Inject constructor(
         runCatching {
             syncApi.updatePageBlockText(
                 authorization = header,
+                ifMatch = pageMutationRevisionEtag(page),
                 id = page.id,
                 blockId = blockId,
                 request = PageBlockPatchRequestDto(text = text),
@@ -347,8 +357,7 @@ class SessionSyncCoordinator @Inject constructor(
         }.onSuccess { remotePage ->
             persistPushResponse(remotePage = remotePage, pushedPage = page)
         }.onFailure { error ->
-            handleSyncFailure(error)
-            pushPage(page)
+            recoverPageMutationFailure(page, error)
         }
     }
 
@@ -360,6 +369,7 @@ class SessionSyncCoordinator @Inject constructor(
         runCatching {
             syncApi.updatePageBlockText(
                 authorization = header,
+                ifMatch = pageMutationRevisionEtag(page),
                 id = page.id,
                 blockId = block.id,
                 request = PageBlockPatchRequestDto(
@@ -372,8 +382,7 @@ class SessionSyncCoordinator @Inject constructor(
         }.onSuccess { remotePage ->
             persistPushResponse(remotePage = remotePage, pushedPage = page)
         }.onFailure { error ->
-            handleSyncFailure(error)
-            pushPage(page)
+            recoverPageMutationFailure(page, error)
         }
     }
 
@@ -387,6 +396,7 @@ class SessionSyncCoordinator @Inject constructor(
         runCatching {
             syncApi.updatePagePropertyValue(
                 authorization = header,
+                ifMatch = pageMutationRevisionEtag(page),
                 id = page.id,
                 request = PagePropertyValuePatchRequestDto(
                     propertyId = propertyId,
@@ -397,8 +407,7 @@ class SessionSyncCoordinator @Inject constructor(
         }.onSuccess { remotePage ->
             persistPushResponse(remotePage = remotePage, pushedPage = page)
         }.onFailure { error ->
-            handleSyncFailure(error)
-            pushPage(page)
+            recoverPageMutationFailure(page, error)
         }
     }
 
@@ -412,6 +421,7 @@ class SessionSyncCoordinator @Inject constructor(
         runCatching {
             syncApi.updatePageTableCellValue(
                 authorization = header,
+                ifMatch = pageMutationRevisionEtag(page),
                 id = page.id,
                 request = PageTableCellValuePatchRequestDto(
                     rowId = rowId,
@@ -423,8 +433,7 @@ class SessionSyncCoordinator @Inject constructor(
         }.onSuccess { remotePage ->
             persistPushResponse(remotePage = remotePage, pushedPage = page)
         }.onFailure { error ->
-            handleSyncFailure(error)
-            pushPage(page)
+            recoverPageMutationFailure(page, error)
         }
     }
 
@@ -437,6 +446,7 @@ class SessionSyncCoordinator @Inject constructor(
         runCatching {
             syncApi.updatePageTable(
                 authorization = header,
+                ifMatch = pageMutationRevisionEtag(page),
                 id = page.id,
                 tableBlockId = tableBlockId,
                 request = table.toPatchRequestDto(),
@@ -444,8 +454,7 @@ class SessionSyncCoordinator @Inject constructor(
         }.onSuccess { remotePage ->
             persistPushResponse(remotePage = remotePage, pushedPage = page)
         }.onFailure { error ->
-            handleSyncFailure(error)
-            pushPage(page)
+            recoverPageMutationFailure(page, error)
         }
     }
 
@@ -458,6 +467,7 @@ class SessionSyncCoordinator @Inject constructor(
         runCatching {
             syncApi.updatePageTableColumn(
                 authorization = header,
+                ifMatch = pageMutationRevisionEtag(page),
                 id = page.id,
                 tableBlockId = tableBlockId,
                 columnId = column.id,
@@ -466,8 +476,7 @@ class SessionSyncCoordinator @Inject constructor(
         }.onSuccess { remotePage ->
             persistPushResponse(remotePage = remotePage, pushedPage = page)
         }.onFailure { error ->
-            handleSyncFailure(error)
-            pushPage(page)
+            recoverPageMutationFailure(page, error)
         }
     }
 
@@ -486,6 +495,7 @@ class SessionSyncCoordinator @Inject constructor(
         runCatching {
             syncApi.addPageBlock(
                 authorization = header,
+                ifMatch = pageMutationRevisionEtag(page),
                 id = page.id,
                 request = PageBlockCreateRequestDto(
                     blockId = block.id,
@@ -499,8 +509,7 @@ class SessionSyncCoordinator @Inject constructor(
         }.onSuccess { remotePage ->
             persistPushResponse(remotePage = remotePage, pushedPage = page)
         }.onFailure { error ->
-            handleSyncFailure(error)
-            pushPage(page)
+            recoverPageMutationFailure(page, error)
         }
     }
 
@@ -512,14 +521,14 @@ class SessionSyncCoordinator @Inject constructor(
         runCatching {
             syncApi.deletePageBlock(
                 authorization = header,
+                ifMatch = pageMutationRevisionEtag(page),
                 id = page.id,
                 blockId = blockId,
             )
         }.onSuccess { remotePage ->
             persistPushResponse(remotePage = remotePage, pushedPage = page)
         }.onFailure { error ->
-            handleSyncFailure(error)
-            pushPage(page)
+            recoverPageMutationFailure(page, error)
         }
     }
 
@@ -532,6 +541,7 @@ class SessionSyncCoordinator @Inject constructor(
         runCatching {
             syncApi.movePageBlock(
                 authorization = header,
+                ifMatch = pageMutationRevisionEtag(page),
                 id = page.id,
                 blockId = blockId,
                 request = PageElementPositionPatchRequestDto(targetIndex = targetIndex),
@@ -539,8 +549,7 @@ class SessionSyncCoordinator @Inject constructor(
         }.onSuccess { remotePage ->
             persistPushResponse(remotePage = remotePage, pushedPage = page)
         }.onFailure { error ->
-            handleSyncFailure(error)
-            pushPage(page)
+            recoverPageMutationFailure(page, error)
         }
     }
 
@@ -553,6 +562,7 @@ class SessionSyncCoordinator @Inject constructor(
         runCatching {
             syncApi.addPageProperty(
                 authorization = header,
+                ifMatch = pageMutationRevisionEtag(page),
                 id = page.id,
                 request = PagePropertyCreateRequestDto(
                     propertyId = property.id,
@@ -565,8 +575,7 @@ class SessionSyncCoordinator @Inject constructor(
         }.onSuccess { remotePage ->
             persistPushResponse(remotePage = remotePage, pushedPage = page)
         }.onFailure { error ->
-            handleSyncFailure(error)
-            pushPage(page)
+            recoverPageMutationFailure(page, error)
         }
     }
 
@@ -578,14 +587,14 @@ class SessionSyncCoordinator @Inject constructor(
         runCatching {
             syncApi.deletePageProperty(
                 authorization = header,
+                ifMatch = pageMutationRevisionEtag(page),
                 id = page.id,
                 propertyId = propertyId,
             )
         }.onSuccess { remotePage ->
             persistPushResponse(remotePage = remotePage, pushedPage = page)
         }.onFailure { error ->
-            handleSyncFailure(error)
-            pushPage(page)
+            recoverPageMutationFailure(page, error)
         }
     }
 
@@ -598,6 +607,7 @@ class SessionSyncCoordinator @Inject constructor(
         runCatching {
             syncApi.movePageProperty(
                 authorization = header,
+                ifMatch = pageMutationRevisionEtag(page),
                 id = page.id,
                 propertyId = propertyId,
                 request = PageElementPositionPatchRequestDto(targetIndex = targetIndex),
@@ -605,8 +615,7 @@ class SessionSyncCoordinator @Inject constructor(
         }.onSuccess { remotePage ->
             persistPushResponse(remotePage = remotePage, pushedPage = page)
         }.onFailure { error ->
-            handleSyncFailure(error)
-            pushPage(page)
+            recoverPageMutationFailure(page, error)
         }
     }
 
@@ -625,6 +634,7 @@ class SessionSyncCoordinator @Inject constructor(
         runCatching {
             syncApi.addPageTableColumn(
                 authorization = header,
+                ifMatch = pageMutationRevisionEtag(page),
                 id = page.id,
                 tableBlockId = tableBlockId,
                 request = PageTableColumnCreateRequestDto(
@@ -639,8 +649,7 @@ class SessionSyncCoordinator @Inject constructor(
         }.onSuccess { remotePage ->
             persistPushResponse(remotePage = remotePage, pushedPage = page)
         }.onFailure { error ->
-            handleSyncFailure(error)
-            pushPage(page)
+            recoverPageMutationFailure(page, error)
         }
     }
 
@@ -653,6 +662,7 @@ class SessionSyncCoordinator @Inject constructor(
         runCatching {
             syncApi.deletePageTableColumn(
                 authorization = header,
+                ifMatch = pageMutationRevisionEtag(page),
                 id = page.id,
                 tableBlockId = tableBlockId,
                 columnId = columnId,
@@ -660,8 +670,7 @@ class SessionSyncCoordinator @Inject constructor(
         }.onSuccess { remotePage ->
             persistPushResponse(remotePage = remotePage, pushedPage = page)
         }.onFailure { error ->
-            handleSyncFailure(error)
-            pushPage(page)
+            recoverPageMutationFailure(page, error)
         }
     }
 
@@ -675,6 +684,7 @@ class SessionSyncCoordinator @Inject constructor(
         runCatching {
             syncApi.movePageTableColumn(
                 authorization = header,
+                ifMatch = pageMutationRevisionEtag(page),
                 id = page.id,
                 tableBlockId = tableBlockId,
                 columnId = columnId,
@@ -683,8 +693,7 @@ class SessionSyncCoordinator @Inject constructor(
         }.onSuccess { remotePage ->
             persistPushResponse(remotePage = remotePage, pushedPage = page)
         }.onFailure { error ->
-            handleSyncFailure(error)
-            pushPage(page)
+            recoverPageMutationFailure(page, error)
         }
     }
 
@@ -702,6 +711,7 @@ class SessionSyncCoordinator @Inject constructor(
         runCatching {
             syncApi.addPageTableRow(
                 authorization = header,
+                ifMatch = pageMutationRevisionEtag(page),
                 id = page.id,
                 tableBlockId = tableBlockId,
                 request = PageTableRowCreateRequestDto(
@@ -715,8 +725,7 @@ class SessionSyncCoordinator @Inject constructor(
         }.onSuccess { remotePage ->
             persistPushResponse(remotePage = remotePage, pushedPage = page)
         }.onFailure { error ->
-            handleSyncFailure(error)
-            pushPage(page)
+            recoverPageMutationFailure(page, error)
         }
     }
 
@@ -729,6 +738,7 @@ class SessionSyncCoordinator @Inject constructor(
         runCatching {
             syncApi.updatePageTableRow(
                 authorization = header,
+                ifMatch = pageMutationRevisionEtag(page),
                 id = page.id,
                 tableBlockId = tableBlockId,
                 rowId = row.id,
@@ -740,8 +750,7 @@ class SessionSyncCoordinator @Inject constructor(
         }.onSuccess { remotePage ->
             persistPushResponse(remotePage = remotePage, pushedPage = page)
         }.onFailure { error ->
-            handleSyncFailure(error)
-            pushPage(page)
+            recoverPageMutationFailure(page, error)
         }
     }
 
@@ -754,6 +763,7 @@ class SessionSyncCoordinator @Inject constructor(
         runCatching {
             syncApi.deletePageTableRow(
                 authorization = header,
+                ifMatch = pageMutationRevisionEtag(page),
                 id = page.id,
                 tableBlockId = tableBlockId,
                 rowId = rowId,
@@ -761,8 +771,7 @@ class SessionSyncCoordinator @Inject constructor(
         }.onSuccess { remotePage ->
             persistPushResponse(remotePage = remotePage, pushedPage = page)
         }.onFailure { error ->
-            handleSyncFailure(error)
-            pushPage(page)
+            recoverPageMutationFailure(page, error)
         }
     }
 
@@ -776,6 +785,7 @@ class SessionSyncCoordinator @Inject constructor(
         runCatching {
             syncApi.movePageTableRow(
                 authorization = header,
+                ifMatch = pageMutationRevisionEtag(page),
                 id = page.id,
                 tableBlockId = tableBlockId,
                 rowId = rowId,
@@ -784,33 +794,64 @@ class SessionSyncCoordinator @Inject constructor(
         }.onSuccess { remotePage ->
             persistPushResponse(remotePage = remotePage, pushedPage = page)
         }.onFailure { error ->
-            handleSyncFailure(error)
-            pushPage(page)
+            recoverPageMutationFailure(page, error)
         }
     }
 
     suspend fun deletePage(pageId: String) {
         val header = authHeader() ?: return
+        val page = pageDao.getPage(pageId) ?: return
         runCatching {
-            syncApi.deletePage(header, pageId)
-        }.onSuccess {
-            markPageSynced(pageId)
-        }.onFailure(::handleSyncFailure)
+            syncApi.deletePage(
+                authorization = header,
+                ifMatch = pageRevisionEtag(page),
+                id = pageId,
+            )
+        }.onSuccess { remotePage ->
+            persistPushResponse(remotePage = remotePage, pushedPage = page)
+        }.onFailure { error ->
+            handleSyncFailure(error)
+            if (error.isPageRevisionConflict()) {
+                refreshPage(pageId = pageId, includeDeleted = true)
+            }
+        }
     }
 
     suspend fun restorePage(pageId: String) {
         val header = authHeader() ?: return
+        val page = pageDao.getPage(pageId) ?: return
         runCatching {
-            syncApi.restorePage(header, pageId)
-        }.onSuccess {
-            markPageSynced(pageId)
-        }.onFailure(::handleSyncFailure)
+            syncApi.restorePage(
+                authorization = header,
+                ifMatch = pageRevisionEtag(page),
+                id = pageId,
+            )
+        }.onSuccess { remotePage ->
+            persistPushResponse(remotePage = remotePage, pushedPage = page)
+        }.onFailure { error ->
+            handleSyncFailure(error)
+            if (error.isPageRevisionConflict()) {
+                refreshPage(pageId = pageId, includeDeleted = true)
+            }
+        }
     }
 
     suspend fun deletePagePermanently(pageId: String) {
         val header = authHeader() ?: return
+        val tombstone = syncTombstoneDao.getPendingTombstones()
+            .firstOrNull { candidate ->
+                candidate.entityType == SyncTombstoneType.PagePermanentDelete &&
+                    candidate.entityId == pageId
+            }
+        val expectedRevision = tombstone?.expectedRevision
+            ?: pageDao.getPage(pageId)?.revision
+            ?: return
         runCatching {
-            syncApi.deletePagePermanently(header, pageId)
+            syncApi.deletePagePermanently(
+                authorization = header,
+                ifMatch = expectedRevision.toPageEtag(),
+                id = pageId,
+            )
         }.onSuccess {
             syncTombstoneDao.deleteTombstone(
                 entityType = SyncTombstoneType.PagePermanentDelete,
@@ -822,6 +863,8 @@ class SessionSyncCoordinator @Inject constructor(
                     entityType = SyncTombstoneType.PagePermanentDelete,
                     entityId = pageId,
                 )
+            } else if (error.isPageRevisionConflict()) {
+                recoverPermanentDeleteConflict(pageId)
             } else {
                 handleSyncFailure(error)
             }
@@ -829,10 +872,23 @@ class SessionSyncCoordinator @Inject constructor(
     }
 
     suspend fun keepLocalPageConflict(pageId: String) {
-        val page = pageDao.getPage(pageId) ?: return
-        val pendingPage = page.copy(syncStatus = SyncStatus.PendingPush)
-        persistPage(pendingPage)
-        pushPage(pendingPage)
+        val header = authHeader() ?: return
+        val localPage = pageDao.getPage(pageId) ?: return
+        runCatching {
+            syncApi.getPage(
+                authorization = header,
+                id = pageId,
+                includeDeleted = true,
+            )
+        }.onSuccess { remotePage ->
+            val pendingPage = localPage.copy(
+                syncStatus = SyncStatus.PendingPush,
+                revision = remotePage.revision,
+                remoteUpdatedAt = remotePage.updatedAt,
+            )
+            persistPage(pendingPage)
+            pushPage(pendingPage)
+        }.onFailure(::handleSyncFailure)
     }
 
     suspend fun useRemotePageConflict(pageId: String) {
@@ -941,9 +997,7 @@ class SessionSyncCoordinator @Inject constructor(
             }
 
             localPage.syncStatus == SyncStatus.PendingPush &&
-                localPage.remoteUpdatedAt > 0 &&
-                remotePage.updatedAt > localPage.remoteUpdatedAt &&
-                remotePage.updatedAt != localPage.updatedAt -> {
+                remotePage.revision > localPage.revision -> {
                 val remoteEntity = remotePage.toSyncedEntity(previous = localPage, now = now)
                 val mergedPage = tryMergePageConflict(
                     localPage = localPage,
@@ -958,8 +1012,9 @@ class SessionSyncCoordinator @Inject constructor(
                 }
             }
 
-            remotePage.updatedAt >= localPage.updatedAt ||
-                localPage.syncStatus == SyncStatus.Synced -> {
+            remotePage.revision >= localPage.revision &&
+                (remotePage.updatedAt >= localPage.updatedAt ||
+                    localPage.syncStatus == SyncStatus.Synced) -> {
                 persistPage(remotePage.toSyncedEntity(previous = localPage, now = now))
             }
 
@@ -1101,17 +1156,6 @@ class SessionSyncCoordinator @Inject constructor(
             }
         }
         searchIndexRebuilder.rebuildChatSession(remoteMessage.sessionId)
-    }
-
-    private suspend fun markPageSynced(pageId: String) {
-        val page = pageDao.getPage(pageId) ?: return
-        persistPage(
-            page.copy(
-                syncStatus = SyncStatus.Synced,
-                remoteUpdatedAt = page.updatedAt,
-                lastSyncedAt = System.currentTimeMillis(),
-            ),
-        )
     }
 
     private fun WorkspaceSyncDto.toSyncedEntity(
@@ -1269,6 +1313,7 @@ class SessionSyncCoordinator @Inject constructor(
             persistPage(
                 currentPage.copy(
                     syncStatus = SyncStatus.PendingPush,
+                    revision = remotePage.revision,
                     remoteUpdatedAt = maxOf(currentPage.remoteUpdatedAt, remotePage.updatedAt),
                     lastSyncedAt = now,
                 ),
@@ -1323,19 +1368,73 @@ class SessionSyncCoordinator @Inject constructor(
     }
 
     private suspend fun persistPage(page: PageEntity) {
-        pageDao.upsertPage(page)
-        page.toContentProjection()?.let { projection ->
-            pageContentDao.replacePageContentProjection(
-                pageId = page.id,
-                blocks = projection.blocks,
-                properties = projection.properties,
-                tables = projection.tables,
-                columns = projection.columns,
-                rows = projection.rows,
-                cells = projection.cells,
-            )
+        database.withTransaction {
+            pageDao.upsertPage(page)
+            page.toContentProjection()?.let { projection ->
+                pageContentDao.replacePageContentProjection(
+                    pageId = page.id,
+                    blocks = projection.blocks,
+                    properties = projection.properties,
+                    tables = projection.tables,
+                    columns = projection.columns,
+                    rows = projection.rows,
+                    cells = projection.cells,
+                )
+            }
         }
         searchIndexRebuilder.rebuildPage(page)
+    }
+
+    private suspend fun recoverPermanentDeleteConflict(pageId: String) {
+        val header = authHeader() ?: return
+        runCatching {
+            syncApi.getPage(
+                authorization = header,
+                id = pageId,
+                includeDeleted = true,
+            )
+        }.onSuccess { remotePage ->
+            persistPage(
+                remotePage.toSyncedEntity(
+                    previous = pageDao.getPage(pageId),
+                    now = System.currentTimeMillis(),
+                ).copy(syncStatus = SyncStatus.Conflict),
+            )
+            syncTombstoneDao.deleteTombstone(
+                entityType = SyncTombstoneType.PagePermanentDelete,
+                entityId = pageId,
+            )
+        }.onFailure(::handleSyncFailure)
+    }
+
+    private suspend fun recoverPageMutationFailure(
+        page: PageEntity,
+        error: Throwable,
+    ) {
+        handleSyncFailure(error)
+        when {
+            error is SupersededPageMutationException -> pushPage(page)
+            error.isPageRevisionConflict() -> refreshPage(pageId = page.id, includeDeleted = true)
+            else -> pushPage(page)
+        }
+    }
+
+    private suspend fun pageMutationRevisionEtag(page: PageEntity): String {
+        val currentPage = pageDao.getPage(page.id) ?: page
+        if (currentPage.hasLocalMutationAfter(page)) {
+            throw SupersededPageMutationException(page.id)
+        }
+        return currentPage.revision.toPageEtag()
+    }
+
+    private suspend fun pageRevisionEtag(page: PageEntity): String {
+        return (pageDao.getPage(page.id)?.revision ?: page.revision).toPageEtag()
+    }
+
+    private fun Long.toPageEtag(): String = "\"$this\""
+
+    private fun Throwable.isPageRevisionConflict(): Boolean {
+        return this is HttpException && code() == 409
     }
 
     private fun authHeader(): String? {
@@ -1351,6 +1450,9 @@ class SessionSyncCoordinator @Inject constructor(
             tokenStore.clearToken()
         }
     }
+
+    private class SupersededPageMutationException(pageId: String) :
+        IllegalStateException("Page mutation was superseded before sync: $pageId")
 
     private fun PageBlock.canUseGranularCreate(): Boolean {
         return type != PageBlockType.DatabaseTable &&

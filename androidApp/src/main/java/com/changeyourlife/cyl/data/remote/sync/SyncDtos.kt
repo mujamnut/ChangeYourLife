@@ -36,6 +36,7 @@ data class PageSyncDto(
     val createdAt: Long,
     val updatedAt: Long,
     val deletedAt: Long? = null,
+    val revision: Long = 0L,
 )
 
 @Serializable
@@ -286,6 +287,7 @@ fun Page.toSyncDto(): PageSyncDto {
         createdAt = createdAt,
         updatedAt = updatedAt,
         deletedAt = deletedAt,
+        revision = revision,
     )
 }
 
@@ -300,6 +302,7 @@ fun PageSyncDto.toDomain(): Page {
         createdAt = createdAt,
         updatedAt = updatedAt,
         deletedAt = deletedAt,
+        revision = revision,
     )
 }
 

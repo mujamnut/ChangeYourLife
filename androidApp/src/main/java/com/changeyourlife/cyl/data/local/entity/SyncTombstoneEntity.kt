@@ -16,6 +16,7 @@ data class SyncTombstoneEntity(
     val entityType: String,
     val entityId: String,
     val createdAt: Long,
+    val expectedRevision: Long = 0L,
 )
 
 object SyncTombstoneType {

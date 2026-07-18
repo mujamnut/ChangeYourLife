@@ -10,5 +10,5 @@ data class Page(
     val createdAt: Long,
     val updatedAt: Long,
     val deletedAt: Long?,
+    val revision: Long = 0L,
 )
-

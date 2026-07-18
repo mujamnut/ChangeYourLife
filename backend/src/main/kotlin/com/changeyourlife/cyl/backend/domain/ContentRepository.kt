@@ -21,7 +21,25 @@ data class PageRecord(
     val createdAt: Long,
     val updatedAt: Long,
     val deletedAt: Long?,
+    val revision: Long = 0L,
 )
+
+sealed interface PageMutationResult {
+    data class Applied(val page: PageRecord) : PageMutationResult
+
+    data class Conflict(
+        val expectedRevision: Long,
+        val currentPage: PageRecord,
+    ) : PageMutationResult
+
+    data object NotFound : PageMutationResult
+
+    data object Forbidden : PageMutationResult
+
+    data object Rejected : PageMutationResult
+
+    data object PermanentlyDeleted : PageMutationResult
+}
 
 data class ContentSearchQuery(
     val workspaceId: String,
@@ -65,15 +83,24 @@ interface ContentRepository {
 
     suspend fun search(userId: String, query: ContentSearchQuery): List<ContentSearchResult>
 
-    suspend fun upsertPage(userId: String, page: PageRecord): PageRecord?
+    suspend fun upsertPage(userId: String, page: PageRecord): PageMutationResult
+
+    suspend fun mutatePageContent(
+        userId: String,
+        pageId: String,
+        expectedRevision: Long,
+        updatedAt: Long,
+        transform: (String) -> String?,
+    ): PageMutationResult
 
     suspend fun updatePageBlockText(
         userId: String,
         pageId: String,
         blockId: String,
         text: String,
+        expectedRevision: Long,
         updatedAt: Long,
-    ): PageRecord?
+    ): PageMutationResult
 
     suspend fun updatePagePropertyValue(
         userId: String,
@@ -81,8 +108,9 @@ interface ContentRepository {
         propertyId: String = "",
         propertyName: String = "",
         value: String,
+        expectedRevision: Long,
         updatedAt: Long,
-    ): PageRecord?
+    ): PageMutationResult
 
     suspend fun updatePageTableCellValue(
         userId: String,
@@ -91,12 +119,27 @@ interface ContentRepository {
         columnId: String,
         value: String,
         valueJson: JsonObject?,
+        expectedRevision: Long,
         updatedAt: Long,
-    ): PageRecord?
+    ): PageMutationResult
 
-    suspend fun softDeletePage(userId: String, pageId: String, deletedAt: Long): Boolean
+    suspend fun softDeletePage(
+        userId: String,
+        pageId: String,
+        expectedRevision: Long,
+        deletedAt: Long,
+    ): PageMutationResult
 
-    suspend fun restorePage(userId: String, pageId: String, restoredAt: Long): Boolean
+    suspend fun restorePage(
+        userId: String,
+        pageId: String,
+        expectedRevision: Long,
+        restoredAt: Long,
+    ): PageMutationResult
 
-    suspend fun deletePagePermanently(userId: String, pageId: String): Boolean
+    suspend fun deletePagePermanently(
+        userId: String,
+        pageId: String,
+        expectedRevision: Long,
+    ): PageMutationResult
 }

@@ -119,6 +119,7 @@ interface SyncApi {
     @POST("api/v1/pages/{id}/blocks")
     suspend fun addPageBlock(
         @Header("Authorization") authorization: String,
+        @Header("If-Match") ifMatch: String,
         @Path("id") id: String,
         @Body request: PageBlockCreateRequestDto,
     ): PageSyncDto
@@ -126,6 +127,7 @@ interface SyncApi {
     @DELETE("api/v1/pages/{id}/blocks/{blockId}")
     suspend fun deletePageBlock(
         @Header("Authorization") authorization: String,
+        @Header("If-Match") ifMatch: String,
         @Path("id") id: String,
         @Path("blockId") blockId: String,
     ): PageSyncDto
@@ -133,6 +135,7 @@ interface SyncApi {
     @PATCH("api/v1/pages/{id}/blocks/{blockId}/position")
     suspend fun movePageBlock(
         @Header("Authorization") authorization: String,
+        @Header("If-Match") ifMatch: String,
         @Path("id") id: String,
         @Path("blockId") blockId: String,
         @Body request: PageElementPositionPatchRequestDto,
@@ -141,6 +144,7 @@ interface SyncApi {
     @PATCH("api/v1/pages/{id}/blocks/{blockId}")
     suspend fun updatePageBlockText(
         @Header("Authorization") authorization: String,
+        @Header("If-Match") ifMatch: String,
         @Path("id") id: String,
         @Path("blockId") blockId: String,
         @Body request: PageBlockPatchRequestDto,
@@ -149,6 +153,7 @@ interface SyncApi {
     @POST("api/v1/pages/{id}/properties")
     suspend fun addPageProperty(
         @Header("Authorization") authorization: String,
+        @Header("If-Match") ifMatch: String,
         @Path("id") id: String,
         @Body request: PagePropertyCreateRequestDto,
     ): PageSyncDto
@@ -156,6 +161,7 @@ interface SyncApi {
     @PATCH("api/v1/pages/{id}/properties")
     suspend fun updatePagePropertyValue(
         @Header("Authorization") authorization: String,
+        @Header("If-Match") ifMatch: String,
         @Path("id") id: String,
         @Body request: PagePropertyValuePatchRequestDto,
     ): PageSyncDto
@@ -163,6 +169,7 @@ interface SyncApi {
     @DELETE("api/v1/pages/{id}/properties/{propertyId}")
     suspend fun deletePageProperty(
         @Header("Authorization") authorization: String,
+        @Header("If-Match") ifMatch: String,
         @Path("id") id: String,
         @Path("propertyId") propertyId: String,
     ): PageSyncDto
@@ -170,6 +177,7 @@ interface SyncApi {
     @PATCH("api/v1/pages/{id}/properties/{propertyId}/position")
     suspend fun movePageProperty(
         @Header("Authorization") authorization: String,
+        @Header("If-Match") ifMatch: String,
         @Path("id") id: String,
         @Path("propertyId") propertyId: String,
         @Body request: PageElementPositionPatchRequestDto,
@@ -178,6 +186,7 @@ interface SyncApi {
     @POST("api/v1/pages/{id}/tables/{tableBlockId}/columns")
     suspend fun addPageTableColumn(
         @Header("Authorization") authorization: String,
+        @Header("If-Match") ifMatch: String,
         @Path("id") id: String,
         @Path("tableBlockId") tableBlockId: String,
         @Body request: PageTableColumnCreateRequestDto,
@@ -186,6 +195,7 @@ interface SyncApi {
     @DELETE("api/v1/pages/{id}/tables/{tableBlockId}/columns/{columnId}")
     suspend fun deletePageTableColumn(
         @Header("Authorization") authorization: String,
+        @Header("If-Match") ifMatch: String,
         @Path("id") id: String,
         @Path("tableBlockId") tableBlockId: String,
         @Path("columnId") columnId: String,
@@ -194,6 +204,7 @@ interface SyncApi {
     @PATCH("api/v1/pages/{id}/tables/{tableBlockId}/columns/{columnId}/position")
     suspend fun movePageTableColumn(
         @Header("Authorization") authorization: String,
+        @Header("If-Match") ifMatch: String,
         @Path("id") id: String,
         @Path("tableBlockId") tableBlockId: String,
         @Path("columnId") columnId: String,
@@ -203,6 +214,7 @@ interface SyncApi {
     @POST("api/v1/pages/{id}/tables/{tableBlockId}/rows")
     suspend fun addPageTableRow(
         @Header("Authorization") authorization: String,
+        @Header("If-Match") ifMatch: String,
         @Path("id") id: String,
         @Path("tableBlockId") tableBlockId: String,
         @Body request: PageTableRowCreateRequestDto,
@@ -211,6 +223,7 @@ interface SyncApi {
     @PATCH("api/v1/pages/{id}/tables/{tableBlockId}/rows/{rowId}")
     suspend fun updatePageTableRow(
         @Header("Authorization") authorization: String,
+        @Header("If-Match") ifMatch: String,
         @Path("id") id: String,
         @Path("tableBlockId") tableBlockId: String,
         @Path("rowId") rowId: String,
@@ -220,6 +233,7 @@ interface SyncApi {
     @DELETE("api/v1/pages/{id}/tables/{tableBlockId}/rows/{rowId}")
     suspend fun deletePageTableRow(
         @Header("Authorization") authorization: String,
+        @Header("If-Match") ifMatch: String,
         @Path("id") id: String,
         @Path("tableBlockId") tableBlockId: String,
         @Path("rowId") rowId: String,
@@ -228,6 +242,7 @@ interface SyncApi {
     @PATCH("api/v1/pages/{id}/tables/{tableBlockId}/rows/{rowId}/position")
     suspend fun movePageTableRow(
         @Header("Authorization") authorization: String,
+        @Header("If-Match") ifMatch: String,
         @Path("id") id: String,
         @Path("tableBlockId") tableBlockId: String,
         @Path("rowId") rowId: String,
@@ -237,6 +252,7 @@ interface SyncApi {
     @PATCH("api/v1/pages/{id}/table-cells")
     suspend fun updatePageTableCellValue(
         @Header("Authorization") authorization: String,
+        @Header("If-Match") ifMatch: String,
         @Path("id") id: String,
         @Body request: PageTableCellValuePatchRequestDto,
     ): PageSyncDto
@@ -244,6 +260,7 @@ interface SyncApi {
     @PATCH("api/v1/pages/{id}/tables/{tableBlockId}")
     suspend fun updatePageTable(
         @Header("Authorization") authorization: String,
+        @Header("If-Match") ifMatch: String,
         @Path("id") id: String,
         @Path("tableBlockId") tableBlockId: String,
         @Body request: PageTablePatchRequestDto,
@@ -252,6 +269,7 @@ interface SyncApi {
     @PATCH("api/v1/pages/{id}/tables/{tableBlockId}/columns/{columnId}")
     suspend fun updatePageTableColumn(
         @Header("Authorization") authorization: String,
+        @Header("If-Match") ifMatch: String,
         @Path("id") id: String,
         @Path("tableBlockId") tableBlockId: String,
         @Path("columnId") columnId: String,
@@ -261,18 +279,21 @@ interface SyncApi {
     @DELETE("api/v1/pages/{id}")
     suspend fun deletePage(
         @Header("Authorization") authorization: String,
+        @Header("If-Match") ifMatch: String,
         @Path("id") id: String,
-    )
+    ): PageSyncDto
 
     @POST("api/v1/pages/{id}/restore")
     suspend fun restorePage(
         @Header("Authorization") authorization: String,
+        @Header("If-Match") ifMatch: String,
         @Path("id") id: String,
-    )
+    ): PageSyncDto
 
     @DELETE("api/v1/pages/{id}/permanent")
     suspend fun deletePagePermanently(
         @Header("Authorization") authorization: String,
+        @Header("If-Match") ifMatch: String,
         @Path("id") id: String,
     )
 }

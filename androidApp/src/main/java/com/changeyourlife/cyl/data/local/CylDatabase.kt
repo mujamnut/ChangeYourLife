@@ -48,7 +48,7 @@ import com.changeyourlife.cyl.data.local.entity.WorkspaceEntity
         AiSkillEntity::class,
         SearchIndexEntity::class,
     ],
-    version = 16,
+    version = 17,
     exportSchema = true,
 )
 abstract class CylDatabase : RoomDatabase() {

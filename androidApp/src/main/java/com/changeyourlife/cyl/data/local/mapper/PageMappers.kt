@@ -14,6 +14,7 @@ fun PageEntity.toDomain(): Page {
         createdAt = createdAt,
         updatedAt = updatedAt,
         deletedAt = deletedAt,
+        revision = revision,
     )
 }
 
@@ -28,6 +29,6 @@ fun Page.toEntity(): PageEntity {
         createdAt = createdAt,
         updatedAt = updatedAt,
         deletedAt = deletedAt,
+        revision = revision,
     )
 }
-

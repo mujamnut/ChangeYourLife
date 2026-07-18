@@ -29,11 +29,21 @@ data class PageSyncDto(
     val createdAt: Long,
     val updatedAt: Long,
     val deletedAt: Long? = null,
+    val revision: Long = 0L,
 )
 
 @Serializable
 data class PageListResponse(
     val pages: List<PageSyncDto>,
+)
+
+@Serializable
+data class PageRevisionConflictResponse(
+    val code: String = "page_revision_conflict",
+    val message: String = "The page changed after this client last synced.",
+    val expectedRevision: Long,
+    val actualRevision: Long,
+    val currentPage: PageSyncDto,
 )
 
 @Serializable

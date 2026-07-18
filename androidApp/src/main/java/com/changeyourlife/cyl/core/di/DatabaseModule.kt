@@ -48,6 +48,7 @@ object DatabaseModule {
             .addMigrations(MIGRATION_13_14)
             .addMigrations(MIGRATION_14_15)
             .addMigrations(MIGRATION_15_16)
+            .addMigrations(MIGRATION_16_17)
             .build()
     }
 
@@ -611,6 +612,15 @@ object DatabaseModule {
             db.execSQL("CREATE INDEX IF NOT EXISTS `index_search_index_propertyId` ON `search_index` (`propertyId`)")
             db.execSQL("CREATE INDEX IF NOT EXISTS `index_search_index_chatSessionId` ON `search_index` (`chatSessionId`)")
             db.execSQL("CREATE INDEX IF NOT EXISTS `index_search_index_chatMessageId` ON `search_index` (`chatMessageId`)")
+        }
+    }
+
+    val MIGRATION_16_17 = object : Migration(16, 17) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE `pages` ADD COLUMN `revision` INTEGER NOT NULL DEFAULT 0")
+            db.execSQL(
+                "ALTER TABLE `sync_tombstones` ADD COLUMN `expectedRevision` INTEGER NOT NULL DEFAULT 0",
+            )
         }
     }
 }

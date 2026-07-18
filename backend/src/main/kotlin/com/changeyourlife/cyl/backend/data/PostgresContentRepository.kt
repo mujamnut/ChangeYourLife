@@ -3,8 +3,10 @@ package com.changeyourlife.cyl.backend.data
 import com.changeyourlife.cyl.backend.domain.ContentRepository
 import com.changeyourlife.cyl.backend.domain.ContentSearchQuery
 import com.changeyourlife.cyl.backend.domain.ContentSearchResult
+import com.changeyourlife.cyl.backend.domain.PageMutationResult
 import com.changeyourlife.cyl.backend.domain.PageRecord
 import com.changeyourlife.cyl.backend.domain.WorkspaceRecord
+import java.sql.Connection
 import java.sql.PreparedStatement
 import java.sql.ResultSet
 import java.util.UUID
@@ -84,7 +86,7 @@ class PostgresContentRepository(
                 connection.autoCommit = false
                 try {
                     val serverWorkspaceId = connection.resolveWorkspaceServerId(userId, workspaceId)
-                        ?: return@withContext false
+                        ?: return@withContext connection.rollbackWith(false)
                     val updated = connection.prepareStatement(
                         """
                         UPDATE workspaces
@@ -99,23 +101,33 @@ class PostgresContentRepository(
                         statement.executeUpdate()
                     }
                     if (updated > 0) {
-                        connection.prepareStatement(
+                        val updatedPages = connection.prepareStatement(
                             """
                             UPDATE pages
-                            SET deleted_at = ?, updated_at = ?
+                            SET deleted_at = ?,
+                                updated_at = GREATEST(?, updated_at + 1),
+                                revision = revision + 1
                             WHERE workspace_id = ?
+                            RETURNING id, content, created_at, updated_at, deleted_at
                             """.trimIndent(),
                         ).use { statement ->
                             statement.setLong(1, deletedAt)
                             statement.setLong(2, deletedAt)
                             statement.setString(3, serverWorkspaceId)
-                            statement.executeUpdate()
+                            statement.executeQuery().use { resultSet ->
+                                buildList {
+                                    while (resultSet.next()) add(resultSet.toProjectionSource())
+                                }
+                            }
+                        }
+                        updatedPages.forEach { source ->
+                            projectionWriter.replace(connection, source)
                         }
                     }
                     connection.commit()
                     updated > 0
                 } catch (error: Throwable) {
-                    connection.rollback()
+                    runCatching { connection.rollback() }
                     throw error
                 }
             }
@@ -137,7 +149,8 @@ class PostgresContentRepository(
                        pages.sort_order,
                        pages.created_at,
                        pages.updated_at,
-                       pages.deleted_at
+                       pages.deleted_at,
+                       pages.revision
                 FROM pages
                 INNER JOIN workspaces ON workspaces.id = pages.workspace_id
                 WHERE workspaces.user_id = ?
@@ -171,7 +184,8 @@ class PostgresContentRepository(
                            pages.sort_order,
                            pages.created_at,
                            pages.updated_at,
-                           pages.deleted_at
+                           pages.deleted_at,
+                           pages.revision
                     FROM pages
                     INNER JOIN workspaces ON workspaces.id = pages.workspace_id
                     WHERE workspaces.user_id = ?
@@ -236,70 +250,78 @@ class PostgresContentRepository(
             }
         }
 
-    override suspend fun upsertPage(userId: String, page: PageRecord): PageRecord? =
+    override suspend fun upsertPage(userId: String, page: PageRecord): PageMutationResult =
         withContext(Dispatchers.IO) {
-            val serverWorkspaceId = resolveWorkspaceServerId(userId, page.workspaceId) ?: return@withContext null
-            val existingWorkspaceId = pageWorkspaceServerId(page.id)
-            if (existingWorkspaceId != null && !workspaceServerIdBelongsToUser(userId, existingWorkspaceId)) return@withContext null
-            if (page.parentPageId != null) {
-                val parentWorkspaceId = pageWorkspaceServerId(page.parentPageId) ?: return@withContext null
-                if (parentWorkspaceId != serverWorkspaceId) return@withContext null
-            }
-
-            val saved = dataSource.connection.use { connection ->
+            dataSource.connection.use { connection ->
                 connection.autoCommit = false
                 try {
-                    val persisted = connection.prepareStatement(
-                        """
-                        INSERT INTO pages (
-                            id, workspace_id, parent_page_id, title, content, sort_order,
-                            created_at, updated_at, deleted_at
+                    val serverWorkspaceId = connection.resolveWorkspaceServerId(userId, page.workspaceId)
+                        ?: return@withContext connection.rollbackWith(PageMutationResult.Forbidden)
+                    if (!connection.parentPageBelongsToWorkspace(
+                            userId = userId,
+                            parentPageId = page.parentPageId,
+                            workspaceServerId = serverWorkspaceId,
                         )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        ON CONFLICT (id) DO UPDATE SET
-                            workspace_id = EXCLUDED.workspace_id,
-                            parent_page_id = EXCLUDED.parent_page_id,
-                            title = EXCLUDED.title,
-                            content = EXCLUDED.content,
-                            sort_order = EXCLUDED.sort_order,
-                            updated_at = EXCLUDED.updated_at,
-                            deleted_at = EXCLUDED.deleted_at
-                        WHERE pages.updated_at < EXCLUDED.updated_at
-                        RETURNING id, workspace_id, parent_page_id, title, content, sort_order,
-                                  created_at, updated_at, deleted_at
-                        """.trimIndent(),
-                    ).use { statement ->
-                        statement.setString(1, page.id)
-                        statement.setString(2, serverWorkspaceId)
-                        statement.setString(3, page.parentPageId)
-                        statement.setString(4, page.title)
-                        statement.setString(5, page.content)
-                        statement.setInt(6, page.sortOrder)
-                        statement.setLong(7, page.createdAt)
-                        statement.setLong(8, page.updatedAt)
-                        statement.setNullableLong(9, page.deletedAt)
-                        statement.executeQuery().use { resultSet ->
-                            if (resultSet.next()) {
-                                resultSet.toPageRecord(workspaceId = page.workspaceId)
+                    ) {
+                        return@withContext connection.rollbackWith(PageMutationResult.Forbidden)
+                    }
+
+                    val current = connection.selectOwnedPage(
+                        userId = userId,
+                        pageId = page.id,
+                        includeDeleted = true,
+                        forUpdate = true,
+                    )
+                    val result = when {
+                        current == null && connection.pageExists(page.id) -> PageMutationResult.Forbidden
+                        current == null && page.revision != 0L -> PageMutationResult.NotFound
+                        current == null -> {
+                            val created = connection.insertPage(
+                                page = page,
+                                workspaceServerId = serverWorkspaceId,
+                            )
+                            if (created != null) {
+                                PageMutationResult.Applied(created)
                             } else {
-                                null
+                                val concurrentPage = connection.selectOwnedPage(
+                                    userId = userId,
+                                    pageId = page.id,
+                                    includeDeleted = true,
+                                    forUpdate = true,
+                                )
+                                when {
+                                    concurrentPage != null -> PageMutationResult.Conflict(
+                                        expectedRevision = page.revision,
+                                        currentPage = concurrentPage,
+                                    )
+                                    connection.pageExists(page.id) -> PageMutationResult.Forbidden
+                                    else -> PageMutationResult.NotFound
+                                }
                             }
                         }
+                        current.revision != page.revision -> PageMutationResult.Conflict(page.revision, current)
+                        else -> {
+                            val updated = connection.updatePage(
+                                page = page,
+                                workspaceServerId = serverWorkspaceId,
+                                expectedRevision = current.revision,
+                            )
+                            PageMutationResult.Applied(updated)
+                        }
                     }
-                    persisted?.let { savedPage ->
-                        projectionWriter.replace(
-                            connection = connection,
-                            source = savedPage.toProjectionSource(),
-                        )
+
+                    if (result is PageMutationResult.Applied) {
+                        projectionWriter.replace(connection, result.page.toProjectionSource())
+                        connection.commit()
+                    } else {
+                        connection.rollback()
                     }
-                    connection.commit()
-                    persisted
+                    result
                 } catch (error: Throwable) {
                     runCatching { connection.rollback() }
                     throw error
                 }
             }
-            saved ?: getPage(userId = userId, pageId = page.id, includeDeleted = true)
         }
 
     override suspend fun updatePageBlockText(
@@ -307,8 +329,9 @@ class PostgresContentRepository(
         pageId: String,
         blockId: String,
         text: String,
+        expectedRevision: Long,
         updatedAt: Long,
-    ): PageRecord? = updatePageContent(userId, pageId, updatedAt) { content ->
+    ): PageMutationResult = mutatePageContent(userId, pageId, expectedRevision, updatedAt) { content ->
         PageContentJsonMutator.updateBlockText(
             content = content,
             blockId = blockId,
@@ -322,8 +345,9 @@ class PostgresContentRepository(
         propertyId: String,
         propertyName: String,
         value: String,
+        expectedRevision: Long,
         updatedAt: Long,
-    ): PageRecord? = updatePageContent(userId, pageId, updatedAt) { content ->
+    ): PageMutationResult = mutatePageContent(userId, pageId, expectedRevision, updatedAt) { content ->
         PageContentJsonMutator.updatePropertyValue(
             content = content,
             propertyId = propertyId,
@@ -339,8 +363,9 @@ class PostgresContentRepository(
         columnId: String,
         value: String,
         valueJson: kotlinx.serialization.json.JsonObject?,
+        expectedRevision: Long,
         updatedAt: Long,
-    ): PageRecord? = updatePageContent(userId, pageId, updatedAt) { content ->
+    ): PageMutationResult = mutatePageContent(userId, pageId, expectedRevision, updatedAt) { content ->
         PageContentJsonMutator.updateTableCellValue(
             content = content,
             rowId = rowId,
@@ -350,42 +375,78 @@ class PostgresContentRepository(
         )
     }
 
-    override suspend fun softDeletePage(userId: String, pageId: String, deletedAt: Long): Boolean =
+    override suspend fun softDeletePage(
+        userId: String,
+        pageId: String,
+        expectedRevision: Long,
+        deletedAt: Long,
+    ): PageMutationResult =
         withContext(Dispatchers.IO) {
             updatePageTreeDeletion(
                 userId = userId,
                 pageId = pageId,
+                expectedRevision = expectedRevision,
                 deletedAt = deletedAt,
                 restoredAt = null,
             )
         }
 
-    override suspend fun restorePage(userId: String, pageId: String, restoredAt: Long): Boolean =
+    override suspend fun restorePage(
+        userId: String,
+        pageId: String,
+        expectedRevision: Long,
+        restoredAt: Long,
+    ): PageMutationResult =
         withContext(Dispatchers.IO) {
             updatePageTreeDeletion(
                 userId = userId,
                 pageId = pageId,
+                expectedRevision = expectedRevision,
                 deletedAt = null,
                 restoredAt = restoredAt,
             )
         }
 
-    override suspend fun deletePagePermanently(userId: String, pageId: String): Boolean =
+    override suspend fun deletePagePermanently(
+        userId: String,
+        pageId: String,
+        expectedRevision: Long,
+    ): PageMutationResult =
         withContext(Dispatchers.IO) {
             dataSource.connection.use { connection ->
-                connection.prepareStatement(
-                    """
-                    DELETE FROM pages
-                    WHERE (id = ? OR parent_page_id = ?)
-                      AND workspace_id IN (
-                          SELECT id FROM workspaces WHERE user_id = ?
-                      )
-                    """.trimIndent(),
-                ).use { statement ->
-                    statement.setString(1, pageId)
-                    statement.setString(2, pageId)
-                    statement.setString(3, userId)
-                    statement.executeUpdate() > 0
+                connection.autoCommit = false
+                try {
+                    val current = connection.selectOwnedPage(
+                        userId = userId,
+                        pageId = pageId,
+                        includeDeleted = true,
+                        forUpdate = true,
+                    ) ?: return@withContext connection.rollbackWith(PageMutationResult.NotFound)
+                    if (current.revision != expectedRevision) {
+                        return@withContext connection.rollbackWith(
+                            PageMutationResult.Conflict(expectedRevision, current),
+                        )
+                    }
+
+                    connection.prepareStatement(
+                        """
+                        DELETE FROM pages
+                        WHERE (id = ? OR parent_page_id = ?)
+                          AND workspace_id IN (
+                              SELECT id FROM workspaces WHERE user_id = ?
+                          )
+                        """.trimIndent(),
+                    ).use { statement ->
+                        statement.setString(1, pageId)
+                        statement.setString(2, pageId)
+                        statement.setString(3, userId)
+                        statement.executeUpdate()
+                    }
+                    connection.commit()
+                    PageMutationResult.PermanentlyDeleted
+                } catch (error: Throwable) {
+                    runCatching { connection.rollback() }
+                    throw error
                 }
             }
         }
@@ -393,22 +454,36 @@ class PostgresContentRepository(
     private fun updatePageTreeDeletion(
         userId: String,
         pageId: String,
+        expectedRevision: Long,
         deletedAt: Long?,
         restoredAt: Long?,
-    ): Boolean {
+    ): PageMutationResult {
         val updatedAt = restoredAt ?: deletedAt ?: System.currentTimeMillis()
         dataSource.connection.use { connection ->
             connection.autoCommit = false
             try {
+                val current = connection.selectOwnedPage(
+                    userId = userId,
+                    pageId = pageId,
+                    includeDeleted = true,
+                    forUpdate = true,
+                ) ?: return connection.rollbackWith(PageMutationResult.NotFound)
+                if (current.revision != expectedRevision) {
+                    return connection.rollbackWith(PageMutationResult.Conflict(expectedRevision, current))
+                }
+
                 val updatedPages = connection.prepareStatement(
                     """
                     UPDATE pages
-                    SET deleted_at = ?, updated_at = ?
+                    SET deleted_at = ?,
+                        updated_at = GREATEST(?, updated_at + 1),
+                        revision = revision + 1
                     WHERE (id = ? OR parent_page_id = ?)
                       AND workspace_id IN (
                           SELECT id FROM workspaces WHERE user_id = ?
                       )
-                    RETURNING id, content, created_at, updated_at, deleted_at
+                    RETURNING id, workspace_id, parent_page_id, title, content, sort_order,
+                              created_at, updated_at, deleted_at, revision
                     """.trimIndent(),
                 ).use { statement ->
                     statement.setNullableLong(1, deletedAt)
@@ -419,16 +494,18 @@ class PostgresContentRepository(
                     statement.executeQuery().use { resultSet ->
                         buildList {
                             while (resultSet.next()) {
-                                add(resultSet.toProjectionSource())
+                                add(resultSet.toPageRecord(workspaceId = current.workspaceId))
                             }
                         }
                     }
                 }
-                updatedPages.forEach { source ->
-                    projectionWriter.replace(connection, source)
+                updatedPages.forEach { updatedPage ->
+                    projectionWriter.replace(connection, updatedPage.toProjectionSource())
                 }
+                val updatedRoot = updatedPages.firstOrNull { updatedPage -> updatedPage.id == pageId }
+                    ?: return connection.rollbackWith(PageMutationResult.NotFound)
                 connection.commit()
-                return updatedPages.isNotEmpty()
+                return PageMutationResult.Applied(updatedRoot)
             } catch (error: Throwable) {
                 runCatching { connection.rollback() }
                 throw error
@@ -436,38 +513,38 @@ class PostgresContentRepository(
         }
     }
 
-    private fun resolveWorkspaceServerId(userId: String, workspaceId: String): String? {
-        dataSource.connection.use { connection ->
-            return connection.resolveWorkspaceServerId(userId, workspaceId)
-        }
-    }
-
-    private suspend fun updatePageContent(
+    override suspend fun mutatePageContent(
         userId: String,
         pageId: String,
+        expectedRevision: Long,
         updatedAt: Long,
         transform: (String) -> String?,
-    ): PageRecord? = withContext(Dispatchers.IO) {
+    ): PageMutationResult = withContext(Dispatchers.IO) {
         dataSource.connection.use { connection ->
             connection.autoCommit = false
             try {
-                val currentContent = connection.selectOwnedPageContent(
+                val current = connection.selectOwnedPage(
                     userId = userId,
                     pageId = pageId,
-                ) ?: run {
-                    connection.rollback()
-                    return@withContext null
+                    includeDeleted = false,
+                    forUpdate = true,
+                ) ?: return@withContext connection.rollbackWith(PageMutationResult.NotFound)
+                if (current.revision != expectedRevision) {
+                    return@withContext connection.rollbackWith(
+                        PageMutationResult.Conflict(expectedRevision, current),
+                    )
                 }
-                val updatedContent = transform(currentContent) ?: run {
-                    connection.rollback()
-                    return@withContext null
-                }
+                val updatedContent = transform(current.content)
+                    ?: return@withContext connection.rollbackWith(PageMutationResult.Rejected)
                 val saved = connection.prepareStatement(
                     """
                     WITH updated AS (
                         UPDATE pages
-                        SET content = ?, updated_at = GREATEST(?, updated_at + 1)
+                        SET content = ?,
+                            updated_at = GREATEST(?, updated_at + 1),
+                            revision = revision + 1
                         WHERE id = ?
+                          AND revision = ?
                           AND deleted_at IS NULL
                           AND workspace_id IN (
                               SELECT id FROM workspaces WHERE user_id = ?
@@ -482,7 +559,8 @@ class PostgresContentRepository(
                            updated.sort_order,
                            updated.created_at,
                            updated.updated_at,
-                           updated.deleted_at
+                           updated.deleted_at,
+                           updated.revision
                     FROM updated
                     INNER JOIN workspaces ON workspaces.id = updated.workspace_id
                     """.trimIndent(),
@@ -490,49 +568,23 @@ class PostgresContentRepository(
                     statement.setString(1, updatedContent)
                     statement.setLong(2, updatedAt)
                     statement.setString(3, pageId)
-                    statement.setString(4, userId)
+                    statement.setLong(4, expectedRevision)
+                    statement.setString(5, userId)
                     statement.executeQuery().use { resultSet ->
                         if (resultSet.next()) resultSet.toPageRecord() else null
                     }
-                }
-                saved?.let { savedPage ->
-                    projectionWriter.replace(
-                        connection = connection,
-                        source = savedPage.toProjectionSource(),
-                    )
-                }
+                } ?: return@withContext connection.rollbackWith(
+                    PageMutationResult.Conflict(expectedRevision, current),
+                )
+                projectionWriter.replace(
+                    connection = connection,
+                    source = saved.toProjectionSource(),
+                )
                 connection.commit()
-                saved
+                PageMutationResult.Applied(saved)
             } catch (error: Throwable) {
                 runCatching { connection.rollback() }
                 throw error
-            }
-        }
-    }
-
-    private fun workspaceServerIdBelongsToUser(userId: String, workspaceServerId: String): Boolean {
-        dataSource.connection.use { connection ->
-            connection.prepareStatement(
-                "SELECT 1 FROM workspaces WHERE id = ? AND user_id = ? LIMIT 1",
-            ).use { statement ->
-                statement.setString(1, workspaceServerId)
-                statement.setString(2, userId)
-                statement.executeQuery().use { resultSet ->
-                    return resultSet.next()
-                }
-            }
-        }
-    }
-
-    private fun pageWorkspaceServerId(pageId: String): String? {
-        dataSource.connection.use { connection ->
-            connection.prepareStatement(
-                "SELECT workspace_id FROM pages WHERE id = ? LIMIT 1",
-            ).use { statement ->
-                statement.setString(1, pageId)
-                statement.executeQuery().use { resultSet ->
-                    return if (resultSet.next()) resultSet.getString("workspace_id") else null
-                }
             }
         }
     }
@@ -556,25 +608,152 @@ private fun java.sql.Connection.resolveWorkspaceServerId(userId: String, workspa
     }
 }
 
-private fun java.sql.Connection.selectOwnedPageContent(userId: String, pageId: String): String? {
+private fun Connection.selectOwnedPage(
+    userId: String,
+    pageId: String,
+    includeDeleted: Boolean,
+    forUpdate: Boolean,
+): PageRecord? {
+    val deletedPredicate = if (includeDeleted) "" else "AND pages.deleted_at IS NULL"
+    val lockingClause = if (forUpdate) "FOR UPDATE OF pages" else ""
     prepareStatement(
         """
-        SELECT pages.content
+        SELECT pages.id,
+               COALESCE(workspaces.client_id, workspaces.id) AS workspace_id,
+               pages.parent_page_id,
+               pages.title,
+               pages.content,
+               pages.sort_order,
+               pages.created_at,
+               pages.updated_at,
+               pages.deleted_at,
+               pages.revision
         FROM pages
         INNER JOIN workspaces ON workspaces.id = pages.workspace_id
         WHERE workspaces.user_id = ?
           AND pages.id = ?
-          AND pages.deleted_at IS NULL
+          $deletedPredicate
         LIMIT 1
-        FOR UPDATE OF pages
+        $lockingClause
         """.trimIndent(),
     ).use { statement ->
         statement.setString(1, userId)
         statement.setString(2, pageId)
         statement.executeQuery().use { resultSet ->
-            return if (resultSet.next()) resultSet.getString("content") else null
+            return if (resultSet.next()) resultSet.toPageRecord() else null
         }
     }
+}
+
+private fun Connection.parentPageBelongsToWorkspace(
+    userId: String,
+    parentPageId: String?,
+    workspaceServerId: String,
+): Boolean {
+    if (parentPageId == null) return true
+    prepareStatement(
+        """
+        SELECT 1
+        FROM pages
+        INNER JOIN workspaces ON workspaces.id = pages.workspace_id
+        WHERE pages.id = ?
+          AND pages.workspace_id = ?
+          AND pages.deleted_at IS NULL
+          AND workspaces.user_id = ?
+          AND workspaces.deleted_at IS NULL
+        LIMIT 1
+        """.trimIndent(),
+    ).use { statement ->
+        statement.setString(1, parentPageId)
+        statement.setString(2, workspaceServerId)
+        statement.setString(3, userId)
+        statement.executeQuery().use { resultSet -> return resultSet.next() }
+    }
+}
+
+private fun Connection.pageExists(pageId: String): Boolean {
+    prepareStatement("SELECT 1 FROM pages WHERE id = ? LIMIT 1").use { statement ->
+        statement.setString(1, pageId)
+        statement.executeQuery().use { resultSet -> return resultSet.next() }
+    }
+}
+
+private fun Connection.insertPage(
+    page: PageRecord,
+    workspaceServerId: String,
+): PageRecord? {
+    prepareStatement(
+        """
+        INSERT INTO pages (
+            id, workspace_id, parent_page_id, title, content, sort_order,
+            created_at, updated_at, deleted_at, revision
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+        ON CONFLICT (id) DO NOTHING
+        RETURNING id, workspace_id, parent_page_id, title, content, sort_order,
+                  created_at, updated_at, deleted_at, revision
+        """.trimIndent(),
+    ).use { statement ->
+        statement.setString(1, page.id)
+        statement.setString(2, workspaceServerId)
+        statement.setString(3, page.parentPageId)
+        statement.setString(4, page.title)
+        statement.setString(5, page.content)
+        statement.setInt(6, page.sortOrder)
+        statement.setLong(7, page.createdAt)
+        statement.setLong(8, page.updatedAt)
+        statement.setNullableLong(9, page.deletedAt)
+        statement.executeQuery().use { resultSet ->
+            return if (resultSet.next()) {
+                resultSet.toPageRecord(workspaceId = page.workspaceId)
+            } else {
+                null
+            }
+        }
+    }
+}
+
+private fun Connection.updatePage(
+    page: PageRecord,
+    workspaceServerId: String,
+    expectedRevision: Long,
+): PageRecord {
+    prepareStatement(
+        """
+        UPDATE pages
+        SET workspace_id = ?,
+            parent_page_id = ?,
+            title = ?,
+            content = ?,
+            sort_order = ?,
+            updated_at = GREATEST(?, updated_at + 1),
+            deleted_at = ?,
+            revision = revision + 1
+        WHERE id = ?
+          AND revision = ?
+        RETURNING id, workspace_id, parent_page_id, title, content, sort_order,
+                  created_at, updated_at, deleted_at, revision
+        """.trimIndent(),
+    ).use { statement ->
+        statement.setString(1, workspaceServerId)
+        statement.setString(2, page.parentPageId)
+        statement.setString(3, page.title)
+        statement.setString(4, page.content)
+        statement.setInt(5, page.sortOrder)
+        statement.setLong(6, page.updatedAt)
+        statement.setNullableLong(7, page.deletedAt)
+        statement.setString(8, page.id)
+        statement.setLong(9, expectedRevision)
+        statement.executeQuery().use { resultSet ->
+            check(resultSet.next()) { "Page revision changed while locked: ${page.id}" }
+            return resultSet.toPageRecord(workspaceId = page.workspaceId)
+        }
+    }
+}
+
+private fun <T> Connection.rollbackWith(result: T): T {
+    rollback()
+    return result
 }
 
 private val DefaultBackendSearchScopes = setOf("Page", "Block", "Table", "Row", "Property", "Column", "Cell")
@@ -834,6 +1013,7 @@ private fun ResultSet.toPageRecord(): PageRecord {
         createdAt = getLong("created_at"),
         updatedAt = getLong("updated_at"),
         deletedAt = getNullableLong("deleted_at"),
+        revision = getLong("revision"),
     )
 }
 
@@ -848,6 +1028,7 @@ private fun ResultSet.toPageRecord(workspaceId: String): PageRecord {
         createdAt = getLong("created_at"),
         updatedAt = getLong("updated_at"),
         deletedAt = getNullableLong("deleted_at"),
+        revision = getLong("revision"),
     )
 }
 

@@ -98,6 +98,7 @@ internal object PageContentConflictMerger {
             content = PageContentCodec.encodeDocument(mergedSnapshot.toDocument()),
             updatedAt = mergedUpdatedAt,
             syncStatus = SyncStatus.PendingPush,
+            revision = remotePage.revision,
             remoteUpdatedAt = remotePage.updatedAt,
             lastSyncedAt = now,
         )

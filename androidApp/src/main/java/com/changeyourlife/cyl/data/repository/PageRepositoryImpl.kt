@@ -1,5 +1,7 @@
 package com.changeyourlife.cyl.data.repository
 
+import androidx.room.withTransaction
+import com.changeyourlife.cyl.data.local.CylDatabase
 import com.changeyourlife.cyl.data.local.dao.PageDao
 import com.changeyourlife.cyl.data.local.dao.PageContentDao
 import com.changeyourlife.cyl.data.local.dao.SyncTombstoneDao
@@ -51,6 +53,7 @@ private enum class PageRemoteSyncPolicy {
 }
 
 class PageRepositoryImpl @Inject constructor(
+    private val database: CylDatabase,
     private val pageDao: PageDao,
     private val pageContentDao: PageContentDao,
     private val syncTombstoneDao: SyncTombstoneDao,
@@ -137,12 +140,17 @@ class PageRepositoryImpl @Inject constructor(
 
     override suspend fun upsertPage(page: Page) {
         val requestedEntity = page.toEntity()
-        val currentEntity = pageDao.getPage(page.id)
-        val entity = requestedEntity.copy(
-            updatedAt = currentEntity?.nextUpdatedAt(requestedEntity.updatedAt) ?: requestedEntity.updatedAt,
-            syncStatus = SyncStatus.PendingPush,
-        )
-        persistPage(entity)
+        val entity = database.withTransaction {
+            val currentEntity = pageDao.getPage(page.id)
+            requestedEntity.copy(
+                updatedAt = currentEntity?.nextUpdatedAt(requestedEntity.updatedAt) ?: requestedEntity.updatedAt,
+                revision = currentEntity?.revision ?: requestedEntity.revision,
+                syncStatus = SyncStatus.PendingPush,
+            ).also { updatedPage ->
+                persistPageState(updatedPage)
+            }
+        }
+        searchIndexRebuilder.rebuildPage(entity)
         backgroundSyncQueue.enqueuePendingPushDebounced()
     }
 
@@ -718,16 +726,20 @@ class PageRepositoryImpl @Inject constructor(
 
     override suspend fun deletePagePermanently(pageId: String) {
         val now = System.currentTimeMillis()
-        syncTombstoneDao.upsertTombstone(
-            SyncTombstoneEntity(
-                id = "${SyncTombstoneType.PagePermanentDelete}:$pageId",
-                entityType = SyncTombstoneType.PagePermanentDelete,
-                entityId = pageId,
-                createdAt = now,
-            ),
-        )
+        database.withTransaction {
+            val expectedRevision = pageDao.getPage(pageId)?.revision ?: 0L
+            syncTombstoneDao.upsertTombstone(
+                SyncTombstoneEntity(
+                    id = "${SyncTombstoneType.PagePermanentDelete}:$pageId",
+                    entityType = SyncTombstoneType.PagePermanentDelete,
+                    entityId = pageId,
+                    createdAt = now,
+                    expectedRevision = expectedRevision,
+                ),
+            )
+            pageDao.deletePageTreePermanently(pageId)
+        }
         searchIndexRebuilder.deletePageTree(pageId)
-        pageDao.deletePageTreePermanently(pageId)
         backgroundSyncQueue.enqueue("deletePagePermanently:$pageId") {
             this.deletePagePermanently(pageId)
         }
@@ -750,17 +762,8 @@ class PageRepositoryImpl @Inject constructor(
     }
 
     private suspend fun persistPage(page: PageEntity) {
-        pageDao.upsertPage(page)
-        page.toContentProjection()?.let { projection ->
-            pageContentDao.replacePageContentProjection(
-                pageId = page.id,
-                blocks = projection.blocks,
-                properties = projection.properties,
-                tables = projection.tables,
-                columns = projection.columns,
-                rows = projection.rows,
-                cells = projection.cells,
-            )
+        database.withTransaction {
+            persistPageState(page)
         }
         searchIndexRebuilder.rebuildPage(page)
     }
@@ -771,19 +774,22 @@ class PageRepositoryImpl @Inject constructor(
         remoteSync: suspend (PageEntity) -> Unit,
         mutation: suspend (updatedAt: Long) -> Boolean,
     ): Boolean {
-        val currentPage = pageDao.getPage(pageId) ?: return false
-        ensureProjectionForPage(currentPage)
+        val mutationResult = database.withTransaction {
+            val currentPage = pageDao.getPage(pageId) ?: return@withTransaction null
+            ensureProjectionForPage(currentPage)
+            val updatedAt = currentPage.nextUpdatedAt()
+            if (!mutation(updatedAt)) return@withTransaction null
 
-        val updatedAt = currentPage.nextUpdatedAt()
-        if (!mutation(updatedAt)) return false
-
-        val updatedDocument = pageContentDao.getPageContentSnapshot(pageId).toDocument()
-        val updatedPage = currentPage.copy(
-            content = PageContentCodec.encodeDocument(updatedDocument),
-            updatedAt = updatedAt,
-            syncStatus = SyncStatus.PendingPush,
-        )
-        pageDao.upsertPage(updatedPage)
+            val updatedDocument = pageContentDao.getPageContentSnapshot(pageId).toDocument()
+            val updatedPage = currentPage.copy(
+                content = PageContentCodec.encodeDocument(updatedDocument),
+                updatedAt = updatedAt,
+                syncStatus = SyncStatus.PendingPush,
+            )
+            pageDao.upsertPage(updatedPage)
+            updatedPage to updatedDocument
+        } ?: return false
+        val (updatedPage, updatedDocument) = mutationResult
         searchIndexRebuilder.rebuildPage(
             page = updatedPage,
             document = updatedDocument,
@@ -803,16 +809,21 @@ class PageRepositoryImpl @Inject constructor(
         remoteSync: suspend (PageEntity) -> Unit,
         mutation: (PageBlockDocument) -> PageBlockDocument?,
     ): Boolean {
-        val currentPage = pageDao.getPage(pageId) ?: return false
-        val currentDocument = PageContentCodec.decodeDocument(currentPage.content)
-        val updatedDocument = mutation(currentDocument) ?: return false
-        val updatedAt = currentPage.nextUpdatedAt()
-        val updatedPage = currentPage.copy(
-            content = PageContentCodec.encodeDocument(updatedDocument),
-            updatedAt = updatedAt,
-            syncStatus = SyncStatus.PendingPush,
-        )
-        persistPage(updatedPage)
+        val mutationResult = database.withTransaction {
+            val currentPage = pageDao.getPage(pageId) ?: return@withTransaction null
+            val currentDocument = PageContentCodec.decodeDocument(currentPage.content)
+            val updatedDocument = mutation(currentDocument) ?: return@withTransaction null
+            val updatedAt = currentPage.nextUpdatedAt()
+            val updatedPage = currentPage.copy(
+                content = PageContentCodec.encodeDocument(updatedDocument),
+                updatedAt = updatedAt,
+                syncStatus = SyncStatus.PendingPush,
+            )
+            persistPageState(updatedPage)
+            updatedPage to updatedDocument
+        } ?: return false
+        val (updatedPage, updatedDocument) = mutationResult
+        searchIndexRebuilder.rebuildPage(page = updatedPage, document = updatedDocument)
         enqueueRemotePageMutation(
             name = "mutateDocumentPage:$pageId",
             policy = remoteSyncPolicy,
@@ -838,7 +849,32 @@ class PageRepositoryImpl @Inject constructor(
 
     private suspend fun ensureProjectionForPage(page: PageEntity) {
         if (pageContentDao.getBlocks(page.id).isNotEmpty()) return
-        persistPage(page)
+        page.toContentProjection()?.let { projection ->
+            pageContentDao.replacePageContentProjection(
+                pageId = page.id,
+                blocks = projection.blocks,
+                properties = projection.properties,
+                tables = projection.tables,
+                columns = projection.columns,
+                rows = projection.rows,
+                cells = projection.cells,
+            )
+        }
+    }
+
+    private suspend fun persistPageState(page: PageEntity) {
+        pageDao.upsertPage(page)
+        page.toContentProjection()?.let { projection ->
+            pageContentDao.replacePageContentProjection(
+                pageId = page.id,
+                blocks = projection.blocks,
+                properties = projection.properties,
+                tables = projection.tables,
+                columns = projection.columns,
+                rows = projection.rows,
+                cells = projection.cells,
+            )
+        }
     }
 
     private fun PageBlock.withStableId(): PageBlock {

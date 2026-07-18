@@ -358,6 +358,7 @@ class ApplicationTest {
             setBody(Json.encodeToString(page))
         }
         assertEquals(HttpStatusCode.OK, upsertPageResponse.status)
+        val createdPage = Json.decodeFromString<PageSyncDto>(upsertPageResponse.bodyAsText())
 
         val pageListResponse = client.get("/api/v1/pages?workspaceId=${workspace.id}") {
             header(HttpHeaders.Authorization, authHeader)
@@ -368,8 +369,10 @@ class ApplicationTest {
 
         val deleteResponse = client.delete("/api/v1/pages/${page.id}") {
             header(HttpHeaders.Authorization, authHeader)
+            header(HttpHeaders.IfMatch, createdPage.revision.toPageEtag())
         }
-        assertEquals(HttpStatusCode.NoContent, deleteResponse.status)
+        assertEquals(HttpStatusCode.OK, deleteResponse.status)
+        val deletedPage = Json.decodeFromString<PageSyncDto>(deleteResponse.bodyAsText())
 
         val deletedPageListResponse = client.get("/api/v1/pages?workspaceId=${workspace.id}&includeDeleted=true") {
             header(HttpHeaders.Authorization, authHeader)
@@ -379,8 +382,9 @@ class ApplicationTest {
 
         val restoreResponse = client.post("/api/v1/pages/${page.id}/restore") {
             header(HttpHeaders.Authorization, authHeader)
+            header(HttpHeaders.IfMatch, deletedPage.revision.toPageEtag())
         }
-        assertEquals(HttpStatusCode.NoContent, restoreResponse.status)
+        assertEquals(HttpStatusCode.OK, restoreResponse.status)
     }
 
     @Test
@@ -664,17 +668,30 @@ class ApplicationTest {
             createdAt = 2L,
             updatedAt = 2L,
         )
-        assertEquals(
-            HttpStatusCode.OK,
-            client.put("/api/v1/pages/${page.id}") {
-                header(HttpHeaders.Authorization, authHeader)
-                contentType(ContentType.Application.Json)
-                setBody(Json.encodeToString(page))
-            }.status,
-        )
+        val createPageResponse = client.put("/api/v1/pages/${page.id}") {
+            header(HttpHeaders.Authorization, authHeader)
+            contentType(ContentType.Application.Json)
+            setBody(Json.encodeToString(page))
+        }
+        assertEquals(HttpStatusCode.OK, createPageResponse.status)
+        val createdPage = Json.decodeFromString<PageSyncDto>(createPageResponse.bodyAsText())
+
+        val stalePageResponse = client.put("/api/v1/pages/${page.id}") {
+            header(HttpHeaders.Authorization, authHeader)
+            contentType(ContentType.Application.Json)
+            setBody(Json.encodeToString(page.copy(title = "Stale overwrite")))
+        }
+        assertEquals(HttpStatusCode.Conflict, stalePageResponse.status)
+        assertTrue(stalePageResponse.bodyAsText().contains("page_revision_conflict"))
+
+        val missingPreconditionResponse = client.delete("/api/v1/pages/${page.id}/blocks/block-note") {
+            header(HttpHeaders.Authorization, authHeader)
+        }
+        assertEquals(HttpStatusCode(428, "Precondition Required"), missingPreconditionResponse.status)
 
         val blockResponse = client.patch("/api/v1/pages/${page.id}/blocks/block-note") {
             header(HttpHeaders.Authorization, authHeader)
+            header(HttpHeaders.IfMatch, createdPage.revision.toPageEtag())
             contentType(ContentType.Application.Json)
             setBody(
                 Json.encodeToString(
@@ -714,6 +731,7 @@ class ApplicationTest {
 
         val propertyResponse = client.patch("/api/v1/pages/${page.id}/properties") {
             header(HttpHeaders.Authorization, authHeader)
+            header(HttpHeaders.IfMatch, blockPage.revision.toPageEtag())
             contentType(ContentType.Application.Json)
             setBody(
                 Json.encodeToString(
@@ -730,6 +748,7 @@ class ApplicationTest {
 
         val cellResponse = client.patch("/api/v1/pages/${page.id}/table-cells") {
             header(HttpHeaders.Authorization, authHeader)
+            header(HttpHeaders.IfMatch, propertyPage.revision.toPageEtag())
             contentType(ContentType.Application.Json)
             setBody(
                 Json.encodeToString(
@@ -802,17 +821,17 @@ class ApplicationTest {
             createdAt = 2L,
             updatedAt = 2L,
         )
-        assertEquals(
-            HttpStatusCode.OK,
-            client.put("/api/v1/pages/${page.id}") {
-                header(HttpHeaders.Authorization, authHeader)
-                contentType(ContentType.Application.Json)
-                setBody(Json.encodeToString(page))
-            }.status,
-        )
+        val createPageResponse = client.put("/api/v1/pages/${page.id}") {
+            header(HttpHeaders.Authorization, authHeader)
+            contentType(ContentType.Application.Json)
+            setBody(Json.encodeToString(page))
+        }
+        assertEquals(HttpStatusCode.OK, createPageResponse.status)
+        val createdPage = Json.decodeFromString<PageSyncDto>(createPageResponse.bodyAsText())
 
         val tableResponse = client.patch("/api/v1/pages/${page.id}/tables/block-table") {
             header(HttpHeaders.Authorization, authHeader)
+            header(HttpHeaders.IfMatch, createdPage.revision.toPageEtag())
             contentType(ContentType.Application.Json)
             setBody(
                 Json.encodeToString(
@@ -830,7 +849,8 @@ class ApplicationTest {
             )
         }
         assertEquals(HttpStatusCode.OK, tableResponse.status)
-        val tableContent = Json.decodeFromString<PageSyncDto>(tableResponse.bodyAsText()).content
+        val tablePage = Json.decodeFromString<PageSyncDto>(tableResponse.bodyAsText())
+        val tableContent = tablePage.content
         assertTrue(tableContent.contains("\"title\":\"Expenses\""), tableContent)
         assertTrue(tableContent.contains("\"view\":\"Calendar\""), tableContent)
         assertTrue(tableContent.contains("\"calendarDateColumnId\":\"column-date\""), tableContent)
@@ -840,6 +860,7 @@ class ApplicationTest {
 
         val columnResponse = client.patch("/api/v1/pages/${page.id}/tables/block-table/columns/column-date") {
             header(HttpHeaders.Authorization, authHeader)
+            header(HttpHeaders.IfMatch, tablePage.revision.toPageEtag())
             contentType(ContentType.Application.Json)
             setBody(
                 Json.encodeToString(
@@ -919,17 +940,17 @@ class ApplicationTest {
             createdAt = 2L,
             updatedAt = 2L,
         )
-        assertEquals(
-            HttpStatusCode.OK,
-            client.put("/api/v1/pages/${page.id}") {
-                header(HttpHeaders.Authorization, authHeader)
-                contentType(ContentType.Application.Json)
-                setBody(Json.encodeToString(page))
-            }.status,
-        )
+        val createPageResponse = client.put("/api/v1/pages/${page.id}") {
+            header(HttpHeaders.Authorization, authHeader)
+            contentType(ContentType.Application.Json)
+            setBody(Json.encodeToString(page))
+        }
+        assertEquals(HttpStatusCode.OK, createPageResponse.status)
+        var currentPage = Json.decodeFromString<PageSyncDto>(createPageResponse.bodyAsText())
 
         val addBlockResponse = client.post("/api/v1/pages/${page.id}/blocks") {
             header(HttpHeaders.Authorization, authHeader)
+            header(HttpHeaders.IfMatch, currentPage.revision.toPageEtag())
             contentType(ContentType.Application.Json)
             setBody(
                 Json.encodeToString(
@@ -943,18 +964,22 @@ class ApplicationTest {
         }
         assertEquals(HttpStatusCode.OK, addBlockResponse.status)
         assertTrue(addBlockResponse.bodyAsText().contains("block-second"))
+        currentPage = Json.decodeFromString(addBlockResponse.bodyAsText())
 
         val moveBlockResponse = client.patch("/api/v1/pages/${page.id}/blocks/block-second/position") {
             header(HttpHeaders.Authorization, authHeader)
+            header(HttpHeaders.IfMatch, currentPage.revision.toPageEtag())
             contentType(ContentType.Application.Json)
             setBody(Json.encodeToString(PageElementPositionPatchRequest(targetIndex = 0)))
         }
         assertEquals(HttpStatusCode.OK, moveBlockResponse.status)
-        val movedBlockContent = Json.decodeFromString<PageSyncDto>(moveBlockResponse.bodyAsText()).content
+        currentPage = Json.decodeFromString(moveBlockResponse.bodyAsText())
+        val movedBlockContent = currentPage.content
         assertTrue(movedBlockContent.indexOf("block-second") < movedBlockContent.indexOf("block-first"), movedBlockContent)
 
         val addPropertyResponse = client.post("/api/v1/pages/${page.id}/properties") {
             header(HttpHeaders.Authorization, authHeader)
+            header(HttpHeaders.IfMatch, currentPage.revision.toPageEtag())
             contentType(ContentType.Application.Json)
             setBody(
                 Json.encodeToString(
@@ -968,14 +993,17 @@ class ApplicationTest {
         }
         assertEquals(HttpStatusCode.OK, addPropertyResponse.status)
         assertTrue(addPropertyResponse.bodyAsText().contains("property-created"))
+        currentPage = Json.decodeFromString(addPropertyResponse.bodyAsText())
 
         val movePropertyResponse = client.patch("/api/v1/pages/${page.id}/properties/property-created/position") {
             header(HttpHeaders.Authorization, authHeader)
+            header(HttpHeaders.IfMatch, currentPage.revision.toPageEtag())
             contentType(ContentType.Application.Json)
             setBody(Json.encodeToString(PageElementPositionPatchRequest(targetIndex = 0)))
         }
         assertEquals(HttpStatusCode.OK, movePropertyResponse.status)
-        val movedPropertyContent = Json.decodeFromString<PageSyncDto>(movePropertyResponse.bodyAsText()).content
+        currentPage = Json.decodeFromString(movePropertyResponse.bodyAsText())
+        val movedPropertyContent = currentPage.content
         assertTrue(
             movedPropertyContent.indexOf("property-created") < movedPropertyContent.indexOf("property-existing"),
             movedPropertyContent,
@@ -983,6 +1011,7 @@ class ApplicationTest {
 
         val addColumnResponse = client.post("/api/v1/pages/${page.id}/tables/block-table/columns") {
             header(HttpHeaders.Authorization, authHeader)
+            header(HttpHeaders.IfMatch, currentPage.revision.toPageEtag())
             contentType(ContentType.Application.Json)
             setBody(
                 Json.encodeToString(
@@ -996,12 +1025,14 @@ class ApplicationTest {
             )
         }
         assertEquals(HttpStatusCode.OK, addColumnResponse.status)
-        val addedColumnContent = Json.decodeFromString<PageSyncDto>(addColumnResponse.bodyAsText()).content
+        currentPage = Json.decodeFromString(addColumnResponse.bodyAsText())
+        val addedColumnContent = currentPage.content
         assertTrue(addedColumnContent.contains("column-amount"), addedColumnContent)
         assertTrue(addedColumnContent.contains("\"column-amount\":\"4\""), addedColumnContent)
 
         val addNotesColumnResponse = client.post("/api/v1/pages/${page.id}/tables/block-table/columns") {
             header(HttpHeaders.Authorization, authHeader)
+            header(HttpHeaders.IfMatch, currentPage.revision.toPageEtag())
             contentType(ContentType.Application.Json)
             setBody(
                 Json.encodeToString(
@@ -1014,19 +1045,23 @@ class ApplicationTest {
             )
         }
         assertEquals(HttpStatusCode.OK, addNotesColumnResponse.status)
+        currentPage = Json.decodeFromString(addNotesColumnResponse.bodyAsText())
 
         val moveColumnResponse = client.patch("/api/v1/pages/${page.id}/tables/block-table/columns/column-amount/position") {
             header(HttpHeaders.Authorization, authHeader)
+            header(HttpHeaders.IfMatch, currentPage.revision.toPageEtag())
             contentType(ContentType.Application.Json)
             setBody(Json.encodeToString(PageElementPositionPatchRequest(targetIndex = 2)))
         }
         assertEquals(HttpStatusCode.OK, moveColumnResponse.status)
-        val movedColumnContent = Json.decodeFromString<PageSyncDto>(moveColumnResponse.bodyAsText()).content
+        currentPage = Json.decodeFromString(moveColumnResponse.bodyAsText())
+        val movedColumnContent = currentPage.content
         assertTrue(movedColumnContent.indexOf("column-name") < movedColumnContent.indexOf("column-notes"), movedColumnContent)
         assertTrue(movedColumnContent.indexOf("column-notes") < movedColumnContent.indexOf("column-amount"), movedColumnContent)
 
         val addRowResponse = client.post("/api/v1/pages/${page.id}/tables/block-table/rows") {
             header(HttpHeaders.Authorization, authHeader)
+            header(HttpHeaders.IfMatch, currentPage.revision.toPageEtag())
             contentType(ContentType.Application.Json)
             setBody(
                 Json.encodeToString(
@@ -1039,9 +1074,11 @@ class ApplicationTest {
         }
         assertEquals(HttpStatusCode.OK, addRowResponse.status)
         assertTrue(addRowResponse.bodyAsText().contains("row-second"))
+        currentPage = Json.decodeFromString(addRowResponse.bodyAsText())
 
         val updateRowPageResponse = client.patch("/api/v1/pages/${page.id}/tables/block-table/rows/row-second") {
             header(HttpHeaders.Authorization, authHeader)
+            header(HttpHeaders.IfMatch, currentPage.revision.toPageEtag())
             contentType(ContentType.Application.Json)
             setBody(
                 Json.encodeToString(
@@ -1060,39 +1097,47 @@ class ApplicationTest {
             )
         }
         assertEquals(HttpStatusCode.OK, updateRowPageResponse.status)
-        val rowPageContent = Json.decodeFromString<PageSyncDto>(updateRowPageResponse.bodyAsText()).content
+        currentPage = Json.decodeFromString(updateRowPageResponse.bodyAsText())
+        val rowPageContent = currentPage.content
         assertTrue(rowPageContent.contains("row-block-note"), rowPageContent)
         assertTrue(rowPageContent.contains("\"text\":\"Row notes\""), rowPageContent)
 
         val moveRowResponse = client.patch("/api/v1/pages/${page.id}/tables/block-table/rows/row-second/position") {
             header(HttpHeaders.Authorization, authHeader)
+            header(HttpHeaders.IfMatch, currentPage.revision.toPageEtag())
             contentType(ContentType.Application.Json)
             setBody(Json.encodeToString(PageElementPositionPatchRequest(targetIndex = 0)))
         }
         assertEquals(HttpStatusCode.OK, moveRowResponse.status)
-        val movedRowContent = Json.decodeFromString<PageSyncDto>(moveRowResponse.bodyAsText()).content
+        currentPage = Json.decodeFromString(moveRowResponse.bodyAsText())
+        val movedRowContent = currentPage.content
         assertTrue(movedRowContent.indexOf("row-second") < movedRowContent.indexOf("row-first"), movedRowContent)
 
-        assertEquals(
-            HttpStatusCode.OK,
-            client.delete("/api/v1/pages/${page.id}/tables/block-table/rows/row-second") {
-                header(HttpHeaders.Authorization, authHeader)
-            }.status,
-        )
-        assertEquals(
-            HttpStatusCode.OK,
+        val deleteRowResponse = client.delete("/api/v1/pages/${page.id}/tables/block-table/rows/row-second") {
+            header(HttpHeaders.Authorization, authHeader)
+            header(HttpHeaders.IfMatch, currentPage.revision.toPageEtag())
+        }
+        assertEquals(HttpStatusCode.OK, deleteRowResponse.status)
+        currentPage = Json.decodeFromString(deleteRowResponse.bodyAsText())
+
+        val deleteColumnResponse =
             client.delete("/api/v1/pages/${page.id}/tables/block-table/columns/column-amount") {
                 header(HttpHeaders.Authorization, authHeader)
-            }.status,
-        )
-        assertEquals(
-            HttpStatusCode.OK,
-            client.delete("/api/v1/pages/${page.id}/properties/property-created") {
-                header(HttpHeaders.Authorization, authHeader)
-            }.status,
-        )
+                header(HttpHeaders.IfMatch, currentPage.revision.toPageEtag())
+            }
+        assertEquals(HttpStatusCode.OK, deleteColumnResponse.status)
+        currentPage = Json.decodeFromString(deleteColumnResponse.bodyAsText())
+
+        val deletePropertyResponse = client.delete("/api/v1/pages/${page.id}/properties/property-created") {
+            header(HttpHeaders.Authorization, authHeader)
+            header(HttpHeaders.IfMatch, currentPage.revision.toPageEtag())
+        }
+        assertEquals(HttpStatusCode.OK, deletePropertyResponse.status)
+        currentPage = Json.decodeFromString(deletePropertyResponse.bodyAsText())
+
         val deleteBlockResponse = client.delete("/api/v1/pages/${page.id}/blocks/block-second") {
             header(HttpHeaders.Authorization, authHeader)
+            header(HttpHeaders.IfMatch, currentPage.revision.toPageEtag())
         }
         assertEquals(HttpStatusCode.OK, deleteBlockResponse.status)
         val finalContent = Json.decodeFromString<PageSyncDto>(deleteBlockResponse.bodyAsText()).content
@@ -1237,3 +1282,5 @@ class ApplicationTest {
         )
     }
 }
+
+private fun Long.toPageEtag(): String = "\"$this\""
