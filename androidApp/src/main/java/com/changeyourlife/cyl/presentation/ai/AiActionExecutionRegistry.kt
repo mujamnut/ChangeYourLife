@@ -115,7 +115,7 @@ internal object AiActionExecutionRegistry {
         "DELETE_TABLE_ROW_BLOCK",
     )
 
-    private val cellActions = setOf("UPDATE_TABLE_CELL", "CLEAR_TABLE_CELL")
+    private val cellActions = setOf("UPDATE_TABLE_CELL", "CLEAR_TABLE_CELL", "CLEAR_TABLE_CELLS")
     private val taskActions = setOf("CREATE_TASK")
     private val reminderActions = setOf("CREATE_REMINDER")
 

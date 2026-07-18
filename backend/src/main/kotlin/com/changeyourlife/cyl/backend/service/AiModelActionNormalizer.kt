@@ -67,7 +67,12 @@ class AiModelActionNormalizer(
     ): AiService.AiActionItem {
         val rawNormalizedType = type.normalizedActionType()
         val normalizedType = when {
+            rawNormalizedType in clearTableCellsAliases -> "CLEAR_TABLE_CELLS"
+            rawNormalizedType in clearTableCellAliases &&
+                prompt.looksLikeClearAllCellsRequest() -> "CLEAR_TABLE_CELLS"
             rawNormalizedType in clearTableCellAliases -> "CLEAR_TABLE_CELL"
+            rawNormalizedType == "UPDATE_TABLE_CELL" &&
+                prompt.looksLikeClearAllCellsRequest() -> "CLEAR_TABLE_CELLS"
             rawNormalizedType == "UPDATE_TABLE_CELL" &&
                 prompt.looksLikeClearCellRequest() &&
                 value.isBlank() &&
@@ -88,6 +93,15 @@ class AiModelActionNormalizer(
                 } else {
                     ""
                 }
+            },
+            filterQuery = if (normalizedType == "CLEAR_TABLE_CELLS") {
+                filterQuery
+                    .ifBlank { value }
+                    .ifBlank { rowTitle }
+                    .ifBlank { content }
+                    .trim()
+            } else {
+                filterQuery
             },
         )
     }
@@ -274,6 +288,17 @@ class AiModelActionNormalizer(
             words.any { word -> word in cellTargetWords }
     }
 
+    private fun String.looksLikeClearAllCellsRequest(): Boolean {
+        val words = withoutMentionContext()
+            .lowercase()
+            .split(Regex("[^a-z0-9]+"))
+            .filter(String::isNotBlank)
+            .toSet()
+        return words.any { word -> word in clearMutationWords } &&
+            words.any { word -> word in cellTargetWords } &&
+            words.any { word -> word in bulkTargetWords }
+    }
+
     private fun String.looksLikePageMutationRequest(): Boolean {
         val value = lowercase()
         val mutationIntent = listOf(
@@ -428,11 +453,20 @@ class AiModelActionNormalizer(
             "DELETE_TABLE_ROW",
             "UPDATE_TABLE_CELL",
             "CLEAR_TABLE_CELL",
+            "CLEAR_TABLE_CELLS",
         )
-        val cellActionTypes = setOf("UPDATE_TABLE_CELL", "CLEAR_TABLE_CELL")
+        val cellActionTypes = setOf("UPDATE_TABLE_CELL", "CLEAR_TABLE_CELL", "CLEAR_TABLE_CELLS")
         val clearTableCellAliases = setOf("CLEAR_TABLE_CELL", "DELETE_TABLE_CELL", "EMPTY_TABLE_CELL")
+        val clearTableCellsAliases = setOf(
+            "CLEAR_MATCHING_TABLE_CELLS",
+            "CLEAR_TABLE_CELLS",
+            "DELETE_MATCHING_TABLE_CELLS",
+            "DELETE_TABLE_CELLS",
+            "EMPTY_MATCHING_TABLE_CELLS",
+        )
         val clearMutationWords = setOf("clear", "delete", "empty", "hapus", "kosongkan", "padam", "remove")
         val cellTargetWords = setOf("cell", "sel")
+        val bulkTargetWords = setOf("all", "every", "semua", "seluruh")
         val legacyEnvelopeKeys = setOf("page", "targetpage", "targettitle", "action", "data", "rows", "row", "table", "tabletitle")
         val ignoredLegacyDataKeys = setOf("id", "rowid", "row_id", "uuid")
     }

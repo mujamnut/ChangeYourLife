@@ -129,6 +129,40 @@ class AiActionRecoveryTest {
     }
 
     @Test
+    fun normalizesExplicitAllCellRequestIntoBulkClearAction() {
+        val result = service.recoverActionFromModelReply(
+            reply = """
+                {
+                  "reply": "Siap",
+                  "actions": [
+                    {
+                      "type": "UPDATE_TABLE_CELL",
+                      "targetTitle": "Monthly Expenses",
+                      "tableTitle": "Transactions",
+                      "columnName": "Month",
+                      "value": "bulan 4"
+                    }
+                  ]
+                }
+            """.trimIndent(),
+            prompt = "delete cell yang ada bulan 4 semua",
+            pages = listOf(
+                AiPageContext(
+                    id = "page-monthly",
+                    title = "Monthly Expenses",
+                ),
+            ),
+        )
+
+        val action = assertNotNull(result).actions.single()
+        assertEquals(emptyList(), result.validationIssues)
+        assertEquals("CLEAR_TABLE_CELLS", action.type)
+        assertEquals("Transactions", action.tableTitle)
+        assertEquals("Month", action.columnName)
+        assertEquals("bulan 4", action.filterQuery)
+    }
+
+    @Test
     fun recoversMalayExpenseRowWithTodayDate() {
         val result = service.recoverActionFromPrompt(
             prompt = "saya guna 29 ringgit harini beli makeup",

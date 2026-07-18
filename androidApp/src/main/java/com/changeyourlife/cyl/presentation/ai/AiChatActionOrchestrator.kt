@@ -204,6 +204,12 @@ private fun String.missingRequiredMessage(useMalay: Boolean): String {
             "Specify the new value for that cell."
         }
 
+        contains("filterQuery", ignoreCase = true) -> if (useMalay) {
+            "Nyatakan nilai cell yang hendak dipadankan."
+        } else {
+            "Specify the cell value to match."
+        }
+
         contains("table", ignoreCase = true) -> if (useMalay) {
             "Nyatakan database yang dimaksudkan."
         } else {
@@ -278,6 +284,12 @@ private fun String.targetNotFoundMessage(useMalay: Boolean): String {
             "Property yang dimaksudkan tidak ditemui. Nyatakan nama column yang tepat."
         } else {
             "The property could not be found. Specify the exact column."
+        }
+
+        contains("filterQuery", ignoreCase = true) -> if (useMalay) {
+            "Tiada cell dengan nilai itu ditemui dalam column yang dipilih."
+        } else {
+            "No cell with that value was found in the selected column."
         }
 
         contains("block", ignoreCase = true) -> if (useMalay) {

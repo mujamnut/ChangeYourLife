@@ -686,6 +686,32 @@ class AiPageActionExecutor @Inject constructor(
                         }
                     }
 
+                    "CLEAR_TABLE_CELLS" -> {
+                        val columnName = action.columnName.ifBlank { action.propertyName }
+                        val matchQuery = action.bulkCellMatchQuery()
+                            .ifBlank { error("Missing cell match value") }
+                        val targetTable = workingDocument.blocks.findMatchingTable(action)
+                            ?: error("Could not find matching table")
+                        val column = targetTable.table.findColumn(action.columnId, columnName)
+                            ?: error("Could not find column: ${columnName.ifBlank { action.columnId }}")
+                        val matchingCellCount = targetTable.table
+                            .rowsMatchingCell(column, matchQuery)
+                            .size
+                        if (matchingCellCount == 0) {
+                            error("Could not find cells matching: $matchQuery")
+                        }
+                        val update = workingDocument.updateMatchingTable(action, actionIndex, undoCommands) { block ->
+                            block.clearMatchingCells(
+                                columnId = action.columnId,
+                                columnName = columnName,
+                                matchQuery = matchQuery,
+                            )
+                        }
+                        workingDocument = update.document
+                        documentChanged = true
+                        "Cleared $matchingCellCount matching cell${if (matchingCellCount == 1) "" else "s"} in ${update.tableTitle}"
+                    }
+
                     "CHANGE_TABLE_VIEW", "SET_TABLE_VIEW" -> {
                         val view = action.tableView.ifBlank { action.value }.ifBlank { action.content }.toPageTableView()
                         val update = workingDocument.updateMatchingTable(action, actionIndex, undoCommands) { block ->
@@ -1463,6 +1489,33 @@ private fun PageBlockDocument.validateActionTarget(
             rowIssue(table) ?: columnIssue(table) ?: tableDateCellIssue(table)
         }
 
+        "CLEAR_TABLE_CELLS" -> {
+            val table = targetTable() ?: return tableIssue()
+            columnIssue(table)?.let { issue -> return issue }
+            val matchQuery = action.bulkCellMatchQuery()
+            if (matchQuery.isBlank()) {
+                AiPageActionValidationIssue(
+                    actionIndex = actionIndex,
+                    field = "filterQuery",
+                    code = "required",
+                    message = "Bulk cell clear needs a value to match.",
+                )
+            } else {
+                val columnName = action.columnName.ifBlank { action.propertyName }
+                val column = table.table.findColumn(action.columnId, columnName)
+                    ?: return columnIssue(table)
+                if (table.table.rowsMatchingCell(column, matchQuery).isEmpty()) {
+                    targetNotFound(
+                        field = "filterQuery",
+                        targetKind = "cell value",
+                        targetLabel = matchQuery,
+                    )
+                } else {
+                    null
+                }
+            }
+        }
+
         "CREATE_TASK" -> taskDateIssue()
 
         "CREATE_REMINDER" -> missingReminderDateIssue()
@@ -1839,11 +1892,21 @@ private fun List<PageBlock>.findMatchingTable(action: ChatAction): PageBlock? {
     }
     val databaseTables = filter { block -> block.type == PageBlockType.DatabaseTable }
     if (actionType in cellTargetActionTypes && tableName.isBlank()) {
-        val rowTitle = action.rowTitle.ifBlank { action.title }
         val columnName = action.columnName.ifBlank { action.propertyName }
-        val matchingTables = databaseTables.filter { block ->
-            block.table.resolveRow(action.rowId, rowTitle) is AiRowResolution.Found &&
-                block.table.findColumn(action.columnId, columnName) != null
+        val matchingTables = if (actionType == "CLEAR_TABLE_CELLS") {
+            val matchQuery = action.bulkCellMatchQuery()
+            databaseTables.filter { block ->
+                val column = block.table.findColumn(action.columnId, columnName)
+                column != null &&
+                    matchQuery.isNotBlank() &&
+                    block.table.rowsMatchingCell(column, matchQuery).isNotEmpty()
+            }
+        } else {
+            val rowTitle = action.rowTitle.ifBlank { action.title }
+            databaseTables.filter { block ->
+                block.table.resolveRow(action.rowId, rowTitle) is AiRowResolution.Found &&
+                    block.table.findColumn(action.columnId, columnName) != null
+            }
         }
         matchingTables.singleOrNull()?.let { return it }
         if (databaseTables.size > 1) return null
@@ -1851,7 +1914,7 @@ private fun List<PageBlock>.findMatchingTable(action: ChatAction): PageBlock? {
     return databaseTables.singleOrNull() ?: databaseTables.firstOrNull()
 }
 
-private val cellTargetActionTypes = setOf("UPDATE_TABLE_CELL", "CLEAR_TABLE_CELL")
+private val cellTargetActionTypes = setOf("UPDATE_TABLE_CELL", "CLEAR_TABLE_CELL", "CLEAR_TABLE_CELLS")
 
 private fun PageBlockDocument.upsertProperty(
     name: String,
@@ -2206,6 +2269,35 @@ private fun PageBlock.updateCellByNames(
     )
 }
 
+private fun PageBlock.clearMatchingCells(
+    columnId: String,
+    columnName: String,
+    matchQuery: String,
+): PageBlock {
+    val column = table.findColumn(columnId = columnId, columnName = columnName)
+        ?: error("Could not find column: ${columnName.ifBlank { columnId }}")
+    val matchingRowIds = table.rowsMatchingCell(column, matchQuery)
+        .map(PageTableRow::id)
+        .toSet()
+    if (matchingRowIds.isEmpty()) {
+        error("Could not find cells matching: $matchQuery")
+    }
+    return copy(
+        table = table.copy(
+            rows = table.rows.map { row ->
+                if (row.id in matchingRowIds) {
+                    row.copy(
+                        cells = row.cells + (column.id to ""),
+                        cellValues = row.cellValues + (column.id to column.toTypedCellValue("")),
+                    )
+                } else {
+                    row
+                }
+            },
+        ),
+    )
+}
+
 private fun ChatAction.resolvedTableCellUpdateValue(columnName: String): String {
     if (value.isNotBlank()) return value
     if (content.isNotBlank()) return content
@@ -2445,6 +2537,36 @@ private fun PageTableRow.searchableCellTexts(): Sequence<String> =
     cells.values.asSequence()
         .map(String::trim)
         .filter(String::isNotBlank)
+
+private fun ChatAction.bulkCellMatchQuery(): String {
+    return filterQuery
+        .ifBlank { value }
+        .ifBlank { rowTitle }
+        .ifBlank { content }
+        .ifBlank { title }
+        .trim()
+}
+
+private fun PageTable.rowsMatchingCell(
+    column: PageTableColumn,
+    matchQuery: String,
+): List<PageTableRow> {
+    return rows.filter { row ->
+        row.cellText(column).matchesAiCellQuery(matchQuery)
+    }
+}
+
+private fun String.matchesAiCellQuery(query: String): Boolean {
+    val current = trim()
+    val target = query.trim()
+    if (current.isBlank() || target.isBlank()) return false
+    if (current.normalizedAiKey() == target.normalizedAiKey()) return true
+    val currentMonth = current.toAiMonthReferenceOrNull()
+    val targetMonth = target.toAiMonthReferenceOrNull()
+    return currentMonth != null &&
+        targetMonth != null &&
+        currentMonth.matches(targetMonth)
+}
 
 private sealed interface AiRowResolution {
     data class Found(val row: PageTableRow) : AiRowResolution

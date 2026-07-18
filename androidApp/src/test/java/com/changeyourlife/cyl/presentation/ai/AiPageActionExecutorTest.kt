@@ -480,6 +480,91 @@ class AiPageActionExecutorTest {
     }
 
     @Test
+    fun clearsEveryMatchingCellInSelectedColumnWithoutDeletingRows() = runBlocking {
+        val nameColumn = PageTableColumn(id = "entry-name", name = "Name")
+        val monthColumn = PageTableColumn(id = "entry-month", name = "Month")
+        val notesColumn = PageTableColumn(id = "entry-notes", name = "Notes")
+        val tableBlock = PageBlock(
+            id = "entries-table",
+            type = PageBlockType.DatabaseTable,
+            table = PageTable(
+                title = "Entries",
+                columns = listOf(nameColumn, monthColumn, notesColumn),
+                rows = listOf(
+                    PageTableRow(
+                        id = "entry-food",
+                        cells = mapOf(
+                            nameColumn.id to "Food",
+                            monthColumn.id to "2026-04",
+                            notesColumn.id to "Keep food note",
+                        ),
+                    ),
+                    PageTableRow(
+                        id = "entry-fuel",
+                        cells = mapOf(
+                            nameColumn.id to "Fuel",
+                            monthColumn.id to "bulan 4",
+                            notesColumn.id to "Keep fuel note",
+                        ),
+                    ),
+                    PageTableRow(
+                        id = "entry-salary",
+                        cells = mapOf(
+                            nameColumn.id to "Salary",
+                            monthColumn.id to "2026-05",
+                            notesColumn.id to "bulan 4",
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val document = PageBlockDocument(blocks = listOf(tableBlock))
+        val page = Page(
+            id = "page-1",
+            workspaceId = "workspace-1",
+            parentPageId = null,
+            title = "Entries page",
+            content = PageBlockCodec.encodeDocument(document),
+            sortOrder = 0,
+            createdAt = 1000,
+            updatedAt = 1000,
+            deletedAt = null,
+        )
+        val executor = AiPageActionExecutor(
+            pageRepository = FakePageRepository(page, document),
+            taskRepository = FakeTaskRepository(),
+            reminderRepository = FakeReminderRepository(),
+            applyEditorCommandUseCase = ApplyEditorCommandUseCase(),
+        )
+
+        val result = executor.executeOnPage(
+            page = page,
+            title = page.title,
+            document = document,
+            actions = listOf(
+                ChatAction(
+                    type = "CLEAR_TABLE_CELLS",
+                    title = "",
+                    tableTitle = "Entries",
+                    columnName = "Month",
+                    filterQuery = "bulan 4",
+                ),
+            ),
+        )
+
+        val updatedTable = requireNotNull(result.updatedDocument).table
+        assertEquals(emptyList<AiPageActionValidationIssue>(), result.validationIssues)
+        assertEquals(listOf(0), result.executedActionIndexes)
+        assertEquals(3, updatedTable.rows.size)
+        assertEquals("", updatedTable.rows[0].cells[monthColumn.id])
+        assertEquals("", updatedTable.rows[1].cells[monthColumn.id])
+        assertEquals("2026-05", updatedTable.rows[2].cells[monthColumn.id])
+        assertEquals("Keep food note", updatedTable.rows[0].cells[notesColumn.id])
+        assertEquals("Keep fuel note", updatedTable.rows[1].cells[notesColumn.id])
+        assertEquals("bulan 4", updatedTable.rows[2].cells[notesColumn.id])
+    }
+
+    @Test
     fun addsMalayExpenseRowToExistingTable() = runBlocking {
         val nameColumn = PageTableColumn(id = "column-name", name = "Name")
         val amountColumn = PageTableColumn(

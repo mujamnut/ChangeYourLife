@@ -294,18 +294,37 @@ private sealed interface AiActionContract {
     }
 
     data object TableCell : AiActionContract {
-        override val types = setOf("UPDATE_TABLE_CELL", "CLEAR_TABLE_CELL")
-        override val allowedFields = TableTarget + RowTarget + ColumnTarget + setOf("title", "propertyName", "value", "content", "cellValues")
+        override val types = setOf("UPDATE_TABLE_CELL", "CLEAR_TABLE_CELL", "CLEAR_TABLE_CELLS")
+        override val allowedFields = TableTarget + RowTarget + ColumnTarget + setOf(
+            "title",
+            "propertyName",
+            "value",
+            "content",
+            "cellValues",
+            "filterQuery",
+        )
 
         override fun requiredFieldIssues(actionIndex: Int, action: AiService.AiActionItem): List<AiActionValidationIssue> = buildList {
-            if (!action.hasAny(action.rowId, action.rowTitle, action.title)) add(missingField(actionIndex, "rowTitle", "Cell update needs rowId, rowTitle, or title."))
+            val actionType = action.type.normalizedActionType()
+            if (
+                actionType != "CLEAR_TABLE_CELLS" &&
+                !action.hasAny(action.rowId, action.rowTitle, action.title)
+            ) {
+                add(missingField(actionIndex, "rowTitle", "Cell update needs rowId, rowTitle, or title."))
+            }
             if (!action.hasAny(action.columnId, action.columnName, action.propertyName)) add(missingField(actionIndex, "columnName", "Cell update needs columnId, columnName, or propertyName."))
             if (
-                !action.type.equals("CLEAR_TABLE_CELL", ignoreCase = true) &&
+                actionType == "UPDATE_TABLE_CELL" &&
                 !action.hasAny(action.value, action.content) &&
                 action.cellValues.isEmpty()
             ) {
                 add(missingField(actionIndex, "value", "Cell update needs value, content, or cellValues."))
+            }
+            if (
+                actionType == "CLEAR_TABLE_CELLS" &&
+                !action.hasAny(action.filterQuery, action.value, action.rowTitle, action.content)
+            ) {
+                add(missingField(actionIndex, "filterQuery", "Bulk cell clear needs a value to match."))
             }
         }
     }
