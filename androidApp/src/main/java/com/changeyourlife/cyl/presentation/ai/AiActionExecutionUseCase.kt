@@ -51,10 +51,14 @@ class AiActionExecutionUseCase @Inject constructor(
         val globalActions = actions.filter { candidate -> candidate.action.isHomeScopedAction() }
         val pageActions = actions.filterNot { candidate -> candidate.action.isHomeScopedAction() }
         val globalResult = executeHomeScopedActions(workspaceId, globalActions)
-        val pageResult = when {
-            pageActions.isEmpty() -> AiActionExecutionResult()
-            scopedTargetPage != null -> executePageScopedActions(scopedTargetPage, pageActions)
-            else -> executeTargetedPageActions(workspaceId, pageActions)
+        val pageResult = if (pageActions.isEmpty()) {
+            AiActionExecutionResult()
+        } else {
+            executeTargetedPageActions(
+                workspaceId = workspaceId,
+                actions = pageActions,
+                defaultPage = scopedTargetPage,
+            )
         }
         return globalResult + pageResult
     }
@@ -197,14 +201,38 @@ class AiActionExecutionUseCase @Inject constructor(
     private suspend fun executeTargetedPageActions(
         workspaceId: String,
         actions: List<AiActionExecutionCandidate>,
+        defaultPage: Page?,
     ): AiActionExecutionResult {
         val pages = pageRepository.observePages(workspaceId).first()
-        val groupedActions = linkedMapOf<Page, MutableList<AiActionExecutionCandidate>>()
+        val canonicalDefaultPage = defaultPage?.let { page ->
+            pages.firstOrNull { candidate -> candidate.id == page.id } ?: page
+        }
+        val targetPagesById = linkedMapOf<String, Page>()
+        val groupedActions = linkedMapOf<String, MutableList<AiActionExecutionCandidate>>()
         val validationIssues = mutableListOf<ChatActionValidationMetadata>()
 
         actions.forEach { candidate ->
             val targetTitle = candidate.action.targetTitle.trim()
-            if (targetTitle.isBlank()) {
+            val resolution = if (targetTitle.isBlank()) {
+                canonicalDefaultPage
+                    ?.let { page -> TargetPageResolution.Found(page) }
+                    ?: TargetPageResolution.Missing
+            } else {
+                val matchesDefaultPage = canonicalDefaultPage
+                    ?.let { page ->
+                        AiPageTargetResolver.resolveExactTarget(
+                            pages = listOf(page),
+                            rawTitle = targetTitle,
+                        )
+                    }
+                if (matchesDefaultPage is TargetPageResolution.Found) {
+                    matchesDefaultPage
+                } else {
+                    AiPageTargetResolver.resolveExactTarget(pages, targetTitle)
+                }
+            }
+
+            if (targetTitle.isBlank() && canonicalDefaultPage == null) {
                 validationIssues += candidate.targetPageIssue(
                     code = "target_page_required",
                     message = "This action needs a page target. Mention a page with @ or open the page before asking AI to edit it.",
@@ -212,9 +240,10 @@ class AiActionExecutionUseCase @Inject constructor(
                 return@forEach
             }
 
-            when (val resolution = AiPageTargetResolver.resolveExactTarget(pages, targetTitle)) {
+            when (resolution) {
                 is TargetPageResolution.Found -> {
-                    groupedActions.getOrPut(resolution.page) { mutableListOf() } += candidate
+                    targetPagesById[resolution.page.id] = resolution.page
+                    groupedActions.getOrPut(resolution.page.id) { mutableListOf() } += candidate
                 }
                 TargetPageResolution.Ambiguous -> {
                     validationIssues += candidate.targetPageIssue(
@@ -233,7 +262,7 @@ class AiActionExecutionUseCase @Inject constructor(
 
         return groupedActions.entries.fold(AiActionExecutionResult(validationIssues = validationIssues)) { result, entry ->
             result + executePageScopedActions(
-                page = entry.key,
+                page = requireNotNull(targetPagesById[entry.key]),
                 actions = entry.value,
             )
         }

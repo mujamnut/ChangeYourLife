@@ -801,19 +801,28 @@ class HomeViewModel @Inject constructor(
                 val pages = pageRepository.observePages(workspaceId)
                     .first()
                     .sortedByDescending { page -> page.updatedAt }
-                val normalizedMentionedPageIds = (mentionedPageIds + listOfNotNull(attachedPageId))
+                val explicitlyMentionedPageIds = mentionedPageIds
                     .filter { pageId -> pageId.isNotBlank() }
+                    .filterNot { pageId -> pageId == attachedPageId }
                     .distinct()
                 val attachedPage = attachedPageId
                     ?.takeIf { pageId -> pageId.isNotBlank() }
                     ?.let { pageId -> pages.firstOrNull { page -> page.id == pageId } }
-                val scopedTargetPage = attachedPage
-                    ?: normalizedMentionedPageIds
-                        .singleOrNull()
-                        ?.let { pageId -> pages.firstOrNull { page -> page.id == pageId } }
-                val explicitlyMentionedPages = pages.findPagesByIds(normalizedMentionedPageIds)
+                val explicitlyMentionedPages = pages.findPagesByIds(explicitlyMentionedPageIds)
+                val scopedTargetPage = when (explicitlyMentionedPages.size) {
+                    0 -> attachedPage
+                    1 -> explicitlyMentionedPages.single()
+                    else -> null
+                }
+                val contextualPageIds = (
+                    explicitlyMentionedPageIds +
+                        listOfNotNull(attachedPage?.id)
+                    ).distinct()
+                val actionTargetPages = explicitlyMentionedPages.ifEmpty {
+                    listOfNotNull(attachedPage)
+                }
                 val pageContext = pages
-                    .withMentionedPagesFirst(normalizedMentionedPageIds)
+                    .withMentionedPagesFirst(contextualPageIds)
                     .map { page -> page.toAiPageContext() }
                 val openTasks = taskRepository.observeOpenTasks(workspaceId)
                     .first()
@@ -856,11 +865,13 @@ class HomeViewModel @Inject constructor(
                 } else {
                     emptyList()
                 }
-                val searchPageLinks = searchContext.results.toAiSearchPageLinks()
                 val messagesForAi = skillMessages + memoryMessages + searchMessages +
                     currentMessages.filter { message -> message.content.isNotBlank() } +
                     userMessage.copy(
-                        content = requestPrompt.withMentionContext(explicitlyMentionedPages),
+                        content = requestPrompt.withMentionContext(
+                            pages = actionTargetPages,
+                            hasExplicitTargets = explicitlyMentionedPages.isNotEmpty(),
+                        ),
                     )
                 aiRepository.chatWithActions(
                     messages = messagesForAi.toRoleContentPairs(),
@@ -890,12 +901,7 @@ class HomeViewModel @Inject constructor(
                             sessionId = session.id,
                             role = "assistant",
                             content = orchestration.reply.sanitizeAiUserVisibleText(),
-                            pageLinks = (
-                                orchestration.pageLinks +
-                                    searchPageLinks.takeIf {
-                                        orchestration.actionMetadata.proposedActions.isEmpty()
-                                    }.orEmpty()
-                                )
+                            pageLinks = orchestration.pageLinks
                                 .distinctBy { link -> "${link.pageId}:${link.targetType}:${link.targetId}" }
                                 .toDomainChatPageLinks(),
                             actionMetadata = orchestration.actionMetadata,
@@ -991,16 +997,32 @@ class HomeViewModel @Inject constructor(
         return mentionedPages + filterNot { page -> page.id in mentionedIds }
     }
 
-    private fun String.withMentionContext(pages: List<Page>): String {
+    private fun String.withMentionContext(
+        pages: List<Page>,
+        hasExplicitTargets: Boolean,
+    ): String {
         if (pages.isEmpty()) return this
         val context = pages.joinToString(separator = "\n") { page ->
             "- @${page.title.ifBlank { "Untitled page" }} id=${page.id}"
+        }
+        val targetingInstruction = if (hasExplicitTargets) {
+            """
+                The user explicitly selected these exact target pages in the chat UI.
+                A single selected page overrides the currently open page.
+                If several pages are listed, every mutation action must include the exact targetTitle for its page.
+            """.trimIndent()
+        } else {
+            """
+                This is the currently open page and is only the default mutation target.
+                If the visible request explicitly names another page, that requested page and its targetTitle override this default.
+            """.trimIndent()
         }
         return """
             $this
 
             CYL_MENTION_CONTEXT:
-            The user selected these page mentions from the chat UI. Treat them as exact target pages for create/update/delete actions. Do not mention internal IDs in your reply:
+            $targetingInstruction
+            Do not mention internal IDs in your reply:
             $context
         """.trimIndent()
     }
@@ -1210,19 +1232,6 @@ private fun SearchResult.toHomeSearchResult(): HomeSearchResult? {
         updatedAt = updatedAt,
     )
 }
-
-private fun List<SearchResult>.toAiSearchPageLinks(): List<AiChatPageLink> =
-    mapNotNull { result ->
-        val pageId = result.target.pageId.takeIf { id -> id.isNotBlank() } ?: return@mapNotNull null
-        val routeTarget = result.target.toPageRouteTarget()
-        AiChatPageLink(
-            pageId = pageId,
-            title = result.title.ifBlank { result.subtitle.ifBlank { "Search result" } },
-            targetType = routeTarget.type,
-            targetId = routeTarget.id,
-        )
-    }
-        .distinctBy { link -> "${link.pageId}:${link.targetType}:${link.targetId}" }
 
 private fun SearchTarget.toPageRouteTarget(): HomeSearchRouteTarget = when (type) {
     SearchTargetType.Page -> HomeSearchRouteTarget(SearchTargetPageTitle, "")

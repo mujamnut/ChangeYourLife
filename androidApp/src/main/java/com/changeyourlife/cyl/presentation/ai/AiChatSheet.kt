@@ -107,12 +107,6 @@ fun AiChatSheet(
     attachedPageId: String? = null,
     attachedPageTitle: String? = null,
 ) {
-    val attachedMentionPageIds = rememberSaveable(attachedPageId) {
-        attachedPageId
-            ?.takeIf { it.isNotBlank() }
-            ?.let(::listOf)
-            .orEmpty()
-    }
     val inputState = rememberTextFieldState()
     val inputText = inputState.text.toString()
     var selectedMentionPageIds by rememberSaveable(attachedPageId) {
@@ -319,7 +313,7 @@ fun AiChatSheet(
             val message = inputText.trim()
             onSendMessage(
                 message,
-                (selectedMentionPageIds + attachedMentionPageIds)
+                selectedMentionPageIds
                     .filter { pageId -> pageId.isNotBlank() }
                     .distinct(),
                 stagedImageAttachments,
@@ -678,7 +672,9 @@ private fun AiChatMessageList(
                             style = MaterialTheme.typography.bodyMedium,
                         )
                     }
-                    if (!isUser && message.pageLinks.isNotEmpty()) {
+                    val hasSuccessfulPageAction =
+                        message.actionMetadata?.executedActions?.isNotEmpty() == true
+                    if (!isUser && hasSuccessfulPageAction && message.pageLinks.isNotEmpty()) {
                         AiChatPageLinks(
                             links = message.pageLinks,
                             onOpenPage = onOpenPage,

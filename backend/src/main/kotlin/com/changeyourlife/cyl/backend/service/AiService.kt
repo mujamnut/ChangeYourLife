@@ -441,8 +441,11 @@ class AiService(
             - Home request to create a new tracker/jadual/table/page: use CREATE_PAGE with tableTitle, tableColumns, and tableRows when useful.
             - Request inside or mentioning an existing page to create a table: use CREATE_DATABASE with targetTitle.
             - Request to add spending/expense/record to an existing budget/monthly expense page: use ADD_TABLE_ROW with tableTitle "Transactions", Category, Type, Amount, Status, Month (YYYY-MM) when known, and Date when known. Do not create a new table unless user asks for a new table/page.
-            - If a page is mentioned in CYL_MENTION_CONTEXT, treat that as the exact target page.
-            - If one current/mentioned page is clearly in context and user does not mention a page, use that page.
+            - CYL_MENTION_CONTEXT may contain either explicit page mentions or the currently open default page; follow its targeting instructions exactly.
+            - A page explicitly selected with @ overrides the currently open default page.
+            - If the visible request clearly names another page, use that exact page in targetTitle instead of forcing the action onto the current page.
+            - If several pages are explicitly selected, include the exact targetTitle on every mutation action so each action can be routed independently.
+            - If one current/mentioned page is clearly in context and the user does not name another page, use that page.
             - For date words like harini/today, use the client date.
             - For money like "29 ringgit", put the numeric value in an amount/price/cost column if such column exists or create a Number column.
             - To change one existing cell, use UPDATE_TABLE_CELL with the exact table, row, column, and value. Text and Number cells are editable data: never convert them to Select/Status or modify dropdown options unless the user explicitly asks to change the property type/options.

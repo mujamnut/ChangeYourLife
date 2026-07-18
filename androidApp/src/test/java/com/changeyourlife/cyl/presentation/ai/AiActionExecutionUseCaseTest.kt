@@ -190,6 +190,78 @@ class AiActionExecutionUseCaseTest {
     }
 
     @Test
+    fun explicitTargetTitleOverridesCurrentlyOpenPage() = runBlocking {
+        val currentPage = page(PageBlockDocument(), id = "page-current", title = "Current")
+        val otherPage = page(PageBlockDocument(), id = "page-other", title = "Other")
+        val pageRepository = FakePageRepository(currentPage, otherPage)
+        val useCase = useCase(pageRepository)
+
+        val result = useCase.execute(
+            workspaceId = "workspace-1",
+            scopedTargetPage = currentPage,
+            actions = listOf(
+                ChatAction(
+                    type = "ADD_BLOCK",
+                    targetTitle = "Other",
+                    content = "Edit the requested page",
+                ),
+            ),
+        )
+
+        assertTrue(result.validationIssues.isEmpty())
+        val unchangedCurrent = PageBlockCodec.decodeDocument(
+            requireNotNull(pageRepository.getPage("page-current")).content,
+        )
+        val updatedOther = PageBlockCodec.decodeDocument(
+            requireNotNull(pageRepository.getPage("page-other")).content,
+        )
+        assertEquals(emptyList<PageBlock>(), unchangedCurrent.meaningfulBlocks())
+        assertEquals(
+            listOf("Edit the requested page"),
+            updatedOther.meaningfulBlocks().map { block -> block.text },
+        )
+    }
+
+    @Test
+    fun routesActionsToDifferentPagesInOneRequest() = runBlocking {
+        val firstPage = page(PageBlockDocument(), id = "page-first", title = "First")
+        val secondPage = page(PageBlockDocument(), id = "page-second", title = "Second")
+        val pageRepository = FakePageRepository(firstPage, secondPage)
+        val useCase = useCase(pageRepository)
+
+        val result = useCase.execute(
+            workspaceId = "workspace-1",
+            scopedTargetPage = firstPage,
+            actions = listOf(
+                ChatAction(
+                    type = "ADD_BLOCK",
+                    targetTitle = "First",
+                    content = "First change",
+                ),
+                ChatAction(
+                    type = "ADD_BLOCK",
+                    targetTitle = "Second",
+                    content = "Second change",
+                ),
+            ),
+        )
+
+        assertTrue(result.validationIssues.isEmpty())
+        val updatedFirst = PageBlockCodec.decodeDocument(
+            requireNotNull(pageRepository.getPage("page-first")).content,
+        )
+        val updatedSecond = PageBlockCodec.decodeDocument(
+            requireNotNull(pageRepository.getPage("page-second")).content,
+        )
+        assertEquals(listOf("First change"), updatedFirst.meaningfulBlocks().map { block -> block.text })
+        assertEquals(listOf("Second change"), updatedSecond.meaningfulBlocks().map { block -> block.text })
+        assertEquals(
+            setOf("page-first", "page-second"),
+            result.pageLinks.map { link -> link.pageId }.toSet(),
+        )
+    }
+
+    @Test
     fun doesNotFuzzyMatchShortTargetTitleToLongerPageTitle() = runBlocking {
         val budgetTracker = page(PageBlockDocument(), id = "page-budget-tracker", title = "Budget Tracker")
         val pageRepository = FakePageRepository(budgetTracker)
