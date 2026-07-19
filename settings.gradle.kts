@@ -21,4 +21,4 @@ rootProject.name = "ChangeYourLife"
 
 include(":androidApp")
 include(":backend")
-
+include(":ai-action-contract")

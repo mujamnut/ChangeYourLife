@@ -4,6 +4,7 @@ WORKDIR /workspace
 
 COPY gradlew ./
 COPY gradle ./gradle
+COPY ai-action-contract ./ai-action-contract
 COPY backend ./backend
 
 RUN chmod +x ./gradlew

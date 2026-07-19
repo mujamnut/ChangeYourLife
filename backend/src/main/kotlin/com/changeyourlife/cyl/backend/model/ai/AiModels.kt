@@ -1,9 +1,14 @@
 package com.changeyourlife.cyl.backend.model.ai
 
+import com.changeyourlife.cyl.aicontract.AiActionWire
+import com.changeyourlife.cyl.aicontract.AiTableColumnWire
 import kotlinx.serialization.Serializable
 
-const val CYL_ACTION_SCHEMA_NAME = "CYL_ACTION_SCHEMA"
-const val CYL_ACTION_SCHEMA_VERSION = 1
+const val CYL_ACTION_SCHEMA_NAME = com.changeyourlife.cyl.aicontract.CYL_ACTION_SCHEMA_NAME
+const val CYL_ACTION_SCHEMA_VERSION = com.changeyourlife.cyl.aicontract.CYL_ACTION_SCHEMA_VERSION
+
+typealias AiAction = AiActionWire
+typealias AiTableColumn = AiTableColumnWire
 
 @Serializable
 data class ChatMessage(
@@ -97,87 +102,6 @@ data class AiBlockContext(
 data class AiTaskContext(
     val id: String,
     val title: String
-)
-
-@Serializable
-data class AiTableColumn(
-    val name: String = "",
-    val type: String = "Text",
-    val options: List<String> = emptyList(),
-    val dateFormat: String = "",
-    val timeFormat: String = "",
-    val dateReminder: String = "",
-    val timezoneLabel: String = "",
-    val formula: String = "",
-    val relationTargetTableId: String = "",
-    val rollupRelationColumnName: String = "",
-    val rollupTargetColumnName: String = "",
-    val rollupAggregation: String = "",
-)
-
-@Serializable
-data class AiAction(
-    val type: String,
-    val title: String,
-    val targetTitle: String = "",
-    val content: String = "",
-    val blockType: String = "",
-    val blockId: String = "",
-    val blockText: String = "",
-    val textToFormat: String = "",
-    val format: String = "",
-    val linkUrl: String = "",
-    val color: String = "",
-    val highlight: String = "",
-    val rangeStart: Int? = null,
-    val rangeEnd: Int? = null,
-    val mediaUri: String = "",
-    val mediaName: String = "",
-    val mediaMimeType: String = "",
-    val mediaSizeBytes: Long = 0,
-    val isChecked: Boolean? = null,
-    val propertyName: String = "",
-    val propertyType: String = "Text",
-    val value: String = "",
-    val moduleType: String = "",
-    val tableTitle: String = "",
-    val tableView: String = "Table",
-    val calendarDateColumnId: String = "",
-    val calendarDateColumnName: String = "",
-    val timelineStartColumnId: String = "",
-    val timelineStartColumnName: String = "",
-    val timelineEndColumnId: String = "",
-    val timelineEndColumnName: String = "",
-    val dashboardMetricColumnId: String = "",
-    val dashboardMetricColumnName: String = "",
-    val dashboardGroupColumnId: String = "",
-    val dashboardGroupColumnName: String = "",
-    val columnId: String = "",
-    val columnName: String = "",
-    val newColumnName: String = "",
-    val columnType: String = "Text",
-    val options: List<String> = emptyList(),
-    val formula: String = "",
-    val relationTargetTableId: String = "",
-    val relationTargetTableTitle: String = "",
-    val rollupRelationColumnId: String = "",
-    val rollupRelationColumnName: String = "",
-    val rollupTargetColumnId: String = "",
-    val rollupTargetColumnName: String = "",
-    val rollupAggregation: String = "",
-    val sortDirection: String = "Ascending",
-    val filterQuery: String = "",
-    val groupByColumnId: String = "",
-    val groupByColumnName: String = "",
-    val rowId: String = "",
-    val rowTitle: String = "",
-    val newRowTitle: String = "",
-    val rowBlockId: String = "",
-    val targetIndex: Int? = null,
-    val cellValues: Map<String, String> = emptyMap(),
-    val tableColumns: List<AiTableColumn> = emptyList(),
-    val tableRows: List<Map<String, String>> = emptyList(),
-    val delayMinutes: Long? = null
 )
 
 @Serializable

@@ -175,7 +175,7 @@ class ApplicationTest {
         assertEquals(HttpStatusCode.OK, response.status)
         val body = Json.decodeFromString<ChatWithActionsResponse>(response.bodyAsText())
         assertEquals("CYL_ACTION_SCHEMA", body.schemaName)
-        assertEquals(1, body.schemaVersion)
+        assertEquals(2, body.schemaVersion)
         assertTrue(body.reply.isNotBlank())
         assertEquals(emptyList(), body.actions)
         assertEquals(emptyList(), body.validationIssues)

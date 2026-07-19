@@ -1,5 +1,8 @@
 package com.changeyourlife.cyl.domain.repository
 
+import com.changeyourlife.cyl.aicontract.CYL_ACTION_SCHEMA_NAME
+import com.changeyourlife.cyl.aicontract.CYL_ACTION_SCHEMA_VERSION
+
 interface AiRepository {
     suspend fun status(): Result<AiStatus>
     suspend fun chat(messages: List<Pair<String, String>>): Result<String>
@@ -58,8 +61,8 @@ data class AiImageAttachment(
 data class ChatActionResult(
     val reply: String,
     val actions: List<ChatAction> = emptyList(),
-    val schemaName: String = "",
-    val schemaVersion: Int = 1,
+    val schemaName: String = CYL_ACTION_SCHEMA_NAME,
+    val schemaVersion: Int = CYL_ACTION_SCHEMA_VERSION,
     val validationIssues: List<ChatActionValidationIssue> = emptyList(),
     val diagnostics: AiDiagnostics = AiDiagnostics(),
 )

@@ -6,12 +6,11 @@ import com.changeyourlife.cyl.backend.model.ai.ChatWithActionsRequest
 import com.changeyourlife.cyl.backend.model.ai.ChatWithActionsResponse
 import com.changeyourlife.cyl.backend.model.ai.AiChatActionsJobAcceptedResponse
 import com.changeyourlife.cyl.backend.model.ai.AiChatActionsJobStatusResponse
-import com.changeyourlife.cyl.backend.model.ai.AiAction
-import com.changeyourlife.cyl.backend.model.ai.AiTableColumn
 import com.changeyourlife.cyl.backend.domain.AiChatActionsJob
 import com.changeyourlife.cyl.backend.domain.AiIdempotencyConflictException
 import com.changeyourlife.cyl.backend.service.AiJobService
 import com.changeyourlife.cyl.backend.service.AiService
+import com.changeyourlife.cyl.backend.service.toContractWire
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.application.call
@@ -236,85 +235,6 @@ private fun AiService.AiActionResult.toResponse(): ChatWithActionsResponse =
     ChatWithActionsResponse(
         reply = reply,
         validationIssues = validationIssues,
-        actions = actions.map { action ->
-            AiAction(
-                type = action.type,
-                title = action.title,
-                targetTitle = action.targetTitle,
-                content = action.content,
-                blockType = action.blockType,
-                blockId = action.blockId,
-                blockText = action.blockText,
-                textToFormat = action.textToFormat,
-                format = action.format,
-                linkUrl = action.linkUrl,
-                color = action.color,
-                highlight = action.highlight,
-                rangeStart = action.rangeStart,
-                rangeEnd = action.rangeEnd,
-                mediaUri = action.mediaUri,
-                mediaName = action.mediaName,
-                mediaMimeType = action.mediaMimeType,
-                mediaSizeBytes = action.mediaSizeBytes,
-                isChecked = action.isChecked,
-                propertyName = action.propertyName,
-                propertyType = action.propertyType,
-                value = action.value,
-                moduleType = action.moduleType,
-                tableTitle = action.tableTitle,
-                tableView = action.tableView,
-                calendarDateColumnId = action.calendarDateColumnId,
-                calendarDateColumnName = action.calendarDateColumnName,
-                timelineStartColumnId = action.timelineStartColumnId,
-                timelineStartColumnName = action.timelineStartColumnName,
-                timelineEndColumnId = action.timelineEndColumnId,
-                timelineEndColumnName = action.timelineEndColumnName,
-                dashboardMetricColumnId = action.dashboardMetricColumnId,
-                dashboardMetricColumnName = action.dashboardMetricColumnName,
-                dashboardGroupColumnId = action.dashboardGroupColumnId,
-                dashboardGroupColumnName = action.dashboardGroupColumnName,
-                columnId = action.columnId,
-                columnName = action.columnName,
-                newColumnName = action.newColumnName,
-                columnType = action.columnType,
-                options = action.options,
-                formula = action.formula,
-                relationTargetTableId = action.relationTargetTableId,
-                relationTargetTableTitle = action.relationTargetTableTitle,
-                rollupRelationColumnId = action.rollupRelationColumnId,
-                rollupRelationColumnName = action.rollupRelationColumnName,
-                rollupTargetColumnId = action.rollupTargetColumnId,
-                rollupTargetColumnName = action.rollupTargetColumnName,
-                rollupAggregation = action.rollupAggregation,
-                sortDirection = action.sortDirection,
-                filterQuery = action.filterQuery,
-                groupByColumnId = action.groupByColumnId,
-                groupByColumnName = action.groupByColumnName,
-                rowId = action.rowId,
-                rowTitle = action.rowTitle,
-                newRowTitle = action.newRowTitle,
-                rowBlockId = action.rowBlockId,
-                targetIndex = action.targetIndex,
-                cellValues = action.cellValues,
-                tableColumns = action.tableColumns.map { column ->
-                    AiTableColumn(
-                        name = column.name,
-                        type = column.type,
-                        options = column.options,
-                        dateFormat = column.dateFormat,
-                        timeFormat = column.timeFormat,
-                        dateReminder = column.dateReminder,
-                        timezoneLabel = column.timezoneLabel,
-                        formula = column.formula,
-                        relationTargetTableId = column.relationTargetTableId,
-                        rollupRelationColumnName = column.rollupRelationColumnName,
-                        rollupTargetColumnName = column.rollupTargetColumnName,
-                        rollupAggregation = column.rollupAggregation,
-                    )
-                },
-                tableRows = action.tableRows,
-                delayMinutes = action.delayMinutes,
-            )
-        },
+        actions = actions.map(AiService.AiActionItem::toContractWire),
         diagnostics = diagnostics,
     )

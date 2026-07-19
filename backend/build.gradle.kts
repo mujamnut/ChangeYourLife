@@ -29,6 +29,7 @@ kotlin {
 }
 
 dependencies {
+    implementation(project(":ai-action-contract"))
     implementation(libs.ktor.server.core)
     implementation(libs.ktor.server.netty)
     implementation(libs.ktor.server.content.negotiation)

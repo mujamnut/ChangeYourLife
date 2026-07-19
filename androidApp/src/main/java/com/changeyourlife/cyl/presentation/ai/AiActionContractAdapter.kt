@@ -1,46 +1,10 @@
-package com.changeyourlife.cyl.backend.service
+package com.changeyourlife.cyl.presentation.ai
 
-import com.changeyourlife.cyl.aicontract.AiActionContractSchema
 import com.changeyourlife.cyl.aicontract.AiActionWire
 import com.changeyourlife.cyl.aicontract.AiTableColumnWire
-import com.changeyourlife.cyl.backend.model.ai.AiActionValidationIssue
+import com.changeyourlife.cyl.domain.repository.ChatAction
 
-class AiActionSchemaValidator {
-    data class Result(
-        val actions: List<AiService.AiActionItem>,
-        val issues: List<AiActionValidationIssue>,
-    )
-
-    fun validate(actions: List<AiService.AiActionItem>): Result {
-        val validActions = mutableListOf<AiService.AiActionItem>()
-        val issues = mutableListOf<AiActionValidationIssue>()
-
-        actions.forEachIndexed { index, action ->
-            val result = AiActionContractSchema.parse(
-                actionIndex = index,
-                payload = action.toContractWire(),
-            )
-            issues += result.issues.map { issue ->
-                AiActionValidationIssue(
-                    // Invalid actions are omitted from the response action list. Keeping
-                    // their original index would make the client reject a different,
-                    // valid action after the list is compacted.
-                    actionIndex = null,
-                    field = issue.field,
-                    code = issue.code,
-                    message = issue.message,
-                )
-            }
-            if (result.isValid) {
-                validActions += action.copy(type = result.normalizedPayload.type)
-            }
-        }
-
-        return Result(actions = validActions, issues = issues)
-    }
-}
-
-internal fun AiService.AiActionItem.toContractWire(): AiActionWire = AiActionWire(
+internal fun ChatAction.toContractWire(): AiActionWire = AiActionWire(
     type = type,
     title = title,
     targetTitle = targetTitle,

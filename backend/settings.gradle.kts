@@ -21,3 +21,6 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "ChangeYourLifeBackend"
+
+include(":ai-action-contract")
+project(":ai-action-contract").projectDir = file("../ai-action-contract")

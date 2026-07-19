@@ -83,6 +83,7 @@ ksp {
 }
 
 dependencies {
+    implementation(project(":ai-action-contract"))
     implementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(platform(libs.androidx.compose.bom))
 

@@ -1,6 +1,11 @@
 package com.changeyourlife.cyl.data.remote.ai
 
+import com.changeyourlife.cyl.aicontract.CYL_ACTION_SCHEMA_NAME
+import com.changeyourlife.cyl.aicontract.CYL_ACTION_SCHEMA_VERSION
 import kotlinx.serialization.Serializable
+
+typealias AiActionDto = com.changeyourlife.cyl.aicontract.AiActionWire
+typealias AiTableColumnDto = com.changeyourlife.cyl.aicontract.AiTableColumnWire
 
 @Serializable
 data class ChatMessageDto(
@@ -98,87 +103,6 @@ data class AiTaskContextDto(
 )
 
 @Serializable
-data class AiTableColumnDto(
-    val name: String = "",
-    val type: String = "Text",
-    val options: List<String> = emptyList(),
-    val dateFormat: String = "",
-    val timeFormat: String = "",
-    val dateReminder: String = "",
-    val timezoneLabel: String = "",
-    val formula: String = "",
-    val relationTargetTableId: String = "",
-    val rollupRelationColumnName: String = "",
-    val rollupTargetColumnName: String = "",
-    val rollupAggregation: String = "",
-)
-
-@Serializable
-data class AiActionDto(
-    val type: String = "",
-    val title: String = "",
-    val targetTitle: String = "",
-    val content: String = "",
-    val blockType: String = "",
-    val blockId: String = "",
-    val blockText: String = "",
-    val textToFormat: String = "",
-    val format: String = "",
-    val linkUrl: String = "",
-    val color: String = "",
-    val highlight: String = "",
-    val rangeStart: Int? = null,
-    val rangeEnd: Int? = null,
-    val mediaUri: String = "",
-    val mediaName: String = "",
-    val mediaMimeType: String = "",
-    val mediaSizeBytes: Long = 0,
-    val isChecked: Boolean? = null,
-    val propertyName: String = "",
-    val propertyType: String = "Text",
-    val value: String = "",
-    val moduleType: String = "",
-    val tableTitle: String = "",
-    val tableView: String = "Table",
-    val calendarDateColumnId: String = "",
-    val calendarDateColumnName: String = "",
-    val timelineStartColumnId: String = "",
-    val timelineStartColumnName: String = "",
-    val timelineEndColumnId: String = "",
-    val timelineEndColumnName: String = "",
-    val dashboardMetricColumnId: String = "",
-    val dashboardMetricColumnName: String = "",
-    val dashboardGroupColumnId: String = "",
-    val dashboardGroupColumnName: String = "",
-    val columnId: String = "",
-    val columnName: String = "",
-    val newColumnName: String = "",
-    val columnType: String = "Text",
-    val options: List<String> = emptyList(),
-    val formula: String = "",
-    val relationTargetTableId: String = "",
-    val relationTargetTableTitle: String = "",
-    val rollupRelationColumnId: String = "",
-    val rollupRelationColumnName: String = "",
-    val rollupTargetColumnId: String = "",
-    val rollupTargetColumnName: String = "",
-    val rollupAggregation: String = "",
-    val sortDirection: String = "Ascending",
-    val filterQuery: String = "",
-    val groupByColumnId: String = "",
-    val groupByColumnName: String = "",
-    val rowId: String = "",
-    val rowTitle: String = "",
-    val newRowTitle: String = "",
-    val rowBlockId: String = "",
-    val targetIndex: Int? = null,
-    val cellValues: Map<String, String> = emptyMap(),
-    val tableColumns: List<AiTableColumnDto> = emptyList(),
-    val tableRows: List<Map<String, String>> = emptyList(),
-    val delayMinutes: Long? = null
-)
-
-@Serializable
 data class AiActionValidationIssueDto(
     val actionIndex: Int? = null,
     val field: String = "",
@@ -190,8 +114,8 @@ data class AiActionValidationIssueDto(
 data class ChatWithActionsResponseDto(
     val reply: String,
     val actions: List<AiActionDto> = emptyList(),
-    val schemaName: String = "",
-    val schemaVersion: Int = 1,
+    val schemaName: String = CYL_ACTION_SCHEMA_NAME,
+    val schemaVersion: Int = CYL_ACTION_SCHEMA_VERSION,
     val validationIssues: List<AiActionValidationIssueDto> = emptyList(),
     val diagnostics: AiDiagnosticsDto = AiDiagnosticsDto(),
 )

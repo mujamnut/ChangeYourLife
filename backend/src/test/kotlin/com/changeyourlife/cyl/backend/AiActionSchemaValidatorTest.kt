@@ -4,6 +4,7 @@ import com.changeyourlife.cyl.backend.service.AiActionSchemaValidator
 import com.changeyourlife.cyl.backend.service.AiService
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 
 class AiActionSchemaValidatorTest {
     private val validator = AiActionSchemaValidator()
@@ -143,5 +144,27 @@ class AiActionSchemaValidatorTest {
         val issue = result.issues.single()
         assertEquals("columnName,options", issue.field)
         assertEquals("unexpected_action_fields", issue.code)
+    }
+
+    @Test
+    fun invalidActionIssueCannotRejectFollowingValidActionAfterCompaction() {
+        val result = validator.validate(
+            listOf(
+                AiService.AiActionItem(
+                    type = "ADD_TABLE_ROW",
+                    tableTitle = "Budget",
+                    columnName = "Category",
+                ),
+                AiService.AiActionItem(
+                    type = "ADD_TABLE_ROW",
+                    tableTitle = "Budget",
+                    rowTitle = "Fuel",
+                    cellValues = mapOf("Amount" to "5"),
+                ),
+            ),
+        )
+
+        assertEquals(listOf("Fuel"), result.actions.map { action -> action.rowTitle })
+        assertNull(result.issues.single().actionIndex)
     }
 }
