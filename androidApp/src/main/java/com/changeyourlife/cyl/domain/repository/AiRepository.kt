@@ -4,6 +4,7 @@ interface AiRepository {
     suspend fun status(): Result<AiStatus>
     suspend fun chat(messages: List<Pair<String, String>>): Result<String>
     suspend fun chatWithActions(
+        idempotencyKey: String,
         messages: List<Pair<String, String>>,
         pages: List<AiPageContext> = emptyList(),
         tasks: List<Pair<String, String>> = emptyList(),
@@ -19,7 +20,6 @@ data class AiStatus(
     val mode: String = "",
     val provider: String = "",
     val model: String = "",
-    val apiKeyConfigured: Boolean = false,
     val visionPipelineVersion: String = "",
     val visionMaxImageDimension: Int = 0,
     val visionMaxImageBytes: Int = 0,

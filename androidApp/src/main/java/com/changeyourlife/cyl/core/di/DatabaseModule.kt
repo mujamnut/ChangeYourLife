@@ -6,6 +6,7 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.changeyourlife.cyl.data.local.CylDatabase
 import com.changeyourlife.cyl.data.local.dao.AiActionLogDao
+import com.changeyourlife.cyl.data.local.dao.AiAppliedActionDao
 import com.changeyourlife.cyl.data.local.dao.AiSkillDao
 import com.changeyourlife.cyl.data.local.dao.ChatMessageDao
 import com.changeyourlife.cyl.data.local.dao.PageDao
@@ -49,6 +50,7 @@ object DatabaseModule {
             .addMigrations(MIGRATION_14_15)
             .addMigrations(MIGRATION_15_16)
             .addMigrations(MIGRATION_16_17)
+            .addMigrations(MIGRATION_17_18)
             .build()
     }
 
@@ -90,6 +92,11 @@ object DatabaseModule {
     @Provides
     fun provideAiActionLogDao(database: CylDatabase): AiActionLogDao {
         return database.aiActionLogDao()
+    }
+
+    @Provides
+    fun provideAiAppliedActionDao(database: CylDatabase): AiAppliedActionDao {
+        return database.aiAppliedActionDao()
     }
 
     @Provides
@@ -620,6 +627,48 @@ object DatabaseModule {
             db.execSQL("ALTER TABLE `pages` ADD COLUMN `revision` INTEGER NOT NULL DEFAULT 0")
             db.execSQL(
                 "ALTER TABLE `sync_tombstones` ADD COLUMN `expectedRevision` INTEGER NOT NULL DEFAULT 0",
+            )
+        }
+    }
+
+    val MIGRATION_17_18 = object : Migration(17, 18) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `applied_ai_actions` (
+                    `idempotencyKey` TEXT NOT NULL,
+                    `requestMessageId` TEXT NOT NULL,
+                    `workspaceId` TEXT NOT NULL,
+                    `auditId` TEXT NOT NULL,
+                    `actionIndex` INTEGER NOT NULL,
+                    `actionType` TEXT NOT NULL,
+                    `actionFingerprint` TEXT NOT NULL,
+                    `state` TEXT NOT NULL,
+                    `failure` TEXT NOT NULL,
+                    `createdAt` INTEGER NOT NULL,
+                    `updatedAt` INTEGER NOT NULL,
+                    PRIMARY KEY(`idempotencyKey`)
+                )
+                """.trimIndent(),
+            )
+            db.execSQL(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS
+                    `index_applied_ai_actions_requestMessageId_actionIndex`
+                ON `applied_ai_actions` (`requestMessageId`, `actionIndex`)
+                """.trimIndent(),
+            )
+            db.execSQL(
+                """
+                CREATE INDEX IF NOT EXISTS `index_applied_ai_actions_workspaceId_updatedAt`
+                ON `applied_ai_actions` (`workspaceId`, `updatedAt`)
+                """.trimIndent(),
+            )
+            db.execSQL(
+                """
+                CREATE INDEX IF NOT EXISTS `index_applied_ai_actions_state`
+                ON `applied_ai_actions` (`state`)
+                """.trimIndent(),
             )
         }
     }

@@ -4,15 +4,23 @@ import com.changeyourlife.cyl.backend.model.ai.AiDiagnostics
 import com.changeyourlife.cyl.backend.model.ai.ChatWithActionsResponse
 
 interface AiJobRepository {
+    suspend fun claim(job: AiChatActionsJob): AiJobClaim
     suspend fun upsert(job: AiChatActionsJob): AiChatActionsJob
     suspend fun get(ownerId: String, jobId: String): AiChatActionsJob?
     suspend fun markActiveJobsInterrupted(now: Long, message: String)
     suspend fun cleanup(now: Long, ttlMillis: Long, maxRetainedJobs: Int)
 }
 
+data class AiJobClaim(
+    val job: AiChatActionsJob,
+    val isNew: Boolean,
+)
+
 data class AiChatActionsJob(
     val jobId: String,
     val ownerId: String,
+    val idempotencyKey: String,
+    val requestFingerprint: String,
     val status: AiJobStatus,
     val phase: String = AiJobPhases.Queued,
     val createdAtEpochMillis: Long,
@@ -21,6 +29,9 @@ data class AiChatActionsJob(
     val error: String = "",
     val diagnostics: AiDiagnostics = AiDiagnostics(),
 )
+
+class AiIdempotencyConflictException :
+    IllegalStateException("The idempotency key was already used with a different request.")
 
 enum class AiJobStatus(val wireValue: String) {
     Queued("queued"),

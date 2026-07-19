@@ -111,19 +111,6 @@ class AiService(
 
     val isMockMode: Boolean = activeProvider == "sandbox"
 
-    val apiKeyLength: Int = completionEndpoints.firstOrNull()?.apiKey?.length ?: 0
-
-    val apiKeyInspect: String
-        get() {
-            val endpoint = completionEndpoints.firstOrNull() ?: return "null"
-            val key = endpoint.apiKey ?: return "provider=${endpoint.provider}, key=null"
-            if (key.isBlank()) return "blank"
-            val len = key.length
-            val first = key.substring(0, minOf(5, len))
-            val last = key.substring(maxOf(0, len - 5))
-            return "provider=$activeProvider, len=$len, first='$first', last='$last'"
-        }
-
     val visionPipelineVersion: String = VisionPipelineVersion
     val visionMaxImageDimension: Int = VisionMaxImageDimension
     val visionMaxImageBytes: Int = VisionMaxImageBytes
@@ -411,8 +398,10 @@ class AiService(
 
             If the user is only chatting, asking questions, brainstorming, or planning, keep "actions" empty.
             If the user asks to create, update, delete, rename, add a row, edit a table, edit a page, or change a property, produce CYL actions.
+            Only the latest user message authorizes actions. Never repeat a mutation from an older message when the latest message is only a greeting or unrelated chat.
             Do not answer with markdown tables when the user wants data created in the app. Convert the idea into table/page actions.
-            Do not expose internal ids. Use page/table/block/row/column names from context.
+            Internal ids supplied by CYL context may be used inside action fields such as rowId, blockId, or columnId.
+            Never expose those ids in the user-visible reply.
             If CYL_WEB_CONTEXT is present, use those web results for current/live questions and cite URLs when useful.
             If CYL_WEB_CONTEXT says no reliable web result is available, say the web source could not retrieve results. Do not claim you cannot browse based only on model limitations.
 
@@ -422,13 +411,13 @@ class AiService(
             ADD_PROPERTY, UPDATE_PROPERTY, DELETE_PROPERTY,
             CREATE_DATABASE, CREATE_TABLE, RENAME_TABLE, ADD_TABLE_COLUMN, DELETE_TABLE_COLUMN,
             RENAME_TABLE_COLUMN, UPDATE_TABLE_COLUMN_TYPE, UPDATE_TABLE_COLUMN_CONFIG,
-            ADD_TABLE_ROW, UPDATE_TABLE_ROW, DELETE_TABLE_ROW, UPDATE_TABLE_CELL,
+            ADD_TABLE_ROW, UPDATE_TABLE_ROW, DELETE_TABLE_ROW, UPDATE_TABLE_CELL, CLEAR_TABLE_CELL, CLEAR_TABLE_CELLS,
             ADD_ROW_PAGE_BLOCK, UPDATE_ROW_PAGE_BLOCK, DELETE_ROW_PAGE_BLOCK,
             CHANGE_TABLE_VIEW, SET_TABLE_VIEW_CONFIG, SORT_TABLE, FILTER_TABLE, GROUP_TABLE.
 
             Main fields you may use:
             targetTitle, title, content, blockType, blockText, propertyName, propertyType, value,
-            tableTitle, tableView, columnName, newColumnName, columnType, rowTitle, newRowTitle,
+            tableTitle, tableView, columnId, columnName, newColumnName, columnType, rowId, rowTitle, newRowTitle,
             cellValues, tableColumns, tableRows, options, formula, sortDirection, filterQuery, groupByColumnName,
             textToFormat, format, linkUrl, color, highlight, rangeStart, rangeEnd.
 
@@ -440,12 +429,20 @@ class AiService(
             - Home request to create a new tracker/jadual/table/page: use CREATE_PAGE with tableTitle, tableColumns, and tableRows when useful.
             - Request inside or mentioning an existing page to create a table: use CREATE_DATABASE with targetTitle.
             - Request to add spending/expense/record to an existing budget/monthly expense page: use ADD_TABLE_ROW with tableTitle "Transactions", Category, Type, Amount, Status, Month (YYYY-MM) when known, and Date when known. Do not create a new table unless user asks for a new table/page.
-            - If a page is mentioned in CYL_MENTION_CONTEXT, treat that as the exact target page.
-            - If one current/mentioned page is clearly in context and user does not mention a page, use that page.
+            - CYL_MENTION_CONTEXT may contain either explicit page mentions or the currently open default page; follow its targeting instructions exactly.
+            - A page explicitly selected with @ overrides the currently open default page.
+            - If the visible request clearly names another page, use that exact page in targetTitle instead of forcing the action onto the current page.
+            - If several pages are explicitly selected, include the exact targetTitle on every mutation action so each action can be routed independently.
+            - If one current/mentioned page is clearly in context and the user does not name another page, use that page.
             - For date words like harini/today, use the client date.
             - For money like "29 ringgit", put the numeric value in an amount/price/cost column if such column exists or create a Number column.
             - To change one existing cell, use UPDATE_TABLE_CELL with the exact table, row, column, and value. Text and Number cells are editable data: never convert them to Select/Status or modify dropdown options unless the user explicitly asks to change the property type/options.
-            - To change several cells in one existing row, use UPDATE_TABLE_ROW with cellValues. To intentionally clear one cell, use UPDATE_TABLE_CELL with cellValues containing that column and an empty string.
+            - To intentionally clear/delete one cell value, use CLEAR_TABLE_CELL with its exact rowId/rowTitle and columnId/columnName. Do not delete the row or column.
+            - To clear every cell in one column whose current value matches a query, use CLEAR_TABLE_CELLS with tableTitle, columnId/columnName, and filterQuery. This is a bulk cell operation: do not ask for one row when the user explicitly says all/semua.
+            - CLEAR_TABLE_CELLS must only clear matching cells. It must never delete rows, delete the column, or clear values from other columns.
+            - If a value such as "bulan 4" uniquely identifies one existing cell, use its hidden rowId and columnId. If several cells match, ask which table/row instead of guessing.
+            - To change several cells in one existing row, use UPDATE_TABLE_ROW with cellValues.
+            - For update/delete/move row actions, prefer the exact rowId from CYL_SEARCH_CONTEXT when available. If the user identifies a row by another property such as Month, resolve that search result to its rowId instead of inventing a row title.
             - For table creation, infer sensible columns and rows from the user's intent instead of using fixed templates.
             - Do not set table sort, filter, group, hidden columns, or view rules when creating a page/table unless the user explicitly asks for those controls. A normal monthly expenses request should create data/schema only; user can filter/sort/group manually later.
             - For monthly expenses/budget with salary and spending data, prefer a transaction ledger plus summary:
@@ -469,6 +466,12 @@ class AiService(
 
             User: dalam row makeup ubah Notes jadi beli di kedai
             JSON: {"reply":"Siap - saya kemas kini catatan itu.","actions":[{"type":"UPDATE_TABLE_CELL","tableTitle":"Transactions","rowTitle":"makeup","columnName":"Notes","value":"beli di kedai"}]}
+
+            User: padam cell Month untuk row April
+            JSON: {"reply":"Siap - saya kosongkan cell itu.","actions":[{"type":"CLEAR_TABLE_CELL","tableTitle":"Monthly Summary","rowTitle":"April","columnName":"Month"}]}
+
+            User: delete cell yang ada bulan 4 semua dalam column Month
+            JSON: {"reply":"Siap - saya kosongkan semua cell Month yang sepadan dengan bulan 4.","actions":[{"type":"CLEAR_TABLE_CELLS","tableTitle":"Transactions","columnName":"Month","filterQuery":"bulan 4"}]}
 
             User: @Budget Tracker ubah nama table jadi Expenses
             JSON: {"reply":"Siap - saya rename table itu.","actions":[{"type":"RENAME_TABLE","targetTitle":"Budget Tracker","title":"Expenses"}]}

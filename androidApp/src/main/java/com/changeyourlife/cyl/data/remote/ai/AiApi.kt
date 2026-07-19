@@ -19,12 +19,14 @@ interface AiApi {
     @POST("ai/chat-actions")
     suspend fun chatWithActions(
         @Header("Authorization") authorization: String,
+        @Header("Idempotency-Key") idempotencyKey: String,
         @Body request: ChatWithActionsRequestDto
     ): ChatWithActionsResponseDto
 
     @POST("ai/chat-actions/jobs")
     suspend fun createChatWithActionsJob(
         @Header("Authorization") authorization: String,
+        @Header("Idempotency-Key") idempotencyKey: String,
         @Body request: ChatWithActionsRequestDto
     ): AiChatActionsJobAcceptedResponseDto
 

@@ -13,17 +13,26 @@ import com.changeyourlife.cyl.domain.model.PageTableRow
 import com.changeyourlife.cyl.domain.model.PageTableView
 import com.changeyourlife.cyl.domain.model.toTypedCellValue
 import com.changeyourlife.cyl.domain.repository.ChatAction
+import com.changeyourlife.cyl.domain.repository.AiAppliedActionClaimResult
+import com.changeyourlife.cyl.domain.repository.AiAppliedActionLedgerRepository
+import com.changeyourlife.cyl.domain.repository.AiAppliedActionRecord
+import com.changeyourlife.cyl.domain.repository.AiAppliedActionState
+import com.changeyourlife.cyl.domain.repository.NoOpAiAppliedActionLedgerRepository
 import com.changeyourlife.cyl.domain.repository.PageRepository
 import com.changeyourlife.cyl.presentation.page.PageBlockCodec
 import com.changeyourlife.cyl.presentation.page.PageModuleTemplates
 import com.changeyourlife.cyl.presentation.page.PageModuleType
 import com.changeyourlife.cyl.presentation.ai.toPageTableColumnFromAi
 import kotlinx.coroutines.flow.first
+import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
 import javax.inject.Inject
 
 class AiActionExecutionUseCase @Inject constructor(
     private val pageRepository: PageRepository,
     private val aiPageActionExecutor: AiPageActionExecutor,
+    private val appliedActionLedgerRepository: AiAppliedActionLedgerRepository =
+        NoOpAiAppliedActionLedgerRepository,
 ) {
     suspend fun execute(
         workspaceId: String,
@@ -46,8 +55,135 @@ class AiActionExecutionUseCase @Inject constructor(
         workspaceId: String,
         scopedTargetPage: Page?,
         actions: List<AiActionExecutionCandidate>,
+        idempotencyKey: String = "",
+        auditId: String = "",
     ): AiActionExecutionResult {
         if (actions.isEmpty()) return AiActionExecutionResult()
+        val requestKey = idempotencyKey.trim()
+        if (requestKey.isBlank()) {
+            return executeClaimedCandidates(
+                workspaceId = workspaceId,
+                scopedTargetPage = scopedTargetPage,
+                actions = actions,
+            )
+        }
+
+        val requestAuditId = auditId.ifBlank { "ai-action:$requestKey" }
+        val claimedActions = mutableListOf<AiActionExecutionCandidate>()
+        val replayedActionIndexes = mutableListOf<Int>()
+        val ledgerIssues = mutableListOf<ChatActionValidationMetadata>()
+        actions.forEach { candidate ->
+            val now = System.currentTimeMillis()
+            val actionKey = requestKey.toActionIdempotencyKey(candidate.originalIndex)
+            when (
+                val claim = appliedActionLedgerRepository.claim(
+                    AiAppliedActionRecord(
+                        idempotencyKey = actionKey,
+                        requestMessageId = requestKey,
+                        workspaceId = workspaceId,
+                        auditId = requestAuditId,
+                        actionIndex = candidate.originalIndex,
+                        actionType = candidate.action.type,
+                        actionFingerprint = candidate.action.ledgerFingerprint(),
+                        createdAt = now,
+                        updatedAt = now,
+                    ),
+                )
+            ) {
+                AiAppliedActionClaimResult.Acquired -> claimedActions += candidate
+                is AiAppliedActionClaimResult.Existing -> {
+                    when (claim.record.state) {
+                        AiAppliedActionState.Applied -> {
+                            replayedActionIndexes += candidate.originalIndex
+                        }
+
+                        AiAppliedActionState.Claimed -> {
+                            ledgerIssues += candidate.toLedgerIssue(
+                                code = "idempotent_action_in_progress",
+                                message = "This AI action is already claimed and will not be executed twice.",
+                            )
+                        }
+
+                        AiAppliedActionState.Rejected,
+                        AiAppliedActionState.Failed
+                        -> ledgerIssues += candidate.toLedgerIssue(
+                            code = "previous_action_${claim.record.state.wireValue.lowercase()}",
+                            message = claim.record.failure.ifBlank {
+                                "This AI action was already processed and was not applied."
+                            },
+                        )
+                    }
+                }
+                is AiAppliedActionClaimResult.Conflict -> {
+                    ledgerIssues += candidate.toLedgerIssue(
+                        code = "idempotency_conflict",
+                        message = "The idempotency key was already used for a different AI action.",
+                    )
+                }
+            }
+        }
+
+        if (claimedActions.isEmpty()) {
+            return AiActionExecutionResult(
+                validationIssues = ledgerIssues,
+                executedActionIndexes = replayedActionIndexes.distinct(),
+            )
+        }
+
+        val execution = executeClaimedCandidates(
+            workspaceId = workspaceId,
+            scopedTargetPage = scopedTargetPage,
+            actions = claimedActions,
+        )
+        val executedIndexes = execution.executedActionIndexes.toSet()
+        claimedActions.forEach { candidate ->
+            val actionKey = requestKey.toActionIdempotencyKey(candidate.originalIndex)
+            val now = System.currentTimeMillis()
+            val issue = execution.validationIssues
+                .firstOrNull { validation -> validation.actionIndex == candidate.originalIndex }
+            when {
+                candidate.originalIndex in executedIndexes -> {
+                    runCatching {
+                        appliedActionLedgerRepository.markApplied(actionKey, now)
+                    }
+                }
+                issue != null -> {
+                    runCatching {
+                        appliedActionLedgerRepository.markRejected(
+                            idempotencyKey = actionKey,
+                            reason = issue.message,
+                            updatedAt = now,
+                        )
+                    }
+                }
+                else -> {
+                    runCatching {
+                        appliedActionLedgerRepository.markFailed(
+                            idempotencyKey = actionKey,
+                            reason = execution.messages.joinToString(" | ").ifBlank {
+                                "The executor returned without applying this action."
+                            },
+                            updatedAt = now,
+                        )
+                    }
+                }
+            }
+        }
+
+        return execution.copy(
+            validationIssues = ledgerIssues + execution.validationIssues,
+            executedActionIndexes = (
+                replayedActionIndexes +
+                    execution.executedActionIndexes
+                ).distinct(),
+        )
+    }
+
+    private suspend fun executeClaimedCandidates(
+        workspaceId: String,
+        scopedTargetPage: Page?,
+        actions: List<AiActionExecutionCandidate>,
+    ): AiActionExecutionResult {
         val globalActions = actions.filter { candidate -> candidate.action.isHomeScopedAction() }
         val pageActions = actions.filterNot { candidate -> candidate.action.isHomeScopedAction() }
         val globalResult = executeHomeScopedActions(workspaceId, globalActions)
@@ -267,6 +403,35 @@ class AiActionExecutionUseCase @Inject constructor(
             )
         }
     }
+}
+
+private fun String.toActionIdempotencyKey(actionIndex: Int): String {
+    return "$this:action:$actionIndex"
+}
+
+private fun ChatAction.ledgerFingerprint(): String {
+    val canonicalAction = copy(
+        cellValues = cellValues.toSortedMap(),
+        tableRows = tableRows.map { row -> row.toSortedMap() },
+    )
+    val digest = MessageDigest.getInstance("SHA-256")
+        .digest(canonicalAction.toString().toByteArray(StandardCharsets.UTF_8))
+    return digest.joinToString("") { byte -> "%02x".format(byte) }
+}
+
+private fun AiActionExecutionCandidate.toLedgerIssue(
+    code: String,
+    message: String,
+): ChatActionValidationMetadata {
+    val trace = AiActionExecutionRegistry.trace(originalIndex, action)
+    return ChatActionValidationMetadata(
+        actionIndex = originalIndex,
+        actionType = trace.actionType,
+        actionDomain = trace.domain.id,
+        field = "idempotencyKey",
+        code = code,
+        message = message,
+    )
 }
 
 private fun AiActionExecutionCandidate.targetPageIssue(

@@ -32,16 +32,22 @@ class AiJobService(
 
     suspend fun createChatActionsJob(
         ownerId: String,
+        idempotencyKey: String,
+        requestFingerprint: String,
         diagnostics: AiDiagnostics = AiDiagnostics(),
         work: suspend (AiJobProgressSink) -> ChatWithActionsResponse,
     ): AiChatActionsJob {
+        require(idempotencyKey.isNotBlank()) { "AI job idempotencyKey must not be blank." }
+        require(requestFingerprint.isNotBlank()) { "AI job requestFingerprint must not be blank." }
         val now = currentTimeMillis()
         cleanup(now)
 
-        val job = repository.upsert(
+        val claim = repository.claim(
             AiChatActionsJob(
                 jobId = UUID.randomUUID().toString(),
                 ownerId = ownerId,
+                idempotencyKey = idempotencyKey,
+                requestFingerprint = requestFingerprint,
                 status = AiJobStatus.Queued,
                 phase = AiJobPhases.Queued,
                 createdAtEpochMillis = now,
@@ -49,6 +55,8 @@ class AiJobService(
                 diagnostics = diagnostics.copy(phase = AiJobPhases.Queued),
             ),
         )
+        val job = claim.job
+        if (!claim.isNew) return job
 
         scope.launch {
             updateJob(ownerId = ownerId, jobId = job.jobId) { existing ->

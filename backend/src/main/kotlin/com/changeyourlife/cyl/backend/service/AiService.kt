@@ -111,19 +111,6 @@ class AiService(
 
     val isMockMode: Boolean = activeProvider == "sandbox"
 
-    val apiKeyLength: Int = completionEndpoints.firstOrNull()?.apiKey?.length ?: 0
-
-    val apiKeyInspect: String
-        get() {
-            val endpoint = completionEndpoints.firstOrNull() ?: return "null"
-            val key = endpoint.apiKey ?: return "provider=${endpoint.provider}, key=null"
-            if (key.isBlank()) return "blank"
-            val len = key.length
-            val first = key.substring(0, minOf(5, len))
-            val last = key.substring(maxOf(0, len - 5))
-            return "provider=$activeProvider, len=$len, first='$first', last='$last'"
-        }
-
     val visionPipelineVersion: String = VisionPipelineVersion
     val visionMaxImageDimension: Int = VisionMaxImageDimension
     val visionMaxImageBytes: Int = VisionMaxImageBytes

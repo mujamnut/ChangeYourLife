@@ -874,6 +874,7 @@ class HomeViewModel @Inject constructor(
                         ),
                     )
                 aiRepository.chatWithActions(
+                    idempotencyKey = savedUserMessage.id,
                     messages = messagesForAi.toRoleContentPairs(),
                     pages = pageContext,
                     tasks = taskContext,
@@ -882,11 +883,13 @@ class HomeViewModel @Inject constructor(
                     webSearchQuery = requestPrompt,
                 )
                     .onSuccess { result ->
+                        val auditId = "ai-action:${savedUserMessage.id}"
                         val orchestration = AiChatActionOrchestrator.orchestrate(
                             workspaceId = workspaceId,
                             scopedTargetPage = scopedTargetPage,
                             prompt = visiblePrompt,
                             backendResult = result,
+                            auditId = auditId,
                             requestMessageId = savedUserMessage.id,
                             provider = aiStatusState.value.provider,
                             model = aiStatusState.value.model,
@@ -895,6 +898,8 @@ class HomeViewModel @Inject constructor(
                                 workspaceId = targetWorkspaceId,
                                 scopedTargetPage = targetPage,
                                 actions = actions,
+                                idempotencyKey = savedUserMessage.id,
+                                auditId = auditId,
                             )
                         }
                         val assistantMessage = chatHistoryRepository.appendMessage(

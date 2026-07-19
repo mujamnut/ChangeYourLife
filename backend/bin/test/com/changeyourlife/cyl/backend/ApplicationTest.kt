@@ -52,6 +52,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class ApplicationTest {
@@ -138,8 +139,9 @@ class ApplicationTest {
         val body = response.bodyAsText()
         assertTrue(body.contains("mode"), "Expected 'mode' key in response body: $body")
         assertTrue(body.contains("model"), "Expected 'model' key in response body: $body")
-        assertTrue(body.contains("apiKeyConfigured"), "Expected 'apiKeyConfigured' key in response body: $body")
-        assertTrue(body.contains("apiKeyLength"), "Expected 'apiKeyLength' key in response body: $body")
+        assertFalse(body.contains("apiKeyConfigured"), "Status must not expose API key metadata: $body")
+        assertFalse(body.contains("apiKeyLength"), "Status must not expose API key metadata: $body")
+        assertFalse(body.contains("apiKeyInspect"), "Status must not expose API key metadata: $body")
     }
 
     @Test

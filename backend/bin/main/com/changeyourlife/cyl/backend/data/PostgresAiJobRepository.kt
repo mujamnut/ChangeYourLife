@@ -1,6 +1,8 @@
 package com.changeyourlife.cyl.backend.data
 
 import com.changeyourlife.cyl.backend.domain.AiChatActionsJob
+import com.changeyourlife.cyl.backend.domain.AiJobClaim
+import com.changeyourlife.cyl.backend.domain.AiIdempotencyConflictException
 import com.changeyourlife.cyl.backend.domain.AiJobPhases
 import com.changeyourlife.cyl.backend.domain.AiJobRepository
 import com.changeyourlife.cyl.backend.domain.AiJobStatus
@@ -19,13 +21,15 @@ class PostgresAiJobRepository(
     private val dataSource: DataSource,
     private val json: Json = AiJobJson,
 ) : AiJobRepository {
-    override suspend fun upsert(job: AiChatActionsJob): AiChatActionsJob = withContext(Dispatchers.IO) {
+    override suspend fun claim(job: AiChatActionsJob): AiJobClaim = withContext(Dispatchers.IO) {
         dataSource.connection.use { connection ->
-            connection.prepareStatement(
+            val inserted = connection.prepareStatement(
                 """
                 INSERT INTO ai_jobs (
                     job_id,
                     user_id,
+                    idempotency_key,
+                    request_fingerprint,
                     status,
                     phase,
                     diagnostics_json,
@@ -34,7 +38,72 @@ class PostgresAiJobRepository(
                     created_at,
                     updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (user_id, idempotency_key) DO NOTHING
+                """.trimIndent(),
+            ).use { statement ->
+                statement.bind(job, json)
+                statement.executeUpdate() == 1
+            }
+            if (inserted) {
+                AiJobClaim(job = job, isNew = true)
+            } else {
+                val existing = connection.prepareStatement(
+                    """
+                    SELECT job_id,
+                           user_id,
+                           idempotency_key,
+                           request_fingerprint,
+                           status,
+                           phase,
+                           diagnostics_json,
+                           result_json,
+                           error,
+                           created_at,
+                           updated_at
+                    FROM ai_jobs
+                    WHERE user_id = ? AND idempotency_key = ?
+                    LIMIT 1
+                    """.trimIndent(),
+                ).use { statement ->
+                    statement.setString(1, job.ownerId)
+                    statement.setString(2, job.idempotencyKey)
+                    statement.executeQuery().use { resultSet ->
+                        if (resultSet.next()) resultSet.toAiChatActionsJob(json) else null
+                    }
+                }
+                val existingJob = checkNotNull(existing) {
+                    "Idempotent AI job claim conflicted but the existing job could not be loaded."
+                }
+                if (existingJob.requestFingerprint != job.requestFingerprint) {
+                    throw AiIdempotencyConflictException()
+                }
+                AiJobClaim(
+                    job = existingJob,
+                    isNew = false,
+                )
+            }
+        }
+    }
+
+    override suspend fun upsert(job: AiChatActionsJob): AiChatActionsJob = withContext(Dispatchers.IO) {
+        dataSource.connection.use { connection ->
+            connection.prepareStatement(
+                """
+                INSERT INTO ai_jobs (
+                    job_id,
+                    user_id,
+                    idempotency_key,
+                    request_fingerprint,
+                    status,
+                    phase,
+                    diagnostics_json,
+                    result_json,
+                    error,
+                    created_at,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (user_id, job_id) DO UPDATE SET
                     status = EXCLUDED.status,
                     phase = EXCLUDED.phase,
@@ -57,6 +126,8 @@ class PostgresAiJobRepository(
                 """
                 SELECT job_id,
                        user_id,
+                       idempotency_key,
+                       request_fingerprint,
                        status,
                        phase,
                        diagnostics_json,
@@ -84,6 +155,8 @@ class PostgresAiJobRepository(
                 """
                 SELECT job_id,
                        user_id,
+                       idempotency_key,
+                       request_fingerprint,
                        status,
                        phase,
                        diagnostics_json,
@@ -175,13 +248,15 @@ class PostgresAiJobRepository(
 private fun PreparedStatement.bind(job: AiChatActionsJob, json: Json) {
     setString(1, job.jobId)
     setString(2, job.ownerId)
-    setString(3, job.status.wireValue)
-    setString(4, job.phase)
-    setString(5, json.encodeToString(job.diagnostics))
-    setString(6, job.result?.let { result -> json.encodeToString(result) })
-    setString(7, job.error)
-    setLong(8, job.createdAtEpochMillis)
-    setLong(9, job.updatedAtEpochMillis)
+    setString(3, job.idempotencyKey)
+    setString(4, job.requestFingerprint)
+    setString(5, job.status.wireValue)
+    setString(6, job.phase)
+    setString(7, json.encodeToString(job.diagnostics))
+    setString(8, job.result?.let { result -> json.encodeToString(result) })
+    setString(9, job.error)
+    setLong(10, job.createdAtEpochMillis)
+    setLong(11, job.updatedAtEpochMillis)
 }
 
 private fun ResultSet.toAiChatActionsJob(json: Json): AiChatActionsJob {
@@ -190,6 +265,8 @@ private fun ResultSet.toAiChatActionsJob(json: Json): AiChatActionsJob {
     return AiChatActionsJob(
         jobId = getString("job_id"),
         ownerId = getString("user_id"),
+        idempotencyKey = getString("idempotency_key"),
+        requestFingerprint = getString("request_fingerprint"),
         status = getString("status").toAiJobStatus(),
         phase = getString("phase"),
         diagnostics = diagnosticsJson

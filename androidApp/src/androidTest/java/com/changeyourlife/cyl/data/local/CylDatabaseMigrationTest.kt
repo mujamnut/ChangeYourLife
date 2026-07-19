@@ -518,6 +518,27 @@ class CylDatabaseMigrationTest {
         database.close()
     }
 
+    @Test
+    fun migrate17To18AddsAppliedAiActionLedger() {
+        helper.createDatabase(TEST_DATABASE, 17).apply {
+            close()
+        }
+
+        val database = helper.runMigrationsAndValidate(
+            TEST_DATABASE,
+            18,
+            true,
+            DatabaseModule.MIGRATION_17_18,
+        )
+
+        assertTrue(database.tableExists("applied_ai_actions"))
+        assertTrue(database.columnExists("applied_ai_actions", "idempotencyKey"))
+        assertTrue(database.columnExists("applied_ai_actions", "actionFingerprint"))
+        assertTrue(database.columnExists("applied_ai_actions", "state"))
+
+        database.close()
+    }
+
     private fun Cursor.stringValue(columnName: String): String {
         return getString(getColumnIndexOrThrow(columnName))
     }

@@ -103,7 +103,7 @@ fun Application.module(
         webSearchService = WebSearchService(appConfig.webSearch),
     )
     environment.log.info(
-        "AI provider initialized: provider=${aiService.activeProvider}, model=${aiService.activeModel}, apiKeyConfigured=${!aiService.isMockMode}",
+        "AI provider initialized: provider=${aiService.activeProvider}, model=${aiService.activeModel}",
     )
     environment.log.info(
         "AI vision initialized: pipeline=${aiService.visionPipelineVersion}, maxDimension=${aiService.visionMaxImageDimension}, maxBytes=${aiService.visionMaxImageBytes}, lmStudioVisionModels=${aiService.lmStudioVisionModelLabel}",

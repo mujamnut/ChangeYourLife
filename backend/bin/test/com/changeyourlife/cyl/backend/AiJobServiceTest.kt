@@ -4,6 +4,7 @@ import com.changeyourlife.cyl.backend.data.InMemoryAiJobRepository
 import com.changeyourlife.cyl.backend.domain.AiChatActionsJob
 import com.changeyourlife.cyl.backend.domain.AiJobPhases
 import com.changeyourlife.cyl.backend.domain.AiJobStatus
+import com.changeyourlife.cyl.backend.domain.AiIdempotencyConflictException
 import com.changeyourlife.cyl.backend.model.ai.AiDiagnostics
 import com.changeyourlife.cyl.backend.model.ai.ChatWithActionsResponse
 import com.changeyourlife.cyl.backend.service.AiJobService
@@ -22,7 +23,11 @@ class AiJobServiceTest {
         runBlocking {
             val service = AiJobService(InMemoryAiJobRepository())
 
-            val created = service.createChatActionsJob(ownerId = "owner-a") { _ ->
+            val created = service.createChatActionsJob(
+                ownerId = "owner-a",
+                idempotencyKey = "request-completes",
+                requestFingerprint = "fingerprint-completes",
+            ) { _ ->
                 ChatWithActionsResponse(reply = "Done")
             }
 
@@ -41,7 +46,11 @@ class AiJobServiceTest {
         runBlocking {
             val service = AiJobService(InMemoryAiJobRepository())
 
-            val created = service.createChatActionsJob(ownerId = "owner-a") { _ ->
+            val created = service.createChatActionsJob(
+                ownerId = "owner-a",
+                idempotencyKey = "request-owner-scope",
+                requestFingerprint = "fingerprint-owner-scope",
+            ) { _ ->
                 ChatWithActionsResponse(reply = "Private")
             }
 
@@ -55,7 +64,11 @@ class AiJobServiceTest {
         runBlocking {
             val service = AiJobService(InMemoryAiJobRepository())
 
-            val created = service.createChatActionsJob(ownerId = "owner-a") { _ ->
+            val created = service.createChatActionsJob(
+                ownerId = "owner-a",
+                idempotencyKey = "request-failure",
+                requestFingerprint = "fingerprint-failure",
+            ) { _ ->
                 error("Provider failed")
             }
 
@@ -76,6 +89,8 @@ class AiJobServiceTest {
 
             val created = service.createChatActionsJob(
                 ownerId = "owner-a",
+                idempotencyKey = "request-progress",
+                requestFingerprint = "fingerprint-progress",
                 diagnostics = AiDiagnostics(imageCount = 1, visionAttempted = true),
             ) { progress ->
                 progress(
@@ -112,6 +127,64 @@ class AiJobServiceTest {
             }
             assertEquals(AiJobPhases.Succeeded, completed.phase)
             assertEquals("succeeded", completed.diagnostics.visionStatus)
+        }
+    }
+
+    @Test
+    fun duplicateIdempotencyKeyReturnsExistingJobAndRunsWorkOnce() {
+        runBlocking {
+            val service = AiJobService(InMemoryAiJobRepository())
+            var invocationCount = 0
+
+            val first = service.createChatActionsJob(
+                ownerId = "owner-a",
+                idempotencyKey = "request-idempotent",
+                requestFingerprint = "fingerprint-idempotent",
+            ) { _ ->
+                invocationCount += 1
+                delay(50)
+                ChatWithActionsResponse(reply = "Done")
+            }
+            val replay = service.createChatActionsJob(
+                ownerId = "owner-a",
+                idempotencyKey = "request-idempotent",
+                requestFingerprint = "fingerprint-idempotent",
+            ) { _ ->
+                invocationCount += 1
+                ChatWithActionsResponse(reply = "Duplicate")
+            }
+
+            assertEquals(first.jobId, replay.jobId)
+            service.awaitJob(ownerId = "owner-a", jobId = first.jobId) { job ->
+                job.status == AiJobStatus.Succeeded
+            }
+            assertEquals(1, invocationCount)
+        }
+    }
+
+    @Test
+    fun duplicateIdempotencyKeyRejectsDifferentRequestFingerprint() {
+        runBlocking {
+            val service = AiJobService(InMemoryAiJobRepository())
+            service.createChatActionsJob(
+                ownerId = "owner-a",
+                idempotencyKey = "request-conflict",
+                requestFingerprint = "fingerprint-a",
+            ) { _ ->
+                ChatWithActionsResponse(reply = "First")
+            }
+
+            val error = runCatching {
+                service.createChatActionsJob(
+                    ownerId = "owner-a",
+                    idempotencyKey = "request-conflict",
+                    requestFingerprint = "fingerprint-b",
+                ) { _ ->
+                    ChatWithActionsResponse(reply = "Second")
+                }
+            }.exceptionOrNull()
+
+            assertTrue(error is AiIdempotencyConflictException)
         }
     }
 

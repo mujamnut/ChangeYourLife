@@ -34,7 +34,6 @@ data class AiStatusResponseDto(
     val mode: String = "",
     val provider: String = "",
     val model: String = "",
-    val apiKeyConfigured: Boolean = false,
     val visionPipelineVersion: String = "",
     val visionMaxImageDimension: Int = 0,
     val visionMaxImageBytes: Int = 0,

@@ -58,7 +58,6 @@ class AiRepositoryImpl @Inject constructor(
                 mode = response.mode,
                 provider = response.provider,
                 model = response.model,
-                apiKeyConfigured = response.apiKeyConfigured,
                 visionPipelineVersion = response.visionPipelineVersion,
                 visionMaxImageDimension = response.visionMaxImageDimension,
                 visionMaxImageBytes = response.visionMaxImageBytes,
@@ -79,6 +78,7 @@ class AiRepositoryImpl @Inject constructor(
     }
 
     override suspend fun chatWithActions(
+        idempotencyKey: String,
         messages: List<Pair<String, String>>,
         pages: List<AiPageContext>,
         tasks: List<Pair<String, String>>,
@@ -128,7 +128,11 @@ class AiRepositoryImpl @Inject constructor(
                 webSearchEnabled = webSearchEnabled,
                 webSearchQuery = webSearchQuery,
             )
-            val response = runChatWithActionsJob(header = header, request = request)
+            val response = runChatWithActionsJob(
+                header = header,
+                idempotencyKey = idempotencyKey,
+                request = request,
+            )
             if (response.reply.isBlank() && response.actions.isEmpty() && response.validationIssues.isEmpty()) {
                 throw AiErrorMapper.emptyResponse("chatWithActions")
             }
@@ -138,13 +142,14 @@ class AiRepositoryImpl @Inject constructor(
 
     private suspend fun runChatWithActionsJob(
         header: String,
+        idempotencyKey: String,
         request: ChatWithActionsRequestDto,
     ) = withContext(Dispatchers.IO) {
         val accepted = try {
-            aiApi.createChatWithActionsJob(header, request)
+            aiApi.createChatWithActionsJob(header, idempotencyKey, request)
         } catch (error: HttpException) {
             if (error.isMissingAiJobEndpoint()) {
-                return@withContext aiApi.chatWithActions(header, request)
+                return@withContext aiApi.chatWithActions(header, idempotencyKey, request)
             }
             throw error
         }
@@ -160,7 +165,7 @@ class AiRepositoryImpl @Inject constructor(
                 aiApi.chatWithActionsJobStatus(header, jobId)
             } catch (error: HttpException) {
                 if (error.isMissingAiJobEndpoint()) {
-                    return@withContext aiApi.chatWithActions(header, request)
+                    return@withContext aiApi.chatWithActions(header, idempotencyKey, request)
                 }
                 throw error
             }

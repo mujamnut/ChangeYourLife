@@ -2,6 +2,7 @@ package com.changeyourlife.cyl.core.di
 
 import com.changeyourlife.cyl.data.repository.AuthRepositoryImpl
 import com.changeyourlife.cyl.data.repository.AiActionLogRepositoryImpl
+import com.changeyourlife.cyl.data.repository.AiAppliedActionLedgerRepositoryImpl
 import com.changeyourlife.cyl.data.repository.ChatHistoryRepositoryImpl
 import com.changeyourlife.cyl.data.repository.PageRepositoryImpl
 import com.changeyourlife.cyl.data.repository.ReminderRepositoryImpl
@@ -17,6 +18,7 @@ import com.changeyourlife.cyl.data.sync.BackgroundChatSyncScheduler
 import com.changeyourlife.cyl.data.sync.ChatSyncScheduler
 import com.changeyourlife.cyl.domain.repository.AuthRepository
 import com.changeyourlife.cyl.domain.repository.AiActionLogRepository
+import com.changeyourlife.cyl.domain.repository.AiAppliedActionLedgerRepository
 import com.changeyourlife.cyl.domain.repository.ChatHistoryRepository
 import com.changeyourlife.cyl.domain.repository.PageRepository
 import com.changeyourlife.cyl.domain.repository.ReminderRepository
@@ -106,6 +108,12 @@ abstract class RepositoryModule {
     abstract fun bindAiActionLogRepository(
         implementation: AiActionLogRepositoryImpl,
     ): AiActionLogRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindAiAppliedActionLedgerRepository(
+        implementation: AiAppliedActionLedgerRepositoryImpl,
+    ): AiAppliedActionLedgerRepository
 
     @Binds
     @Singleton

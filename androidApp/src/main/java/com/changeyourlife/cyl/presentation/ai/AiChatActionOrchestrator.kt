@@ -164,6 +164,16 @@ private fun List<ChatActionValidationMetadata>.toUserVisibleMessages(
                 } else {
                     "That action is not supported yet."
                 }
+                "idempotent_action_in_progress" -> if (useMalay) {
+                    "Tindakan yang sama sedang diproses atau pernah terhenti. Ia tidak akan dijalankan dua kali."
+                } else {
+                    "The same action is processing or was interrupted. It will not run twice."
+                }
+                "idempotency_conflict" -> if (useMalay) {
+                    "Permintaan itu bercanggah dengan tindakan yang sudah direkodkan."
+                } else {
+                    "That request conflicts with an action that was already recorded."
+                }
                 "required", "missing_required_action_fields", "missing_required_field" ->
                     issue.field.missingRequiredMessage(useMalay)
                 else -> if (useMalay) {
