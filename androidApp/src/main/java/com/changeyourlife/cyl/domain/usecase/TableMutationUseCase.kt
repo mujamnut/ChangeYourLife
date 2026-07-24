@@ -443,6 +443,34 @@ class TableMutationUseCase(
         )
     }
 
+    fun updateRows(
+        document: PageBlockDocument,
+        tableBlockId: String,
+        rowIds: Set<String>,
+        valuesByColumnId: Map<String, String>,
+    ): TableMutationResult = replaceTable(document, tableBlockId) { table ->
+        if (rowIds.isEmpty() || valuesByColumnId.isEmpty()) return@replaceTable table
+        val columnsById = table.columns.associateBy(PageTableColumn::id)
+        table.copy(
+            rows = table.rows.map { row ->
+                if (row.id !in rowIds) return@map row
+                valuesByColumnId.entries.fold(row) { currentRow, (columnId, rawValue) ->
+                    val column = columnsById[columnId] ?: return@fold currentRow
+                    if (column.type == PageTableColumnType.Formula || column.type == PageTableColumnType.Rollup) {
+                        return@fold currentRow
+                    }
+                    val nextValue = column.type.coerceManualCellValue(rawValue)
+                    currentRow.copy(
+                        cells = currentRow.cells + (columnId to nextValue),
+                        cellValues = currentRow.cellValues + (
+                            columnId to column.toTypedCellValue(nextValue)
+                            ),
+                    )
+                }
+            },
+        )
+    }
+
     fun updateCells(
         document: PageBlockDocument,
         tableBlockId: String,
@@ -627,12 +655,62 @@ class TableMutationUseCase(
         )
     }
 
+    fun duplicateRow(
+        document: PageBlockDocument,
+        tableBlockId: String,
+        sourceRowId: String,
+        targetIndex: Int? = null,
+    ): DuplicateTableRowMutationResult {
+        var duplicatedRow: PageTableRow? = null
+        var insertIndex: Int? = null
+        val mutation = replaceTable(document, tableBlockId) { table ->
+            val sourceIndex = table.rows.indexOfFirst { row -> row.id == sourceRowId }
+            val source = table.rows.getOrNull(sourceIndex) ?: return@replaceTable table
+            insertIndex = targetIndex?.coerceIn(0, table.rows.size) ?: (sourceIndex + 1)
+            val now = System.currentTimeMillis()
+            val duplicate = source.copy(
+                id = UUID.randomUUID().toString(),
+                cellValues = source.cellValues.mapValues { (_, value) ->
+                    value.copy(
+                        files = value.files.map { file ->
+                            file.copy(id = UUID.randomUUID().toString())
+                        },
+                    )
+                },
+                metadata = source.metadata.copy(
+                    createdAt = now,
+                    lastEditedAt = now,
+                ),
+                blocks = source.blocks.map { block -> block.duplicatedForImportedTableRow() },
+            )
+            duplicatedRow = duplicate
+            table.copy(
+                rows = table.rows.toMutableList().apply {
+                    add(requireNotNull(insertIndex), duplicate)
+                },
+            )
+        }
+        return DuplicateTableRowMutationResult(
+            mutation = mutation,
+            row = duplicatedRow,
+            insertIndex = insertIndex,
+        )
+    }
+
     fun deleteRow(
         document: PageBlockDocument,
         tableBlockId: String,
         rowId: String,
     ): TableMutationResult = replaceTable(document, tableBlockId) { table ->
         table.copy(rows = table.rows.filterNot { row -> row.id == rowId })
+    }
+
+    fun deleteRows(
+        document: PageBlockDocument,
+        tableBlockId: String,
+        rowIds: Set<String>,
+    ): TableMutationResult = replaceTable(document, tableBlockId) { table ->
+        if (rowIds.isEmpty()) table else table.copy(rows = table.rows.filterNot { row -> row.id in rowIds })
     }
 
     fun moveRow(
@@ -829,6 +907,18 @@ data class DuplicateTableColumnMutationResult(
     val column: PageTableColumn,
     val insertIndex: Int?,
     val cellValues: Map<String, String>,
+) {
+    val document: PageBlockDocument
+        get() = mutation.document
+
+    val changed: Boolean
+        get() = mutation.changed
+}
+
+data class DuplicateTableRowMutationResult(
+    val mutation: TableMutationResult,
+    val row: PageTableRow?,
+    val insertIndex: Int?,
 ) {
     val document: PageBlockDocument
         get() = mutation.document

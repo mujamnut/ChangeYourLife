@@ -3,7 +3,7 @@ package com.changeyourlife.cyl.aicontract
 import kotlinx.serialization.Serializable
 
 const val CYL_ACTION_SCHEMA_NAME = "CYL_ACTION_SCHEMA"
-const val CYL_ACTION_SCHEMA_VERSION = 2
+const val CYL_ACTION_SCHEMA_VERSION = 3
 
 @Serializable
 data class AiTableColumnWire(
@@ -47,8 +47,16 @@ data class AiActionWire(
     val mediaSizeBytes: Long = 0,
     val isChecked: Boolean? = null,
     val propertyName: String = "",
+    val newPropertyName: String = "",
     val propertyType: String = "Text",
     val value: String = "",
+    val moveDirection: String = "",
+    val parentPageId: String = "",
+    val parentPageTitle: String = "",
+    val sourcePageId: String = "",
+    val sourcePageTitle: String = "",
+    val sourceTableBlockId: String = "",
+    val sourceTableTitle: String = "",
     val moduleType: String = "",
     val tableTitle: String = "",
     val tableView: String = "Table",
@@ -80,6 +88,7 @@ data class AiActionWire(
     val groupByColumnId: String = "",
     val groupByColumnName: String = "",
     val rowId: String = "",
+    val rowIds: List<String> = emptyList(),
     val rowTitle: String = "",
     val newRowTitle: String = "",
     val rowBlockId: String = "",
@@ -119,6 +128,8 @@ sealed interface CylAiAction {
         val tableColumns: List<AiTableColumnWire>,
         val tableRows: List<Map<String, String>>,
         val targetIndex: Int?,
+        val parentPageId: String,
+        val parentPageTitle: String,
     ) : CylAiAction {
         override val domain = AiActionDomain.Page
     }
@@ -149,6 +160,7 @@ sealed interface CylAiAction {
         val tableColumns: List<AiTableColumnWire>,
         val tableRows: List<Map<String, String>>,
         val targetIndex: Int?,
+        val moveDirection: String,
     ) : CylAiAction {
         override val domain = AiActionDomain.Block
     }
@@ -158,6 +170,7 @@ sealed interface CylAiAction {
         override val targetTitle: String,
         val title: String,
         val propertyName: String,
+        val newPropertyName: String,
         val propertyType: String,
         val value: String,
         val content: String,
@@ -196,6 +209,10 @@ sealed interface CylAiAction {
         val filterQuery: String,
         val groupByColumnId: String,
         val groupByColumnName: String,
+        val sourcePageId: String,
+        val sourcePageTitle: String,
+        val sourceTableBlockId: String,
+        val sourceTableTitle: String,
     ) : CylAiAction {
         override val domain = AiActionDomain.Database
     }
@@ -233,6 +250,7 @@ sealed interface CylAiAction {
         val tableTitle: String,
         val title: String,
         val rowId: String,
+        val rowIds: List<String>,
         val rowTitle: String,
         val newRowTitle: String,
         val value: String,
@@ -250,6 +268,7 @@ sealed interface CylAiAction {
         val tableTitle: String,
         val title: String,
         val rowId: String,
+        val rowIds: List<String>,
         val rowTitle: String,
         val rowBlockId: String,
         val content: String,
@@ -272,6 +291,7 @@ sealed interface CylAiAction {
         val tableTitle: String,
         val title: String,
         val rowId: String,
+        val rowIds: List<String>,
         val rowTitle: String,
         val columnId: String,
         val columnName: String,
@@ -309,6 +329,8 @@ sealed interface CylAiAction {
         val rowId: String,
         val rowTitle: String,
         val newRowTitle: String,
+        val columnId: String,
+        val columnName: String,
         val content: String,
         val value: String,
         val cellValues: Map<String, String>,
@@ -359,6 +381,21 @@ object AiActionContractSchema {
             allowedFields = PageTarget + TableShape + setOf("title", "content", "moduleType", "targetIndex"),
         ),
         ContractSpec(
+            domain = AiActionDomain.Page,
+            types = setOf("MOVE_PAGE"),
+            allowedFields = PageTarget + setOf("parentPageId", "parentPageTitle"),
+        ),
+        ContractSpec(
+            domain = AiActionDomain.Page,
+            types = setOf("DUPLICATE_PAGE"),
+            allowedFields = PageTarget + setOf("title"),
+        ),
+        ContractSpec(
+            domain = AiActionDomain.Page,
+            types = setOf("TRASH_PAGE", "RESTORE_PAGE", "DELETE_PAGE_PERMANENTLY"),
+            allowedFields = PageTarget,
+        ),
+        ContractSpec(
             domain = AiActionDomain.Block,
             types = setOf("APPEND_BLOCK", "APPEND_PAGE_BLOCK", "ADD_BLOCK"),
             allowedFields = PageTarget + BlockPayload + TableShape + setOf("targetIndex"),
@@ -372,6 +409,16 @@ object AiActionContractSchema {
             domain = AiActionDomain.Block,
             types = setOf("DELETE_BLOCK", "UPDATE_BLOCK", "EDIT_BLOCK", "UPDATE_TODO", "CHECK_BLOCK", "UNCHECK_BLOCK"),
             allowedFields = PageTarget + BlockTargetFields + BlockPayload + setOf("value"),
+        ),
+        ContractSpec(
+            domain = AiActionDomain.Block,
+            types = setOf("MOVE_BLOCK"),
+            allowedFields = PageTarget + BlockTargetFields + setOf("targetIndex", "moveDirection"),
+        ),
+        ContractSpec(
+            domain = AiActionDomain.Block,
+            types = setOf("INDENT_BLOCK", "OUTDENT_BLOCK", "DUPLICATE_BLOCK"),
+            allowedFields = PageTarget + BlockTargetFields + setOf("targetIndex"),
         ),
         ContractSpec(
             domain = AiActionDomain.Block,
@@ -393,6 +440,16 @@ object AiActionContractSchema {
             allowedFields = PageTarget + setOf("title", "propertyName", "propertyType", "value", "content", "targetIndex"),
         ),
         ContractSpec(
+            domain = AiActionDomain.Property,
+            types = setOf("RENAME_PROPERTY", "DUPLICATE_PROPERTY"),
+            allowedFields = PageTarget + setOf("title", "propertyName", "newPropertyName", "targetIndex"),
+        ),
+        ContractSpec(
+            domain = AiActionDomain.Property,
+            types = setOf("MOVE_PROPERTY"),
+            allowedFields = PageTarget + setOf("title", "propertyName", "targetIndex"),
+        ),
+        ContractSpec(
             domain = AiActionDomain.Database,
             types = setOf("CREATE_DATABASE", "CREATE_TABLE"),
             allowedFields = PageTarget + TableShape + setOf("title", "content", "moduleType", "targetIndex"),
@@ -401,6 +458,26 @@ object AiActionContractSchema {
             domain = AiActionDomain.Database,
             types = setOf("RENAME_TABLE", "RENAME_DATABASE", "UPDATE_TABLE_TITLE"),
             allowedFields = TableTarget + setOf("title", "value", "content", "newColumnName"),
+        ),
+        ContractSpec(
+            domain = AiActionDomain.Database,
+            types = setOf("DUPLICATE_DATABASE"),
+            allowedFields = TableTarget + setOf("title", "targetIndex"),
+        ),
+        ContractSpec(
+            domain = AiActionDomain.Database,
+            types = setOf("ATTACH_TABLE_DATA_SOURCE"),
+            allowedFields = TableTarget + setOf(
+                "sourcePageId",
+                "sourcePageTitle",
+                "sourceTableBlockId",
+                "sourceTableTitle",
+            ),
+        ),
+        ContractSpec(
+            domain = AiActionDomain.Database,
+            types = setOf("CLEAR_TABLE_DATA_SOURCE"),
+            allowedFields = TableTarget,
         ),
         ContractSpec(
             domain = AiActionDomain.Column,
@@ -419,6 +496,7 @@ object AiActionContractSchema {
                 "UPDATE_ROLLUP_COLUMN",
                 "REORDER_TABLE_COLUMN",
                 "MOVE_TABLE_COLUMN",
+                "DUPLICATE_TABLE_COLUMN",
             ),
             allowedFields = TableTarget + ColumnTarget + ColumnConfig + setOf(
                 "title",
@@ -438,8 +516,23 @@ object AiActionContractSchema {
                 "RENAME_TABLE_ROW",
                 "REORDER_TABLE_ROW",
                 "MOVE_TABLE_ROW",
+                "DUPLICATE_TABLE_ROW",
+                "DELETE_TABLE_ROWS",
+                "UPDATE_TABLE_ROWS",
             ),
-            allowedFields = TableTarget + RowTarget + setOf("title", "value", "content", "cellValues", "tableRows", "targetIndex"),
+            allowedFields = TableTarget + RowTarget + setOf(
+                "title",
+                "value",
+                "content",
+                "cellValues",
+                "tableRows",
+                "targetIndex",
+                "rowIds",
+                "columnId",
+                "columnName",
+                "propertyName",
+                "filterQuery",
+            ),
         ),
         ContractSpec(
             domain = AiActionDomain.RowContent,
@@ -511,8 +604,15 @@ object AiActionContractSchema {
         ),
         ContractSpec(
             domain = AiActionDomain.Reminder,
-            types = setOf("CREATE_REMINDER"),
-            allowedFields = TableTarget + RowTarget + setOf("title", "content", "value", "cellValues", "delayMinutes", "targetIndex"),
+            types = setOf("CREATE_REMINDER", "CANCEL_REMINDER", "RESCHEDULE_REMINDER", "COMPLETE_REMINDER"),
+            allowedFields = TableTarget + RowTarget + ColumnTarget + setOf(
+                "title",
+                "content",
+                "value",
+                "cellValues",
+                "delayMinutes",
+                "targetIndex",
+            ),
         ),
     )
 
@@ -640,6 +740,8 @@ private fun AiActionDomain.toAction(payload: AiActionWire): CylAiAction = when (
         tableColumns = payload.tableColumns,
         tableRows = payload.tableRows,
         targetIndex = payload.targetIndex,
+        parentPageId = payload.parentPageId,
+        parentPageTitle = payload.parentPageTitle,
     )
     AiActionDomain.Block -> CylAiAction.Block(
         type = payload.type,
@@ -667,12 +769,14 @@ private fun AiActionDomain.toAction(payload: AiActionWire): CylAiAction = when (
         tableColumns = payload.tableColumns,
         tableRows = payload.tableRows,
         targetIndex = payload.targetIndex,
+        moveDirection = payload.moveDirection,
     )
     AiActionDomain.Property -> CylAiAction.Property(
         type = payload.type,
         targetTitle = payload.targetTitle,
         title = payload.title,
         propertyName = payload.propertyName,
+        newPropertyName = payload.newPropertyName,
         propertyType = payload.propertyType,
         value = payload.value,
         content = payload.content,
@@ -708,6 +812,10 @@ private fun AiActionDomain.toAction(payload: AiActionWire): CylAiAction = when (
         filterQuery = payload.filterQuery,
         groupByColumnId = payload.groupByColumnId,
         groupByColumnName = payload.groupByColumnName,
+        sourcePageId = payload.sourcePageId,
+        sourcePageTitle = payload.sourcePageTitle,
+        sourceTableBlockId = payload.sourceTableBlockId,
+        sourceTableTitle = payload.sourceTableTitle,
     )
     AiActionDomain.Column -> CylAiAction.Column(
         type = payload.type,
@@ -739,6 +847,7 @@ private fun AiActionDomain.toAction(payload: AiActionWire): CylAiAction = when (
         tableTitle = payload.tableTitle,
         title = payload.title,
         rowId = payload.rowId,
+        rowIds = payload.rowIds,
         rowTitle = payload.rowTitle,
         newRowTitle = payload.newRowTitle,
         value = payload.value,
@@ -753,6 +862,7 @@ private fun AiActionDomain.toAction(payload: AiActionWire): CylAiAction = when (
         tableTitle = payload.tableTitle,
         title = payload.title,
         rowId = payload.rowId,
+        rowIds = payload.rowIds,
         rowTitle = payload.rowTitle,
         rowBlockId = payload.rowBlockId,
         content = payload.content,
@@ -772,6 +882,7 @@ private fun AiActionDomain.toAction(payload: AiActionWire): CylAiAction = when (
         tableTitle = payload.tableTitle,
         title = payload.title,
         rowId = payload.rowId,
+        rowIds = payload.rowIds,
         rowTitle = payload.rowTitle,
         columnId = payload.columnId,
         columnName = payload.columnName,
@@ -803,6 +914,8 @@ private fun AiActionDomain.toAction(payload: AiActionWire): CylAiAction = when (
         rowId = payload.rowId,
         rowTitle = payload.rowTitle,
         newRowTitle = payload.newRowTitle,
+        columnId = payload.columnId,
+        columnName = payload.columnName,
         content = payload.content,
         value = payload.value,
         cellValues = payload.cellValues,
@@ -832,6 +945,12 @@ private fun AiActionWire.requiredFieldIssues(actionIndex: Int?): List<AiActionCo
                 moduleType,
             )
 
+        "MOVE_PAGE" -> {
+            if (parentPageId.isBlank() && parentPageTitle.isBlank()) {
+                // A blank parent explicitly means move the page to workspace root.
+            }
+        }
+
         "APPEND_BLOCK", "APPEND_PAGE_BLOCK", "ADD_BLOCK" -> {
             val normalizedBlockType = AiActionContractSchema.normalizeType(blockType)
             when {
@@ -850,6 +969,13 @@ private fun AiActionWire.requiredFieldIssues(actionIndex: Int?): List<AiActionCo
             }
         }
 
+        "MOVE_BLOCK", "INDENT_BLOCK", "OUTDENT_BLOCK", "DUPLICATE_BLOCK" -> {
+            requireAny("blockId", "$type needs blockId, blockText, content, or title.", blockId, blockText, content, title)
+            if (type == "MOVE_BLOCK" && targetIndex == null && moveDirection.isBlank()) {
+                add(missingField(actionIndex, "targetIndex|moveDirection", "Move block needs targetIndex or moveDirection."))
+            }
+        }
+
         "FORMAT_BLOCK_TEXT" -> {
             requireAny("blockId", "Format text action needs blockId, blockText, content, or title.", blockId, blockText, content, title)
             if (textToFormat.isBlank() && value.isBlank() && content.isBlank() && rangeStart == null && rangeEnd == null) {
@@ -861,11 +987,32 @@ private fun AiActionWire.requiredFieldIssues(actionIndex: Int?): List<AiActionCo
         "ADD_PROPERTY", "UPDATE_PROPERTY", "DELETE_PROPERTY" ->
             requireAny("propertyName", "Property action needs propertyName or title.", propertyName, title)
 
+        "RENAME_PROPERTY" -> {
+            requireAny("propertyName", "Rename property needs propertyName or title.", propertyName, title)
+            requireAny("newPropertyName", "Rename property needs newPropertyName, value, or content.", newPropertyName, value, content)
+        }
+
+        "MOVE_PROPERTY" -> {
+            requireAny("propertyName", "Move property needs propertyName or title.", propertyName, title)
+            if (targetIndex == null) add(missingField(actionIndex, "targetIndex", "Move property needs targetIndex."))
+        }
+
+        "DUPLICATE_PROPERTY" ->
+            requireAny("propertyName", "Duplicate property needs propertyName or title.", propertyName, title)
+
         "CREATE_DATABASE", "CREATE_TABLE" ->
             requireAny("tableTitle", "Create table action needs tableTitle, title, or content.", tableTitle, title, content)
 
         "RENAME_TABLE", "RENAME_DATABASE", "UPDATE_TABLE_TITLE" ->
             requireAny("title", "Rename table action needs a new title.", title, value, content, newColumnName)
+
+        "ATTACH_TABLE_DATA_SOURCE" ->
+            requireAny(
+                "sourcePageId",
+                "Attach data source needs sourcePageId or sourcePageTitle.",
+                sourcePageId,
+                sourcePageTitle,
+            )
 
         "ADD_TABLE_COLUMN",
         "DELETE_TABLE_COLUMN",
@@ -881,6 +1028,7 @@ private fun AiActionWire.requiredFieldIssues(actionIndex: Int?): List<AiActionCo
         "UPDATE_ROLLUP_COLUMN",
         "REORDER_TABLE_COLUMN",
         "MOVE_TABLE_COLUMN",
+        "DUPLICATE_TABLE_COLUMN",
         -> {
             requireAny("columnName", "Column action needs columnId, columnName, propertyName, or title.", columnId, columnName, propertyName, title)
             if (type in setOf("RENAME_TABLE_COLUMN", "UPDATE_TABLE_COLUMN")) {
@@ -915,6 +1063,27 @@ private fun AiActionWire.requiredFieldIssues(actionIndex: Int?): List<AiActionCo
         "REORDER_TABLE_ROW", "MOVE_TABLE_ROW" -> {
             requireAny("rowTitle", "Move row action needs rowId, rowTitle, or title.", rowId, rowTitle, title)
             if (targetIndex == null) add(missingField(actionIndex, "targetIndex", "Move row action needs targetIndex."))
+        }
+
+        "DUPLICATE_TABLE_ROW" ->
+            requireAny("rowTitle", "Duplicate row needs rowId, rowTitle, or title.", rowId, rowTitle, title)
+
+        "DELETE_TABLE_ROWS", "UPDATE_TABLE_ROWS" -> {
+            val hasExplicitRows = rowIds.any(String::isNotBlank)
+            val hasCondition = filterQuery.isNotBlank() &&
+                listOf(columnId, columnName, propertyName).any(String::isNotBlank)
+            if (!hasExplicitRows && !hasCondition) {
+                add(
+                    missingField(
+                        actionIndex,
+                        "rowIds|column+filterQuery",
+                        "$type needs explicit rowIds or a column and filterQuery condition.",
+                    ),
+                )
+            }
+            if (type == "UPDATE_TABLE_ROWS" && cellValues.isEmpty()) {
+                add(missingField(actionIndex, "cellValues", "Bulk row update needs cellValues."))
+            }
         }
 
         "ADD_ROW_PAGE_BLOCK",
@@ -967,10 +1136,10 @@ private fun AiActionWire.requiredFieldIssues(actionIndex: Int?): List<AiActionCo
                 cellValues.taskLikeValue(),
             )
 
-        "CREATE_REMINDER" -> {
+        "CREATE_REMINDER", "RESCHEDULE_REMINDER" -> {
             requireAny(
                 "title",
-                "Create reminder action needs title, rowTitle, content, value, or a task cell value.",
+                "$type needs title, rowTitle, content, value, or a task cell value.",
                 title,
                 rowTitle,
                 content,
@@ -985,7 +1154,7 @@ private fun AiActionWire.requiredFieldIssues(actionIndex: Int?): List<AiActionCo
                     missingField(
                         actionIndex = actionIndex,
                         field = "delayMinutes|cellValues.date",
-                        message = "Create reminder action needs a positive delayMinutes or a date/time value in cellValues.",
+                        message = "$type needs a positive delayMinutes or a date/time value in cellValues.",
                     ),
                 )
             } else if (delayMinutes != null && delayMinutes <= 0) {
@@ -999,6 +1168,9 @@ private fun AiActionWire.requiredFieldIssues(actionIndex: Int?): List<AiActionCo
                 )
             }
         }
+
+        "CANCEL_REMINDER", "COMPLETE_REMINDER" ->
+            requireAny("rowTitle", "$type needs rowId, rowTitle, or title.", rowId, rowTitle, title)
     }
 }
 
@@ -1038,8 +1210,16 @@ private fun AiActionWire.presentFields(): Set<String> = buildSet {
     if (mediaSizeBytes > 0) add("mediaSizeBytes")
     if (isChecked != null) add("isChecked")
     if (propertyName.isNotBlank()) add("propertyName")
+    if (newPropertyName.isNotBlank()) add("newPropertyName")
     if (propertyType.isNotBlank() && propertyType != "Text") add("propertyType")
     if (value.isNotBlank()) add("value")
+    if (moveDirection.isNotBlank()) add("moveDirection")
+    if (parentPageId.isNotBlank()) add("parentPageId")
+    if (parentPageTitle.isNotBlank()) add("parentPageTitle")
+    if (sourcePageId.isNotBlank()) add("sourcePageId")
+    if (sourcePageTitle.isNotBlank()) add("sourcePageTitle")
+    if (sourceTableBlockId.isNotBlank()) add("sourceTableBlockId")
+    if (sourceTableTitle.isNotBlank()) add("sourceTableTitle")
     if (moduleType.isNotBlank()) add("moduleType")
     if (tableTitle.isNotBlank()) add("tableTitle")
     if (tableView.isNotBlank() && tableView != "Table") add("tableView")
@@ -1071,6 +1251,7 @@ private fun AiActionWire.presentFields(): Set<String> = buildSet {
     if (groupByColumnId.isNotBlank()) add("groupByColumnId")
     if (groupByColumnName.isNotBlank()) add("groupByColumnName")
     if (rowId.isNotBlank()) add("rowId")
+    if (rowIds.isNotEmpty()) add("rowIds")
     if (rowTitle.isNotBlank()) add("rowTitle")
     if (newRowTitle.isNotBlank()) add("newRowTitle")
     if (rowBlockId.isNotBlank()) add("rowBlockId")

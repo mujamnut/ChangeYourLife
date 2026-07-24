@@ -57,6 +57,11 @@ sealed interface EditorCommand {
         val property: PageProperty,
     ) : EditorCommand
 
+    data class MoveProperty(
+        val propertyId: String,
+        val targetIndex: Int,
+    ) : EditorCommand
+
     data class DeleteProperty(
         val propertyId: String,
     ) : EditorCommand
@@ -85,6 +90,7 @@ object EditorCommandExecutor {
             is EditorCommand.ReplaceTable -> document.replaceTable(command)
             is EditorCommand.InsertProperty -> document.insertProperty(command)
             is EditorCommand.ReplaceProperty -> document.replaceProperty(command)
+            is EditorCommand.MoveProperty -> document.moveProperty(command)
             is EditorCommand.DeleteProperty -> document.deleteProperty(command)
         }
     }
@@ -356,6 +362,26 @@ object EditorCommandExecutor {
             undoCommand = EditorCommand.InsertProperty(
                 property = existing,
                 index = index,
+            ),
+            changed = true,
+        )
+    }
+
+    private fun PageBlockDocument.moveProperty(
+        command: EditorCommand.MoveProperty,
+    ): EditorCommandResult {
+        val currentIndex = properties.indexOfFirst { property -> property.id == command.propertyId }
+        if (currentIndex == -1) return unchanged()
+        val mutableProperties = properties.toMutableList()
+        val property = mutableProperties.removeAt(currentIndex)
+        val nextIndex = command.targetIndex.coerceIn(0, mutableProperties.size)
+        if (currentIndex == nextIndex) return unchanged()
+        mutableProperties.add(nextIndex, property)
+        return EditorCommandResult(
+            document = copy(properties = mutableProperties),
+            undoCommand = EditorCommand.MoveProperty(
+                propertyId = command.propertyId,
+                targetIndex = currentIndex,
             ),
             changed = true,
         )

@@ -8,11 +8,11 @@ import kotlin.test.assertTrue
 import org.junit.runner.RunWith
 import org.junit.runners.Parameterized
 
-private const val ExpectedActionCount = 73
+private const val ExpectedActionCount = 95
 
 class AiActionContractRegressionInvariantTest {
     @Test
-    fun fixtureRegistryCoversExactlyAll73SharedActions() {
+    fun fixtureRegistryCoversExactlyAllSharedActions() {
         assertEquals(ExpectedActionCount, AiActionContractSchema.supportedTypes.size)
         assertEquals(
             AiActionContractSchema.supportedTypes,
@@ -99,17 +99,13 @@ private object AiActionRegressionFixtures {
         payload: AiActionWire,
         domain: AiActionDomain,
     ): AiActionWire = when (domain) {
-        AiActionDomain.Page,
-        AiActionDomain.Block,
-        AiActionDomain.Property,
-        AiActionDomain.Database,
-        AiActionDomain.Column,
-        -> payload.copy(rowId = "cross-domain-row")
-
-        AiActionDomain.Row,
-        AiActionDomain.RowContent,
-        -> payload.copy(columnId = "cross-domain-column")
-
+        AiActionDomain.Page -> payload.copy(rowBlockId = "cross-domain-row-block")
+        AiActionDomain.Block -> payload.copy(sourcePageId = "cross-domain-source-page")
+        AiActionDomain.Property -> payload.copy(blockId = "cross-domain-block")
+        AiActionDomain.Database -> payload.copy(rowBlockId = "cross-domain-row-block")
+        AiActionDomain.Column -> payload.copy(rowBlockId = "cross-domain-row-block")
+        AiActionDomain.Row -> payload.copy(blockId = "cross-domain-block")
+        AiActionDomain.RowContent -> payload.copy(sourcePageId = "cross-domain-source-page")
         AiActionDomain.Cell,
         AiActionDomain.Task,
         AiActionDomain.Reminder,
@@ -121,12 +117,18 @@ private object AiActionRegressionFixtures {
         "UPDATE_PAGE" -> pageTarget(type).copy(content = "Updated page content")
         "CREATE_PAGE" -> AiActionWire(type = type, title = "Created page", content = "Page content")
         "CREATE_SUBPAGE" -> pageTarget(type).copy(title = "Created subpage", content = "Subpage content")
+        "MOVE_PAGE" -> pageTarget(type).copy(parentPageTitle = "Archive")
+        "DUPLICATE_PAGE" -> pageTarget(type).copy(title = "Budget copy")
+        "TRASH_PAGE", "RESTORE_PAGE", "DELETE_PAGE_PERMANENTLY" -> pageTarget(type)
 
         "APPEND_BLOCK", "APPEND_PAGE_BLOCK", "ADD_BLOCK" ->
             pageTarget(type).copy(content = "New block", blockType = "Text")
 
         "DELETE_ALL_BLOCKS" -> pageTarget(type)
         "DELETE_BLOCK" -> pageTarget(type).copy(blockId = "block-text")
+        "MOVE_BLOCK" -> pageTarget(type).copy(blockId = "block-text", moveDirection = "up")
+        "INDENT_BLOCK", "OUTDENT_BLOCK", "DUPLICATE_BLOCK" ->
+            pageTarget(type).copy(blockId = "block-text")
         "UPDATE_BLOCK", "EDIT_BLOCK" ->
             pageTarget(type).copy(blockId = "block-text", content = "Updated block")
 
@@ -147,6 +149,15 @@ private object AiActionRegressionFixtures {
 
         "UPDATE_PROPERTY" -> pageTarget(type).copy(propertyName = "Budget", value = "200")
         "DELETE_PROPERTY" -> pageTarget(type).copy(propertyName = "Budget")
+        "RENAME_PROPERTY" -> pageTarget(type).copy(
+            propertyName = "Budget",
+            newPropertyName = "Monthly budget",
+        )
+        "MOVE_PROPERTY" -> pageTarget(type).copy(propertyName = "Budget", targetIndex = 1)
+        "DUPLICATE_PROPERTY" -> pageTarget(type).copy(
+            propertyName = "Budget",
+            newPropertyName = "Budget copy",
+        )
 
         "CREATE_DATABASE", "CREATE_TABLE" -> pageTarget(type).copy(
             tableTitle = "Transactions",
@@ -158,6 +169,12 @@ private object AiActionRegressionFixtures {
 
         "RENAME_TABLE", "RENAME_DATABASE", "UPDATE_TABLE_TITLE" ->
             tableTarget(type).copy(title = "Renamed transactions")
+        "DUPLICATE_DATABASE" -> tableTarget(type).copy(title = "Transactions copy")
+        "ATTACH_TABLE_DATA_SOURCE" -> tableTarget(type).copy(
+            sourcePageTitle = "Sales",
+            sourceTableTitle = "Orders",
+        )
+        "CLEAR_TABLE_DATA_SOURCE" -> tableTarget(type)
 
         "ADD_TABLE_COLUMN" -> tableTarget(type).copy(
             columnName = "Category",
@@ -202,6 +219,8 @@ private object AiActionRegressionFixtures {
 
         "REORDER_TABLE_COLUMN", "MOVE_TABLE_COLUMN" ->
             tableTarget(type).copy(columnName = "Category", targetIndex = 1)
+        "DUPLICATE_TABLE_COLUMN" ->
+            tableTarget(type).copy(columnName = "Category", newColumnName = "Category copy")
 
         "ADD_TABLE_ROW" -> tableTarget(type).copy(
             rowTitle = "Lunch",
@@ -221,6 +240,16 @@ private object AiActionRegressionFixtures {
 
         "REORDER_TABLE_ROW", "MOVE_TABLE_ROW" ->
             tableTarget(type).copy(rowTitle = "Lunch", targetIndex = 1)
+        "DUPLICATE_TABLE_ROW" ->
+            tableTarget(type).copy(rowTitle = "Lunch", newRowTitle = "Lunch copy")
+        "DELETE_TABLE_ROWS" -> tableTarget(type).copy(
+            columnName = "Month",
+            filterQuery = "2026-04",
+        )
+        "UPDATE_TABLE_ROWS" -> tableTarget(type).copy(
+            rowIds = listOf("row-lunch"),
+            cellValues = mapOf("Status" to "Done"),
+        )
 
         "ADD_ROW_PAGE_BLOCK", "APPEND_ROW_PAGE_BLOCK", "ADD_TABLE_ROW_BLOCK" ->
             tableTarget(type).copy(
@@ -292,6 +321,15 @@ private object AiActionRegressionFixtures {
         "CREATE_REMINDER" -> tableTarget(type).copy(
             title = "Pay electricity bill",
             delayMinutes = 30,
+        )
+        "CANCEL_REMINDER", "COMPLETE_REMINDER" -> tableTarget(type).copy(
+            rowTitle = "Pay electricity bill",
+            columnName = "Date",
+        )
+        "RESCHEDULE_REMINDER" -> tableTarget(type).copy(
+            rowTitle = "Pay electricity bill",
+            columnName = "Date",
+            delayMinutes = 60,
         )
 
         else -> error("Missing regression fixture for shared action: $type")

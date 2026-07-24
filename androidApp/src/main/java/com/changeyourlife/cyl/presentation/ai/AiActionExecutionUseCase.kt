@@ -340,21 +340,34 @@ class AiActionExecutionUseCase @Inject constructor(
         defaultPage: Page?,
     ): AiActionExecutionResult {
         val pages = pageRepository.observePages(workspaceId).first()
+        val needsDeletedPages = actions.any { candidate ->
+            candidate.action.type.normalizedActionType() in DeletedPageActionTypes
+        }
+        val deletedPages = if (needsDeletedPages) {
+            pageRepository.observeDeletedPages(workspaceId).first()
+        } else {
+            emptyList()
+        }
         val canonicalDefaultPage = defaultPage?.let { page ->
-            pages.firstOrNull { candidate -> candidate.id == page.id } ?: page
+            (pages + deletedPages).firstOrNull { candidate -> candidate.id == page.id } ?: page
         }
         val targetPagesById = linkedMapOf<String, Page>()
         val groupedActions = linkedMapOf<String, MutableList<AiActionExecutionCandidate>>()
         val validationIssues = mutableListOf<ChatActionValidationMetadata>()
 
         actions.forEach { candidate ->
+            val actionType = candidate.action.type.normalizedActionType()
+            val candidatePages = if (actionType in DeletedPageActionTypes) deletedPages else pages
+            val eligibleDefaultPage = canonicalDefaultPage?.takeIf { page ->
+                candidatePages.any { candidatePage -> candidatePage.id == page.id }
+            }
             val targetTitle = candidate.action.targetTitle.trim()
             val resolution = if (targetTitle.isBlank()) {
-                canonicalDefaultPage
+                eligibleDefaultPage
                     ?.let { page -> TargetPageResolution.Found(page) }
                     ?: TargetPageResolution.Missing
             } else {
-                val matchesDefaultPage = canonicalDefaultPage
+                val matchesDefaultPage = eligibleDefaultPage
                     ?.let { page ->
                         AiPageTargetResolver.resolveExactTarget(
                             pages = listOf(page),
@@ -364,11 +377,11 @@ class AiActionExecutionUseCase @Inject constructor(
                 if (matchesDefaultPage is TargetPageResolution.Found) {
                     matchesDefaultPage
                 } else {
-                    AiPageTargetResolver.resolveExactTarget(pages, targetTitle)
+                    AiPageTargetResolver.resolveExactTarget(candidatePages, targetTitle)
                 }
             }
 
-            if (targetTitle.isBlank() && canonicalDefaultPage == null) {
+            if (targetTitle.isBlank() && eligibleDefaultPage == null) {
                 validationIssues += candidate.targetPageIssue(
                     code = "target_page_required",
                     message = "This action needs a page target. Mention a page with @ or open the page before asking AI to edit it.",
@@ -474,6 +487,8 @@ private fun ChatAction.isHomeScopedAction(): Boolean {
     return actionType == "CREATE_PAGE" ||
         (actionType in setOf("CREATE_DATABASE", "CREATE_TABLE") && targetTitle.isBlank())
 }
+
+private val DeletedPageActionTypes = setOf("RESTORE_PAGE", "DELETE_PAGE_PERMANENTLY")
 
 private fun ChatAction.toCreatedPageContent(): String {
     val actionType = type.normalizedActionType()

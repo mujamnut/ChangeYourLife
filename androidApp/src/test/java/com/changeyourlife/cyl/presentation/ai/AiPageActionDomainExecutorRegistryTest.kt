@@ -9,7 +9,7 @@ import org.junit.Test
 class AiPageActionDomainExecutorRegistryTest {
     @Test
     fun everySharedContractActionHasAnAndroidDomainExecutor() {
-        assertEquals(73, AiActionContractSchema.supportedTypes.size)
+        assertEquals(95, AiActionContractSchema.supportedTypes.size)
         assertEquals(
             AiActionContractSchema.supportedTypes,
             AiActionExecutionRegistry.supportedActions,

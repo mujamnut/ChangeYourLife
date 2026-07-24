@@ -18,6 +18,7 @@ import com.changeyourlife.cyl.domain.model.PageTableRow
 import com.changeyourlife.cyl.domain.model.PageTableSelectOption
 import com.changeyourlife.cyl.domain.model.PageTableSort
 import com.changeyourlife.cyl.domain.model.PageTableSortDirection
+import com.changeyourlife.cyl.domain.model.PageTableViewConfig
 import com.changeyourlife.cyl.domain.model.Reminder
 import com.changeyourlife.cyl.domain.repository.ChatAction
 import com.changeyourlife.cyl.domain.repository.ChatTableColumn
@@ -46,7 +47,10 @@ class AiPageActionExecutionRegressionTest(
     fun validSharedActionExecutesAgainstARealisticPageDocument() = runBlocking {
         val fixture = RegressionPageFixture.create(actionType)
         val executor = AiPageActionExecutor(
-            pageRepository = RegressionPageRepository(fixture.page),
+            pageRepository = RegressionPageRepository(
+                page = fixture.page,
+                supportingPages = fixture.supportingPages,
+            ),
             pageMutationUseCase = PageMutationUseCase(ApplyEditorCommandUseCase()),
             tableMutationUseCase = TableMutationUseCase(ApplyEditorCommandUseCase()),
             scheduleTableDateReminderUseCase = ScheduleTableDateReminderUseCase(
@@ -73,11 +77,13 @@ class AiPageActionExecutionRegressionTest(
 
         when (actionType) {
             "RENAME_CURRENT_PAGE", "RENAME_PAGE" -> assertNotNull(result.updatedTitle)
-            "CREATE_PAGE", "CREATE_SUBPAGE" -> assertEquals(1, result.createdPages.size)
-            "CREATE_REMINDER" -> {
+            "CREATE_PAGE", "CREATE_SUBPAGE", "DUPLICATE_PAGE" ->
+                assertEquals(1, result.createdPages.size)
+            "CREATE_REMINDER", "RESCHEDULE_REMINDER" -> {
                 assertNotNull(result.updatedDocument)
                 assertEquals(1, result.createdReminders.size)
             }
+            "MOVE_PAGE", "TRASH_PAGE", "RESTORE_PAGE", "DELETE_PAGE_PERMANENTLY" -> Unit
             else -> assertNotNull(
                 "$actionType reported execution without producing a page mutation.",
                 result.updatedDocument,
@@ -108,6 +114,12 @@ private object RegressionActionFixtures {
 
         "CREATE_SUBPAGE" ->
             page(type).copy(title = "Created subpage", content = "Created subpage content")
+        "MOVE_PAGE" ->
+            page(type).copy(parentPageTitle = "Archive")
+        "DUPLICATE_PAGE" ->
+            page(type).copy(title = "Budget copy")
+        "TRASH_PAGE", "RESTORE_PAGE", "DELETE_PAGE_PERMANENTLY" ->
+            page(type)
 
         "APPEND_BLOCK", "APPEND_PAGE_BLOCK", "ADD_BLOCK" ->
             page(type).copy(content = "New note", blockType = "Text")
@@ -116,6 +128,14 @@ private object RegressionActionFixtures {
             page(type)
 
         "DELETE_BLOCK" ->
+            page(type).copy(blockId = "block-text")
+        "MOVE_BLOCK" ->
+            page(type).copy(blockId = "block-todo", moveDirection = "up")
+        "INDENT_BLOCK" ->
+            page(type).copy(blockId = "block-todo")
+        "OUTDENT_BLOCK" ->
+            page(type).copy(blockId = "block-todo")
+        "DUPLICATE_BLOCK" ->
             page(type).copy(blockId = "block-text")
 
         "UPDATE_BLOCK", "EDIT_BLOCK" ->
@@ -157,6 +177,12 @@ private object RegressionActionFixtures {
 
         "DELETE_PROPERTY" ->
             page(type).copy(propertyName = "Budget")
+        "RENAME_PROPERTY" ->
+            page(type).copy(propertyName = "Budget", newPropertyName = "Monthly budget")
+        "MOVE_PROPERTY" ->
+            page(type).copy(propertyName = "Budget", targetIndex = 2)
+        "DUPLICATE_PROPERTY" ->
+            page(type).copy(propertyName = "Budget", newPropertyName = "Budget copy")
 
         "CREATE_DATABASE", "CREATE_TABLE" ->
             page(type).copy(
@@ -169,6 +195,12 @@ private object RegressionActionFixtures {
 
         "RENAME_TABLE", "RENAME_DATABASE", "UPDATE_TABLE_TITLE" ->
             table(type).copy(title = "Renamed transactions")
+        "DUPLICATE_DATABASE" ->
+            table(type).copy(title = "Transactions copy")
+        "ATTACH_TABLE_DATA_SOURCE" ->
+            table(type).copy(sourcePageTitle = "Sales", sourceTableTitle = "Orders")
+        "CLEAR_TABLE_DATA_SOURCE" ->
+            table(type)
 
         "ADD_TABLE_COLUMN" ->
             table(type).copy(
@@ -234,6 +266,12 @@ private object RegressionActionFixtures {
                 columnName = "Category",
                 targetIndex = 2,
             )
+        "DUPLICATE_TABLE_COLUMN" ->
+            table(type).copy(
+                columnId = "column-category",
+                columnName = "Category",
+                newColumnName = "Category copy",
+            )
 
         "ADD_TABLE_ROW" ->
             table(type).copy(
@@ -268,6 +306,23 @@ private object RegressionActionFixtures {
                 rowId = "row-lunch",
                 rowTitle = "Lunch",
                 targetIndex = 2,
+            )
+        "DUPLICATE_TABLE_ROW" ->
+            table(type).copy(
+                rowId = "row-lunch",
+                rowTitle = "Lunch",
+                newRowTitle = "Lunch copy",
+            )
+        "DELETE_TABLE_ROWS" ->
+            table(type).copy(
+                columnId = "column-month",
+                columnName = "Month",
+                filterQuery = "2026-07",
+            )
+        "UPDATE_TABLE_ROWS" ->
+            table(type).copy(
+                rowIds = listOf("row-lunch", "row-fuel"),
+                cellValues = mapOf("Category" to "Other"),
             )
 
         "ADD_ROW_PAGE_BLOCK", "APPEND_ROW_PAGE_BLOCK", "ADD_TABLE_ROW_BLOCK" ->
@@ -385,6 +440,21 @@ private object RegressionActionFixtures {
                 title = "Pay electricity bill",
                 delayMinutes = 120,
             )
+        "CANCEL_REMINDER", "COMPLETE_REMINDER" ->
+            table(type).copy(
+                rowId = "row-lunch",
+                rowTitle = "Lunch",
+                columnId = "column-date",
+                columnName = "Date",
+            )
+        "RESCHEDULE_REMINDER" ->
+            table(type).copy(
+                rowId = "row-lunch",
+                rowTitle = "Lunch",
+                columnId = "column-date",
+                columnName = "Date",
+                delayMinutes = 120,
+            )
 
         else -> error("Missing Android execution fixture for shared action: $type")
     }
@@ -403,6 +473,7 @@ private object RegressionActionFixtures {
 private data class RegressionPageFixture(
     val page: Page,
     val document: PageBlockDocument,
+    val supportingPages: List<Page>,
 ) {
     companion object {
         fun create(actionType: String): RegressionPageFixture {
@@ -464,6 +535,15 @@ private data class RegressionPageFixture(
                 type = PageBlockType.DatabaseTable,
                 table = PageTable(
                     title = "Transactions",
+                    viewConfig = if (actionType == "CLEAR_TABLE_DATA_SOURCE") {
+                        PageTableViewConfig(
+                            dataSourcePageId = "page-sales",
+                            dataSourceTableBlockId = "table-orders",
+                            dataSourceTitle = "Orders",
+                        )
+                    } else {
+                        PageTableViewConfig()
+                    },
                     columns = columns,
                     rows = listOf(
                         PageTableRow(
@@ -543,23 +623,48 @@ private data class RegressionPageFixture(
                         type = PagePropertyType.Number,
                         value = "100",
                     ),
+                    PageProperty(
+                        id = "property-notes",
+                        name = "Notes",
+                        type = PagePropertyType.Text,
+                        value = "",
+                    ),
                 ),
-                blocks = listOf(
-                    PageBlock(
+                blocks = buildList {
+                    add(
+                        PageBlock(
                         id = "block-text",
                         type = PageBlockType.Text,
                         text = "budget ayam",
+                        children = if (actionType == "OUTDENT_BLOCK") {
+                            listOf(
+                                PageBlock(
+                                    id = "block-todo",
+                                    type = PageBlockType.Todo,
+                                    text = "Review budget",
+                                    isChecked = todoChecked,
+                                ),
+                            )
+                        } else {
+                            emptyList()
+                        },
                     ),
-                    PageBlock(
-                        id = "block-todo",
-                        type = PageBlockType.Todo,
-                        text = "Review budget",
-                        isChecked = todoChecked,
-                    ),
-                    transactionTable,
-                    categoryTable,
-                ),
+                    )
+                    if (actionType != "OUTDENT_BLOCK") {
+                        add(
+                            PageBlock(
+                                id = "block-todo",
+                                type = PageBlockType.Todo,
+                                text = "Review budget",
+                                isChecked = todoChecked,
+                            ),
+                        )
+                    }
+                    add(transactionTable)
+                    add(categoryTable)
+                },
             )
+            val isDeletedPage = actionType in setOf("RESTORE_PAGE", "DELETE_PAGE_PERMANENTLY")
             val page = Page(
                 id = "page-budget",
                 workspaceId = "workspace-1",
@@ -569,17 +674,73 @@ private data class RegressionPageFixture(
                 sortOrder = 0,
                 createdAt = 1_000,
                 updatedAt = 1_000,
+                deletedAt = if (isDeletedPage) 1_500 else null,
+            )
+            val archivePage = Page(
+                id = "page-archive",
+                workspaceId = "workspace-1",
+                parentPageId = null,
+                title = "Archive",
+                content = PageBlockCodec.encodeDocument(PageBlockDocument()),
+                sortOrder = 1,
+                createdAt = 1_000,
+                updatedAt = 1_000,
                 deletedAt = null,
             )
-            return RegressionPageFixture(page = page, document = document)
+            val ordersDocument = PageBlockDocument(
+                blocks = listOf(
+                    PageBlock(
+                        id = "table-orders",
+                        type = PageBlockType.DatabaseTable,
+                        table = PageTable(
+                            title = "Orders",
+                            columns = listOf(
+                                PageTableColumn(id = "orders-name", name = "Name"),
+                                PageTableColumn(
+                                    id = "orders-amount",
+                                    name = "Amount",
+                                    type = PageTableColumnType.Number,
+                                ),
+                            ),
+                            rows = listOf(
+                                PageTableRow(
+                                    id = "orders-row-1",
+                                    cells = mapOf(
+                                        "orders-name" to "Order 1",
+                                        "orders-amount" to "25",
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            )
+            val salesPage = Page(
+                id = "page-sales",
+                workspaceId = "workspace-1",
+                parentPageId = null,
+                title = "Sales",
+                content = PageBlockCodec.encodeDocument(ordersDocument),
+                sortOrder = 2,
+                createdAt = 1_000,
+                updatedAt = 1_000,
+                deletedAt = null,
+            )
+            return RegressionPageFixture(
+                page = page,
+                document = document,
+                supportingPages = listOf(archivePage, salesPage),
+            )
         }
     }
 }
 
 private class RegressionPageRepository(
     private var page: Page,
+    private val supportingPages: List<Page>,
 ) : PageRepository {
-    override fun observePages(workspaceId: String): Flow<List<Page>> = flowOf(listOf(page))
+    override fun observePages(workspaceId: String): Flow<List<Page>> =
+        flowOf((listOf(page) + supportingPages).filter { candidate -> candidate.deletedAt == null })
 
     override fun observeChildPages(parentPageId: String): Flow<List<Page>> = flowOf(emptyList())
 
@@ -588,7 +749,8 @@ private class RegressionPageRepository(
     override fun observeRecentPages(workspaceId: String, limit: Int): Flow<List<Page>> =
         flowOf(listOf(page))
 
-    override fun observeDeletedPages(workspaceId: String): Flow<List<Page>> = flowOf(emptyList())
+    override fun observeDeletedPages(workspaceId: String): Flow<List<Page>> =
+        flowOf((listOf(page) + supportingPages).filter { candidate -> candidate.deletedAt != null })
 
     override fun observePage(pageId: String): Flow<Page?> = flowOf(page.takeIf { it.id == pageId })
 

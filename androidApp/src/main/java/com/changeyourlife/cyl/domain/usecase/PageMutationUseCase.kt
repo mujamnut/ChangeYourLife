@@ -10,6 +10,7 @@ import com.changeyourlife.cyl.domain.model.PageMediaAttachment
 import com.changeyourlife.cyl.domain.model.PageProperty
 import com.changeyourlife.cyl.domain.model.PagePropertyType
 import com.changeyourlife.cyl.domain.model.PageTextSpan
+import java.util.UUID
 
 class PageMutationUseCase(
     private val applyEditorCommandUseCase: ApplyEditorCommandUseCase,
@@ -220,6 +221,48 @@ class PageMutationUseCase(
         )
     }
 
+    fun moveBlockToIndex(
+        document: PageBlockDocument,
+        blockId: String,
+        targetIndex: Int,
+    ): PageMutationResult {
+        val location = document.blocks.findBlockLocation(blockId)
+            ?: return document.unchangedResult()
+        return apply(
+            document = document,
+            command = EditorCommand.MoveBlockToParent(
+                blockId = blockId,
+                parentBlockId = location.parentBlockId,
+                index = targetIndex,
+            ),
+        )
+    }
+
+    fun duplicateBlock(
+        document: PageBlockDocument,
+        blockId: String,
+        targetIndex: Int? = null,
+    ): BlockMutationResult {
+        val location = document.blocks.findBlockLocation(blockId)
+            ?: return BlockMutationResult(
+                applied = document.unchangedApplied(),
+                block = PageContentCodec.newBlock(PageBlockType.Text),
+                insertCommand = EditorCommand.InsertBlock(PageContentCodec.newBlock(PageBlockType.Text)),
+            )
+        val duplicatedBlock = document.findBlock(blockId)?.duplicatedForEditor()
+            ?: return BlockMutationResult(
+                applied = document.unchangedApplied(),
+                block = PageContentCodec.newBlock(PageBlockType.Text),
+                insertCommand = EditorCommand.InsertBlock(PageContentCodec.newBlock(PageBlockType.Text)),
+            )
+        return insertBlock(
+            document = document,
+            block = duplicatedBlock,
+            parentBlockId = location.parentBlockId,
+            index = targetIndex ?: (location.index + 1),
+        )
+    }
+
     fun indentBlock(
         document: PageBlockDocument,
         blockId: String,
@@ -343,6 +386,46 @@ class PageMutationUseCase(
         )
     }
 
+    fun moveProperty(
+        document: PageBlockDocument,
+        propertyId: String,
+        targetIndex: Int,
+    ): PageMutationResult {
+        return apply(
+            document = document,
+            command = EditorCommand.MoveProperty(
+                propertyId = propertyId,
+                targetIndex = targetIndex,
+            ),
+        )
+    }
+
+    fun duplicateProperty(
+        document: PageBlockDocument,
+        propertyId: String,
+        name: String = "",
+        targetIndex: Int? = null,
+    ): PropertyMutationResult {
+        val sourceIndex = document.properties.indexOfFirst { property -> property.id == propertyId }
+        val source = document.properties.getOrNull(sourceIndex)
+            ?: return PropertyMutationResult(document.unchangedApplied(), property = null)
+        val property = source.copy(
+            id = UUID.randomUUID().toString(),
+            name = name.trim().ifBlank { "${source.name} copy" },
+        )
+        val applied = applyEditorCommandUseCase(
+            document = document,
+            command = EditorCommand.InsertProperty(
+                property = property,
+                index = targetIndex ?: (sourceIndex + 1),
+            ),
+        )
+        return PropertyMutationResult(
+            applied = applied,
+            property = property,
+        )
+    }
+
     private fun replaceBlockMediaAttachments(
         document: PageBlockDocument,
         blockId: String,
@@ -390,6 +473,76 @@ class PageMutationUseCase(
             command = EditorCommand.DeleteBlock(MissingCommandTargetId),
         )
     }
+}
+
+private fun PageBlock.duplicatedForEditor(): PageBlock {
+    val nextBlockId = UUID.randomUUID().toString()
+    val columnIdMap = table.columns.associate { column -> column.id to UUID.randomUUID().toString() }
+    val rowIdMap = table.rows.associate { row -> row.id to UUID.randomUUID().toString() }
+    fun mappedColumnId(id: String): String = columnIdMap[id].orEmpty()
+
+    val duplicatedColumns = table.columns.map { column ->
+        column.copy(
+            id = columnIdMap.getValue(column.id),
+            relationTargetTableId = if (column.relationTargetTableId == id) {
+                nextBlockId
+            } else {
+                column.relationTargetTableId
+            },
+            rollupRelationColumnId = mappedColumnId(column.rollupRelationColumnId),
+            rollupTargetColumnId = mappedColumnId(column.rollupTargetColumnId),
+        )
+    }
+    val duplicatedRows = table.rows.map { row ->
+        row.copy(
+            id = rowIdMap.getValue(row.id),
+            cells = row.cells.mapNotNull { (columnId, value) ->
+                columnIdMap[columnId]?.let { nextColumnId -> nextColumnId to value }
+            }.toMap(),
+            cellValues = row.cellValues.mapNotNull { (columnId, value) ->
+                columnIdMap[columnId]?.let { nextColumnId ->
+                    nextColumnId to value.copy(
+                        files = value.files.map { file ->
+                            file.copy(id = UUID.randomUUID().toString())
+                        },
+                        relationRowIds = value.relationRowIds.map { relationRowId ->
+                            rowIdMap[relationRowId] ?: relationRowId
+                        },
+                    )
+                }
+            }.toMap(),
+            metadata = row.metadata.copy(
+                createdAt = System.currentTimeMillis(),
+                lastEditedAt = System.currentTimeMillis(),
+            ),
+            blocks = row.blocks.map { block -> block.duplicatedForEditor() },
+        )
+    }
+    val duplicatedTable = table.copy(
+        viewConfig = table.viewConfig.copy(
+            calendarDateColumnId = mappedColumnId(table.viewConfig.calendarDateColumnId),
+            timelineStartColumnId = mappedColumnId(table.viewConfig.timelineStartColumnId),
+            timelineEndColumnId = mappedColumnId(table.viewConfig.timelineEndColumnId),
+            dashboardMetricColumnId = mappedColumnId(table.viewConfig.dashboardMetricColumnId),
+            dashboardGroupColumnId = mappedColumnId(table.viewConfig.dashboardGroupColumnId),
+            dataSourcePageId = "",
+            dataSourceTableBlockId = "",
+            dataSourceTitle = "",
+        ),
+        columns = duplicatedColumns,
+        rows = duplicatedRows,
+        sort = table.sort.copy(columnId = mappedColumnId(table.sort.columnId)),
+        filter = table.filter.copy(columnId = mappedColumnId(table.filter.columnId)),
+        groupByColumnId = mappedColumnId(table.groupByColumnId),
+    )
+    return copy(
+        id = nextBlockId,
+        mediaAttachments = mediaAttachments.map { attachment ->
+            attachment.copy(id = UUID.randomUUID().toString())
+        },
+        table = duplicatedTable,
+        children = children.map { child -> child.duplicatedForEditor() },
+    )
 }
 
 data class PageMutationResult(

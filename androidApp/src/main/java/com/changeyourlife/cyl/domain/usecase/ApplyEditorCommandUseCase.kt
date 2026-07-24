@@ -57,6 +57,7 @@ private fun EditorCommand.target(): EditorCommandTarget {
         is EditorCommand.ReplaceTable -> EditorCommandTarget.Table(blockId)
         is EditorCommand.InsertProperty -> EditorCommandTarget.Property(property.id)
         is EditorCommand.ReplaceProperty -> EditorCommandTarget.Property(property.id)
+        is EditorCommand.MoveProperty -> EditorCommandTarget.Property(propertyId)
         is EditorCommand.DeleteProperty -> EditorCommandTarget.Property(propertyId)
         is EditorCommand.InsertBlock -> parentBlockId?.let(EditorCommandTarget::Block)
             ?: EditorCommandTarget.Document

@@ -225,7 +225,7 @@ private fun ChatAction.toTaskTableRow(columns: List<PageTableColumn>): PageTable
     return PageBlockCodec.newTableRow(columns).copy(cells = values)
 }
 
-private fun ChatAction.taskDateCellValue(): String {
+internal fun ChatAction.taskDateCellValue(): String {
     val explicit = cellValues.entries.firstOrNull { entry ->
         entry.key.normalizedAiKey() in setOf("date", "due date", "deadline", "time", "reminder")
     }?.value.orEmpty()
@@ -265,7 +265,7 @@ private fun buildDateCellValue(
     ),
 )
 
-private fun String.withReminderMetadata(): String {
+internal fun String.withReminderMetadata(): String {
     val parsed = if (trim().startsWith("{")) {
         runCatching {
             AiDateCellJson.decodeFromString<PageTableDateCellValue>(trim())
@@ -287,8 +287,22 @@ private fun String.withReminderMetadata(): String {
     )
 }
 
+internal fun String.withoutReminderMetadata(): String {
+    if (isBlank()) return ""
+    val parsed = if (trim().startsWith("{")) {
+        runCatching {
+            AiDateCellJson.decodeFromString<PageTableDateCellValue>(trim())
+        }.getOrNull() ?: return this
+    } else {
+        PageTableDateCellValue(startDate = trim())
+    }
+    return AiDateCellJson.encodeToString(
+        parsed.copy(reminder = PageTableDateReminder.None),
+    )
+}
+
 private fun ChatAction.isCreateReminderAction(): Boolean =
-    type.normalizedAiActionType() == "CREATE_REMINDER"
+    type.normalizedAiActionType() in setOf("CREATE_REMINDER", "RESCHEDULE_REMINDER")
 
 private fun ChatAction.taskLikeTitle(): String {
     return title

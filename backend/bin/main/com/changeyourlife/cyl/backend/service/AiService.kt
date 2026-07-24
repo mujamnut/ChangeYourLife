@@ -173,8 +173,16 @@ class AiService(
         val mediaSizeBytes: Long = 0,
         val isChecked: Boolean? = null,
         val propertyName: String = "",
+        val newPropertyName: String = "",
         val propertyType: String = "Text",
         val value: String = "",
+        val moveDirection: String = "",
+        val parentPageId: String = "",
+        val parentPageTitle: String = "",
+        val sourcePageId: String = "",
+        val sourcePageTitle: String = "",
+        val sourceTableBlockId: String = "",
+        val sourceTableTitle: String = "",
         val moduleType: String = "",
         val tableTitle: String = "",
         val tableView: String = "Table",
@@ -206,6 +214,7 @@ class AiService(
         val groupByColumnId: String = "",
         val groupByColumnName: String = "",
         val rowId: String = "",
+        val rowIds: List<String> = emptyList(),
         val rowTitle: String = "",
         val newRowTitle: String = "",
         val rowBlockId: String = "",
@@ -424,9 +433,17 @@ class AiService(
             - To intentionally clear/delete one cell value, use CLEAR_TABLE_CELL with its exact rowId/rowTitle and columnId/columnName. Do not delete the row or column.
             - To clear every cell in one column whose current value matches a query, use CLEAR_TABLE_CELLS with tableTitle, columnId/columnName, and filterQuery. This is a bulk cell operation: do not ask for one row when the user explicitly says all/semua.
             - CLEAR_TABLE_CELLS must only clear matching cells. It must never delete rows, delete the column, or clear values from other columns.
+            - To delete an entire database/table block, use DELETE_BLOCK with blockType "DatabaseTable" and the exact blockId or table title in blockText. Do not claim table deletion is unsupported.
             - If a value such as "bulan 4" uniquely identifies one existing cell, use its hidden rowId and columnId. If several cells match, ask which table/row instead of guessing.
             - To change several cells in one existing row, use UPDATE_TABLE_ROW with cellValues.
+            - If the user explicitly asks to update or delete all matching rows, use UPDATE_TABLE_ROWS or DELETE_TABLE_ROWS. Prefer exact rowIds from context; otherwise provide columnName/columnId plus filterQuery. Never turn a bulk request into repeated ambiguous single-row actions.
             - For update/delete/move row actions, prefer the exact rowId from CYL_SEARCH_CONTEXT when available. If the user identifies a row by another property such as Month, resolve that search result to its rowId instead of inventing a row title.
+            - Use DUPLICATE_TABLE_ROW, DUPLICATE_TABLE_COLUMN, or DUPLICATE_DATABASE when the user asks to copy an existing database item. Use newRowTitle/newColumnName/title only when a new name is requested.
+            - Use MOVE_BLOCK with targetIndex or moveDirection "up"/"down"; use INDENT_BLOCK and OUTDENT_BLOCK for nesting; use DUPLICATE_BLOCK for a copied block.
+            - Use RENAME_PROPERTY, MOVE_PROPERTY, and DUPLICATE_PROPERTY for page properties. Property actions are not table-column actions.
+            - For page lifecycle requests use MOVE_PAGE, DUPLICATE_PAGE, TRASH_PAGE, RESTORE_PAGE, or DELETE_PAGE_PERMANENTLY. Permanent delete is only valid for a page already in trash.
+            - For MOVE_PAGE, parentPageTitle/parentPageId identifies the new parent; omit both to move to workspace root.
+            - To connect a database to another database page, use ATTACH_TABLE_DATA_SOURCE with sourcePageId/sourcePageTitle and sourceTableBlockId/sourceTableTitle. Use CLEAR_TABLE_DATA_SOURCE to disconnect it.
             - For table creation, infer sensible columns and rows from the user's intent instead of using fixed templates.
             - Do not set table sort, filter, group, hidden columns, or view rules when creating a page/table unless the user explicitly asks for those controls. A normal monthly expenses request should create data/schema only; user can filter/sort/group manually later.
             - For monthly expenses/budget with salary and spending data, prefer a transaction ledger plus summary:
@@ -437,6 +454,7 @@ class AiService(
             - For Select, MultiSelect, or Status dropdown values, include options as a string array on the column or action.
             - If the user asks for a category dropdown, use columnType "Select" and include category options.
             - If the user asks to be reminded, use CREATE_REMINDER. Include a clear title and either positive delayMinutes for a relative time or cellValues with Date for an absolute date. Do not use CREATE_TASK as a substitute for a reminder.
+            - Use CANCEL_REMINDER, RESCHEDULE_REMINDER, or COMPLETE_REMINDER for an existing reminder row. Include the exact rowId when context provides it and the Date column when a table has several Date columns.
             - If the user asks for a task without a reminder, use CREATE_TASK. A task date is optional and does not schedule a notification by itself.
             - For multi-step requests, return multiple actions in order.
 
@@ -467,6 +485,15 @@ class AiService(
 
             User: ingatkan saya bayar bil dalam 30 minit
             JSON: {"reply":"Baik, saya tetapkan peringatan bayar bil dalam 30 minit.","actions":[{"type":"CREATE_REMINDER","title":"Bayar bil","delayMinutes":30}]}
+
+            User: padam semua transaksi untuk Month 2026-04
+            JSON: {"reply":"Baik, saya padam semua transaksi April 2026.","actions":[{"type":"DELETE_TABLE_ROWS","tableTitle":"Transactions","columnName":"Month","filterQuery":"2026-04"}]}
+
+            User: pindahkan block catatan ke atas
+            JSON: {"reply":"Baik, saya pindahkan block itu.","actions":[{"type":"MOVE_BLOCK","blockText":"catatan","moveDirection":"up"}]}
+
+            User: sambungkan table ini dengan database Orders dalam page Sales
+            JSON: {"reply":"Baik, saya sambungkan data source itu.","actions":[{"type":"ATTACH_TABLE_DATA_SOURCE","sourcePageTitle":"Sales","sourceTableTitle":"Orders"}]}
 
             Context:
             $context

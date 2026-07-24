@@ -125,6 +125,15 @@ fun EditorCommand.toAiUndoCommandSummary(actionIndex: Int): AiUndoCommandSummary
             property = property,
         )
 
+        is EditorCommand.MoveProperty -> AiUndoCommandSummary(
+            actionIndex = actionIndex,
+            commandType = "MoveProperty",
+            targetType = "Property",
+            targetId = propertyId,
+            propertyId = propertyId,
+            index = targetIndex,
+        )
+
         is EditorCommand.DeleteProperty -> AiUndoCommandSummary(
             actionIndex = actionIndex,
             commandType = "DeleteProperty",
@@ -191,6 +200,10 @@ fun AiUndoCommandSummary.toEditorCommand(): EditorCommand? {
         }
 
         "ReplaceProperty" -> property?.let(EditorCommand::ReplaceProperty)
+
+        "MoveProperty" -> propertyId.takeIf(String::isNotBlank)?.let { id ->
+            index?.let { targetIndex -> EditorCommand.MoveProperty(propertyId = id, targetIndex = targetIndex) }
+        }
 
         "DeleteProperty" -> propertyId.takeIf(String::isNotBlank)?.let(EditorCommand::DeleteProperty)
 
