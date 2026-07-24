@@ -197,10 +197,23 @@ class TableMutationUseCase(
         tableBlockId: String,
         columnId: String,
         name: String,
+    ): TableMutationResult = updateColumn(
+        document = document,
+        tableBlockId = tableBlockId,
+        columnId = columnId,
+    ) { column ->
+        column.copy(name = name)
+    }
+
+    fun updateColumn(
+        document: PageBlockDocument,
+        tableBlockId: String,
+        columnId: String,
+        transform: (PageTableColumn) -> PageTableColumn,
     ): TableMutationResult = replaceTable(document, tableBlockId) { table ->
         table.copy(
             columns = table.columns.map { column ->
-                if (column.id == columnId) column.copy(name = name) else column
+                if (column.id == columnId) transform(column) else column
             },
         )
     }
@@ -402,6 +415,64 @@ class TableMutationUseCase(
         )
     }
 
+    fun updateRow(
+        document: PageBlockDocument,
+        tableBlockId: String,
+        rowId: String,
+        valuesByColumnId: Map<String, String>,
+    ): TableMutationResult = replaceTable(document, tableBlockId) { table ->
+        if (valuesByColumnId.isEmpty()) return@replaceTable table
+        val columnsById = table.columns.associateBy(PageTableColumn::id)
+        table.copy(
+            rows = table.rows.map { row ->
+                if (row.id != rowId) return@map row
+                valuesByColumnId.entries.fold(row) { currentRow, (columnId, rawValue) ->
+                    val column = columnsById[columnId] ?: return@fold currentRow
+                    if (column.type == PageTableColumnType.Formula || column.type == PageTableColumnType.Rollup) {
+                        return@fold currentRow
+                    }
+                    val nextValue = column.type.coerceManualCellValue(rawValue)
+                    currentRow.copy(
+                        cells = currentRow.cells + (columnId to nextValue),
+                        cellValues = currentRow.cellValues + (
+                            columnId to column.toTypedCellValue(nextValue)
+                            ),
+                    )
+                }
+            },
+        )
+    }
+
+    fun updateCells(
+        document: PageBlockDocument,
+        tableBlockId: String,
+        rowIds: Set<String>,
+        columnId: String,
+        value: String,
+    ): TableMutationResult = replaceTable(document, tableBlockId) { table ->
+        if (rowIds.isEmpty()) return@replaceTable table
+        val column = table.columns.firstOrNull { candidate -> candidate.id == columnId }
+            ?: return@replaceTable table
+        if (column.type == PageTableColumnType.Formula || column.type == PageTableColumnType.Rollup) {
+            return@replaceTable table
+        }
+        val nextValue = column.type.coerceManualCellValue(value)
+        table.copy(
+            rows = table.rows.map { row ->
+                if (row.id !in rowIds) {
+                    row
+                } else {
+                    row.copy(
+                        cells = row.cells + (columnId to nextValue),
+                        cellValues = row.cellValues + (
+                            columnId to column.toTypedCellValue(nextValue)
+                            ),
+                    )
+                }
+            },
+        )
+    }
+
     fun updateRelationCell(
         document: PageBlockDocument,
         tableBlockId: String,
@@ -495,6 +566,21 @@ class TableMutationUseCase(
             insertIndex = insertIndex,
             cellValues = cellValues,
         )
+    }
+
+    fun moveColumn(
+        document: PageBlockDocument,
+        tableBlockId: String,
+        columnId: String,
+        targetIndex: Int,
+    ): TableMutationResult = replaceTable(document, tableBlockId) { table ->
+        val currentIndex = table.columns.indexOfFirst { column -> column.id == columnId }
+        if (currentIndex < 0) return@replaceTable table
+        val mutableColumns = table.columns.toMutableList()
+        val column = mutableColumns.removeAt(currentIndex)
+        val nextIndex = targetIndex.coerceIn(0, mutableColumns.size)
+        mutableColumns.add(nextIndex, column)
+        table.copy(columns = mutableColumns)
     }
 
     fun deleteColumn(

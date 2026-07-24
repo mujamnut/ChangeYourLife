@@ -7,6 +7,7 @@ import com.changeyourlife.cyl.domain.model.PageTable
 import com.changeyourlife.cyl.domain.model.PageTableColumn
 import com.changeyourlife.cyl.domain.model.PageTableColumnConfig
 import com.changeyourlife.cyl.domain.model.PageTableColumnType
+import com.changeyourlife.cyl.domain.model.PageTableDateCellValue
 import com.changeyourlife.cyl.domain.model.PageTableDateFormat
 import com.changeyourlife.cyl.domain.model.PageTableDateReminder
 import com.changeyourlife.cyl.domain.model.PageTableOptionColor
@@ -21,11 +22,18 @@ import com.changeyourlife.cyl.domain.repository.ChatTableColumn
 import com.changeyourlife.cyl.presentation.page.PageBlockCodec
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 
-data class TaskTableMutationResult(
-    val document: PageBlockDocument,
+data class TaskTableMutationPlan(
+    val tableBlock: PageBlock,
+    val isNewTable: Boolean,
     val tableTitle: String,
     val rowTitle: String,
+    val rowId: String,
+    val dateColumnId: String,
+    val dateCellValue: String,
 )
 
 fun ChatTableColumn.toPageTableColumnFromAi(): PageTableColumn {
@@ -76,11 +84,12 @@ fun ChatAction.isTaskTableRowAction(): Boolean {
     return tableHint || cellKeys.any { key -> key in taskKeys }
 }
 
-fun PageBlockDocument.withTaskTableAction(action: ChatAction): TaskTableMutationResult {
+fun PageBlockDocument.planTaskTableAction(action: ChatAction): TaskTableMutationPlan {
     val existing = blocks.findTaskLikeTable()
     return if (existing == null) {
         val columns = defaultTaskColumns()
         val row = action.toTaskTableRow(columns)
+        val dateColumn = columns.first { column -> column.type == PageTableColumnType.Date }
         val tableBlock = PageBlockCodec.newBlock(PageBlockType.DatabaseTable).copy(
             table = PageTable(
                 title = "Tasks",
@@ -92,21 +101,30 @@ fun PageBlockDocument.withTaskTableAction(action: ChatAction): TaskTableMutation
                 rows = listOf(row),
             ),
         )
-        TaskTableMutationResult(
-            document = copy(blocks = blocks + tableBlock),
+        TaskTableMutationPlan(
+            tableBlock = tableBlock,
+            isNewTable = true,
             tableTitle = tableBlock.table.title,
             rowTitle = row.cellText(columns.firstOrNull()).ifBlank { action.taskLikeTitle() },
+            rowId = row.id,
+            dateColumnId = dateColumn.id,
+            dateCellValue = row.cells[dateColumn.id].orEmpty(),
         )
     } else {
         val normalized = existing.withRequiredTaskColumns()
         val row = action.toTaskTableRow(normalized.table.columns)
+        val dateColumn = normalized.table.columns.first { column -> column.type == PageTableColumnType.Date }
         val updated = normalized.copy(
             table = normalized.table.copy(rows = normalized.table.rows + row),
         )
-        TaskTableMutationResult(
-            document = copy(blocks = blocks.replaceBlock(updated)),
+        TaskTableMutationPlan(
+            tableBlock = updated,
+            isNewTable = false,
             tableTitle = updated.table.title,
             rowTitle = row.cellText(updated.table.columns.firstOrNull()).ifBlank { action.taskLikeTitle() },
+            rowId = row.id,
+            dateColumnId = dateColumn.id,
+            dateCellValue = row.cells[dateColumn.id].orEmpty(),
         )
     }
 }
@@ -211,16 +229,66 @@ private fun ChatAction.taskDateCellValue(): String {
     val explicit = cellValues.entries.firstOrNull { entry ->
         entry.key.normalizedAiKey() in setOf("date", "due date", "deadline", "time", "reminder")
     }?.value.orEmpty()
-    if (explicit.isNotBlank()) return explicit
+    if (explicit.isNotBlank()) {
+        return if (isCreateReminderAction()) {
+            explicit.withReminderMetadata()
+        } else {
+            explicit
+        }
+    }
 
     val delayMinutes = delayMinutes ?: return ""
     val dateTime = LocalDateTime.now().plusMinutes(delayMinutes)
-    return buildDateCellValue(dateTime)
+    return buildDateCellValue(
+        dateTime = dateTime,
+        reminder = if (isCreateReminderAction()) {
+            PageTableDateReminder.AtTimeOfEvent
+        } else {
+            PageTableDateReminder.None
+        },
+    )
 }
 
-private fun buildDateCellValue(dateTime: LocalDateTime): String {
-    return """{"startDate":"${dateTime.toLocalDate().format(DateTimeFormatter.ISO_LOCAL_DATE)}","startTime":"${dateTime.toLocalTime().withSecond(0).withNano(0).format(DateTimeFormatter.ISO_LOCAL_TIME)}","includeTime":true,"timezoneLabel":"Local"}"""
+private fun buildDateCellValue(
+    dateTime: LocalDateTime,
+    reminder: PageTableDateReminder,
+): String = AiDateCellJson.encodeToString(
+    PageTableDateCellValue(
+        startDate = dateTime.toLocalDate().format(DateTimeFormatter.ISO_LOCAL_DATE),
+        startTime = dateTime.toLocalTime()
+            .withSecond(0)
+            .withNano(0)
+            .format(DateTimeFormatter.ISO_LOCAL_TIME),
+        includeTime = true,
+        timezoneLabel = "Local",
+        reminder = reminder,
+    ),
+)
+
+private fun String.withReminderMetadata(): String {
+    val parsed = if (trim().startsWith("{")) {
+        runCatching {
+            AiDateCellJson.decodeFromString<PageTableDateCellValue>(trim())
+        }.getOrNull() ?: return this
+    } else {
+        PageTableDateCellValue(startDate = trim())
+    }
+    val defaultReminder = if (parsed.includeTime && parsed.startTime.isNotBlank()) {
+        PageTableDateReminder.AtTimeOfEvent
+    } else {
+        PageTableDateReminder.OnDayOfEvent
+    }
+    return AiDateCellJson.encodeToString(
+        parsed.copy(
+            timezoneLabel = parsed.timezoneLabel.ifBlank { "Local" },
+            reminder = parsed.reminder.takeUnless { reminder -> reminder == PageTableDateReminder.None }
+                ?: defaultReminder,
+        ),
+    )
 }
+
+private fun ChatAction.isCreateReminderAction(): Boolean =
+    type.normalizedAiActionType() == "CREATE_REMINDER"
 
 private fun ChatAction.taskLikeTitle(): String {
     return title
@@ -249,16 +317,6 @@ private fun PageTable.isTaskLikeTable(): Boolean {
             column.name.normalizedAiKey() in setOf("date", "due date", "deadline", "time", "reminder")
     }
     return titleHint || (hasTaskColumn && hasDateColumn)
-}
-
-private fun List<PageBlock>.replaceBlock(updated: PageBlock): List<PageBlock> {
-    return map { block ->
-        when {
-            block.id == updated.id -> updated
-            block.children.isNotEmpty() -> block.copy(children = block.children.replaceBlock(updated))
-            else -> block
-        }
-    }
 }
 
 private fun PageTableRow.cellText(column: PageTableColumn?): String {
@@ -344,3 +402,8 @@ private fun String.toPageTableRollupAggregationFromAi() = when (trim().lowercase
 private fun String.normalizedAiActionType(): String = trim().uppercase().replace(' ', '_')
 
 private fun String.normalizedAiKey(): String = trim().lowercase().replace("_", " ")
+
+private val AiDateCellJson = Json {
+    ignoreUnknownKeys = true
+    encodeDefaults = true
+}

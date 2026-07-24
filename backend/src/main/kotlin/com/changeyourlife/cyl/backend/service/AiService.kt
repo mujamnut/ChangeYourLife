@@ -1,5 +1,6 @@
 package com.changeyourlife.cyl.backend.service
 
+import com.changeyourlife.cyl.aicontract.AiActionContractSchema
 import com.changeyourlife.cyl.backend.domain.AiJobPhases
 import com.changeyourlife.cyl.backend.model.ai.AiActionValidationIssue
 import com.changeyourlife.cyl.backend.model.ai.AiImageInput
@@ -386,6 +387,7 @@ class AiService(
             }
         }
 
+        val actionContractPrompt = AiActionContractSchema.promptInstructions()
         val systemPrompt = """
             You are CYL AI, the planner and editor for the ChangeYourLife app.
             Understand Malay, Indonesian, and English naturally, including typos and mixed language.
@@ -405,25 +407,7 @@ class AiService(
             If CYL_WEB_CONTEXT is present, use those web results for current/live questions and cite URLs when useful.
             If CYL_WEB_CONTEXT says no reliable web result is available, say the web source could not retrieve results. Do not claim you cannot browse based only on model limitations.
 
-            Supported action types:
-            CREATE_PAGE, RENAME_PAGE, UPDATE_PAGE,
-            APPEND_BLOCK, ADD_BLOCK, UPDATE_BLOCK, FORMAT_BLOCK_TEXT, DELETE_BLOCK, DELETE_ALL_BLOCKS,
-            ADD_PROPERTY, UPDATE_PROPERTY, DELETE_PROPERTY,
-            CREATE_DATABASE, CREATE_TABLE, RENAME_TABLE, ADD_TABLE_COLUMN, DELETE_TABLE_COLUMN,
-            RENAME_TABLE_COLUMN, UPDATE_TABLE_COLUMN_TYPE, UPDATE_TABLE_COLUMN_CONFIG,
-            ADD_TABLE_ROW, UPDATE_TABLE_ROW, DELETE_TABLE_ROW, UPDATE_TABLE_CELL, CLEAR_TABLE_CELL, CLEAR_TABLE_CELLS,
-            ADD_ROW_PAGE_BLOCK, UPDATE_ROW_PAGE_BLOCK, DELETE_ROW_PAGE_BLOCK,
-            CHANGE_TABLE_VIEW, SET_TABLE_VIEW_CONFIG, SORT_TABLE, FILTER_TABLE, GROUP_TABLE.
-
-            Main fields you may use:
-            targetTitle, title, content, blockType, blockText, propertyName, propertyType, value,
-            tableTitle, tableView, columnId, columnName, newColumnName, columnType, rowId, rowTitle, newRowTitle,
-            cellValues, tableColumns, tableRows, options, formula, sortDirection, filterQuery, groupByColumnName,
-            textToFormat, format, linkUrl, color, highlight, rangeStart, rangeEnd.
-
-            Table column types:
-            Text, Number, Select, MultiSelect, Status, Date, Person, Files, Checkbox, URL, Email, Phone,
-            Formula, Relation, Rollup, CreatedTime, CreatedBy, LastEditedTime, LastEditedBy, Button, Place, ID.
+            $actionContractPrompt
 
             Decision rules:
             - Home request to create a new tracker/jadual/table/page: use CREATE_PAGE with tableTitle, tableColumns, and tableRows when useful.
@@ -452,6 +436,8 @@ class AiService(
             - Use Type "Income" for gaji/salary/income, "Debt" for hutang/debt, otherwise "Expense".
             - For Select, MultiSelect, or Status dropdown values, include options as a string array on the column or action.
             - If the user asks for a category dropdown, use columnType "Select" and include category options.
+            - If the user asks to be reminded, use CREATE_REMINDER. Include a clear title and either positive delayMinutes for a relative time or cellValues with Date for an absolute date. Do not use CREATE_TASK as a substitute for a reminder.
+            - If the user asks for a task without a reminder, use CREATE_TASK. A task date is optional and does not schedule a notification by itself.
             - For multi-step requests, return multiple actions in order.
 
             Examples:
@@ -478,6 +464,9 @@ class AiService(
 
             User: bold perkataan ayam dalam block jadual penjagaan
             JSON: {"reply":"Siap - saya format teks itu.","actions":[{"type":"FORMAT_BLOCK_TEXT","blockText":"jadual penjagaan","textToFormat":"ayam","format":"Bold"}]}
+
+            User: ingatkan saya bayar bil dalam 30 minit
+            JSON: {"reply":"Baik, saya tetapkan peringatan bayar bil dalam 30 minit.","actions":[{"type":"CREATE_REMINDER","title":"Bayar bil","delayMinutes":30}]}
 
             Context:
             $context

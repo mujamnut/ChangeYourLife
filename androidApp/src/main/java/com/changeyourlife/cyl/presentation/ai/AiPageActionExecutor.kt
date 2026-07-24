@@ -11,20 +11,35 @@ import com.changeyourlife.cyl.domain.repository.PageRepository
 import com.changeyourlife.cyl.domain.repository.ReminderRepository
 import com.changeyourlife.cyl.domain.repository.TaskRepository
 import com.changeyourlife.cyl.domain.usecase.ApplyEditorCommandUseCase
+import com.changeyourlife.cyl.domain.usecase.PageMutationUseCase
+import com.changeyourlife.cyl.domain.usecase.ScheduleTableDateReminderUseCase
+import com.changeyourlife.cyl.domain.usecase.TableMutationUseCase
 import com.changeyourlife.cyl.presentation.page.PageBlockCodec
 import javax.inject.Inject
 
 class AiPageActionExecutor @Inject constructor(
     private val pageRepository: PageRepository,
-    taskRepository: TaskRepository,
-    reminderRepository: ReminderRepository,
-    applyEditorCommandUseCase: ApplyEditorCommandUseCase,
+    pageMutationUseCase: PageMutationUseCase,
+    tableMutationUseCase: TableMutationUseCase,
+    scheduleTableDateReminderUseCase: ScheduleTableDateReminderUseCase,
 ) {
     private val mutationEngine = AiPageActionMutationEngine(
         pageRepository = pageRepository,
-        taskRepository = taskRepository,
-        reminderRepository = reminderRepository,
-        applyEditorCommandUseCase = applyEditorCommandUseCase,
+        pageMutationUseCase = pageMutationUseCase,
+        tableMutationUseCase = tableMutationUseCase,
+        scheduleTableDateReminderUseCase = scheduleTableDateReminderUseCase,
+    )
+
+    constructor(
+        pageRepository: PageRepository,
+        @Suppress("UNUSED_PARAMETER") taskRepository: TaskRepository,
+        reminderRepository: ReminderRepository,
+        applyEditorCommandUseCase: ApplyEditorCommandUseCase,
+    ) : this(
+        pageRepository = pageRepository,
+        pageMutationUseCase = PageMutationUseCase(applyEditorCommandUseCase),
+        tableMutationUseCase = TableMutationUseCase(applyEditorCommandUseCase),
+        scheduleTableDateReminderUseCase = ScheduleTableDateReminderUseCase(reminderRepository),
     )
 
     fun supports(action: ChatAction): Boolean =
@@ -40,7 +55,6 @@ class AiPageActionExecutor @Inject constructor(
         var workingDocument = document
         var titleChanged = false
         var documentChanged = false
-        var directDocumentChanged = false
         val messages = mutableListOf<String>()
         val validationIssues = mutableListOf<AiPageActionValidationIssue>()
         val createdPages = mutableListOf<Page>()
@@ -119,24 +133,12 @@ class AiPageActionExecutor @Inject constructor(
                 workingDocument = updatedDocument
                 documentChanged = true
             }
-
-            if (result.updatedDocument == null && result.executedActionIndexes.isNotEmpty() && !documentChanged) {
-                pageRepository.getPage(page.id)?.let { persistedPage ->
-                    val persistedDocument = PageBlockCodec.decodeDocument(persistedPage.content)
-                    if (persistedDocument != workingDocument) {
-                        workingDocument = persistedDocument
-                        directDocumentChanged = true
-                    }
-                }
-            }
         }
 
         return AiPageActionExecutionResult(
             messages = messages,
             updatedTitle = workingTitle.takeIf { titleChanged },
-            updatedDocument = workingDocument.takeIf {
-                documentChanged || (titleChanged && directDocumentChanged)
-            },
+            updatedDocument = workingDocument.takeIf { documentChanged },
             createdPages = createdPages,
             createdTasks = createdTasks,
             createdReminders = createdReminders,

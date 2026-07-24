@@ -518,6 +518,43 @@ object AiActionContractSchema {
 
     val supportedTypes: Set<String> = specs.flatMapTo(linkedSetOf()) { spec -> spec.types }
 
+    val supportedTableColumnTypes: Set<String> = linkedSetOf(
+        "Text",
+        "Number",
+        "Select",
+        "MultiSelect",
+        "Status",
+        "Date",
+        "FilesMedia",
+        "Checkbox",
+        "Formula",
+        "Relation",
+        "Rollup",
+    )
+
+    /**
+     * Renders the model-facing action catalog from the same specs used by runtime validation.
+     * Keeping this here prevents backend prompts from advertising actions or fields that
+     * Android cannot parse and execute.
+     */
+    fun promptInstructions(): String = buildString {
+        appendLine("$CYL_ACTION_SCHEMA_NAME version $CYL_ACTION_SCHEMA_VERSION")
+        appendLine("Every action object must include type and may only include fields listed for that action group.")
+        appendLine("Supported action groups:")
+        specs.forEach { spec ->
+            append("- ")
+            append(spec.domain.wireValue)
+            append(": ")
+            append(spec.types.sorted().joinToString(", "))
+            appendLine()
+            append("  allowed fields: ")
+            appendLine(spec.allowedFields.sorted().joinToString(", "))
+        }
+        append("Supported table column types: ")
+        appendLine(supportedTableColumnTypes.joinToString(", "))
+        appendLine("Do not invent action types, field names, or table column types outside this contract.")
+    }.trimEnd()
+
     fun domainFor(type: String): AiActionDomain? {
         val normalizedType = normalizeType(type)
         return specs.firstOrNull { spec -> normalizedType in spec.types }?.domain
@@ -918,8 +955,60 @@ private fun AiActionWire.requiredFieldIssues(actionIndex: Int?): List<AiActionCo
             groupByColumnId,
             groupByColumnName,
         )
+
+        "CREATE_TASK" ->
+            requireAny(
+                "title",
+                "Create task action needs title, rowTitle, content, value, or a task cell value.",
+                title,
+                rowTitle,
+                content,
+                value,
+                cellValues.taskLikeValue(),
+            )
+
+        "CREATE_REMINDER" -> {
+            requireAny(
+                "title",
+                "Create reminder action needs title, rowTitle, content, value, or a task cell value.",
+                title,
+                rowTitle,
+                content,
+                value,
+                cellValues.taskLikeValue(),
+            )
+            val hasDateValue = cellValues.entries.any { (key, cellValue) ->
+                key.normalizedHumanKey() in ReminderDateFieldNames && cellValue.isNotBlank()
+            }
+            if (delayMinutes == null && !hasDateValue) {
+                add(
+                    missingField(
+                        actionIndex = actionIndex,
+                        field = "delayMinutes|cellValues.date",
+                        message = "Create reminder action needs a positive delayMinutes or a date/time value in cellValues.",
+                    ),
+                )
+            } else if (delayMinutes != null && delayMinutes <= 0) {
+                add(
+                    AiActionContractIssue(
+                        actionIndex = actionIndex,
+                        field = "delayMinutes",
+                        code = "invalid_field_value",
+                        message = "Reminder delayMinutes must be greater than zero.",
+                    ),
+                )
+            }
+        }
     }
 }
+
+private fun Map<String, String>.taskLikeValue(): String? =
+    entries.firstOrNull { (key, value) ->
+        key.normalizedHumanKey() in TaskTitleFieldNames && value.isNotBlank()
+    }?.value
+
+private fun String.normalizedHumanKey(): String =
+    trim().lowercase().replace('_', ' ').replace('-', ' ')
 
 private fun missingField(actionIndex: Int?, field: String, message: String): AiActionContractIssue =
     AiActionContractIssue(
@@ -1022,6 +1111,8 @@ private val ColumnConfig = setOf(
     "rollupAggregation",
 )
 private val RowTarget = setOf("rowId", "rowTitle", "newRowTitle")
+private val TaskTitleFieldNames = setOf("task", "name", "title", "item", "reminder")
+private val ReminderDateFieldNames = setOf("date", "due date", "deadline", "time", "reminder")
 private val ViewConfig = setOf(
     "calendarDateColumnId",
     "calendarDateColumnName",

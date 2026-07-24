@@ -32,12 +32,23 @@ class ScheduleTableDateReminderUseCase @Inject constructor(
         rowId: String,
         columnId: String,
         value: String,
-    ) {
-        val tableBlock = document.findTableBlock(tableBlockId) ?: return cancel(page, tableBlockId, rowId, columnId)
+    ): Reminder? {
+        val tableBlock = document.findTableBlock(tableBlockId)
+        if (tableBlock == null) {
+            cancel(page, tableBlockId, rowId, columnId)
+            return null
+        }
         val table = tableBlock.table
-        val column = table.columns.firstOrNull { it.id == columnId } ?: return cancel(page, tableBlockId, rowId, columnId)
-        if (column.type != PageTableColumnType.Date) return cancel(page, tableBlockId, rowId, columnId)
-        val row = table.rows.firstOrNull { it.id == rowId } ?: return cancel(page, tableBlockId, rowId, columnId)
+        val column = table.columns.firstOrNull { it.id == columnId }
+        if (column == null || column.type != PageTableColumnType.Date) {
+            cancel(page, tableBlockId, rowId, columnId)
+            return null
+        }
+        val row = table.rows.firstOrNull { it.id == rowId }
+        if (row == null) {
+            cancel(page, tableBlockId, rowId, columnId)
+            return null
+        }
         val parsed = value.parseDateCell()
         val dateValue = parsed.value
         val effectiveReminder = if (parsed.hasMetadata) dateValue.reminder else column.dateReminder
@@ -46,24 +57,24 @@ class ScheduleTableDateReminderUseCase @Inject constructor(
 
         if (remindAt == null || remindAt <= System.currentTimeMillis()) {
             cancel(page, tableBlockId, rowId, columnId)
-            return
+            return null
         }
 
         val now = System.currentTimeMillis()
-        reminderRepository.upsertReminder(
-            Reminder(
-                id = reminderId(page.id, tableBlockId, rowId, columnId),
-                workspaceId = page.workspaceId,
-                pageId = page.id,
-                taskId = null,
-                title = table.reminderTitle(row, column, page),
-                remindAt = remindAt,
-                isDone = false,
-                createdAt = now,
-                updatedAt = now,
-                deletedAt = null,
-            ),
+        val reminder = Reminder(
+            id = reminderId(page.id, tableBlockId, rowId, columnId),
+            workspaceId = page.workspaceId,
+            pageId = page.id,
+            taskId = null,
+            title = table.reminderTitle(row, column, page),
+            remindAt = remindAt,
+            isDone = false,
+            createdAt = now,
+            updatedAt = now,
+            deletedAt = null,
         )
+        reminderRepository.upsertReminder(reminder)
+        return reminder
     }
 
     suspend fun cancel(

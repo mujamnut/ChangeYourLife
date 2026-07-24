@@ -9,6 +9,12 @@ import org.junit.Test
 class AiPageActionDomainExecutorRegistryTest {
     @Test
     fun everySharedContractActionHasAnAndroidDomainExecutor() {
+        assertEquals(73, AiActionContractSchema.supportedTypes.size)
+        assertEquals(
+            AiActionContractSchema.supportedTypes,
+            AiActionExecutionRegistry.supportedActions,
+        )
+
         AiActionContractSchema.supportedTypes.forEach { actionType ->
             val action = ChatAction(type = actionType, title = "Target")
             val executor = AiPageActionDomainExecutorRegistry.executorFor(action)

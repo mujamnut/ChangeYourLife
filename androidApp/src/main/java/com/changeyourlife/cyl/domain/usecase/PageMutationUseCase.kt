@@ -87,10 +87,14 @@ class PageMutationUseCase(
     fun toggleTodoBlock(
         document: PageBlockDocument,
         blockId: String,
+        isChecked: Boolean? = null,
     ): PageMutationResult {
         return apply(
             document = document,
-            command = EditorCommand.ToggleTodo(blockId),
+            command = EditorCommand.ToggleTodo(
+                blockId = blockId,
+                isChecked = isChecked,
+            ),
         )
     }
 
@@ -100,9 +104,23 @@ class PageMutationUseCase(
         parentBlockId: String? = null,
     ): BlockMutationResult {
         val block = PageContentCodec.newBlock(type)
+        return insertBlock(
+            document = document,
+            block = block,
+            parentBlockId = parentBlockId,
+        )
+    }
+
+    fun insertBlock(
+        document: PageBlockDocument,
+        block: PageBlock,
+        parentBlockId: String? = null,
+        index: Int? = null,
+    ): BlockMutationResult {
         val command = EditorCommand.InsertBlock(
             block = block,
             parentBlockId = parentBlockId,
+            index = index,
         )
         val applied = applyEditorCommandUseCase(
             document = document,
@@ -265,14 +283,19 @@ class PageMutationUseCase(
         document: PageBlockDocument,
         type: PagePropertyType,
         name: String,
+        value: String = "",
+        index: Int? = null,
     ): PropertyMutationResult {
         val property = PageContentCodec.newProperty(
             type = type,
             name = name.ifBlank { "Untitled property" },
-        )
+        ).copy(value = value)
         val applied = applyEditorCommandUseCase(
             document = document,
-            command = EditorCommand.InsertProperty(property),
+            command = EditorCommand.InsertProperty(
+                property = property,
+                index = index,
+            ),
         )
         return PropertyMutationResult(
             applied = applied,
@@ -298,6 +321,16 @@ class PageMutationUseCase(
         val property = document.properties.firstOrNull { it.id == propertyId }
             ?: return PropertyMutationResult(document.unchangedApplied(), property = null)
         return replaceProperty(document, property.copy(value = value))
+    }
+
+    fun updatePropertyType(
+        document: PageBlockDocument,
+        propertyId: String,
+        type: PagePropertyType,
+    ): PropertyMutationResult {
+        val property = document.properties.firstOrNull { it.id == propertyId }
+            ?: return PropertyMutationResult(document.unchangedApplied(), property = null)
+        return replaceProperty(document, property.copy(type = type))
     }
 
     fun deleteProperty(
