@@ -8,6 +8,7 @@ data class AiUndoCommandSummary(
     val commandType: String,
     val targetType: String,
     val targetId: String,
+    val pageId: String = "",
     val blockId: String = "",
     val text: String = "",
     val richTextSpans: List<PageTextSpan> = emptyList(),
@@ -21,7 +22,89 @@ data class AiUndoCommandSummary(
     val table: PageTable? = null,
     val property: PageProperty? = null,
     val propertyId: String = "",
+    val pageSnapshots: List<AiPageSnapshot> = emptyList(),
 )
+
+@Serializable
+data class AiPageSnapshot(
+    val id: String,
+    val workspaceId: String,
+    val parentPageId: String? = null,
+    val title: String,
+    val content: String,
+    val sortOrder: Int,
+    val createdAt: Long,
+    val updatedAt: Long,
+    val deletedAt: Long? = null,
+    val revision: Long = 0L,
+)
+
+fun Page.toAiPageSnapshot(): AiPageSnapshot {
+    return AiPageSnapshot(
+        id = id,
+        workspaceId = workspaceId,
+        parentPageId = parentPageId,
+        title = title,
+        content = content,
+        sortOrder = sortOrder,
+        createdAt = createdAt,
+        updatedAt = updatedAt,
+        deletedAt = deletedAt,
+        revision = revision,
+    )
+}
+
+fun AiPageSnapshot.toPage(): Page {
+    return Page(
+        id = id,
+        workspaceId = workspaceId,
+        parentPageId = parentPageId,
+        title = title,
+        content = content,
+        sortOrder = sortOrder,
+        createdAt = createdAt,
+        updatedAt = updatedAt,
+        deletedAt = deletedAt,
+        revision = revision,
+    )
+}
+
+fun restorePageSnapshotsUndo(
+    actionIndex: Int,
+    pages: List<Page>,
+): AiUndoCommandSummary {
+    val snapshots = pages
+        .distinctBy(Page::id)
+        .map(Page::toAiPageSnapshot)
+    require(snapshots.isNotEmpty()) { "At least one page snapshot is required." }
+    return AiUndoCommandSummary(
+        actionIndex = actionIndex,
+        commandType = AiUndoCommandType.RestorePageSnapshots,
+        targetType = "Page",
+        targetId = snapshots.first().id,
+        pageId = snapshots.first().id,
+        pageSnapshots = snapshots,
+    )
+}
+
+fun deleteCreatedPageUndo(
+    actionIndex: Int,
+    pageId: String,
+): AiUndoCommandSummary {
+    require(pageId.isNotBlank()) { "Created page id is required." }
+    return AiUndoCommandSummary(
+        actionIndex = actionIndex,
+        commandType = AiUndoCommandType.DeleteCreatedPage,
+        targetType = "Page",
+        targetId = pageId,
+        pageId = pageId,
+    )
+}
+
+object AiUndoCommandType {
+    const val RestorePageSnapshots = "RestorePageSnapshots"
+    const val DeleteCreatedPage = "DeleteCreatedPage"
+}
 
 fun EditorCommand.toAiUndoCommandSummary(actionIndex: Int): AiUndoCommandSummary {
     return when (this) {

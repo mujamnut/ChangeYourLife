@@ -33,35 +33,49 @@ class ScheduleTableDateReminderUseCase @Inject constructor(
         columnId: String,
         value: String,
     ): Reminder? {
-        val tableBlock = document.findTableBlock(tableBlockId)
-        if (tableBlock == null) {
+        val reminder = resolve(
+            page = page,
+            document = document,
+            tableBlockId = tableBlockId,
+            rowId = rowId,
+            columnId = columnId,
+            value = value,
+        )
+        if (reminder == null) {
             cancel(page, tableBlockId, rowId, columnId)
             return null
         }
-        val table = tableBlock.table
+        reminderRepository.upsertReminder(reminder)
+        return reminder
+    }
+
+    fun resolve(
+        page: Page,
+        document: PageBlockDocument,
+        tableBlockId: String,
+        rowId: String,
+        columnId: String,
+        value: String,
+        nowMillis: Long = System.currentTimeMillis(),
+    ): Reminder? {
+        val table = document.findTableBlock(tableBlockId)?.table ?: return null
         val column = table.columns.firstOrNull { it.id == columnId }
-        if (column == null || column.type != PageTableColumnType.Date) {
-            cancel(page, tableBlockId, rowId, columnId)
-            return null
-        }
-        val row = table.rows.firstOrNull { it.id == rowId }
-        if (row == null) {
-            cancel(page, tableBlockId, rowId, columnId)
-            return null
-        }
+            ?.takeIf { it.type == PageTableColumnType.Date }
+            ?: return null
+        val row = table.rows.firstOrNull { it.id == rowId } ?: return null
         val parsed = value.parseDateCell()
         val dateValue = parsed.value
         val effectiveReminder = if (parsed.hasMetadata) dateValue.reminder else column.dateReminder
         val effectiveTimezone = if (parsed.hasMetadata) dateValue.timezoneLabel else column.timezoneLabel
-        val remindAt = dateValue.toReminderInstant(effectiveReminder, effectiveTimezone)?.toEpochMilli()
+        val remindAt = dateValue.toReminderInstant(
+            reminder = effectiveReminder,
+            timezoneLabel = effectiveTimezone,
+            now = Instant.ofEpochMilli(nowMillis),
+        )?.toEpochMilli()
+            ?.takeIf { instant -> instant > nowMillis }
+            ?: return null
 
-        if (remindAt == null || remindAt <= System.currentTimeMillis()) {
-            cancel(page, tableBlockId, rowId, columnId)
-            return null
-        }
-
-        val now = System.currentTimeMillis()
-        val reminder = Reminder(
+        return Reminder(
             id = reminderId(page.id, tableBlockId, rowId, columnId),
             workspaceId = page.workspaceId,
             pageId = page.id,
@@ -69,12 +83,10 @@ class ScheduleTableDateReminderUseCase @Inject constructor(
             title = table.reminderTitle(row, column, page),
             remindAt = remindAt,
             isDone = false,
-            createdAt = now,
-            updatedAt = now,
+            createdAt = nowMillis,
+            updatedAt = nowMillis,
             deletedAt = null,
         )
-        reminderRepository.upsertReminder(reminder)
-        return reminder
     }
 
     suspend fun cancel(
@@ -125,6 +137,7 @@ class ScheduleTableDateReminderUseCase @Inject constructor(
     private fun PageTableDateCellValue.toReminderInstant(
         reminder: PageTableDateReminder,
         timezoneLabel: String,
+        now: Instant,
     ): Instant? {
         if (reminder == PageTableDateReminder.None) return null
         val date = startDate.toLocalDateOrNull() ?: return null
@@ -134,7 +147,6 @@ class ScheduleTableDateReminderUseCase @Inject constructor(
             else -> date.atTime(DefaultReminderTime)
         }
         val zoneId = timezoneLabel.toZoneIdOrLocal()
-        val now = Instant.now()
         val onDayDateTime = date.atTime(DefaultReminderTime)
         val reminderDateTime = when (reminder) {
             PageTableDateReminder.None -> return null

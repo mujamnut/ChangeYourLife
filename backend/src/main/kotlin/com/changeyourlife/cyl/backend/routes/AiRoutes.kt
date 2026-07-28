@@ -181,6 +181,9 @@ private fun ChatWithActionsRequest.idempotencyFingerprint(): String {
     pages.forEach { page ->
         digest.updateField(page.id)
         digest.updateField(page.title)
+        digest.updateField(page.totalBlockCount.toString())
+        digest.updateField(page.isFocused.toString())
+        digest.updateField(page.contextComplete.toString())
         page.blocks.forEach { block ->
             digest.updateField(block.id)
             digest.updateField(block.type)
@@ -192,6 +195,24 @@ private fun ChatWithActionsRequest.idempotencyFingerprint(): String {
             digest.updateField(block.rowTitle)
             digest.updateField(block.rowBlockId)
             digest.updateField(block.isChecked?.toString().orEmpty())
+            digest.updateField(block.totalRowCount.toString())
+            digest.updateField(block.contextComplete.toString())
+            block.tableColumns.forEach { column ->
+                digest.updateField(column.id)
+                digest.updateField(column.name)
+                digest.updateField(column.type)
+                digest.updateField(column.config)
+            }
+            block.tableRows.forEach { row ->
+                digest.updateField(row.id)
+                digest.updateField(row.title)
+                digest.updateField(row.totalBlockCount.toString())
+                row.cells.forEach { cell ->
+                    digest.updateField(cell.columnId)
+                    digest.updateField(cell.columnName)
+                    digest.updateField(cell.value)
+                }
+            }
         }
     }
     tasks.forEach { task ->

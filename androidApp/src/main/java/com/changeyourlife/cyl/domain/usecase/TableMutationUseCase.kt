@@ -6,6 +6,7 @@ import com.changeyourlife.cyl.domain.model.PageContentCodec
 import com.changeyourlife.cyl.domain.model.PageBlock
 import com.changeyourlife.cyl.domain.model.PageBlockDocument
 import com.changeyourlife.cyl.domain.model.PageBlockType
+import com.changeyourlife.cyl.domain.model.PageMediaAttachment
 import com.changeyourlife.cyl.domain.model.PageTable
 import com.changeyourlife.cyl.domain.model.PageTableCellValue
 import com.changeyourlife.cyl.domain.model.PageTableColumn
@@ -17,6 +18,8 @@ import com.changeyourlife.cyl.domain.model.PageTableFilter
 import com.changeyourlife.cyl.domain.model.PageTableFilterOperator
 import com.changeyourlife.cyl.domain.model.PageTableRollupAggregation
 import com.changeyourlife.cyl.domain.model.PageTableRow
+import com.changeyourlife.cyl.domain.model.PageTableSavedView
+import com.changeyourlife.cyl.domain.model.PageTableSelectOption
 import com.changeyourlife.cyl.domain.model.PageTableSort
 import com.changeyourlife.cyl.domain.model.PageTableSortDirection
 import com.changeyourlife.cyl.domain.model.PageTableTimeFormat
@@ -58,6 +61,109 @@ class TableMutationUseCase(
         view: PageTableView,
     ): TableMutationResult = replaceTable(document, tableBlockId) { table ->
         table.copy(view = view)
+    }
+
+    fun createSavedView(
+        document: PageBlockDocument,
+        tableBlockId: String,
+        name: String,
+        view: PageTableView,
+        viewId: String = UUID.randomUUID().toString(),
+        calendarDateColumnId: String? = null,
+        timelineStartColumnId: String? = null,
+        timelineEndColumnId: String? = null,
+        dashboardMetricColumnId: String? = null,
+        dashboardGroupColumnId: String? = null,
+        sort: PageTableSort? = null,
+        filter: PageTableFilter? = null,
+        groupByColumnId: String? = null,
+    ): TableMutationResult = replaceTable(document, tableBlockId) { table ->
+        val normalizedName = name.trim().ifBlank { view.name }
+        if (table.viewConfig.savedViews.any { saved ->
+                saved.name.equals(normalizedName, ignoreCase = true)
+            }
+        ) {
+            return@replaceTable table
+        }
+        val tableWithView = table.copy(
+            view = view,
+            sort = sort ?: table.sort,
+            filter = filter ?: table.filter,
+            groupByColumnId = groupByColumnId ?: table.groupByColumnId,
+            viewConfig = table.viewConfig.copy(
+                calendarDateColumnId = calendarDateColumnId ?: table.viewConfig.calendarDateColumnId,
+                timelineStartColumnId = timelineStartColumnId ?: table.viewConfig.timelineStartColumnId,
+                timelineEndColumnId = timelineEndColumnId ?: table.viewConfig.timelineEndColumnId,
+                dashboardMetricColumnId = dashboardMetricColumnId ?: table.viewConfig.dashboardMetricColumnId,
+                dashboardGroupColumnId = dashboardGroupColumnId ?: table.viewConfig.dashboardGroupColumnId,
+            ),
+        )
+        val savedView = tableWithView.toSavedView(viewId, normalizedName)
+        tableWithView.copy(
+            viewConfig = tableWithView.viewConfig.copy(
+                savedViews = tableWithView.viewConfig.savedViews + savedView,
+                activeSavedViewId = savedView.id,
+            ),
+        )
+    }
+
+    fun renameSavedView(
+        document: PageBlockDocument,
+        tableBlockId: String,
+        viewId: String,
+        viewName: String,
+        newName: String,
+    ): TableMutationResult = replaceTable(document, tableBlockId) { table ->
+        val target = table.viewConfig.savedViews.findSavedView(viewId, viewName)
+            ?: return@replaceTable table
+        val normalizedName = newName.trim()
+        if (normalizedName.isBlank() || table.viewConfig.savedViews.any { saved ->
+                saved.id != target.id && saved.name.equals(normalizedName, ignoreCase = true)
+            }
+        ) {
+            return@replaceTable table
+        }
+        table.copy(
+            viewConfig = table.viewConfig.copy(
+                savedViews = table.viewConfig.savedViews.map { saved ->
+                    if (saved.id == target.id) saved.copy(name = normalizedName) else saved
+                },
+            ),
+        )
+    }
+
+    fun deleteSavedView(
+        document: PageBlockDocument,
+        tableBlockId: String,
+        viewId: String,
+        viewName: String,
+    ): TableMutationResult = replaceTable(document, tableBlockId) { table ->
+        val target = table.viewConfig.savedViews.findSavedView(viewId, viewName)
+            ?: return@replaceTable table
+        val remaining = table.viewConfig.savedViews.filterNot { saved -> saved.id == target.id }
+        val nextActive = if (table.viewConfig.activeSavedViewId == target.id) {
+            remaining.firstOrNull()
+        } else {
+            remaining.firstOrNull { saved -> saved.id == table.viewConfig.activeSavedViewId }
+        }
+        val withoutTarget = table.copy(
+            viewConfig = table.viewConfig.copy(
+                savedViews = remaining,
+                activeSavedViewId = nextActive?.id.orEmpty(),
+            ),
+        )
+        if (nextActive != null) withoutTarget.applySavedView(nextActive) else withoutTarget
+    }
+
+    fun activateSavedView(
+        document: PageBlockDocument,
+        tableBlockId: String,
+        viewId: String,
+        viewName: String,
+    ): TableMutationResult = replaceTable(document, tableBlockId) { table ->
+        val target = table.viewConfig.savedViews.findSavedView(viewId, viewName)
+            ?: return@replaceTable table
+        table.applySavedView(target)
     }
 
     fun updateViewConfig(
@@ -103,6 +209,18 @@ class TableMutationUseCase(
         }
         fun mappedColumnId(columnId: String): String = columnIdMap[columnId].orEmpty()
         val sourceViewConfig = sourceTable.viewConfig
+        val sourceSavedViews = sourceViewConfig.savedViews.map { saved ->
+            saved.copy(
+                calendarDateColumnId = mappedColumnId(saved.calendarDateColumnId),
+                timelineStartColumnId = mappedColumnId(saved.timelineStartColumnId),
+                timelineEndColumnId = mappedColumnId(saved.timelineEndColumnId),
+                dashboardMetricColumnId = mappedColumnId(saved.dashboardMetricColumnId),
+                dashboardGroupColumnId = mappedColumnId(saved.dashboardGroupColumnId),
+                sort = saved.sort.copy(columnId = mappedColumnId(saved.sort.columnId)),
+                filter = saved.filter.copy(columnId = mappedColumnId(saved.filter.columnId)),
+                groupByColumnId = mappedColumnId(saved.groupByColumnId),
+            )
+        }
         val nextViewConfig = table.viewConfig.copy(
             calendarDateColumnId = mappedColumnId(sourceViewConfig.calendarDateColumnId),
             timelineStartColumnId = mappedColumnId(sourceViewConfig.timelineStartColumnId),
@@ -112,6 +230,10 @@ class TableMutationUseCase(
             dataSourcePageId = sourcePageId,
             dataSourceTableBlockId = sourceTableBlockId,
             dataSourceTitle = sourceTitle.ifBlank { sourceTable.title },
+            savedViews = sourceSavedViews,
+            activeSavedViewId = sourceViewConfig.activeSavedViewId
+                .takeIf { activeId -> sourceSavedViews.any { saved -> saved.id == activeId } }
+                .orEmpty(),
         )
         table.copy(
             title = table.title.takeUnless { title -> title.isBlank() || title == "Untitled database" }
@@ -540,6 +662,50 @@ class TableMutationUseCase(
         )
     }
 
+    fun updateMediaCell(
+        document: PageBlockDocument,
+        tableBlockId: String,
+        rowId: String,
+        columnId: String,
+        transform: (List<PageMediaAttachment>) -> List<PageMediaAttachment>,
+    ): TableCellMutationResult {
+        var coercedValue: String? = null
+        val result = replaceTable(document, tableBlockId) { table ->
+            val column = table.columns.firstOrNull { tableColumn -> tableColumn.id == columnId }
+                ?: return@replaceTable table
+            if (column.type != PageTableColumnType.FilesMedia) return@replaceTable table
+            table.copy(
+                rows = table.rows.map { row ->
+                    if (row.id != rowId) return@map row
+                    val currentFiles = row.cellValues[columnId]
+                        ?.takeIf { value -> value.type == PageTableColumnType.FilesMedia }
+                        ?.files
+                        .orEmpty()
+                    val nextFiles = transform(currentFiles)
+                        .filter { file -> file.uri.isNotBlank() || file.name.isNotBlank() }
+                        .distinctBy { file -> file.id.ifBlank { file.uri.ifBlank { file.name } } }
+                    val nextValue = nextFiles.joinToString(", ") { file ->
+                        file.name.ifBlank { file.uri }
+                    }
+                    coercedValue = nextValue
+                    row.copy(
+                        cells = row.cells + (columnId to nextValue),
+                        cellValues = row.cellValues + (
+                            columnId to PageTableCellValue(
+                                type = PageTableColumnType.FilesMedia,
+                                files = nextFiles,
+                            )
+                            ),
+                    )
+                },
+            )
+        }
+        return TableCellMutationResult(
+            mutation = result,
+            coercedValue = coercedValue,
+        )
+    }
+
     fun addColumn(
         document: PageBlockDocument,
         tableBlockId: String,
@@ -637,7 +803,58 @@ class TableMutationUseCase(
                 sort = if (table.sort.columnId == columnId) PageTableSort() else table.sort,
                 filter = if (table.filter.columnId == columnId) PageTableFilter() else table.filter,
                 groupByColumnId = if (table.groupByColumnId == columnId) "" else table.groupByColumnId,
+                viewConfig = table.viewConfig.copy(
+                    savedViews = table.viewConfig.savedViews.map { saved ->
+                        saved.withoutColumn(columnId)
+                    },
+                ),
             ),
+        )
+    }
+
+    fun updateColumnOptions(
+        document: PageBlockDocument,
+        tableBlockId: String,
+        columnId: String,
+        options: List<PageTableSelectOption>,
+        renamedOption: Pair<String, String>? = null,
+        deletedOptionName: String = "",
+    ): TableMutationResult = replaceTable(document, tableBlockId) { table ->
+        val column = table.columns.firstOrNull { candidate -> candidate.id == columnId }
+            ?: return@replaceTable table
+        if (column.type !in setOf(
+                PageTableColumnType.Select,
+                PageTableColumnType.MultiSelect,
+                PageTableColumnType.Status,
+            )
+        ) {
+            return@replaceTable table
+        }
+        val nextColumn = column.copy(
+            config = column.config.copy(options = options).normalizedForType(column.type),
+        )
+        table.copy(
+            columns = table.columns.map { current ->
+                if (current.id == columnId) nextColumn else current
+            },
+            rows = table.rows.map { row ->
+                val currentValue = row.cells[columnId].orEmpty()
+                val nextValue = currentValue.remapTableOptionValue(
+                    type = column.type,
+                    renamedOption = renamedOption,
+                    deletedOptionName = deletedOptionName,
+                )
+                if (nextValue == currentValue) {
+                    row
+                } else {
+                    row.copy(
+                        cells = row.cells + (columnId to nextValue),
+                        cellValues = row.cellValues + (
+                            columnId to nextColumn.toTypedCellValue(nextValue)
+                            ),
+                    )
+                }
+            },
         )
     }
 
@@ -802,17 +1019,18 @@ class TableMutationUseCase(
         tableBlockId: String,
         table: PageTable,
     ): TableMutationResult {
+        val normalizedTable = table.withActiveSavedViewSynced()
         val result = applyEditorCommandUseCase(
             document = this,
             command = EditorCommand.ReplaceTable(
                 blockId = tableBlockId,
-                table = table,
+                table = normalizedTable,
             ),
         ).result
         return TableMutationResult(
             commandResult = result,
             tableBlockId = tableBlockId,
-            table = table,
+            table = normalizedTable,
         )
     }
 
@@ -962,6 +1180,78 @@ private fun PageTableColumn.withoutColumnReference(columnId: String): PageTableC
     )
 }
 
+private fun PageTableSavedView.withoutColumn(columnId: String): PageTableSavedView {
+    return copy(
+        calendarDateColumnId = calendarDateColumnId.takeUnless { it == columnId }.orEmpty(),
+        timelineStartColumnId = timelineStartColumnId.takeUnless { it == columnId }.orEmpty(),
+        timelineEndColumnId = timelineEndColumnId.takeUnless { it == columnId }.orEmpty(),
+        dashboardMetricColumnId = dashboardMetricColumnId.takeUnless { it == columnId }.orEmpty(),
+        dashboardGroupColumnId = dashboardGroupColumnId.takeUnless { it == columnId }.orEmpty(),
+        sort = if (sort.columnId == columnId) PageTableSort() else sort,
+        filter = if (filter.columnId == columnId) PageTableFilter() else filter,
+        groupByColumnId = groupByColumnId.takeUnless { it == columnId }.orEmpty(),
+    )
+}
+
+private fun List<PageTableSavedView>.findSavedView(
+    viewId: String,
+    viewName: String,
+): PageTableSavedView? {
+    if (viewId.isNotBlank()) {
+        firstOrNull { saved -> saved.id == viewId }?.let { return it }
+    }
+    return firstOrNull { saved -> saved.name.equals(viewName, ignoreCase = true) }
+}
+
+private fun PageTable.toSavedView(
+    id: String,
+    name: String,
+): PageTableSavedView = PageTableSavedView(
+    id = id,
+    name = name,
+    view = view,
+    calendarDateColumnId = viewConfig.calendarDateColumnId,
+    timelineStartColumnId = viewConfig.timelineStartColumnId,
+    timelineEndColumnId = viewConfig.timelineEndColumnId,
+    dashboardMetricColumnId = viewConfig.dashboardMetricColumnId,
+    dashboardGroupColumnId = viewConfig.dashboardGroupColumnId,
+    sort = sort,
+    filter = filter,
+    groupByColumnId = groupByColumnId,
+)
+
+private fun PageTable.applySavedView(savedView: PageTableSavedView): PageTable {
+    return copy(
+        view = savedView.view,
+        sort = savedView.sort,
+        filter = savedView.filter,
+        groupByColumnId = savedView.groupByColumnId,
+        viewConfig = viewConfig.copy(
+            calendarDateColumnId = savedView.calendarDateColumnId,
+            timelineStartColumnId = savedView.timelineStartColumnId,
+            timelineEndColumnId = savedView.timelineEndColumnId,
+            dashboardMetricColumnId = savedView.dashboardMetricColumnId,
+            dashboardGroupColumnId = savedView.dashboardGroupColumnId,
+            activeSavedViewId = savedView.id,
+        ),
+    )
+}
+
+private fun PageTable.withActiveSavedViewSynced(): PageTable {
+    val activeId = viewConfig.activeSavedViewId
+    if (activeId.isBlank()) return this
+    val active = viewConfig.savedViews.firstOrNull { saved -> saved.id == activeId }
+        ?: return copy(viewConfig = viewConfig.copy(activeSavedViewId = ""))
+    val snapshot = toSavedView(id = active.id, name = active.name)
+    return copy(
+        viewConfig = viewConfig.copy(
+            savedViews = viewConfig.savedViews.map { saved ->
+                if (saved.id == active.id) snapshot else saved
+            },
+        ),
+    )
+}
+
 private fun PageTableColumnType.coerceManualCellValue(value: String): String {
     return when (this) {
         PageTableColumnType.Formula,
@@ -1026,6 +1316,31 @@ private fun String.toTableChoiceListValue(): String {
         .filter { value -> value.isNotBlank() }
         .distinctBy { value -> value.lowercase() }
         .joinToString(", ")
+}
+
+private fun String.remapTableOptionValue(
+    type: PageTableColumnType,
+    renamedOption: Pair<String, String>?,
+    deletedOptionName: String,
+): String {
+    val values = if (type == PageTableColumnType.MultiSelect) {
+        split(",").map(String::trim)
+    } else {
+        listOf(trim())
+    }
+    val remapped = values.mapNotNull { value ->
+        when {
+            deletedOptionName.isNotBlank() && value.equals(deletedOptionName, ignoreCase = true) -> null
+            renamedOption != null && value.equals(renamedOption.first, ignoreCase = true) -> renamedOption.second
+            value.isBlank() -> null
+            else -> value
+        }
+    }
+    return if (type == PageTableColumnType.MultiSelect) {
+        remapped.distinctBy(String::lowercase).joinToString(", ")
+    } else {
+        remapped.firstOrNull().orEmpty()
+    }
 }
 
 private fun List<String>.normalizedRelationRowIds(): List<String> {

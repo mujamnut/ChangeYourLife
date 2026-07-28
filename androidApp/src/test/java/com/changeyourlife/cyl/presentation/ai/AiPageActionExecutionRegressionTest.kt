@@ -5,19 +5,24 @@ import com.changeyourlife.cyl.domain.model.Page
 import com.changeyourlife.cyl.domain.model.PageBlock
 import com.changeyourlife.cyl.domain.model.PageBlockDocument
 import com.changeyourlife.cyl.domain.model.PageBlockType
+import com.changeyourlife.cyl.domain.model.PageMediaAttachment
 import com.changeyourlife.cyl.domain.model.PageProperty
 import com.changeyourlife.cyl.domain.model.PagePropertyType
 import com.changeyourlife.cyl.domain.model.PageSyncState
 import com.changeyourlife.cyl.domain.model.PageTable
+import com.changeyourlife.cyl.domain.model.PageTableCellValue
 import com.changeyourlife.cyl.domain.model.PageTableColumn
 import com.changeyourlife.cyl.domain.model.PageTableColumnConfig
 import com.changeyourlife.cyl.domain.model.PageTableColumnType
 import com.changeyourlife.cyl.domain.model.PageTableFilter
+import com.changeyourlife.cyl.domain.model.PageTableFilterOperator
 import com.changeyourlife.cyl.domain.model.PageTableRollupAggregation
 import com.changeyourlife.cyl.domain.model.PageTableRow
+import com.changeyourlife.cyl.domain.model.PageTableSavedView
 import com.changeyourlife.cyl.domain.model.PageTableSelectOption
 import com.changeyourlife.cyl.domain.model.PageTableSort
 import com.changeyourlife.cyl.domain.model.PageTableSortDirection
+import com.changeyourlife.cyl.domain.model.PageTableView
 import com.changeyourlife.cyl.domain.model.PageTableViewConfig
 import com.changeyourlife.cyl.domain.model.Reminder
 import com.changeyourlife.cyl.domain.repository.ChatAction
@@ -26,6 +31,7 @@ import com.changeyourlife.cyl.domain.repository.PageRepository
 import com.changeyourlife.cyl.domain.repository.ReminderRepository
 import com.changeyourlife.cyl.domain.usecase.ApplyEditorCommandUseCase
 import com.changeyourlife.cyl.domain.usecase.PageMutationUseCase
+import com.changeyourlife.cyl.domain.usecase.ReconcileTableDateRemindersUseCase
 import com.changeyourlife.cyl.domain.usecase.ScheduleTableDateReminderUseCase
 import com.changeyourlife.cyl.domain.usecase.TableMutationUseCase
 import com.changeyourlife.cyl.presentation.page.PageBlockCodec
@@ -46,6 +52,8 @@ class AiPageActionExecutionRegressionTest(
     @Test
     fun validSharedActionExecutesAgainstARealisticPageDocument() = runBlocking {
         val fixture = RegressionPageFixture.create(actionType)
+        val reminderRepository = RegressionReminderRepository()
+        val scheduleTableDateReminderUseCase = ScheduleTableDateReminderUseCase(reminderRepository)
         val executor = AiPageActionExecutor(
             pageRepository = RegressionPageRepository(
                 page = fixture.page,
@@ -53,8 +61,9 @@ class AiPageActionExecutionRegressionTest(
             ),
             pageMutationUseCase = PageMutationUseCase(ApplyEditorCommandUseCase()),
             tableMutationUseCase = TableMutationUseCase(ApplyEditorCommandUseCase()),
-            scheduleTableDateReminderUseCase = ScheduleTableDateReminderUseCase(
-                RegressionReminderRepository(),
+            scheduleTableDateReminderUseCase = scheduleTableDateReminderUseCase,
+            reconcileTableDateRemindersUseCase = ReconcileTableDateRemindersUseCase(
+                scheduleTableDateReminderUseCase,
             ),
         )
 
@@ -233,6 +242,38 @@ private object RegressionActionFixtures {
                 columnType = "Select",
                 options = listOf("Food", "Fuel", "Other"),
             )
+        "UPDATE_TABLE_DATE_CONFIG" ->
+            table(type).copy(
+                columnId = "column-date",
+                columnName = "Date",
+                dateFormat = "YearMonthDay",
+                timeFormat = "TwentyFourHour",
+                dateReminder = "OneDayBefore",
+                timezoneLabel = "Asia/Kuala_Lumpur",
+            )
+        "ADD_TABLE_COLUMN_OPTION" ->
+            table(type).copy(
+                columnId = "column-category",
+                columnName = "Category",
+                optionName = "Transport",
+                optionColor = "Blue",
+            )
+        "UPDATE_TABLE_COLUMN_OPTION" ->
+            table(type).copy(
+                columnId = "column-category",
+                columnName = "Category",
+                optionId = "food",
+                optionName = "Food",
+                newOptionName = "Meals",
+                optionColor = "Green",
+            )
+        "DELETE_TABLE_COLUMN_OPTION" ->
+            table(type).copy(
+                columnId = "column-category",
+                columnName = "Category",
+                optionId = "fuel",
+                optionName = "Fuel",
+            )
 
         "UPDATE_FORMULA_COLUMN" ->
             table(type).copy(
@@ -387,6 +428,46 @@ private object RegressionActionFixtures {
                 columnName = "Month",
                 filterQuery = "2026-07",
             )
+        "SET_RELATION_CELL" ->
+            table(type).copy(
+                rowId = "row-lunch",
+                rowTitle = "Lunch",
+                columnId = "column-relation",
+                columnName = "Category relation",
+                relationRowIds = listOf("category-row-food"),
+            )
+        "CLEAR_RELATION_CELL" ->
+            table(type).copy(
+                rowId = "row-lunch",
+                rowTitle = "Lunch",
+                columnId = "column-relation",
+                columnName = "Category relation",
+            )
+        "ADD_MEDIA_CELL" ->
+            table(type).copy(
+                rowId = "row-lunch",
+                rowTitle = "Lunch",
+                columnId = "column-receipt",
+                columnName = "Receipt",
+                mediaUri = "content://receipt/dinner",
+                mediaName = "dinner.jpg",
+                mediaMimeType = "image/jpeg",
+            )
+        "REMOVE_MEDIA_CELL" ->
+            table(type).copy(
+                rowId = "row-lunch",
+                rowTitle = "Lunch",
+                columnId = "column-receipt",
+                columnName = "Receipt",
+                mediaId = "media-lunch",
+            )
+        "CLEAR_MEDIA_CELL" ->
+            table(type).copy(
+                rowId = "row-lunch",
+                rowTitle = "Lunch",
+                columnId = "column-receipt",
+                columnName = "Receipt",
+            )
 
         "CHANGE_TABLE_VIEW", "SET_TABLE_VIEW" ->
             table(type).copy(tableView = "Calendar")
@@ -396,6 +477,26 @@ private object RegressionActionFixtures {
                 tableView = "Calendar",
                 calendarDateColumnId = "column-date",
                 calendarDateColumnName = "Date",
+            )
+        "CREATE_TABLE_SAVED_VIEW" ->
+            table(type).copy(
+                viewName = "High value",
+                tableView = "Table",
+                columnId = "column-amount",
+                columnName = "Amount",
+                filterOperator = "GreaterThan",
+                filterQuery = "10",
+            )
+        "RENAME_TABLE_SAVED_VIEW" ->
+            table(type).copy(
+                viewId = "view-food",
+                viewName = "Food only",
+                newViewName = "Meals",
+            )
+        "DELETE_TABLE_SAVED_VIEW", "ACTIVATE_TABLE_SAVED_VIEW" ->
+            table(type).copy(
+                viewId = "view-food",
+                viewName = "Food only",
             )
 
         "SORT_TABLE", "SET_TABLE_SORT" ->
@@ -519,6 +620,16 @@ private data class RegressionPageFixture(
                     id = "column-relation",
                     name = "Category relation",
                     type = PageTableColumnType.Relation,
+                    relationTargetTableId = if (actionType == "UPDATE_RELATION_COLUMN") {
+                        ""
+                    } else {
+                        "table-categories"
+                    },
+                ),
+                PageTableColumn(
+                    id = "column-receipt",
+                    name = "Receipt",
+                    type = PageTableColumnType.FilesMedia,
                 ),
                 PageTableColumn(
                     id = "column-rollup",
@@ -535,15 +646,29 @@ private data class RegressionPageFixture(
                 type = PageBlockType.DatabaseTable,
                 table = PageTable(
                     title = "Transactions",
-                    viewConfig = if (actionType == "CLEAR_TABLE_DATA_SOURCE") {
-                        PageTableViewConfig(
-                            dataSourcePageId = "page-sales",
-                            dataSourceTableBlockId = "table-orders",
-                            dataSourceTitle = "Orders",
-                        )
-                    } else {
-                        PageTableViewConfig()
-                    },
+                    viewConfig = PageTableViewConfig(
+                        dataSourcePageId = if (actionType == "CLEAR_TABLE_DATA_SOURCE") "page-sales" else "",
+                        dataSourceTableBlockId = if (actionType == "CLEAR_TABLE_DATA_SOURCE") "table-orders" else "",
+                        dataSourceTitle = if (actionType == "CLEAR_TABLE_DATA_SOURCE") "Orders" else "",
+                        savedViews = listOf(
+                            PageTableSavedView(
+                                id = "view-all",
+                                name = "All transactions",
+                                view = PageTableView.Table,
+                            ),
+                            PageTableSavedView(
+                                id = "view-food",
+                                name = "Food only",
+                                view = PageTableView.Table,
+                                filter = PageTableFilter(
+                                    columnId = "column-category",
+                                    query = "Food",
+                                    operator = PageTableFilterOperator.Equals,
+                                ),
+                            ),
+                        ),
+                        activeSavedViewId = "view-all",
+                    ),
                     columns = columns,
                     rows = listOf(
                         PageTableRow(
@@ -554,6 +679,29 @@ private data class RegressionPageFixture(
                                 "column-month" to "2026-07",
                                 "column-category" to "Food",
                                 "column-amount" to "12",
+                                "column-receipt" to "lunch.jpg",
+                            ),
+                            cellValues = mapOf(
+                                "column-relation" to PageTableCellValue(
+                                    type = PageTableColumnType.Relation,
+                                    relationRowIds = if (actionType == "CLEAR_RELATION_CELL") {
+                                        listOf("category-row-food")
+                                    } else {
+                                        emptyList()
+                                    },
+                                ),
+                                "column-receipt" to PageTableCellValue(
+                                    type = PageTableColumnType.FilesMedia,
+                                    files = listOf(
+                                        PageMediaAttachment(
+                                            id = "media-lunch",
+                                            uri = "content://receipt/lunch",
+                                            name = "lunch.jpg",
+                                            mimeType = "image/jpeg",
+                                            sizeBytes = 120,
+                                        ),
+                                    ),
+                                ),
                             ),
                             blocks = listOf(
                                 PageBlock(

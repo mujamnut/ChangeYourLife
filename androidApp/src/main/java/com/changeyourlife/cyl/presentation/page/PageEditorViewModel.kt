@@ -88,6 +88,7 @@ class PageEditorViewModel @Inject constructor(
     private val reminderSyncedPageIds = mutableSetOf<String>()
     private val budgetMigratedPageIds = mutableSetOf<String>()
     private val editorUndoSnapshots = ArrayDeque<PageBlockDocument>()
+    private val titleUndoSnapshots = ArrayDeque<String>()
     private val editorCommandHistory = EditorCommandHistory(
         applyEditorCommandUseCase = applyEditorCommandUseCase,
         maxEntries = MaxEditorUndoSnapshots,
@@ -999,7 +1000,9 @@ class PageEditorViewModel @Inject constructor(
     }
 
     private fun updateCanUndoEditorChange() {
-        _canUndoEditorChange.value = editorCommandHistory.canUndo || editorUndoSnapshots.isNotEmpty()
+        _canUndoEditorChange.value = editorCommandHistory.canUndo ||
+            editorUndoSnapshots.isNotEmpty() ||
+            titleUndoSnapshots.isNotEmpty()
     }
 
     fun undoLastEditorChange() {
@@ -1010,9 +1013,15 @@ class PageEditorViewModel @Inject constructor(
             updateCanUndoEditorChange()
             return
         }
-        if (editorUndoSnapshots.isEmpty()) return
-        _pendingChanges.value = editorUndoSnapshots.removeLast().normalizedForEditor()
-        updateCanUndoEditorChange()
+        if (editorUndoSnapshots.isNotEmpty()) {
+            _pendingChanges.value = editorUndoSnapshots.removeLast().normalizedForEditor()
+            updateCanUndoEditorChange()
+            return
+        }
+        if (titleUndoSnapshots.isNotEmpty()) {
+            _pendingTitle.value = titleUndoSnapshots.removeLast()
+            updateCanUndoEditorChange()
+        }
     }
 
     fun keepLocalConflict() {
@@ -1024,13 +1033,26 @@ class PageEditorViewModel @Inject constructor(
     fun useRemoteConflict() {
         _pendingChanges.value = null
         _pendingTitle.value = null
+        titleUndoSnapshots.clear()
+        updateCanUndoEditorChange()
         viewModelScope.launch {
             pageRepository.useRemotePageConflict(pageId)
         }
     }
 
     fun updateTitle(title: String) {
+        val currentTitle = _pendingTitle.value ?: uiState.value.title
+        if (title == currentTitle) return
+        if (_pendingTitle.value == null) {
+            if (titleUndoSnapshots.lastOrNull() != currentTitle) {
+                if (titleUndoSnapshots.size >= MaxEditorUndoSnapshots) {
+                    titleUndoSnapshots.removeFirst()
+                }
+                titleUndoSnapshots.addLast(currentTitle)
+            }
+        }
         _pendingTitle.value = title
+        updateCanUndoEditorChange()
     }
 
     fun updateBlockText(blockId: String, text: String) {
@@ -1418,6 +1440,45 @@ class PageEditorViewModel @Inject constructor(
             recordTableUndo(result)
             queueTablePatchPendingDocument(blockId, result.document)
         }
+    }
+
+    internal fun mutateTableSavedView(
+        blockId: String,
+        mutation: TableSavedViewMutation,
+    ) {
+        val currentUiState = uiState.value
+        if (currentUiState.page == null) return
+        val document = currentDocument(currentUiState) ?: return
+        val result = when (mutation) {
+            is TableSavedViewMutation.Create -> tableMutationUseCase.createSavedView(
+                document = document,
+                tableBlockId = blockId,
+                name = mutation.name,
+                view = mutation.view,
+            )
+            is TableSavedViewMutation.Rename -> tableMutationUseCase.renameSavedView(
+                document = document,
+                tableBlockId = blockId,
+                viewId = mutation.viewId,
+                viewName = mutation.currentName,
+                newName = mutation.newName,
+            )
+            is TableSavedViewMutation.Delete -> tableMutationUseCase.deleteSavedView(
+                document = document,
+                tableBlockId = blockId,
+                viewId = mutation.viewId,
+                viewName = mutation.name,
+            )
+            is TableSavedViewMutation.Activate -> tableMutationUseCase.activateSavedView(
+                document = document,
+                tableBlockId = blockId,
+                viewId = mutation.viewId,
+                viewName = mutation.name,
+            )
+        }
+        if (!result.changed) return
+        recordTableUndo(result)
+        queueTablePatchPendingDocument(blockId, result.document)
     }
 
     internal fun updateTableDataSource(

@@ -1,5 +1,7 @@
 package com.changeyourlife.cyl.domain.model
 
+import com.changeyourlife.cyl.aicontract.AiActionWire
+
 data class ChatMessage(
     val id: String,
     val sessionId: String,
@@ -50,6 +52,7 @@ data class ChatActionMetadata(
     val executedActions: List<ChatActionMetadataItem> = emptyList(),
     val executionMessages: List<String> = emptyList(),
     val validationIssues: List<ChatActionValidationMetadata> = emptyList(),
+    val pendingActions: List<ChatPendingActionMetadata> = emptyList(),
 )
 
 data class ChatActionMetadataItem(
@@ -65,4 +68,10 @@ data class ChatActionValidationMetadata(
     val field: String = "",
     val code: String = "",
     val message: String = "",
+)
+
+data class ChatPendingActionMetadata(
+    val action: AiActionWire,
+    val issueFields: List<String> = emptyList(),
+    val issueCodes: List<String> = emptyList(),
 )

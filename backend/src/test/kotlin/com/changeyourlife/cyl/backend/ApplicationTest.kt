@@ -5,8 +5,6 @@ import com.changeyourlife.cyl.backend.config.DatabaseConfig
 import com.changeyourlife.cyl.backend.config.EmailConfig
 import com.changeyourlife.cyl.backend.config.JwtConfig
 import com.changeyourlife.cyl.backend.config.WebSearchConfig
-import com.changeyourlife.cyl.backend.service.AiService
-import com.changeyourlife.cyl.backend.model.ai.ChatMessage
 import com.changeyourlife.cyl.backend.model.ai.ChatWithActionsResponse
 import com.changeyourlife.cyl.backend.model.auth.AuthResponse
 import com.changeyourlife.cyl.backend.model.auth.ForgotPasswordResponse
@@ -45,7 +43,6 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.HttpHeaders
 import io.ktor.http.contentType
 import io.ktor.server.testing.testApplication
-import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -56,66 +53,6 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class ApplicationTest {
-    @Test
-    fun testZhipuConnectionDirectly() {
-        val config = AppConfig.fromEnvironment()
-        val apiKey = config.glmApiKey
-        println("Inspecting GLM Key: length=${apiKey?.length}, prefix=${apiKey?.take(5)}, suffix=${apiKey?.takeLast(5)}")
-        if (apiKey.isNullOrBlank()) {
-            println("GLM API KEY is blank, skipping direct test.")
-            return
-        }
-        val service = AiService(glmApiKey = apiKey)
-        val response = service.chat(listOf(ChatMessage(role = "user", content = "Hello")))
-        println("Direct response from Zhipu: $response")
-    }
-
-    @Test
-    fun testGeminiConnectionDirectly() {
-        val config = AppConfig.fromEnvironment()
-        val apiKey = config.geminiApiKey
-        println("Inspecting Gemini Key: length=${apiKey?.length}, prefix=${apiKey?.take(5)}, suffix=${apiKey?.takeLast(5)}")
-        if (apiKey.isNullOrBlank() || apiKey.startsWith("AIzaSyDummy")) {
-            println("Gemini API KEY is blank or dummy, skipping direct test.")
-            return
-        }
-        val service = AiService(geminiApiKey = apiKey)
-        val response = service.chat(listOf(ChatMessage(role = "user", content = "Hello")))
-        println("Direct response from Gemini: $response")
-    }
-
-    @Test
-    fun testChatWithActionsDirectly() {
-        val config = AppConfig.fromEnvironment()
-        val apiKey = config.geminiApiKey
-        if (apiKey.isNullOrBlank() || apiKey.startsWith("AIzaSyDummy")) {
-            println("Gemini API KEY is blank or dummy, skipping direct test.")
-            return
-        }
-        val service = AiService(geminiApiKey = apiKey)
-        val response = runBlocking {
-            service.chatWithActions(listOf(ChatMessage(role = "user", content = "create a page called Vacation Plan")))
-        }
-        println("Direct response from chatWithActions: reply='${response.reply}', actions=${response.actions}")
-    }
-
-    @Test
-    fun testOpenRouterConnectionDirectly() {
-        val config = AppConfig.fromEnvironment()
-        val apiKey = config.openRouterApiKey
-        println("Inspecting OpenRouter Key: length=${apiKey?.length}, prefix=${apiKey?.take(5)}, suffix=${apiKey?.takeLast(5)}")
-        if (apiKey.isNullOrBlank()) {
-            println("OpenRouter API KEY is blank, skipping direct test.")
-            return
-        }
-        val service = AiService(
-            openRouterApiKey = apiKey,
-            openRouterModel = config.openRouterModel,
-        )
-        val response = service.chat(listOf(ChatMessage(role = "user", content = "Hello")))
-        println("Direct response from OpenRouter (${config.openRouterModel}): $response")
-    }
-
     @Test
     fun healthReturnsOk() = testApplication {
         application {

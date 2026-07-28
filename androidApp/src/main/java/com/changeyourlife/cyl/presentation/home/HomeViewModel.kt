@@ -26,6 +26,9 @@ import com.changeyourlife.cyl.domain.model.Workspace
 import com.changeyourlife.cyl.domain.model.isActive
 import com.changeyourlife.cyl.domain.repository.AuthRepository
 import com.changeyourlife.cyl.domain.repository.AiBlockContext
+import com.changeyourlife.cyl.domain.repository.AiTableCellContext
+import com.changeyourlife.cyl.domain.repository.AiTableColumnContext
+import com.changeyourlife.cyl.domain.repository.AiTableRowContext
 import com.changeyourlife.cyl.domain.model.ChatMessage
 import com.changeyourlife.cyl.domain.model.ChatMessageAttachment
 import com.changeyourlife.cyl.domain.model.ChatPageLink
@@ -58,6 +61,9 @@ import com.changeyourlife.cyl.presentation.ai.AiChatMessageMapper
 import com.changeyourlife.cyl.presentation.ai.AiChatMessage
 import com.changeyourlife.cyl.presentation.ai.AiChatPageLink
 import com.changeyourlife.cyl.presentation.ai.ChatHistorySearchResult
+import com.changeyourlife.cyl.presentation.ai.latestPendingAiActions
+import com.changeyourlife.cyl.presentation.ai.resolvePendingClarification
+import com.changeyourlife.cyl.presentation.ai.toPendingClarificationContext
 import com.changeyourlife.cyl.presentation.ai.toRoleContentPairs
 import com.changeyourlife.cyl.presentation.page.PageBlockCodec
 import com.changeyourlife.cyl.presentation.page.PageModuleTemplates
@@ -730,7 +736,7 @@ class HomeViewModel @Inject constructor(
         auditId: String,
         pageId: String,
     ) {
-        if (auditId.isBlank() || pageId.isBlank()) return
+        if (auditId.isBlank()) return
         viewModelScope.launch {
             aiChatError.value = null
             val workspaceId = workspaceRepository.getActiveWorkspaceId()
@@ -774,9 +780,9 @@ class HomeViewModel @Inject constructor(
                 val scopeId = homeChatScopeId(workspaceId)
                 val session = resolveActiveChatSession(scopeId)
                 responseSessionId = session.id
-                val currentMessages = chatHistoryRepository.observeMessages(session.id)
-                    .first()
-                    .let(AiChatMessageMapper::toAiChatMessages)
+                val currentSessionMessages = chatHistoryRepository.observeMessages(session.id).first()
+                val pendingClarification = currentSessionMessages.latestPendingAiActions()
+                val currentMessages = AiChatMessageMapper.toAiChatMessages(currentSessionMessages)
                 val userMessage = AiChatMessage(role = "user", content = visiblePrompt)
                 val messageAttachments = images.map { image ->
                     ChatMessageAttachment(
@@ -821,9 +827,15 @@ class HomeViewModel @Inject constructor(
                 val actionTargetPages = explicitlyMentionedPages.ifEmpty {
                     listOfNotNull(attachedPage)
                 }
-                val pageContext = pages
-                    .withMentionedPagesFirst(contextualPageIds)
-                    .map { page -> page.toAiPageContext() }
+                val pageContext = withContext(Dispatchers.Default) {
+                    pages
+                        .withMentionedPagesFirst(contextualPageIds)
+                        .map { page ->
+                            page.toAiPageContext(
+                                isFocused = page.id in contextualPageIds,
+                            )
+                        }
+                }
                 val openTasks = taskRepository.observeOpenTasks(workspaceId)
                     .first()
                 val taskContext = openTasks.map { task -> task.id to task.title }
@@ -865,7 +877,12 @@ class HomeViewModel @Inject constructor(
                 } else {
                     emptyList()
                 }
-                val messagesForAi = skillMessages + memoryMessages + searchMessages +
+                val clarificationMessages = pendingClarification
+                    .toPendingClarificationContext()
+                    .takeIf(String::isNotBlank)
+                    ?.let { context -> listOf(AiChatMessage(role = "system", content = context)) }
+                    .orEmpty()
+                val messagesForAi = skillMessages + memoryMessages + searchMessages + clarificationMessages +
                     currentMessages.filter { message -> message.content.isNotBlank() } +
                     userMessage.copy(
                         content = requestPrompt.withMentionContext(
@@ -882,7 +899,13 @@ class HomeViewModel @Inject constructor(
                     webSearchEnabled = webSearchEnabled,
                     webSearchQuery = requestPrompt,
                 )
-                    .onSuccess { result ->
+                    .onSuccess { backendResult ->
+                        val result = backendResult.resolvePendingClarification(
+                            pendingActions = pendingClarification,
+                            userPrompt = visiblePrompt,
+                            pages = pages,
+                            scopedTargetPage = scopedTargetPage,
+                        )
                         val auditId = "ai-action:${savedUserMessage.id}"
                         val orchestration = AiChatActionOrchestrator.orchestrate(
                             workspaceId = workspaceId,
@@ -1122,7 +1145,9 @@ class HomeViewModel @Inject constructor(
         }
     }
 
-    private fun Page.toAiPageContext(): AiPageContext {
+    private fun Page.toAiPageContext(
+        isFocused: Boolean,
+    ): AiPageContext {
         val document = PageBlockCodec.decodeDocument(content)
         val propertyContexts = document.properties.map { property ->
             AiBlockContext(
@@ -1132,10 +1157,14 @@ class HomeViewModel @Inject constructor(
                 path = "property:${property.name}",
             )
         }
+        val blockContexts = propertyContexts + document.blocks.toAiBlockContexts()
         return AiPageContext(
             id = id,
             title = title.ifBlank { "Untitled page" },
-            blocks = (propertyContexts + document.blocks.toAiBlockContexts()).take(140),
+            blocks = blockContexts,
+            totalBlockCount = blockContexts.size,
+            isFocused = isFocused,
+            contextComplete = true,
         )
     }
 
@@ -1148,7 +1177,7 @@ class HomeViewModel @Inject constructor(
     ): List<AiBlockContext> {
         return flatMapIndexed { index, block ->
             val path = if (pathPrefix.isBlank()) "${index + 1}" else "$pathPrefix.${index + 1}"
-            val currentTableTitle = if (block.type == PageBlockType.DatabaseTable) {
+            val currentTableTitle = if (block.isAiContextTable()) {
                 block.table.title
             } else {
                 tableTitle
@@ -1165,6 +1194,43 @@ class HomeViewModel @Inject constructor(
                     rowTitle = rowTitle,
                     rowBlockId = if (rowId.isNotBlank()) block.id else "",
                     isChecked = if (block.type == PageBlockType.Todo) block.isChecked else null,
+                    tableColumns = if (block.isAiContextTable()) {
+                        block.table.columns.map { column ->
+                            AiTableColumnContext(
+                                id = column.id,
+                                name = column.name,
+                                type = column.type.name,
+                                config = column.aiConfigContextText(),
+                            )
+                        }
+                    } else {
+                        emptyList()
+                    },
+                    tableRows = if (block.isAiContextTable()) {
+                        val titleColumn = block.table.columns.firstOrNull()
+                        block.table.rows.map { row ->
+                            AiTableRowContext(
+                                id = row.id,
+                                title = row.cellText(titleColumn).ifBlank { row.id },
+                                cells = block.table.columns.map { column ->
+                                    AiTableCellContext(
+                                        columnId = column.id,
+                                        columnName = column.name,
+                                        value = row.cells[column.id].orEmpty(),
+                                    )
+                                },
+                                totalBlockCount = row.blocks.size,
+                            )
+                        }
+                    } else {
+                        emptyList()
+                    },
+                    totalRowCount = if (block.isAiContextTable()) {
+                        block.table.rows.size
+                    } else {
+                        0
+                    },
+                    contextComplete = true,
                 ),
             ) + block.children.toAiBlockContexts(
                 pathPrefix = path,
@@ -1173,9 +1239,9 @@ class HomeViewModel @Inject constructor(
                 rowId = rowId,
                 rowTitle = rowTitle,
             )
-            val rowBlockContexts = if (block.type == PageBlockType.DatabaseTable) {
+            val rowBlockContexts = if (block.isAiContextTable()) {
                 val titleColumn = block.table.columns.firstOrNull()
-                block.table.rows.take(20).flatMap { row ->
+                block.table.rows.flatMap { row ->
                     val rowLabel = row.cellText(titleColumn).ifBlank { row.id }
                     row.blocks.toAiBlockContexts(
                         pathPrefix = "$path.row:${row.id}",
@@ -1193,18 +1259,8 @@ class HomeViewModel @Inject constructor(
     }
 
     private fun PageBlock.contextText(): String {
-        if (type == PageBlockType.DatabaseTable) {
-            val columns = table.columns.joinToString { column -> column.aiContextText() }
-            val rows = table.rows.take(12).joinToString(separator = "; ") { row ->
-                val cells = table.columns.joinToString { column ->
-                    "${column.name}=${row.cells[column.id].orEmpty()}"
-                }
-                val rowBlocks = row.blocks.take(6).joinToString(separator = " | ") { rowBlock ->
-                    "${rowBlock.id}:${rowBlock.type.name}:${rowBlock.text.ifBlank { "empty" }}"
-                }.ifBlank { "none" }
-                "${row.id}[$cells; rowBlocks=$rowBlocks]"
-            }
-            return "title=${table.title}; ${table.contextStateText()}; columns=$columns; rows=$rows".take(1_800)
+        if (isAiContextTable()) {
+            return "title=${table.title}; ${table.contextStateText()}"
         }
         val mediaText = mediaAttachments.joinToString(separator = ", ") { attachment ->
             attachment.name
@@ -1213,9 +1269,11 @@ class HomeViewModel @Inject constructor(
             .filter { value -> value.isNotBlank() }
             .joinToString(separator = " | ")
             .ifBlank { "empty" }
-            .take(600)
     }
 }
+
+private fun PageBlock.isAiContextTable(): Boolean =
+    type == PageBlockType.DatabaseTable || type == PageBlockType.Table
 
 private fun SearchResult.toHomeSearchResult(): HomeSearchResult? {
     val routeTarget = target.toPageRouteTarget()
@@ -1509,14 +1567,39 @@ private fun PageTable.contextStateText(): String {
     return "sort=$sortText; filter=$filterText; groupBy=$groupText; viewConfig=$viewConfigText"
 }
 
-private fun PageTableColumn.aiContextText(): String {
-    val config = when (type) {
-        PageTableColumnType.Formula -> " formula=${formula.ifBlank { "none" }}"
-        PageTableColumnType.Relation -> " relationTargetTableId=${relationTargetTableId.ifBlank { "none" }}"
+private fun PageTableColumn.aiConfigContextText(): String {
+    val common = buildList {
+        if (config.options.isNotEmpty()) {
+            add(
+                "options=" + config.options.joinToString("|") { option ->
+                    "${option.id}:${option.name}:${option.color.name}"
+                },
+            )
+        }
+        if (config.isHidden) add("hidden=true")
+        if (config.isRequired) add("required=true")
+        if (config.wrapContent) add("wrap=true")
+        if (config.widthDp > 0) add("widthDp=${config.widthDp}")
+        if (config.defaultValue.isNotBlank()) add("default=${config.defaultValue}")
+        if (config.description.isNotBlank()) add("description=${config.description}")
+        if (type == PageTableColumnType.Date) {
+            add("dateFormat=${dateFormat.name}")
+            add("timeFormat=${timeFormat.name}")
+            add("reminder=${dateReminder.name}")
+            add("timezone=${timezoneLabel.ifBlank { "Local" }}")
+        }
+    }
+    val specialized = when (type) {
+        PageTableColumnType.Formula -> listOf("formula=${formula.ifBlank { "none" }}")
+        PageTableColumnType.Relation -> {
+            listOf("relationTargetTableId=${relationTargetTableId.ifBlank { "none" }}")
+        }
         PageTableColumnType.Rollup -> {
-            " rollupRelationColumnId=${rollupRelationColumnId.ifBlank { "none" }} " +
-                "rollupTargetColumnId=${rollupTargetColumnId.ifBlank { "none" }} " +
-                "rollupAggregation=${rollupAggregation.name}"
+            listOf(
+                "rollupRelationColumnId=${rollupRelationColumnId.ifBlank { "none" }}",
+                "rollupTargetColumnId=${rollupTargetColumnId.ifBlank { "none" }}",
+                "rollupAggregation=${rollupAggregation.name}",
+            )
         }
         PageTableColumnType.Text,
         PageTableColumnType.Number,
@@ -1526,9 +1609,9 @@ private fun PageTableColumn.aiContextText(): String {
         PageTableColumnType.Date,
         PageTableColumnType.Checkbox,
         PageTableColumnType.FilesMedia,
-        -> ""
+        -> emptyList()
     }
-    return "$id:$name:${type.name}$config"
+    return (common + specialized).joinToString(separator = " ")
 }
 
 private data class WorkspaceDashboardState(

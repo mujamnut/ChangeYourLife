@@ -179,6 +179,38 @@ object PageContentCodec {
         val resolvedSortColumnId = resolveColumnId(sort.columnId)
         val resolvedFilterColumnId = resolveColumnId(filter.columnId)
         val resolvedGroupColumnId = resolveColumnId(groupByColumnId)
+        val usedSavedViewIds = mutableSetOf<String>()
+        val normalizedSavedViews = viewConfig.savedViews.mapIndexed { index, saved ->
+            val savedId = saved.id
+                .takeIf { id -> id.isNotBlank() && usedSavedViewIds.add(id) }
+                ?: generateSequence { UUID.randomUUID().toString() }
+                    .first(usedSavedViewIds::add)
+            val savedSortColumnId = resolveColumnId(saved.sort.columnId)
+            val savedFilterColumnId = resolveColumnId(saved.filter.columnId)
+            saved.copy(
+                id = savedId,
+                name = saved.name.trim().ifBlank { "View ${index + 1}" },
+                calendarDateColumnId = resolveColumnId(saved.calendarDateColumnId).orEmpty(),
+                timelineStartColumnId = resolveColumnId(saved.timelineStartColumnId).orEmpty(),
+                timelineEndColumnId = resolveColumnId(saved.timelineEndColumnId).orEmpty(),
+                dashboardMetricColumnId = resolveColumnId(saved.dashboardMetricColumnId).orEmpty(),
+                dashboardGroupColumnId = resolveColumnId(saved.dashboardGroupColumnId).orEmpty(),
+                sort = if (savedSortColumnId != null) {
+                    saved.sort.copy(columnId = savedSortColumnId)
+                } else {
+                    PageTableSort()
+                },
+                filter = if (savedFilterColumnId != null && saved.filter.isActive()) {
+                    saved.filter.copy(columnId = savedFilterColumnId)
+                } else {
+                    PageTableFilter()
+                },
+                groupByColumnId = resolveColumnId(saved.groupByColumnId).orEmpty(),
+            )
+        }
+        val normalizedActiveSavedViewId = viewConfig.activeSavedViewId
+            .takeIf { activeId -> normalizedSavedViews.any { saved -> saved.id == activeId } }
+            .orEmpty()
 
         return copy(
             columns = normalizedColumns,
@@ -196,6 +228,8 @@ object PageContentCodec {
                 timelineEndColumnId = viewConfig.timelineEndColumnId.takeIf { columnId -> columnId in validColumnIds }.orEmpty(),
                 dashboardMetricColumnId = viewConfig.dashboardMetricColumnId.takeIf { columnId -> columnId in validColumnIds }.orEmpty(),
                 dashboardGroupColumnId = viewConfig.dashboardGroupColumnId.takeIf { columnId -> columnId in validColumnIds }.orEmpty(),
+                savedViews = normalizedSavedViews,
+                activeSavedViewId = normalizedActiveSavedViewId,
             ),
         )
     }

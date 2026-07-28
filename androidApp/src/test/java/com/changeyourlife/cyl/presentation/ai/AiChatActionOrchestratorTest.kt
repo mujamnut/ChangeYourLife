@@ -148,7 +148,7 @@ class AiChatActionOrchestratorTest {
     }
 
     @Test
-    fun executedActionMetadataKeepsOriginalIndexesWhenEarlierActionIsRejected() = runBlocking {
+    fun rejectedPolicyActionBlocksTheWholePlanBeforeExecution() = runBlocking {
         var capturedActions = emptyList<ChatAction>()
 
         val result = AiChatActionOrchestrator.orchestrate(
@@ -185,11 +185,10 @@ class AiChatActionOrchestratorTest {
             )
         }
 
-        assertEquals(listOf("ADD_TABLE_ROW"), capturedActions.map { it.type })
+        assertTrue(capturedActions.isEmpty())
         assertEquals(listOf("RENAME_TABLE", "ADD_TABLE_ROW"), result.actionMetadata.proposedActions.map { it.type })
         assertEquals(listOf(0, 1), result.actionMetadata.proposedActions.map { it.actionIndex })
-        assertEquals(listOf("ADD_TABLE_ROW"), result.actionMetadata.executedActions.map { it.type })
-        assertEquals(listOf(1), result.actionMetadata.executedActions.map { it.actionIndex })
+        assertTrue(result.actionMetadata.executedActions.isEmpty())
         assertEquals(listOf(0), result.actionMetadata.validationIssues.map { it.actionIndex })
     }
 
@@ -232,11 +231,8 @@ class AiChatActionOrchestratorTest {
         }
 
         assertEquals(listOf("ADD_TABLE_ROW", "UPDATE_BLOCK"), result.actionMetadata.proposedActions.map { it.type })
-        assertEquals(
-            "Sebahagian perubahan sudah dibuat.\n\nPerubahan itu tidak dapat disimpan.",
-            result.reply,
-        )
-        assertEquals(listOf("ADD_TABLE_ROW"), result.actionMetadata.executedActions.map { it.type })
+        assertTrue(result.reply.startsWith("Saya belum dapat membuat perubahan itu."))
+        assertTrue(result.actionMetadata.executedActions.isEmpty())
         assertEquals(listOf(1), result.actionMetadata.validationIssues.map { it.actionIndex })
     }
 
@@ -270,8 +266,7 @@ class AiChatActionOrchestratorTest {
         }
 
         assertEquals(listOf("RENAME_TABLE", "ADD_TABLE_ROW"), result.actionMetadata.proposedActions.map { it.type })
-        assertEquals(listOf("ADD_TABLE_ROW"), result.actionMetadata.executedActions.map { it.type })
-        assertEquals(listOf(1), result.actionMetadata.executedActions.map { it.actionIndex })
+        assertTrue(result.actionMetadata.executedActions.isEmpty())
         assertEquals(listOf(0), result.actionMetadata.validationIssues.map { it.actionIndex })
     }
 
@@ -318,10 +313,9 @@ class AiChatActionOrchestratorTest {
             )
         }
 
-        assertEquals(listOf(1), capturedIndexes)
+        assertTrue(capturedIndexes.isEmpty())
         assertEquals(listOf("ADD_TABLE_ROW", "ADD_TABLE_ROW"), result.actionMetadata.proposedActions.map { it.type })
-        assertEquals(listOf("ADD_TABLE_ROW"), result.actionMetadata.executedActions.map { it.type })
-        assertEquals(listOf(1), result.actionMetadata.executedActions.map { it.actionIndex })
+        assertTrue(result.actionMetadata.executedActions.isEmpty())
         assertEquals(listOf(0), result.actionMetadata.validationIssues.map { it.actionIndex })
     }
 
@@ -363,6 +357,10 @@ class AiChatActionOrchestratorTest {
             result.reply,
         )
         assertEquals(emptyList<String>(), result.actionMetadata.executedActions.map { action -> action.type })
+        assertEquals(1, result.actionMetadata.pendingActions.size)
+        assertEquals("CLEAR_TABLE_CELL", result.actionMetadata.pendingActions.single().action.type)
+        assertEquals("Month", result.actionMetadata.pendingActions.single().action.columnName)
+        assertEquals(listOf("rowTitle"), result.actionMetadata.pendingActions.single().issueFields)
     }
 
     private fun page(): Page {

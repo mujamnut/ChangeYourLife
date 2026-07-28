@@ -77,7 +77,10 @@ data class ChatActionValidationIssue(
 data class AiPageContext(
     val id: String,
     val title: String,
-    val blocks: List<AiBlockContext> = emptyList()
+    val blocks: List<AiBlockContext> = emptyList(),
+    val totalBlockCount: Int = blocks.size,
+    val isFocused: Boolean = false,
+    val contextComplete: Boolean = true,
 )
 
 data class AiBlockContext(
@@ -90,7 +93,31 @@ data class AiBlockContext(
     val rowId: String = "",
     val rowTitle: String = "",
     val rowBlockId: String = "",
-    val isChecked: Boolean? = null
+    val isChecked: Boolean? = null,
+    val tableColumns: List<AiTableColumnContext> = emptyList(),
+    val tableRows: List<AiTableRowContext> = emptyList(),
+    val totalRowCount: Int = tableRows.size,
+    val contextComplete: Boolean = true,
+)
+
+data class AiTableColumnContext(
+    val id: String,
+    val name: String,
+    val type: String,
+    val config: String = "",
+)
+
+data class AiTableRowContext(
+    val id: String,
+    val title: String = "",
+    val cells: List<AiTableCellContext> = emptyList(),
+    val totalBlockCount: Int = 0,
+)
+
+data class AiTableCellContext(
+    val columnId: String,
+    val columnName: String,
+    val value: String = "",
 )
 
 data class ChatTableColumn(
@@ -101,6 +128,12 @@ data class ChatTableColumn(
     val timeFormat: String = "",
     val dateReminder: String = "",
     val timezoneLabel: String = "",
+    val isHidden: Boolean? = null,
+    val isRequired: Boolean? = null,
+    val wrapContent: Boolean? = null,
+    val widthDp: Int? = null,
+    val defaultValue: String = "",
+    val description: String = "",
     val formula: String = "",
     val relationTargetTableId: String = "",
     val rollupRelationColumnName: String = "",
@@ -127,10 +160,11 @@ data class ChatAction(
     val mediaName: String = "",
     val mediaMimeType: String = "",
     val mediaSizeBytes: Long = 0,
+    val mediaId: String = "",
     val isChecked: Boolean? = null,
     val propertyName: String = "",
     val newPropertyName: String = "",
-    val propertyType: String = "Text",
+    val propertyType: String = "",
     val value: String = "",
     val moveDirection: String = "",
     val parentPageId: String = "",
@@ -141,7 +175,10 @@ data class ChatAction(
     val sourceTableTitle: String = "",
     val moduleType: String = "",
     val tableTitle: String = "",
-    val tableView: String = "Table",
+    val tableView: String = "",
+    val viewId: String = "",
+    val viewName: String = "",
+    val newViewName: String = "",
     val calendarDateColumnId: String = "",
     val calendarDateColumnName: String = "",
     val timelineStartColumnId: String = "",
@@ -155,8 +192,24 @@ data class ChatAction(
     val columnId: String = "",
     val columnName: String = "",
     val newColumnName: String = "",
-    val columnType: String = "Text",
+    val columnType: String = "",
     val options: List<String> = emptyList(),
+    val optionId: String = "",
+    val optionName: String = "",
+    val newOptionName: String = "",
+    val optionColor: String = "",
+    val dateFormat: String = "",
+    val timeFormat: String = "",
+    val dateReminder: String = "",
+    val timezoneLabel: String = "",
+    val isHidden: Boolean? = null,
+    val isRequired: Boolean? = null,
+    val wrapContent: Boolean? = null,
+    val widthDp: Int? = null,
+    val defaultValue: String = "",
+    val clearDefaultValue: Boolean? = null,
+    val description: String = "",
+    val clearDescription: Boolean? = null,
     val formula: String = "",
     val relationTargetTableId: String = "",
     val relationTargetTableTitle: String = "",
@@ -165,8 +218,9 @@ data class ChatAction(
     val rollupTargetColumnId: String = "",
     val rollupTargetColumnName: String = "",
     val rollupAggregation: String = "",
-    val sortDirection: String = "Ascending",
+    val sortDirection: String = "",
     val filterQuery: String = "",
+    val filterOperator: String = "",
     val groupByColumnId: String = "",
     val groupByColumnName: String = "",
     val rowId: String = "",
@@ -176,6 +230,7 @@ data class ChatAction(
     val rowBlockId: String = "",
     val targetIndex: Int? = null,
     val cellValues: Map<String, String> = emptyMap(),
+    val relationRowIds: List<String> = emptyList(),
     val tableColumns: List<ChatTableColumn> = emptyList(),
     val tableRows: List<Map<String, String>> = emptyList(),
     val delayMinutes: Long? = null

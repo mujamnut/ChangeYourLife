@@ -79,7 +79,10 @@ data class ChatWithActionsRequestDto(
 data class AiPageContextDto(
     val id: String,
     val title: String,
-    val blocks: List<AiBlockContextDto> = emptyList()
+    val blocks: List<AiBlockContextDto> = emptyList(),
+    val totalBlockCount: Int = blocks.size,
+    val isFocused: Boolean = false,
+    val contextComplete: Boolean = true,
 )
 
 @Serializable
@@ -93,7 +96,34 @@ data class AiBlockContextDto(
     val rowId: String = "",
     val rowTitle: String = "",
     val rowBlockId: String = "",
-    val isChecked: Boolean? = null
+    val isChecked: Boolean? = null,
+    val tableColumns: List<AiTableColumnContextDto> = emptyList(),
+    val tableRows: List<AiTableRowContextDto> = emptyList(),
+    val totalRowCount: Int = tableRows.size,
+    val contextComplete: Boolean = true,
+)
+
+@Serializable
+data class AiTableColumnContextDto(
+    val id: String,
+    val name: String,
+    val type: String,
+    val config: String = "",
+)
+
+@Serializable
+data class AiTableRowContextDto(
+    val id: String,
+    val title: String = "",
+    val cells: List<AiTableCellContextDto> = emptyList(),
+    val totalBlockCount: Int = 0,
+)
+
+@Serializable
+data class AiTableCellContextDto(
+    val columnId: String,
+    val columnName: String,
+    val value: String = "",
 )
 
 @Serializable

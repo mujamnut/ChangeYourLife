@@ -70,6 +70,22 @@ OPENROUTER_VISION_MODELS=google/gemma-4-26b-a4b-it:free,google/gemma-3-4b-it:fre
 
 The backend uses LM Studio first for chat/action generation and image reading when `LMSTUDIO_BASE_URL` is present, then falls back to OpenRouter, Gemini, GLM, and sandbox mode.
 
+### Live AI action regression
+
+Normal builds and tests never contact an AI provider. The deterministic provider-boundary corpus runs locally with recorded responses.
+
+To validate the configured real model against the critical Malay prompt-to-action and multi-turn corpus, opt in explicitly:
+
+```powershell
+$env:CYL_RUN_LIVE_AI_REGRESSION="true"
+$env:CYL_LIVE_AI_REGRESSION_ATTEMPTS="2"
+.\gradlew.bat :backend:test --tests "com.changeyourlife.cyl.backend.AiLivePromptToActionRegressionTest"
+Remove-Item Env:CYL_RUN_LIVE_AI_REGRESSION
+Remove-Item Env:CYL_LIVE_AI_REGRESSION_ATTEMPTS
+```
+
+The live suite only plans and validates actions; it does not execute page mutations or require a database. It fails if prompt recovery produces the action instead of the configured model.
+
 ## Dependency Notes
 
 - AGP 8.10.1 requires Gradle 8.11.1 and JDK 17+.

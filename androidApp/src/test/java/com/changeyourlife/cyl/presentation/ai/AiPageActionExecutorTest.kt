@@ -1,5 +1,6 @@
 package com.changeyourlife.cyl.presentation.ai
 
+import com.changeyourlife.cyl.domain.model.AiUndoCommandType
 import com.changeyourlife.cyl.domain.model.Page
 import com.changeyourlife.cyl.domain.model.PageBlock
 import com.changeyourlife.cyl.domain.model.PageBlockDocument
@@ -31,6 +32,306 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AiPageActionExecutorTest {
+    @Test
+    fun capturesPageSnapshotBeforeRename() = runBlocking {
+        val document = PageBlockDocument()
+        val page = Page(
+            id = "page-1",
+            workspaceId = "workspace-1",
+            parentPageId = "parent-before",
+            title = "Before",
+            content = PageBlockCodec.encodeDocument(document),
+            sortOrder = 0,
+            createdAt = 1000,
+            updatedAt = 1000,
+            deletedAt = null,
+        )
+        val executor = AiPageActionExecutor(
+            pageRepository = FakePageRepository(page, document),
+            taskRepository = FakeTaskRepository(),
+            reminderRepository = FakeReminderRepository(),
+            applyEditorCommandUseCase = ApplyEditorCommandUseCase(),
+        )
+
+        val result = executor.executeOnPage(
+            page = page,
+            title = page.title,
+            document = document,
+            actions = listOf(ChatAction(type = "RENAME_PAGE", title = "After")),
+        )
+
+        assertEquals("After", result.updatedTitle)
+        val undo = result.undoCommands.single()
+        assertEquals(AiUndoCommandType.RestorePageSnapshots, undo.commandType)
+        assertEquals(page.id, undo.pageId)
+        assertEquals("Before", undo.pageSnapshots.single().title)
+        assertEquals("parent-before", undo.pageSnapshots.single().parentPageId)
+    }
+
+    @Test
+    fun capturesPageTreeSnapshotBeforeTrash() = runBlocking {
+        val document = PageBlockDocument()
+        val page = Page(
+            id = "page-1",
+            workspaceId = "workspace-1",
+            parentPageId = null,
+            title = "Budget",
+            content = PageBlockCodec.encodeDocument(document),
+            sortOrder = 0,
+            createdAt = 1000,
+            updatedAt = 1000,
+            deletedAt = null,
+        )
+        val executor = AiPageActionExecutor(
+            pageRepository = FakePageRepository(page, document),
+            taskRepository = FakeTaskRepository(),
+            reminderRepository = FakeReminderRepository(),
+            applyEditorCommandUseCase = ApplyEditorCommandUseCase(),
+        )
+
+        val result = executor.executeOnPage(
+            page = page,
+            title = page.title,
+            document = document,
+            actions = listOf(ChatAction(type = "TRASH_PAGE", title = "")),
+        )
+
+        val undo = result.undoCommands.single()
+        assertEquals(AiUndoCommandType.RestorePageSnapshots, undo.commandType)
+        assertEquals(page.id, undo.pageSnapshots.single().id)
+        assertEquals(null, undo.pageSnapshots.single().deletedAt)
+    }
+
+    @Test
+    fun rejectsAmbiguousPartialTableTitleInsteadOfMutatingFirstMatch() = runBlocking {
+        val nameColumn = PageTableColumn(id = "column-name", name = "Name")
+        val document = PageBlockDocument(
+            blocks = listOf(
+                PageBlock(
+                    id = "table-april",
+                    type = PageBlockType.DatabaseTable,
+                    table = PageTable(
+                        title = "Budget April",
+                        columns = listOf(nameColumn),
+                    ),
+                ),
+                PageBlock(
+                    id = "table-may",
+                    type = PageBlockType.DatabaseTable,
+                    table = PageTable(
+                        title = "Budget May",
+                        columns = listOf(nameColumn.copy(id = "column-name-may")),
+                    ),
+                ),
+            ),
+        )
+        val page = Page(
+            id = "page-1",
+            workspaceId = "workspace-1",
+            parentPageId = null,
+            title = "Budget",
+            content = PageBlockCodec.encodeDocument(document),
+            sortOrder = 0,
+            createdAt = 1000,
+            updatedAt = 1000,
+            deletedAt = null,
+        )
+        val executor = AiPageActionExecutor(
+            pageRepository = FakePageRepository(page, document),
+            taskRepository = FakeTaskRepository(),
+            reminderRepository = FakeReminderRepository(),
+            applyEditorCommandUseCase = ApplyEditorCommandUseCase(),
+        )
+
+        val result = executor.executeOnPage(
+            page = page,
+            title = page.title,
+            document = document,
+            actions = listOf(
+                ChatAction(
+                    type = "ADD_TABLE_ROW",
+                    title = "",
+                    tableTitle = "Budget",
+                    rowTitle = "Lunch",
+                    cellValues = mapOf("Name" to "Lunch"),
+                ),
+            ),
+        )
+
+        assertEquals("ambiguous_target", result.validationIssues.single().code)
+        assertEquals(emptyList<Int>(), result.executedActionIndexes)
+        assertNull(result.updatedDocument)
+    }
+
+    @Test
+    fun rejectsAmbiguousBlockTextInsteadOfDeletingFirstMatch() = runBlocking {
+        val document = PageBlockDocument(
+            blocks = listOf(
+                PageBlock(id = "block-1", type = PageBlockType.Text, text = "Monthly note"),
+                PageBlock(id = "block-2", type = PageBlockType.Text, text = "Another monthly note"),
+            ),
+        )
+        val page = Page(
+            id = "page-1",
+            workspaceId = "workspace-1",
+            parentPageId = null,
+            title = "Budget",
+            content = PageBlockCodec.encodeDocument(document),
+            sortOrder = 0,
+            createdAt = 1000,
+            updatedAt = 1000,
+            deletedAt = null,
+        )
+        val executor = AiPageActionExecutor(
+            pageRepository = FakePageRepository(page, document),
+            taskRepository = FakeTaskRepository(),
+            reminderRepository = FakeReminderRepository(),
+            applyEditorCommandUseCase = ApplyEditorCommandUseCase(),
+        )
+
+        val result = executor.executeOnPage(
+            page = page,
+            title = page.title,
+            document = document,
+            actions = listOf(
+                ChatAction(
+                    type = "DELETE_BLOCK",
+                    title = "",
+                    blockText = "monthly note",
+                ),
+            ),
+        )
+
+        assertEquals("ambiguous_target", result.validationIssues.single().code)
+        assertEquals(emptyList<Int>(), result.executedActionIndexes)
+        assertNull(result.updatedDocument)
+    }
+
+    @Test
+    fun rejectsAmbiguousPartialColumnNameInsteadOfMutatingFirstMatch() = runBlocking {
+        val fixture = columnTargetingFixture(
+            columns = listOf(
+                PageTableColumn(id = "column-name", name = "Name"),
+                PageTableColumn(id = "column-planned", name = "Amount Planned", type = PageTableColumnType.Number),
+                PageTableColumn(id = "column-actual", name = "Amount Actual", type = PageTableColumnType.Number),
+            ),
+        )
+
+        val result = fixture.executor.executeOnPage(
+            page = fixture.page,
+            title = fixture.page.title,
+            document = fixture.document,
+            actions = listOf(
+                ChatAction(
+                    type = "UPDATE_TABLE_CELL",
+                    title = "",
+                    tableTitle = "Expenses",
+                    rowId = "row-1",
+                    columnName = "Amount",
+                    value = "9",
+                ),
+            ),
+        )
+
+        assertEquals("ambiguous_target", result.validationIssues.single().code)
+        assertEquals(emptyList<Int>(), result.executedActionIndexes)
+        assertNull(result.updatedDocument)
+    }
+
+    @Test
+    fun exactColumnNameWinsOverLongerFuzzyMatch() = runBlocking {
+        val fixture = columnTargetingFixture(
+            columns = listOf(
+                PageTableColumn(id = "column-name", name = "Name"),
+                PageTableColumn(id = "column-amount", name = "Amount", type = PageTableColumnType.Number),
+                PageTableColumn(id = "column-actual", name = "Amount Actual", type = PageTableColumnType.Number),
+            ),
+        )
+
+        val result = fixture.executor.executeOnPage(
+            page = fixture.page,
+            title = fixture.page.title,
+            document = fixture.document,
+            actions = listOf(
+                ChatAction(
+                    type = "UPDATE_TABLE_CELL",
+                    title = "",
+                    tableTitle = "Expenses",
+                    rowId = "row-1",
+                    columnName = "Amount",
+                    value = "9",
+                ),
+            ),
+        )
+
+        val row = requireNotNull(result.updatedDocument).table.rows.single()
+        assertEquals("9", row.cells["column-amount"])
+        assertEquals("2", row.cells["column-actual"])
+    }
+
+    @Test
+    fun exactColumnIdIsAuthoritativeEvenWhenNameIsAmbiguous() = runBlocking {
+        val fixture = columnTargetingFixture(
+            columns = listOf(
+                PageTableColumn(id = "column-name", name = "Name"),
+                PageTableColumn(id = "column-planned", name = "Amount Planned", type = PageTableColumnType.Number),
+                PageTableColumn(id = "column-actual", name = "Amount Actual", type = PageTableColumnType.Number),
+            ),
+        )
+
+        val result = fixture.executor.executeOnPage(
+            page = fixture.page,
+            title = fixture.page.title,
+            document = fixture.document,
+            actions = listOf(
+                ChatAction(
+                    type = "UPDATE_TABLE_CELL",
+                    title = "",
+                    tableTitle = "Expenses",
+                    rowId = "row-1",
+                    columnId = "column-actual",
+                    columnName = "Amount",
+                    value = "9",
+                ),
+            ),
+        )
+
+        val row = requireNotNull(result.updatedDocument).table.rows.single()
+        assertEquals("1", row.cells["column-planned"])
+        assertEquals("9", row.cells["column-actual"])
+    }
+
+    @Test
+    fun staleColumnIdDoesNotFallBackToMatchingName() = runBlocking {
+        val fixture = columnTargetingFixture(
+            columns = listOf(
+                PageTableColumn(id = "column-name", name = "Name"),
+                PageTableColumn(id = "column-amount", name = "Amount", type = PageTableColumnType.Number),
+            ),
+        )
+
+        val result = fixture.executor.executeOnPage(
+            page = fixture.page,
+            title = fixture.page.title,
+            document = fixture.document,
+            actions = listOf(
+                ChatAction(
+                    type = "UPDATE_TABLE_CELL",
+                    title = "",
+                    tableTitle = "Expenses",
+                    rowId = "row-1",
+                    columnId = "stale-column-id",
+                    columnName = "Amount",
+                    value = "9",
+                ),
+            ),
+        )
+
+        assertEquals("target_not_found", result.validationIssues.single().code)
+        assertEquals(emptyList<Int>(), result.executedActionIndexes)
+        assertNull(result.updatedDocument)
+    }
+
     @Test
     fun rejectedTableRowActionCarriesDomainTrace() = runBlocking {
         val document = PageBlockDocument(
@@ -1014,7 +1315,7 @@ class AiPageActionExecutorTest {
     }
 
     @Test
-    fun rejectsMissingSemanticTargetsBeforeMutatingPage() = runBlocking {
+    fun stopsAtFirstMissingSemanticTargetBeforeLaterActionsRun() = runBlocking {
         val nameColumn = PageTableColumn(id = "column-name", name = "Name")
         val dateColumn = PageTableColumn(
             id = "column-date",
@@ -1162,7 +1463,8 @@ class AiPageActionExecutorTest {
             ),
         )
 
-        assertEquals(13, result.validationIssues.size)
+        assertEquals(1, result.validationIssues.size)
+        assertEquals(0, result.validationIssues.single().actionIndex)
         assertEquals("columnName", result.validationIssues[0].field)
         assertEquals("blockText", result.validationIssues[1].field)
         assertEquals("dashboardMetricColumnName", result.validationIssues[2].field)
@@ -1185,8 +1487,60 @@ class AiPageActionExecutorTest {
         )
     }
 
+    private fun columnTargetingFixture(
+        columns: List<PageTableColumn>,
+    ): ColumnTargetingFixture {
+        val row = PageTableRow(
+            id = "row-1",
+            cells = columns.mapIndexed { index, column ->
+                column.id to if (index == 0) "Lunch" else index.toString()
+            }.toMap(),
+        )
+        val document = PageBlockDocument(
+            blocks = listOf(
+                PageBlock(
+                    id = "table-expenses",
+                    type = PageBlockType.DatabaseTable,
+                    table = PageTable(
+                        title = "Expenses",
+                        columns = columns,
+                        rows = listOf(row),
+                    ),
+                ),
+            ),
+        )
+        val page = Page(
+            id = "page-1",
+            workspaceId = "workspace-1",
+            parentPageId = null,
+            title = "Budget",
+            content = PageBlockCodec.encodeDocument(document),
+            sortOrder = 0,
+            createdAt = 1000,
+            updatedAt = 1000,
+            deletedAt = null,
+        )
+        val executor = AiPageActionExecutor(
+            pageRepository = FakePageRepository(page, document),
+            taskRepository = FakeTaskRepository(),
+            reminderRepository = FakeReminderRepository(),
+            applyEditorCommandUseCase = ApplyEditorCommandUseCase(),
+        )
+        return ColumnTargetingFixture(
+            page = page,
+            document = document,
+            executor = executor,
+        )
+    }
+
     private val PageBlockDocument.table: PageTable
         get() = blocks.single { block -> block.type == PageBlockType.DatabaseTable }.table
+
+    private data class ColumnTargetingFixture(
+        val page: Page,
+        val document: PageBlockDocument,
+        val executor: AiPageActionExecutor,
+    )
 
     private class FakePageRepository(
         private var page: Page,

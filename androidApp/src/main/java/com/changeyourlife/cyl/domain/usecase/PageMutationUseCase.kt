@@ -479,6 +479,9 @@ private fun PageBlock.duplicatedForEditor(): PageBlock {
     val nextBlockId = UUID.randomUUID().toString()
     val columnIdMap = table.columns.associate { column -> column.id to UUID.randomUUID().toString() }
     val rowIdMap = table.rows.associate { row -> row.id to UUID.randomUUID().toString() }
+    val savedViewIdMap = table.viewConfig.savedViews.associate { saved ->
+        saved.id to UUID.randomUUID().toString()
+    }
     fun mappedColumnId(id: String): String = columnIdMap[id].orEmpty()
 
     val duplicatedColumns = table.columns.map { column ->
@@ -528,6 +531,20 @@ private fun PageBlock.duplicatedForEditor(): PageBlock {
             dataSourcePageId = "",
             dataSourceTableBlockId = "",
             dataSourceTitle = "",
+            savedViews = table.viewConfig.savedViews.map { saved ->
+                saved.copy(
+                    id = savedViewIdMap.getValue(saved.id),
+                    calendarDateColumnId = mappedColumnId(saved.calendarDateColumnId),
+                    timelineStartColumnId = mappedColumnId(saved.timelineStartColumnId),
+                    timelineEndColumnId = mappedColumnId(saved.timelineEndColumnId),
+                    dashboardMetricColumnId = mappedColumnId(saved.dashboardMetricColumnId),
+                    dashboardGroupColumnId = mappedColumnId(saved.dashboardGroupColumnId),
+                    sort = saved.sort.copy(columnId = mappedColumnId(saved.sort.columnId)),
+                    filter = saved.filter.copy(columnId = mappedColumnId(saved.filter.columnId)),
+                    groupByColumnId = mappedColumnId(saved.groupByColumnId),
+                )
+            },
+            activeSavedViewId = savedViewIdMap[table.viewConfig.activeSavedViewId].orEmpty(),
         ),
         columns = duplicatedColumns,
         rows = duplicatedRows,

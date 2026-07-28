@@ -39,7 +39,15 @@ data class TaskTableMutationPlan(
 fun ChatTableColumn.toPageTableColumnFromAi(): PageTableColumn {
     val columnType = type.toPageTableColumnTypeFromAi()
     return PageBlockCodec.newTableColumn(name.trim(), columnType).copy(
-        config = PageTableColumnConfig(options = options.toAiTableSelectOptions()).normalizedForType(columnType),
+        config = PageTableColumnConfig(
+            options = options.toAiTableSelectOptions(),
+            isHidden = isHidden ?: false,
+            isRequired = isRequired ?: false,
+            wrapContent = wrapContent ?: false,
+            widthDp = widthDp ?: 0,
+            defaultValue = defaultValue,
+            description = description,
+        ).normalizedForType(columnType),
         dateFormat = dateFormat.toPageTableDateFormat(),
         timeFormat = timeFormat.toPageTableTimeFormat(defaultFor = name, type = columnType),
         dateReminder = dateReminder.toPageTableDateReminder(defaultFor = name, type = columnType),

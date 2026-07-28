@@ -22,6 +22,7 @@ class AiActionPlannerTest {
                     tableTitle = "Budget Tracker",
                 ),
             ),
+            source = AiService.AiActionSource.Model,
         )
         val promptResult = AiService.AiActionResult(
             reply = "Siap - saya tambah row itu.",
@@ -37,6 +38,7 @@ class AiActionPlannerTest {
                     ),
                 ),
             ),
+            source = AiService.AiActionSource.PromptRecovery,
         )
 
         val result = planner.selectActionResult(
@@ -48,6 +50,7 @@ class AiActionPlannerTest {
         val action = assertNotNull(result).actions.single()
         assertEquals("ADD_TABLE_ROW", action.type)
         assertEquals("29", action.cellValues["Amount"])
+        assertEquals(AiService.AiActionSource.PromptRecovery, result.source)
     }
 
     @Test
@@ -105,6 +108,7 @@ class AiActionPlannerTest {
                     blockType = "Text",
                 ),
             ),
+            source = AiService.AiActionSource.Model,
         )
 
         val result = planner.selectActionResult(
@@ -116,6 +120,7 @@ class AiActionPlannerTest {
         val action = assertNotNull(result).actions.single()
         assertEquals("ADD_BLOCK", action.type)
         assertEquals("Draft outline", action.content)
+        assertEquals(AiService.AiActionSource.Model, result.source)
     }
 
     @Test

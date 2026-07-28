@@ -3,6 +3,7 @@ package com.changeyourlife.cyl.aicontract
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import org.junit.runner.RunWith
@@ -34,6 +35,174 @@ class AiActionContractRegressionInvariantTest {
                 message = "$actionType must appear exactly once in the generated prompt catalog.",
             )
         }
+    }
+
+    @Test
+    fun columnConfigRejectsAnEmptyMutation() {
+        val result = AiActionContractSchema.parse(
+            actionIndex = 0,
+            payload = AiActionWire(
+                type = "UPDATE_TABLE_COLUMN_CONFIG",
+                targetTitle = "Budget",
+                tableTitle = "Transactions",
+                columnName = "Category",
+            ),
+        )
+
+        assertFalse(result.isValid)
+        assertTrue(result.issues.any { issue -> issue.field == "columnConfig" })
+    }
+
+    @Test
+    fun typedConfigurationRejectsUnsupportedValuesBeforeExecution() {
+        val invalidActions = listOf(
+            AiActionWire(
+                type = "UPDATE_TABLE_DATE_CONFIG",
+                targetTitle = "Budget",
+                tableTitle = "Transactions",
+                columnName = "Date",
+                dateFormat = "Sometimes",
+            ),
+            AiActionWire(
+                type = "UPDATE_TABLE_COLUMN_CONFIG",
+                targetTitle = "Budget",
+                tableTitle = "Transactions",
+                columnName = "Name",
+                widthDp = 12,
+            ),
+            AiActionWire(
+                type = "UPDATE_TABLE_COLUMN_OPTION",
+                targetTitle = "Budget",
+                tableTitle = "Transactions",
+                columnName = "Category",
+                optionName = "Food",
+                optionColor = "Invisible",
+            ),
+            AiActionWire(
+                type = "FILTER_TABLE",
+                targetTitle = "Budget",
+                tableTitle = "Transactions",
+                columnName = "Amount",
+                filterOperator = "Approximately",
+                filterQuery = "10",
+            ),
+            AiActionWire(
+                type = "CHANGE_TABLE_VIEW",
+                targetTitle = "Budget",
+                tableTitle = "Transactions",
+                tableView = "Spreadsheet3D",
+            ),
+        )
+
+        invalidActions.forEach { action ->
+            val result = AiActionContractSchema.parse(actionIndex = 0, payload = action)
+            assertFalse(
+                actual = result.isValid,
+                message = "${action.type} accepted unsupported typed configuration: ${result.issues}",
+            )
+            assertTrue(result.issues.any { issue -> issue.code == "invalid_field_value" })
+        }
+    }
+
+    @Test
+    fun filtersRequireAQueryUnlessTheOperatorIsQueryless() {
+        val missingQuery = AiActionContractSchema.parse(
+            actionIndex = 0,
+            payload = AiActionWire(
+                type = "FILTER_TABLE",
+                targetTitle = "Budget",
+                tableTitle = "Transactions",
+                columnName = "Category",
+                filterOperator = "Equals",
+            ),
+        )
+        val queryless = AiActionContractSchema.parse(
+            actionIndex = 0,
+            payload = AiActionWire(
+                type = "FILTER_TABLE",
+                targetTitle = "Budget",
+                tableTitle = "Transactions",
+                columnName = "Category",
+                filterOperator = "IsEmpty",
+            ),
+        )
+
+        assertFalse(missingQuery.isValid)
+        assertTrue(missingQuery.issues.any { issue -> issue.field == "filterQuery" })
+        assertTrue(queryless.isValid)
+    }
+
+    @Test
+    fun savedViewRulesRequireAnExplicitColumn() {
+        val result = AiActionContractSchema.parse(
+            actionIndex = 0,
+            payload = AiActionWire(
+                type = "CREATE_TABLE_SAVED_VIEW",
+                targetTitle = "Budget",
+                tableTitle = "Transactions",
+                viewName = "Food only",
+                filterOperator = "Equals",
+                filterQuery = "Food",
+            ),
+        )
+
+        assertFalse(result.isValid)
+        assertTrue(result.issues.any { issue -> issue.field == "columnName" })
+    }
+
+    @Test
+    fun tableShapeRejectsDuplicateColumnsAndTypeSpecificConfig() {
+        val result = AiActionContractSchema.parse(
+            actionIndex = 0,
+            payload = AiActionWire(
+                type = "CREATE_DATABASE",
+                targetTitle = "Budget",
+                tableTitle = "Transactions",
+                tableColumns = listOf(
+                    AiTableColumnWire(name = "Name", type = "Text"),
+                    AiTableColumnWire(
+                        name = "Category",
+                        type = "Number",
+                        options = listOf("Food"),
+                    ),
+                    AiTableColumnWire(name = "category", type = "Text"),
+                ),
+            ),
+        )
+
+        assertFalse(result.isValid)
+        assertTrue(result.issues.any { issue -> issue.field == "tableColumns[1].options" })
+        assertTrue(result.issues.any { issue -> issue.field == "tableColumns" })
+    }
+
+    @Test
+    fun omittedActionTypesStayUnsetInsteadOfForcingDefaults() {
+        val propertyResult = AiActionContractSchema.parse(
+            actionIndex = 0,
+            payload = AiActionWire(
+                type = "UPDATE_PROPERTY",
+                targetTitle = "Budget",
+                propertyName = "Budget",
+                value = "200",
+            ),
+        )
+        val columnResult = AiActionContractSchema.parse(
+            actionIndex = 1,
+            payload = AiActionWire(
+                type = "SET_TABLE_COLUMN_TYPE",
+                targetTitle = "Budget",
+                tableTitle = "Transactions",
+                columnName = "Amount",
+                value = "Number",
+            ),
+        )
+
+        assertTrue(propertyResult.isValid)
+        assertEquals("", assertIs<CylAiAction.Property>(propertyResult.action).propertyType)
+        assertTrue(columnResult.isValid)
+        assertEquals("", assertIs<CylAiAction.Column>(columnResult.action).columnType)
+        assertEquals("", AiActionWire().tableView)
+        assertEquals("", AiActionWire().sortDirection)
     }
 }
 
@@ -196,6 +365,30 @@ private object AiActionRegressionFixtures {
             columnType = "Select",
             options = listOf("Food", "Fuel", "Other"),
         )
+        "UPDATE_TABLE_DATE_CONFIG" -> tableTarget(type).copy(
+            columnName = "Date",
+            dateFormat = "YearMonthDay",
+            timeFormat = "TwentyFourHour",
+            dateReminder = "OneDayBefore",
+            timezoneLabel = "Asia/Kuala_Lumpur",
+        )
+        "ADD_TABLE_COLUMN_OPTION" -> tableTarget(type).copy(
+            columnName = "Category",
+            optionName = "Transport",
+            optionColor = "Blue",
+        )
+        "UPDATE_TABLE_COLUMN_OPTION" -> tableTarget(type).copy(
+            columnName = "Category",
+            optionId = "food",
+            optionName = "Food",
+            newOptionName = "Meals",
+            optionColor = "Green",
+        )
+        "DELETE_TABLE_COLUMN_OPTION" -> tableTarget(type).copy(
+            columnName = "Category",
+            optionId = "fuel",
+            optionName = "Fuel",
+        )
 
         "UPDATE_FORMULA_COLUMN" -> tableTarget(type).copy(
             columnName = "Balance",
@@ -291,6 +484,31 @@ private object AiActionRegressionFixtures {
             columnName = "Month",
             filterQuery = "2026-07",
         )
+        "SET_RELATION_CELL" -> tableTarget(type).copy(
+            rowTitle = "Lunch",
+            columnName = "Category relation",
+            relationRowIds = listOf("category-row-food"),
+        )
+        "CLEAR_RELATION_CELL" -> tableTarget(type).copy(
+            rowTitle = "Lunch",
+            columnName = "Category relation",
+        )
+        "ADD_MEDIA_CELL" -> tableTarget(type).copy(
+            rowTitle = "Lunch",
+            columnName = "Receipt",
+            mediaUri = "content://receipt/lunch",
+            mediaName = "lunch.jpg",
+            mediaMimeType = "image/jpeg",
+        )
+        "REMOVE_MEDIA_CELL" -> tableTarget(type).copy(
+            rowTitle = "Lunch",
+            columnName = "Receipt",
+            mediaId = "media-lunch",
+        )
+        "CLEAR_MEDIA_CELL" -> tableTarget(type).copy(
+            rowTitle = "Lunch",
+            columnName = "Receipt",
+        )
 
         "CHANGE_TABLE_VIEW", "SET_TABLE_VIEW" -> tableTarget(type).copy(tableView = "Calendar")
         "SET_TABLE_VIEW_CONFIG", "CONFIGURE_TABLE_VIEW", "UPDATE_TABLE_VIEW_CONFIG" ->
@@ -298,6 +516,22 @@ private object AiActionRegressionFixtures {
                 tableView = "Calendar",
                 calendarDateColumnName = "Date",
             )
+        "CREATE_TABLE_SAVED_VIEW" -> tableTarget(type).copy(
+            viewName = "Food only",
+            tableView = "Table",
+            columnName = "Category",
+            filterOperator = "Equals",
+            filterQuery = "Food",
+        )
+        "RENAME_TABLE_SAVED_VIEW" -> tableTarget(type).copy(
+            viewId = "view-food",
+            viewName = "Food only",
+            newViewName = "Meals",
+        )
+        "DELETE_TABLE_SAVED_VIEW", "ACTIVATE_TABLE_SAVED_VIEW" -> tableTarget(type).copy(
+            viewId = "view-food",
+            viewName = "Food only",
+        )
 
         "SORT_TABLE", "SET_TABLE_SORT" -> tableTarget(type).copy(
             columnName = "Amount",

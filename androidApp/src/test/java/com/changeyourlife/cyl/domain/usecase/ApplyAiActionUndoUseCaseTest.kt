@@ -14,6 +14,8 @@ import com.changeyourlife.cyl.domain.model.PageTable
 import com.changeyourlife.cyl.domain.model.PageTableColumn
 import com.changeyourlife.cyl.domain.model.PageTableColumnType
 import com.changeyourlife.cyl.domain.model.PageTableRow
+import com.changeyourlife.cyl.domain.model.deleteCreatedPageUndo
+import com.changeyourlife.cyl.domain.model.restorePageSnapshotsUndo
 import com.changeyourlife.cyl.domain.repository.AiActionLogRepository
 import com.changeyourlife.cyl.domain.repository.PageRepository
 import kotlinx.coroutines.flow.Flow
@@ -99,6 +101,105 @@ class ApplyAiActionUndoUseCaseTest {
         assertEquals("That AI action has already been undone.", result.message)
     }
 
+    @Test
+    fun restoresPermanentlyDeletedPageFromSavedSnapshot() = runBlocking {
+        val deletedPage = pageWithTable(PageTable(title = "Budget")).copy(
+            title = "Original title",
+            parentPageId = "parent-1",
+            deletedAt = 3000L,
+            revision = 7L,
+        )
+        val pageRepository = FakePageRepository(initialPage = null)
+        val actionLogRepository = FakeAiActionLogRepository(
+            actionLog(
+                undoCommandsJson = json.encodeToString(
+                    listOf(
+                        restorePageSnapshotsUndo(
+                            actionIndex = 0,
+                            pages = listOf(deletedPage),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val useCase = ApplyAiActionUndoUseCase(
+            aiActionLogRepository = actionLogRepository,
+            pageRepository = pageRepository,
+            applyEditorCommandUseCase = ApplyEditorCommandUseCase(),
+        )
+
+        val result = useCase(auditId = "audit-1", pageId = "")
+
+        assertTrue(result.changed)
+        assertEquals(deletedPage, pageRepository.getPage(deletedPage.id))
+        assertEquals(AiActionUndoState.Applied, requireNotNull(actionLogRepository.getByAuditId("audit-1")).undoState)
+    }
+
+    @Test
+    fun removesPageCreatedByAi() = runBlocking {
+        val createdPage = pageWithTable(PageTable(title = "Budget"))
+        val pageRepository = FakePageRepository(createdPage)
+        val actionLogRepository = FakeAiActionLogRepository(
+            actionLog(
+                undoCommandsJson = json.encodeToString(
+                    listOf(
+                        deleteCreatedPageUndo(
+                            actionIndex = 0,
+                            pageId = createdPage.id,
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val useCase = ApplyAiActionUndoUseCase(
+            aiActionLogRepository = actionLogRepository,
+            pageRepository = pageRepository,
+            applyEditorCommandUseCase = ApplyEditorCommandUseCase(),
+        )
+
+        val result = useCase(auditId = "audit-1", pageId = "")
+
+        assertTrue(result.changed)
+        assertEquals(null, pageRepository.getPage(createdPage.id))
+        assertEquals(listOf(createdPage.id), pageRepository.permanentlyDeletedPageIds)
+    }
+
+    @Test
+    fun restoresPreviousPageTitleAndParentSnapshot() = runBlocking {
+        val previousPage = pageWithTable(PageTable(title = "Budget")).copy(
+            title = "Before",
+            parentPageId = "parent-before",
+        )
+        val currentPage = previousPage.copy(
+            title = "After",
+            parentPageId = "parent-after",
+            updatedAt = previousPage.updatedAt + 100L,
+        )
+        val pageRepository = FakePageRepository(currentPage)
+        val actionLogRepository = FakeAiActionLogRepository(
+            actionLog(
+                undoCommandsJson = json.encodeToString(
+                    listOf(
+                        restorePageSnapshotsUndo(
+                            actionIndex = 0,
+                            pages = listOf(previousPage),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val useCase = ApplyAiActionUndoUseCase(
+            aiActionLogRepository = actionLogRepository,
+            pageRepository = pageRepository,
+            applyEditorCommandUseCase = ApplyEditorCommandUseCase(),
+        )
+
+        val result = useCase(auditId = "audit-1", pageId = currentPage.id)
+
+        assertTrue(result.changed)
+        assertEquals(previousPage, pageRepository.getPage(previousPage.id))
+    }
+
     private fun pageWithTable(table: PageTable): Page {
         return Page(
             id = "page-1",
@@ -167,22 +268,29 @@ class ApplyAiActionUndoUseCaseTest {
     }
 
     private class FakePageRepository(
-        initialPage: Page,
+        initialPage: Page?,
     ) : PageRepository {
-        private var page = initialPage
+        private val pages = linkedMapOf<String, Page>().apply {
+            initialPage?.let { page -> put(page.id, page) }
+        }
+        val permanentlyDeletedPageIds = mutableListOf<String>()
 
-        override fun observePages(workspaceId: String): Flow<List<Page>> = flowOf(listOf(page))
+        override fun observePages(workspaceId: String): Flow<List<Page>> =
+            flowOf(pages.values.filter { page -> page.workspaceId == workspaceId && page.deletedAt == null })
         override fun observeChildPages(parentPageId: String): Flow<List<Page>> = flowOf(emptyList())
-        override fun observeRecentPages(limit: Int): Flow<List<Page>> = flowOf(listOf(page))
-        override fun observeRecentPages(workspaceId: String, limit: Int): Flow<List<Page>> = flowOf(listOf(page))
-        override fun observeDeletedPages(workspaceId: String): Flow<List<Page>> = flowOf(emptyList())
-        override fun observePage(pageId: String): Flow<Page?> = flowOf(page.takeIf { it.id == pageId })
+        override fun observeRecentPages(limit: Int): Flow<List<Page>> = flowOf(pages.values.take(limit))
+        override fun observeRecentPages(workspaceId: String, limit: Int): Flow<List<Page>> =
+            flowOf(pages.values.filter { page -> page.workspaceId == workspaceId }.take(limit))
+        override fun observeDeletedPages(workspaceId: String): Flow<List<Page>> =
+            flowOf(pages.values.filter { page -> page.workspaceId == workspaceId && page.deletedAt != null })
+        override fun observePage(pageId: String): Flow<Page?> = flowOf(pages[pageId])
         override fun observePageSyncState(pageId: String): Flow<PageSyncState> = flowOf(PageSyncState())
-        override fun observePageCount(): Flow<Int> = flowOf(1)
-        override fun observePageCount(workspaceId: String): Flow<Int> = flowOf(1)
-        override suspend fun getPage(pageId: String): Page? = page.takeIf { it.id == pageId }
+        override fun observePageCount(): Flow<Int> = flowOf(pages.size)
+        override fun observePageCount(workspaceId: String): Flow<Int> =
+            flowOf(pages.values.count { page -> page.workspaceId == workspaceId })
+        override suspend fun getPage(pageId: String): Page? = pages[pageId]
         override suspend fun upsertPage(page: Page) {
-            this.page = page
+            pages[page.id] = page
         }
 
         override suspend fun updateBlockText(pageId: String, blockId: String, text: String): Boolean = false
@@ -205,9 +313,16 @@ class ApplyAiActionUndoUseCaseTest {
         override suspend fun deleteTableRow(pageId: String, tableBlockId: String, rowId: String): Boolean = false
         override suspend fun moveTableRow(pageId: String, tableBlockId: String, rowId: String, targetIndex: Int): Boolean = false
         override suspend fun createPage(workspaceId: String, title: String, content: String, parentPageId: String?): Page = error("Not used")
-        override suspend fun deletePage(pageId: String) = Unit
-        override suspend fun restorePage(pageId: String) = Unit
-        override suspend fun deletePagePermanently(pageId: String) = Unit
+        override suspend fun deletePage(pageId: String) {
+            pages[pageId]?.let { page -> pages[pageId] = page.copy(deletedAt = 1L) }
+        }
+        override suspend fun restorePage(pageId: String) {
+            pages[pageId]?.let { page -> pages[pageId] = page.copy(deletedAt = null) }
+        }
+        override suspend fun deletePagePermanently(pageId: String) {
+            pages.remove(pageId)
+            permanentlyDeletedPageIds += pageId
+        }
         override suspend fun keepLocalPageConflict(pageId: String) = Unit
         override suspend fun useRemotePageConflict(pageId: String) = Unit
     }

@@ -3,8 +3,10 @@ package com.changeyourlife.cyl.core.di
 import com.changeyourlife.cyl.domain.repository.AiActionLogRepository
 import com.changeyourlife.cyl.domain.repository.PageRepository
 import com.changeyourlife.cyl.domain.usecase.ApplyAiActionUndoUseCase
+import com.changeyourlife.cyl.domain.usecase.ApplyAiUndoCommandsUseCase
 import com.changeyourlife.cyl.domain.usecase.ApplyEditorCommandUseCase
 import com.changeyourlife.cyl.domain.usecase.PageMutationUseCase
+import com.changeyourlife.cyl.domain.usecase.ReconcileTableDateRemindersUseCase
 import com.changeyourlife.cyl.domain.usecase.TableMutationUseCase
 import dagger.Module
 import dagger.Provides
@@ -34,15 +36,30 @@ object UseCaseModule {
     }
 
     @Provides
+    fun provideApplyAiUndoCommandsUseCase(
+        pageRepository: PageRepository,
+        applyEditorCommandUseCase: ApplyEditorCommandUseCase,
+        reconcileTableDateRemindersUseCase: ReconcileTableDateRemindersUseCase,
+    ): ApplyAiUndoCommandsUseCase {
+        return ApplyAiUndoCommandsUseCase(
+            pageRepository = pageRepository,
+            applyEditorCommandUseCase = applyEditorCommandUseCase,
+            reconcileTableDateRemindersUseCase = reconcileTableDateRemindersUseCase,
+        )
+    }
+
+    @Provides
     fun provideApplyAiActionUndoUseCase(
         aiActionLogRepository: AiActionLogRepository,
         pageRepository: PageRepository,
         applyEditorCommandUseCase: ApplyEditorCommandUseCase,
+        reconcileTableDateRemindersUseCase: ReconcileTableDateRemindersUseCase,
     ): ApplyAiActionUndoUseCase {
         return ApplyAiActionUndoUseCase(
             aiActionLogRepository = aiActionLogRepository,
             pageRepository = pageRepository,
             applyEditorCommandUseCase = applyEditorCommandUseCase,
+            reconcileTableDateRemindersUseCase = reconcileTableDateRemindersUseCase,
         )
     }
 }

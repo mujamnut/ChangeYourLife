@@ -159,6 +159,16 @@ interface PageRepository {
         parentPageId: String? = null,
     ): Page
 
+    suspend fun getPageTreeSnapshot(pageId: String): List<Page> {
+        return getPage(pageId)?.let(::listOf).orEmpty()
+    }
+
+    suspend fun restorePageSnapshots(pages: List<Page>): Boolean {
+        if (pages.isEmpty()) return false
+        pages.forEach { page -> upsertPage(page) }
+        return true
+    }
+
     suspend fun deletePage(pageId: String)
 
     suspend fun restorePage(pageId: String)

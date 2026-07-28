@@ -2,6 +2,7 @@ package com.changeyourlife.cyl.presentation.ai
 
 import com.changeyourlife.cyl.domain.model.ChatActionMetadata
 import com.changeyourlife.cyl.domain.model.ChatActionMetadataItem
+import com.changeyourlife.cyl.domain.model.ChatPendingActionMetadata
 import com.changeyourlife.cyl.domain.model.ChatActionValidationMetadata
 import com.changeyourlife.cyl.domain.model.AiUndoCommandSummary
 import com.changeyourlife.cyl.domain.model.Page
@@ -59,35 +60,61 @@ object AiChatActionOrchestrator {
         val actionDecision = AiActionExecutionPolicy.decide(
             backendActions = proposedActions,
         )
-        val actionsToExecute = actionDecision.executableCandidates
-            .filterNot { candidate -> candidate.originalIndex in backendRejectedActionIndexes }
-        val rejectedActionIndexes = (
+        val preExecutionValidationIssues =
             actionDecision.validationIssues +
                 backendValidationIssues
-            )
+        val rejectedActionIndexes = preExecutionValidationIssues
             .mapNotNull { issue -> issue.actionIndex }
             .toSet()
+        val actionsToExecute = if (preExecutionValidationIssues.isEmpty()) {
+            actionDecision.executableCandidates
+        } else {
+            emptyList()
+        }
         val actionResults = if (actionsToExecute.isEmpty()) {
             AiActionExecutionResult()
         } else {
             executeActions(workspaceId, scopedTargetPage, actionsToExecute)
         }
-        val appliedActionIndexes = actionResults.executedActionIndexes
-            .asSequence()
-            .distinct()
-            .filter { index -> index in proposedActions.indices }
-            .filterNot { index -> index in rejectedActionIndexes }
-            .toList()
-        val finalValidationIssues = backendValidationIssues +
-            actionDecision.validationIssues +
+        val finalValidationIssues = preExecutionValidationIssues +
             actionResults.validationIssues.filterNot { issue ->
                 issue.actionIndex != null && issue.actionIndex in rejectedActionIndexes
             }
+        val planFailed = proposedActions.isNotEmpty() && finalValidationIssues.isNotEmpty()
+        val appliedActionIndexes = if (planFailed) {
+            emptyList()
+        } else {
+            actionResults.executedActionIndexes
+                .asSequence()
+                .distinct()
+                .filter { index -> index in proposedActions.indices }
+                .toList()
+        }
         val visibleValidationMessages = finalValidationIssues.toUserVisibleMessages(prompt)
         val needsClarification = proposedActions.isNotEmpty() &&
             appliedActionIndexes.isEmpty() &&
             finalValidationIssues.isNotEmpty() &&
             finalValidationIssues.all(ChatActionValidationMetadata::requiresClarification)
+        val pendingActions = proposedActions.mapIndexedNotNull { index, action ->
+            if (index in appliedActionIndexes) return@mapIndexedNotNull null
+            val issues = finalValidationIssues.filter { issue ->
+                issue.requiresClarification() &&
+                    (issue.actionIndex == index || issue.actionIndex == null && proposedActions.size == 1)
+            }
+            if (issues.isEmpty()) {
+                null
+            } else {
+                ChatPendingActionMetadata(
+                    action = action.toContractWire(),
+                    issueFields = issues.map(ChatActionValidationMetadata::field)
+                        .filter(String::isNotBlank)
+                        .distinct(),
+                    issueCodes = issues.map(ChatActionValidationMetadata::code)
+                        .filter(String::isNotBlank)
+                        .distinct(),
+                )
+            }
+        }
         val assistantReply = when {
             needsClarification -> ""
 
@@ -115,8 +142,8 @@ object AiChatActionOrchestrator {
 
         return AiChatActionOrchestrationResult(
             reply = replyWithResults,
-            pageLinks = actionResults.pageLinks,
-            undoCommands = actionResults.undoCommands,
+            pageLinks = actionResults.pageLinks.takeUnless { planFailed }.orEmpty(),
+            undoCommands = actionResults.undoCommands.takeUnless { planFailed }.orEmpty(),
             actionMetadata = ChatActionMetadata(
                 auditId = auditId,
                 requestMessageId = requestMessageId,
@@ -131,6 +158,7 @@ object AiChatActionOrchestrator {
                     .map { index -> proposedActions[index].toMetadataItem(index) },
                 executionMessages = diagnosticMessages + actionResults.messages,
                 validationIssues = finalValidationIssues,
+                pendingActions = pendingActions,
             ),
         )
     }

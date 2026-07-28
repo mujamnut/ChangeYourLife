@@ -257,7 +257,14 @@ class SessionSyncCoordinator @Inject constructor(
         }.onFailure { error ->
             handleSyncFailure(error)
             if (error.isPageRevisionConflict()) {
-                refreshPage(pageId = pushedPage.id, includeDeleted = true)
+                if (pushedPage.revision == 0L) {
+                    reconcileRecreatedPageWithExistingRemote(
+                        authorization = header,
+                        recreatedPage = pushedPage,
+                    )
+                } else {
+                    refreshPage(pageId = pushedPage.id, includeDeleted = true)
+                }
             }
         }
     }
@@ -842,10 +849,8 @@ class SessionSyncCoordinator @Inject constructor(
             .firstOrNull { candidate ->
                 candidate.entityType == SyncTombstoneType.PagePermanentDelete &&
                     candidate.entityId == pageId
-            }
-        val expectedRevision = tombstone?.expectedRevision
-            ?: pageDao.getPage(pageId)?.revision
-            ?: return
+            } ?: return
+        val expectedRevision = tombstone.expectedRevision
         runCatching {
             syncApi.deletePagePermanently(
                 authorization = header,
@@ -1405,6 +1410,29 @@ class SessionSyncCoordinator @Inject constructor(
                 entityId = pageId,
             )
         }.onFailure(::handleSyncFailure)
+    }
+
+    private suspend fun reconcileRecreatedPageWithExistingRemote(
+        authorization: String,
+        recreatedPage: PageEntity,
+    ) {
+        runCatching {
+            val remotePage = syncApi.getPage(
+                authorization = authorization,
+                id = recreatedPage.id,
+                includeDeleted = true,
+            )
+            val retryPage = recreatedPage.copy(revision = remotePage.revision)
+            val pushed = syncApi.upsertPage(
+                authorization = authorization,
+                id = retryPage.id,
+                page = retryPage.toDomain().toSyncDto(),
+            )
+            persistPushResponse(remotePage = pushed, pushedPage = retryPage)
+        }.onFailure { error ->
+            handleSyncFailure(error)
+            refreshPage(pageId = recreatedPage.id, includeDeleted = true)
+        }
     }
 
     private suspend fun recoverPageMutationFailure(

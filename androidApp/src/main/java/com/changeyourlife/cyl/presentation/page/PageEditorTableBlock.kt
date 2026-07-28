@@ -230,6 +230,7 @@ internal fun DatabaseTableBlockEditor(
     tableReferences: List<PageTableReference>,
     onTitleChange: (String) -> Unit,
     onViewChange: (PageTableView) -> Unit,
+    onSavedViewMutation: (TableSavedViewMutation) -> Unit,
     onViewConfigChange: (PageTableViewConfig) -> Unit,
     onDataSourceChange: (PageTableReference?) -> Unit,
     onSortChange: (String, PageTableSortDirection) -> Unit,
@@ -379,6 +380,7 @@ internal fun DatabaseTableBlockEditor(
             tableReferences = tableReferences,
             onTitleChange = onTitleChange,
             onViewChange = onViewChange,
+            onSavedViewMutation = onSavedViewMutation,
             onViewConfigChange = onViewConfigChange,
             onDataSourceChange = onDataSourceChange,
             onColumnConfigChange = onColumnConfigChange,
@@ -493,6 +495,7 @@ internal fun TableToolbar(
     tableReferences: List<PageTableReference>,
     onTitleChange: (String) -> Unit,
     onViewChange: (PageTableView) -> Unit,
+    onSavedViewMutation: (TableSavedViewMutation) -> Unit,
     onViewConfigChange: (PageTableViewConfig) -> Unit,
     onDataSourceChange: (PageTableReference?) -> Unit,
     onColumnConfigChange: (String, PageTableColumnConfig) -> Unit,
@@ -532,6 +535,7 @@ internal fun TableToolbar(
                     tableReferences = tableReferences,
                     onTitleChange = onTitleChange,
                     onViewChange = onViewChange,
+                    onSavedViewMutation = onSavedViewMutation,
                     onViewConfigChange = onViewConfigChange,
                     onDataSourceChange = onDataSourceChange,
                 )
@@ -828,6 +832,7 @@ internal fun TableViewSelector(
     tableReferences: List<PageTableReference>,
     onTitleChange: (String) -> Unit,
     onViewChange: (PageTableView) -> Unit,
+    onSavedViewMutation: (TableSavedViewMutation) -> Unit,
     onViewConfigChange: (PageTableViewConfig) -> Unit,
     onDataSourceChange: (PageTableReference?) -> Unit,
 ) {
@@ -880,6 +885,7 @@ internal fun TableViewSelector(
                 tableReferences = tableReferences,
                 onTitleChange = onTitleChange,
                 onViewChange = onViewChange,
+                onSavedViewMutation = onSavedViewMutation,
                 onViewConfigChange = onViewConfigChange,
                 onDataSourceChange = onDataSourceChange,
                 onDismiss = { isSheetOpen = false },
@@ -895,6 +901,7 @@ internal fun DatabaseViewSheet(
     tableReferences: List<PageTableReference>,
     onTitleChange: (String) -> Unit,
     onViewChange: (PageTableView) -> Unit,
+    onSavedViewMutation: (TableSavedViewMutation) -> Unit,
     onViewConfigChange: (PageTableViewConfig) -> Unit,
     onDataSourceChange: (PageTableReference?) -> Unit,
     onDismiss: () -> Unit,
@@ -917,10 +924,8 @@ internal fun DatabaseViewSheet(
             onTitleChange = onTitleChange,
         )
         DatabaseNewViewCard(
-            selectedView = table.view,
-            onViewChange = { view ->
-                onViewChange(view)
-            },
+            table = table,
+            onSavedViewMutation = onSavedViewMutation,
         )
         DatabaseViewSetupCard(
             table = table,
@@ -1003,51 +1008,248 @@ private fun String.databaseEditableTitle(): String {
 
 @Composable
 internal fun DatabaseNewViewCard(
-    selectedView: PageTableView,
-    onViewChange: (PageTableView) -> Unit,
+    table: PageTable,
+    onSavedViewMutation: (TableSavedViewMutation) -> Unit,
 ) {
+    var isCreating by rememberSaveable { mutableStateOf(false) }
+    var draftName by rememberSaveable { mutableStateOf("") }
+    var draftViewName by rememberSaveable { mutableStateOf(table.view.name) }
+    var editingViewId by rememberSaveable { mutableStateOf<String?>(null) }
+    var editingName by rememberSaveable { mutableStateOf("") }
+    val draftView = PageTableView.entries.firstOrNull { view -> view.name == draftViewName }
+        ?: PageTableView.Table
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(18.dp))
+            .clip(RoundedCornerShape(12.dp))
             .background(MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.68f))
-            .padding(vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+            .padding(vertical = 6.dp),
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 14.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(
-                imageVector = Icons.Rounded.Add,
-                contentDescription = null,
-                modifier = Modifier.size(19.dp),
-                tint = MaterialTheme.colorScheme.primary,
-            )
-            Column {
-                Text(
-                    text = "New view",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-                Text(
-                    text = "Choose how this database is displayed.",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+        table.viewConfig.savedViews.forEachIndexed { index, savedView ->
+            val isActive = savedView.id == table.viewConfig.activeSavedViewId
+            val isEditing = editingViewId == savedView.id
+            if (index > 0) {
+                HorizontalDivider(
+                    modifier = Modifier.padding(horizontal = 12.dp),
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
                 )
             }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(
+                        enabled = !isEditing,
+                        onClick = {
+                            onSavedViewMutation(
+                                TableSavedViewMutation.Activate(
+                                    viewId = savedView.id,
+                                    name = savedView.name,
+                                ),
+                            )
+                        },
+                    )
+                    .padding(start = 14.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                val option = TableViewOption.entries.firstOrNull { entry -> entry.view == savedView.view }
+                    ?: TableViewOption.entries.first()
+                Icon(
+                    imageVector = option.icon,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                    tint = if (isActive) {
+                        MaterialTheme.colorScheme.onSurface
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                )
+                if (isEditing) {
+                    BasicTextField(
+                        value = editingName,
+                        onValueChange = { editingName = it },
+                        modifier = Modifier.weight(1f),
+                        singleLine = true,
+                        textStyle = MaterialTheme.typography.bodyMedium.copy(
+                            color = MaterialTheme.colorScheme.onSurface,
+                            fontWeight = FontWeight.Medium,
+                        ),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(
+                            onDone = {
+                                onSavedViewMutation(
+                                    TableSavedViewMutation.Rename(
+                                        viewId = savedView.id,
+                                        currentName = savedView.name,
+                                        newName = editingName,
+                                    ),
+                                )
+                                editingViewId = null
+                            },
+                        ),
+                    )
+                    IconButton(
+                        onClick = {
+                            onSavedViewMutation(
+                                TableSavedViewMutation.Rename(
+                                    viewId = savedView.id,
+                                    currentName = savedView.name,
+                                    newName = editingName,
+                                ),
+                            )
+                            editingViewId = null
+                        },
+                        modifier = Modifier.size(36.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Check,
+                            contentDescription = "Save view name",
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                } else {
+                    Text(
+                        text = savedView.name,
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (isActive) {
+                        Icon(
+                            imageVector = Icons.Rounded.Check,
+                            contentDescription = "Active view",
+                            modifier = Modifier.size(17.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    IconButton(
+                        onClick = {
+                            editingViewId = savedView.id
+                            editingName = savedView.name
+                        },
+                        modifier = Modifier.size(36.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Edit,
+                            contentDescription = "Rename view",
+                            modifier = Modifier.size(17.dp),
+                        )
+                    }
+                    IconButton(
+                        onClick = {
+                            onSavedViewMutation(
+                                TableSavedViewMutation.Delete(
+                                    viewId = savedView.id,
+                                    name = savedView.name,
+                                ),
+                            )
+                        },
+                        modifier = Modifier.size(36.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Delete,
+                            contentDescription = "Delete view",
+                            modifier = Modifier.size(17.dp),
+                            tint = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                }
+            }
         }
-        LazyRow(
-            contentPadding = PaddingValues(horizontal = 12.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            items(TableViewOption.entries) { option ->
-                DatabaseViewChip(
-                    option = option,
-                    selected = option.view == selectedView,
-                    onClick = { onViewChange(option.view) },
+
+        if (table.viewConfig.savedViews.isNotEmpty()) {
+            HorizontalDivider(
+                modifier = Modifier.padding(horizontal = 12.dp),
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
+            )
+        }
+
+        if (isCreating) {
+            Column(
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                OutlinedTextField(
+                    value = draftName,
+                    onValueChange = { draftName = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    label = { Text("View name") },
+                    placeholder = {
+                        Text(
+                            TableViewOption.entries.firstOrNull { option -> option.view == draftView }?.label
+                                ?: "Table",
+                        )
+                    },
+                )
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(TableViewOption.entries) { option ->
+                        DatabaseViewChip(
+                            option = option,
+                            selected = option.view == draftView,
+                            onClick = { draftViewName = option.view.name },
+                        )
+                    }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                ) {
+                    TextButton(
+                        onClick = {
+                            isCreating = false
+                            draftName = ""
+                        },
+                    ) {
+                        Text("Cancel")
+                    }
+                    TextButton(
+                        onClick = {
+                            val defaultName = TableViewOption.entries
+                                .firstOrNull { option -> option.view == draftView }
+                                ?.label
+                                ?: "Table"
+                            onSavedViewMutation(
+                                TableSavedViewMutation.Create(
+                                    name = draftName.trim().ifBlank { defaultName },
+                                    view = draftView,
+                                ),
+                            )
+                            draftName = ""
+                            isCreating = false
+                        },
+                    ) {
+                        Text("Create")
+                    }
+                }
+            }
+        } else {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable {
+                        draftViewName = table.view.name
+                        isCreating = true
+                    }
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Add,
+                    contentDescription = null,
+                    modifier = Modifier.size(19.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text = "New view",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
                 )
             }
         }
@@ -1902,7 +2104,9 @@ private fun PageTableColumn.filterOperators(): List<PageTableFilterOperator> = w
         PageTableFilterOperator.Equals,
         PageTableFilterOperator.NotEquals,
         PageTableFilterOperator.GreaterThan,
+        PageTableFilterOperator.GreaterThanOrEqual,
         PageTableFilterOperator.LessThan,
+        PageTableFilterOperator.LessThanOrEqual,
         PageTableFilterOperator.IsEmpty,
         PageTableFilterOperator.IsNotEmpty,
     )
@@ -1926,6 +2130,7 @@ private fun PageTableColumn.filterOperators(): List<PageTableFilterOperator> = w
         PageTableFilterOperator.Equals,
         PageTableFilterOperator.NotEquals,
         PageTableFilterOperator.Contains,
+        PageTableFilterOperator.NotContains,
         PageTableFilterOperator.IsEmpty,
         PageTableFilterOperator.IsNotEmpty,
     )
@@ -1934,6 +2139,7 @@ private fun PageTableColumn.filterOperators(): List<PageTableFilterOperator> = w
     PageTableColumnType.Relation,
     -> listOf(
         PageTableFilterOperator.Contains,
+        PageTableFilterOperator.NotContains,
         PageTableFilterOperator.Equals,
         PageTableFilterOperator.NotEquals,
         PageTableFilterOperator.IsEmpty,
@@ -1949,12 +2155,15 @@ private fun PageTableFilterOperator.requiresQuery(): Boolean {
 private val PageTableFilterOperator.label: String
     get() = when (this) {
         PageTableFilterOperator.Contains -> "Contains"
+        PageTableFilterOperator.NotContains -> "Does not contain"
         PageTableFilterOperator.Equals -> "Is"
         PageTableFilterOperator.NotEquals -> "Is not"
         PageTableFilterOperator.IsEmpty -> "Empty"
         PageTableFilterOperator.IsNotEmpty -> "Not empty"
         PageTableFilterOperator.GreaterThan -> ">"
+        PageTableFilterOperator.GreaterThanOrEqual -> ">="
         PageTableFilterOperator.LessThan -> "<"
+        PageTableFilterOperator.LessThanOrEqual -> "<="
         PageTableFilterOperator.Before -> "Before"
         PageTableFilterOperator.After -> "After"
         PageTableFilterOperator.OnOrBefore -> "On/before"
@@ -7207,6 +7416,7 @@ internal fun androidx.compose.foundation.lazy.LazyListScope.inlineDatabaseTableB
     onActiveEditingCellKeyChange: (String?) -> Unit,
     onTitleChange: (String) -> Unit,
     onViewChange: (PageTableView) -> Unit,
+    onSavedViewMutation: (TableSavedViewMutation) -> Unit,
     onViewConfigChange: (PageTableViewConfig) -> Unit,
     onDataSourceChange: (PageTableReference?) -> Unit,
     onSortChange: (String, PageTableSortDirection) -> Unit,
@@ -7290,6 +7500,7 @@ internal fun androidx.compose.foundation.lazy.LazyListScope.inlineDatabaseTableB
                     tableReferences = tableReferences,
                     onTitleChange = onTitleChange,
                     onViewChange = onViewChange,
+                    onSavedViewMutation = onSavedViewMutation,
                     onViewConfigChange = onViewConfigChange,
                     onDataSourceChange = onDataSourceChange,
                     onColumnConfigChange = onColumnConfigChange,

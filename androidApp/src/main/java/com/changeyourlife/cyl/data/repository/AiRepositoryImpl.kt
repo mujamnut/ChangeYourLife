@@ -5,6 +5,9 @@ import com.changeyourlife.cyl.data.remote.ai.AiApi
 import com.changeyourlife.cyl.data.remote.ai.AiBlockContextDto
 import com.changeyourlife.cyl.data.remote.ai.AiImageInputDto
 import com.changeyourlife.cyl.data.remote.ai.AiPageContextDto
+import com.changeyourlife.cyl.data.remote.ai.AiTableCellContextDto
+import com.changeyourlife.cyl.data.remote.ai.AiTableColumnContextDto
+import com.changeyourlife.cyl.data.remote.ai.AiTableRowContextDto
 import com.changeyourlife.cyl.data.remote.ai.AiTaskContextDto
 import com.changeyourlife.cyl.data.remote.ai.ChatMessageDto
 import com.changeyourlife.cyl.data.remote.ai.ChatRequestDto
@@ -96,6 +99,9 @@ class AiRepositoryImpl @Inject constructor(
                     AiPageContextDto(
                         id = page.id,
                         title = page.title,
+                        totalBlockCount = page.totalBlockCount,
+                        isFocused = page.isFocused,
+                        contextComplete = page.contextComplete,
                         blocks = page.blocks.map { block ->
                             AiBlockContextDto(
                                 id = block.id,
@@ -108,6 +114,30 @@ class AiRepositoryImpl @Inject constructor(
                                 rowTitle = block.rowTitle,
                                 rowBlockId = block.rowBlockId,
                                 isChecked = block.isChecked,
+                                tableColumns = block.tableColumns.map { column ->
+                                    AiTableColumnContextDto(
+                                        id = column.id,
+                                        name = column.name,
+                                        type = column.type,
+                                        config = column.config,
+                                    )
+                                },
+                                tableRows = block.tableRows.map { row ->
+                                    AiTableRowContextDto(
+                                        id = row.id,
+                                        title = row.title,
+                                        totalBlockCount = row.totalBlockCount,
+                                        cells = row.cells.map { cell ->
+                                            AiTableCellContextDto(
+                                                columnId = cell.columnId,
+                                                columnName = cell.columnName,
+                                                value = cell.value,
+                                            )
+                                        },
+                                    )
+                                },
+                                totalRowCount = block.totalRowCount,
+                                contextComplete = block.contextComplete,
                             )
                         },
                     )

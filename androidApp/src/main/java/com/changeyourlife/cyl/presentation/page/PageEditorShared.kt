@@ -1175,10 +1175,15 @@ internal fun PageTableRow.matchesTableFilter(
         PageTableFilterOperator.IsEmpty -> isEmpty
         PageTableFilterOperator.IsNotEmpty -> !isEmpty
         PageTableFilterOperator.Contains -> displayText.contains(query, ignoreCase = true)
+        PageTableFilterOperator.NotContains -> !displayText.contains(query, ignoreCase = true)
         PageTableFilterOperator.Equals -> column.matchesFilterEquals(this, displayText, query, tableReferences)
         PageTableFilterOperator.NotEquals -> !column.matchesFilterEquals(this, displayText, query, tableReferences)
         PageTableFilterOperator.GreaterThan -> column.compareFilterNumberOrText(this, displayText, query, tableReferences) > 0
+        PageTableFilterOperator.GreaterThanOrEqual ->
+            column.compareFilterNumberOrText(this, displayText, query, tableReferences) >= 0
         PageTableFilterOperator.LessThan -> column.compareFilterNumberOrText(this, displayText, query, tableReferences) < 0
+        PageTableFilterOperator.LessThanOrEqual ->
+            column.compareFilterNumberOrText(this, displayText, query, tableReferences) <= 0
         PageTableFilterOperator.Before -> column.compareFilterDateOrText(this, displayText, query, tableReferences) < 0
         PageTableFilterOperator.After -> column.compareFilterDateOrText(this, displayText, query, tableReferences) > 0
         PageTableFilterOperator.OnOrBefore -> column.compareFilterDateOrText(this, displayText, query, tableReferences) <= 0
@@ -1986,6 +1991,7 @@ internal fun PageEditorScreenPreview() {
             onOutdentBlock = {},
             onTableTitleChange = { _, _ -> },
             onTableViewChange = { _, _ -> },
+            onTableSavedViewMutation = { _, _ -> },
             onTableViewConfigChange = { _, _ -> },
             onTableSortChange = { _, _, _ -> },
             onTableFilterChange = { _, _ -> },

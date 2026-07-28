@@ -8,6 +8,7 @@ import com.changeyourlife.cyl.data.search.ChatSearchIndexUpdater
 import com.changeyourlife.cyl.data.sync.ChatSyncScheduler
 import com.changeyourlife.cyl.domain.model.ChatActionMetadata
 import com.changeyourlife.cyl.domain.model.ChatActionMetadataItem
+import com.changeyourlife.cyl.domain.model.ChatPendingActionMetadata
 import com.changeyourlife.cyl.domain.model.ChatActionValidationMetadata
 import com.changeyourlife.cyl.domain.model.ChatMessage
 import com.changeyourlife.cyl.domain.model.ChatMessageAttachment
@@ -234,6 +235,7 @@ private data class ChatActionMetadataDto(
     val executedActions: List<ChatActionMetadataItemDto> = emptyList(),
     val executionMessages: List<String> = emptyList(),
     val validationIssues: List<ChatActionValidationMetadataDto> = emptyList(),
+    val pendingActions: List<ChatPendingActionMetadataDto> = emptyList(),
 )
 
 @Serializable
@@ -251,6 +253,14 @@ private data class ChatActionValidationMetadataDto(
     val field: String = "",
     val code: String = "",
     val message: String = "",
+)
+
+@Serializable
+private data class ChatPendingActionMetadataDto(
+    val action: com.changeyourlife.cyl.aicontract.AiActionWire =
+        com.changeyourlife.cyl.aicontract.AiActionWire(),
+    val issueFields: List<String> = emptyList(),
+    val issueCodes: List<String> = emptyList(),
 )
 
 private fun ChatPageLinkDto.toDomain(): ChatPageLink {
@@ -311,6 +321,7 @@ private fun ChatActionMetadataDto.toDomain(): ChatActionMetadata {
         executedActions = executedActions.map { it.toDomain() },
         executionMessages = executionMessages,
         validationIssues = validationIssues.map { it.toDomain() },
+        pendingActions = pendingActions.map { it.toDomain() },
     )
 }
 
@@ -328,6 +339,7 @@ private fun ChatActionMetadata.toDto(): ChatActionMetadataDto {
         executedActions = executedActions.map { it.toDto() },
         executionMessages = executionMessages,
         validationIssues = validationIssues.map { it.toDto() },
+        pendingActions = pendingActions.map { it.toDto() },
     )
 }
 
@@ -366,6 +378,22 @@ private fun ChatActionValidationMetadata.toDto(): ChatActionValidationMetadataDt
         field = field,
         code = code,
         message = message,
+    )
+}
+
+private fun ChatPendingActionMetadataDto.toDomain(): ChatPendingActionMetadata {
+    return ChatPendingActionMetadata(
+        action = action,
+        issueFields = issueFields,
+        issueCodes = issueCodes,
+    )
+}
+
+private fun ChatPendingActionMetadata.toDto(): ChatPendingActionMetadataDto {
+    return ChatPendingActionMetadataDto(
+        action = action,
+        issueFields = issueFields,
+        issueCodes = issueCodes,
     )
 }
 

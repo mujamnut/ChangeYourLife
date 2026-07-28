@@ -12,6 +12,7 @@ import com.changeyourlife.cyl.domain.repository.ReminderRepository
 import com.changeyourlife.cyl.domain.repository.TaskRepository
 import com.changeyourlife.cyl.domain.usecase.ApplyEditorCommandUseCase
 import com.changeyourlife.cyl.domain.usecase.PageMutationUseCase
+import com.changeyourlife.cyl.domain.usecase.ReconcileTableDateRemindersUseCase
 import com.changeyourlife.cyl.domain.usecase.ScheduleTableDateReminderUseCase
 import com.changeyourlife.cyl.domain.usecase.TableMutationUseCase
 import com.changeyourlife.cyl.presentation.page.PageBlockCodec
@@ -22,12 +23,14 @@ class AiPageActionExecutor @Inject constructor(
     pageMutationUseCase: PageMutationUseCase,
     tableMutationUseCase: TableMutationUseCase,
     scheduleTableDateReminderUseCase: ScheduleTableDateReminderUseCase,
+    reconcileTableDateRemindersUseCase: ReconcileTableDateRemindersUseCase,
 ) {
     private val mutationEngine = AiPageActionMutationEngine(
         pageRepository = pageRepository,
         pageMutationUseCase = pageMutationUseCase,
         tableMutationUseCase = tableMutationUseCase,
         scheduleTableDateReminderUseCase = scheduleTableDateReminderUseCase,
+        reconcileTableDateRemindersUseCase = reconcileTableDateRemindersUseCase,
     )
 
     constructor(
@@ -40,6 +43,9 @@ class AiPageActionExecutor @Inject constructor(
         pageMutationUseCase = PageMutationUseCase(applyEditorCommandUseCase),
         tableMutationUseCase = TableMutationUseCase(applyEditorCommandUseCase),
         scheduleTableDateReminderUseCase = ScheduleTableDateReminderUseCase(reminderRepository),
+        reconcileTableDateRemindersUseCase = ReconcileTableDateRemindersUseCase(
+            ScheduleTableDateReminderUseCase(reminderRepository),
+        ),
     )
 
     fun supports(action: ChatAction): Boolean =
@@ -64,7 +70,7 @@ class AiPageActionExecutor @Inject constructor(
         val undoCommands = mutableListOf<AiUndoCommandSummary>()
         val executedActionIndexes = mutableListOf<Int>()
 
-        actions.forEachIndexed { actionIndex, action ->
+        val validatedActions = actions.mapIndexedNotNull { actionIndex, action ->
             val trace = AiActionExecutionRegistry.trace(actionIndex, action)
             val contractResult = AiActionContractSchema.parse(
                 actionIndex = actionIndex,
@@ -81,9 +87,24 @@ class AiPageActionExecutor @Inject constructor(
                         message = issue.message,
                     )
                 }
-                return@forEachIndexed
+                null
+            } else {
+                ValidatedAiPageAction(
+                    actionIndex = actionIndex,
+                    action = action,
+                    contractAction = requireNotNull(contractResult.action),
+                )
             }
-            val contractAction = requireNotNull(contractResult.action)
+        }
+        if (validationIssues.isNotEmpty()) {
+            return AiPageActionExecutionResult(validationIssues = validationIssues)
+        }
+
+        for (validatedAction in validatedActions) {
+            val actionIndex = validatedAction.actionIndex
+            val action = validatedAction.action
+            val contractAction = validatedAction.contractAction
+            val trace = AiActionExecutionRegistry.trace(actionIndex, action)
             val domainExecutor = requireNotNull(
                 AiPageActionDomainExecutorRegistry.executorFor(contractAction),
             ) {
@@ -119,7 +140,10 @@ class AiPageActionExecutor @Inject constructor(
                 )
             }
             undoCommands += result.undoCommands.map { command ->
-                command.copy(actionIndex = actionIndex)
+                command.copy(
+                    actionIndex = actionIndex,
+                    pageId = command.pageId.ifBlank { workingPage.id },
+                )
             }
             if (result.executedActionIndexes.isNotEmpty()) {
                 executedActionIndexes += actionIndex
@@ -133,6 +157,7 @@ class AiPageActionExecutor @Inject constructor(
                 workingDocument = updatedDocument
                 documentChanged = true
             }
+            if (result.validationIssues.isNotEmpty()) break
         }
 
         return AiPageActionExecutionResult(
@@ -151,3 +176,9 @@ class AiPageActionExecutor @Inject constructor(
         )
     }
 }
+
+private data class ValidatedAiPageAction(
+    val actionIndex: Int,
+    val action: ChatAction,
+    val contractAction: com.changeyourlife.cyl.aicontract.CylAiAction,
+)

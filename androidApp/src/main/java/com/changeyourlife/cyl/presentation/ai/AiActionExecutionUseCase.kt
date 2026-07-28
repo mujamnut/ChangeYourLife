@@ -11,6 +11,7 @@ import com.changeyourlife.cyl.domain.model.PageTableColumn
 import com.changeyourlife.cyl.domain.model.PageTableColumnType
 import com.changeyourlife.cyl.domain.model.PageTableRow
 import com.changeyourlife.cyl.domain.model.PageTableView
+import com.changeyourlife.cyl.domain.model.deleteCreatedPageUndo
 import com.changeyourlife.cyl.domain.model.toTypedCellValue
 import com.changeyourlife.cyl.domain.repository.ChatAction
 import com.changeyourlife.cyl.domain.repository.AiAppliedActionClaimResult
@@ -19,11 +20,15 @@ import com.changeyourlife.cyl.domain.repository.AiAppliedActionRecord
 import com.changeyourlife.cyl.domain.repository.AiAppliedActionState
 import com.changeyourlife.cyl.domain.repository.NoOpAiAppliedActionLedgerRepository
 import com.changeyourlife.cyl.domain.repository.PageRepository
+import com.changeyourlife.cyl.domain.usecase.ApplyAiUndoCommandsUseCase
+import com.changeyourlife.cyl.domain.usecase.ReconcileTableDateRemindersUseCase
 import com.changeyourlife.cyl.presentation.page.PageBlockCodec
 import com.changeyourlife.cyl.presentation.page.PageModuleTemplates
 import com.changeyourlife.cyl.presentation.page.PageModuleType
 import com.changeyourlife.cyl.presentation.ai.toPageTableColumnFromAi
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withContext
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import javax.inject.Inject
@@ -31,6 +36,8 @@ import javax.inject.Inject
 class AiActionExecutionUseCase @Inject constructor(
     private val pageRepository: PageRepository,
     private val aiPageActionExecutor: AiPageActionExecutor,
+    private val reconcileTableDateRemindersUseCase: ReconcileTableDateRemindersUseCase,
+    private val applyAiUndoCommandsUseCase: ApplyAiUndoCommandsUseCase,
     private val appliedActionLedgerRepository: AiAppliedActionLedgerRepository =
         NoOpAiAppliedActionLedgerRepository,
 ) {
@@ -123,6 +130,32 @@ class AiActionExecutionUseCase @Inject constructor(
             }
         }
 
+        if (
+            claimedActions.isNotEmpty() &&
+            (ledgerIssues.isNotEmpty() || replayedActionIndexes.isNotEmpty())
+        ) {
+            val reason = "The complete AI plan could not be claimed atomically, so no remaining action was executed."
+            val now = System.currentTimeMillis()
+            claimedActions.forEach { candidate ->
+                runCatching {
+                    appliedActionLedgerRepository.markFailed(
+                        idempotencyKey = requestKey.toActionIdempotencyKey(candidate.originalIndex),
+                        reason = reason,
+                        updatedAt = now,
+                    )
+                }
+            }
+            return AiActionExecutionResult(
+                validationIssues = ledgerIssues + claimedActions.map { candidate ->
+                    candidate.toLedgerIssue(
+                        code = "atomic_plan_claim_incomplete",
+                        message = reason,
+                    )
+                },
+                executedActionIndexes = replayedActionIndexes.distinct(),
+            )
+        }
+
         if (claimedActions.isEmpty()) {
             return AiActionExecutionResult(
                 validationIssues = ledgerIssues,
@@ -184,9 +217,78 @@ class AiActionExecutionUseCase @Inject constructor(
         scopedTargetPage: Page?,
         actions: List<AiActionExecutionCandidate>,
     ): AiActionExecutionResult {
+        val execution = executeCandidatePlan(
+            workspaceId = workspaceId,
+            scopedTargetPage = scopedTargetPage,
+            actions = actions,
+        )
+        if (
+            !execution.hasPlanFailure() ||
+            execution.executedActionIndexes.isEmpty() && execution.undoCommands.isEmpty()
+        ) {
+            return execution
+        }
+        if (execution.undoCommands.isEmpty()) {
+            return execution.copy(
+                validationIssues = execution.validationIssues + atomicPlanIssue(
+                    code = "atomic_rollback_unavailable",
+                    message = "The AI plan failed, but no rollback payload was available.",
+                ),
+            )
+        }
+
+        val rollback = withContext(NonCancellable) {
+            runCatching {
+                applyAiUndoCommandsUseCase(
+                    undoCommands = execution.undoCommands,
+                    fallbackPageId = scopedTargetPage?.id.orEmpty(),
+                )
+            }
+        }.getOrElse { error ->
+            return execution.copy(
+                validationIssues = execution.validationIssues + atomicPlanIssue(
+                    code = "atomic_rollback_failed",
+                    message = error.message
+                        ?.let { detail -> "The AI plan failed and rollback crashed: $detail" }
+                        ?: "The AI plan failed and rollback crashed.",
+                ),
+            )
+        }
+        if (!rollback.succeeded) {
+            return execution.copy(
+                validationIssues = execution.validationIssues + atomicPlanIssue(
+                    code = "atomic_rollback_failed",
+                    message = rollback.failures.joinToString(
+                        separator = " ",
+                        prefix = "The AI plan failed and rollback was incomplete: ",
+                    ) { failure -> failure.message },
+                ),
+            )
+        }
+
+        return execution.copy(
+            messages = execution.messages.filterNot { message ->
+                message.trimStart().startsWith("Done:", ignoreCase = true)
+            },
+            pageLinks = emptyList(),
+            validationIssues = execution.validationIssues + atomicPlanIssue(
+                code = "atomic_plan_rolled_back",
+                message = "One action failed, so every change from this AI plan was rolled back.",
+            ),
+            undoCommands = emptyList(),
+            executedActionIndexes = emptyList(),
+        )
+    }
+
+    private suspend fun executeCandidatePlan(
+        workspaceId: String,
+        scopedTargetPage: Page?,
+        actions: List<AiActionExecutionCandidate>,
+    ): AiActionExecutionResult {
         val globalActions = actions.filter { candidate -> candidate.action.isHomeScopedAction() }
         val pageActions = actions.filterNot { candidate -> candidate.action.isHomeScopedAction() }
         val globalResult = executeHomeScopedActions(workspaceId, globalActions)
+        if (globalResult.hasPlanFailure()) return globalResult
         val pageResult = if (pageActions.isEmpty()) {
             AiActionExecutionResult()
         } else {
@@ -204,11 +306,14 @@ class AiActionExecutionUseCase @Inject constructor(
         actions: List<AiActionExecutionCandidate>,
     ): AiActionExecutionResult {
         if (actions.isEmpty()) return AiActionExecutionResult()
-        return runCatching {
-            val messages = mutableListOf<String>()
-            val pageLinks = mutableListOf<AiChatPageLink>()
-            val executedActionIndexes = mutableListOf<Int>()
-            actions.forEach { candidate ->
+        val messages = mutableListOf<String>()
+        val pageLinks = mutableListOf<AiChatPageLink>()
+        val validationIssues = mutableListOf<ChatActionValidationMetadata>()
+        val undoCommands = mutableListOf<AiUndoCommandSummary>()
+        val executedActionIndexes = mutableListOf<Int>()
+
+        for (candidate in actions) {
+            val outcome = runCatching {
                 val action = candidate.action
                 when (action.type.normalizedActionType()) {
                     "CREATE_PAGE",
@@ -221,117 +326,158 @@ class AiActionExecutionUseCase @Inject constructor(
                             title = pageTitle,
                             content = action.toCreatedPageContent(),
                         )
-                        messages += "Done: Created page ${created.title.ifBlank { "Untitled page" }}"
                         pageLinks += created.toChatPageLink()
+                        undoCommands += deleteCreatedPageUndo(
+                            actionIndex = candidate.originalIndex,
+                            pageId = created.id,
+                        )
                         executedActionIndexes += candidate.originalIndex
+                        reconcileTableDateRemindersUseCase.scheduleAll(
+                            page = created,
+                            document = PageBlockCodec.decodeDocument(created.content),
+                        )
+                        "Done: Created page ${created.title.ifBlank { "Untitled page" }}"
                     }
+
+                    else -> error("Unsupported home action type: ${action.type}")
                 }
             }
-            AiActionExecutionResult(
-                messages = messages,
-                pageLinks = pageLinks,
-                executedActionIndexes = executedActionIndexes,
-            )
-        }.getOrElse { error ->
-            AiActionExecutionResult(
-                messages = listOf(error.toAiExecutionErrorMessage()),
-            )
+            outcome.onSuccess(messages::add)
+            outcome.onFailure { error ->
+                validationIssues += candidate.executionIssue(error)
+                messages += error.toAiExecutionErrorMessage()
+            }
+            if (outcome.isFailure) break
         }
+
+        return AiActionExecutionResult(
+            messages = messages,
+            pageLinks = pageLinks,
+            validationIssues = validationIssues,
+            undoCommands = undoCommands,
+            executedActionIndexes = executedActionIndexes,
+        )
     }
 
     private suspend fun executePageScopedActions(
         page: Page,
         actions: List<AiActionExecutionCandidate>,
     ): AiActionExecutionResult {
-        return runCatching {
-            val resolvedCandidates = actions.map { candidate ->
-                AiActionExecutionCandidate(
-                    originalIndex = candidate.originalIndex,
-                    action = candidate.action.copy(
-                        targetTitle = candidate.action.targetTitle.ifBlank { page.title },
-                    ),
-                )
-            }
-            val supportedCandidates = mutableListOf<AiActionExecutionCandidate>()
-            val unsupportedIssues = mutableListOf<ChatActionValidationMetadata>()
-            resolvedCandidates.forEach { candidate ->
-                if (aiPageActionExecutor.supports(candidate.action)) {
-                    supportedCandidates += candidate
-                } else {
-                    val trace = AiActionExecutionRegistry.trace(candidate.originalIndex, candidate.action)
-                    unsupportedIssues += ChatActionValidationMetadata(
-                        actionIndex = candidate.originalIndex,
-                        actionType = trace.actionType,
-                        actionDomain = trace.domain.id,
-                        field = "type",
-                        code = "unsupported_action_type",
-                        message = "Unsupported action type: ${candidate.action.type}",
-                    )
-                }
-            }
-            if (supportedCandidates.isEmpty()) {
-                AiActionExecutionResult(validationIssues = unsupportedIssues)
-            } else {
-                val execution = aiPageActionExecutor.executeOnPage(
-                    page = page,
-                    title = page.title,
-                    document = PageBlockCodec.decodeDocument(page.content),
-                    actions = supportedCandidates.map { candidate -> candidate.action },
-                )
-                val didUpdatePage = execution.updatedTitle != null || execution.updatedDocument != null
-                val updatedPage = if (didUpdatePage) {
-                    page.copy(
-                        title = execution.updatedTitle ?: page.title,
-                        content = execution.updatedDocument?.let(PageBlockCodec::encodeDocument) ?: page.content,
-                        updatedAt = System.currentTimeMillis(),
-                    ).also { updatedPage -> pageRepository.upsertPage(updatedPage) }
-                } else {
-                    page
-                }
-
-                val pageLinks = buildList {
-                    if (didUpdatePage) add(updatedPage.toChatPageLink())
-                    addAll(execution.pageLinks)
-                    addAll(execution.createdPages.map { createdPage -> createdPage.toChatPageLink() })
-                }.distinctBy { link -> "${link.pageId}:${link.targetType}:${link.targetId}" }
-
-                AiActionExecutionResult(
-                    messages = execution.messages.ifEmpty {
-                        if (didUpdatePage) {
-                            listOf("Done: Updated ${updatedPage.title.ifBlank { "Untitled page" }}")
-                        } else {
-                            emptyList()
-                        }
-                    },
-                    pageLinks = pageLinks,
-                    validationIssues = unsupportedIssues + execution.validationIssues.map { issue ->
-                        ChatActionValidationMetadata(
-                            actionIndex = issue.actionIndex?.let { index ->
-                                supportedCandidates.getOrNull(index)?.originalIndex ?: index
-                            },
-                            actionType = issue.actionType,
-                            actionDomain = issue.actionDomain,
-                            field = issue.field,
-                            code = issue.code,
-                            message = issue.message,
-                        )
-                    },
-                    undoCommands = execution.undoCommands.map { command ->
-                        command.copy(
-                            actionIndex = supportedCandidates.getOrNull(command.actionIndex)?.originalIndex
-                                ?: command.actionIndex,
-                        )
-                    },
-                    executedActionIndexes = execution.executedActionIndexes.mapNotNull { index ->
-                        supportedCandidates.getOrNull(index)?.originalIndex
-                    },
-                )
-            }
-        }.getOrElse { error ->
-            AiActionExecutionResult(
-                messages = listOf(error.toAiExecutionErrorMessage()),
+        val resolvedCandidates = actions.map { candidate ->
+            AiActionExecutionCandidate(
+                originalIndex = candidate.originalIndex,
+                action = candidate.action.copy(
+                    targetTitle = candidate.action.targetTitle.ifBlank { page.title },
+                ),
             )
         }
+        val supportedCandidates = mutableListOf<AiActionExecutionCandidate>()
+        val unsupportedIssues = mutableListOf<ChatActionValidationMetadata>()
+        resolvedCandidates.forEach { candidate ->
+            if (aiPageActionExecutor.supports(candidate.action)) {
+                supportedCandidates += candidate
+            } else {
+                val trace = AiActionExecutionRegistry.trace(candidate.originalIndex, candidate.action)
+                unsupportedIssues += ChatActionValidationMetadata(
+                    actionIndex = candidate.originalIndex,
+                    actionType = trace.actionType,
+                    actionDomain = trace.domain.id,
+                    field = "type",
+                    code = "unsupported_action_type",
+                    message = "Unsupported action type: ${candidate.action.type}",
+                )
+            }
+        }
+        if (unsupportedIssues.isNotEmpty()) {
+            return AiActionExecutionResult(validationIssues = unsupportedIssues)
+        }
+        if (supportedCandidates.isEmpty()) return AiActionExecutionResult()
+
+        val execution = runCatching {
+            aiPageActionExecutor.executeOnPage(
+                page = page,
+                title = page.title,
+                document = PageBlockCodec.decodeDocument(page.content),
+                actions = supportedCandidates.map { candidate -> candidate.action },
+            )
+        }.getOrElse { error ->
+            return AiActionExecutionResult(
+                messages = listOf(error.toAiExecutionErrorMessage()),
+                validationIssues = listOf(supportedCandidates.first().executionIssue(error)),
+            )
+        }
+
+        val didUpdatePage = execution.updatedTitle != null || execution.updatedDocument != null
+        val previousDocument = PageBlockCodec.decodeDocument(page.content)
+        val currentDocument = execution.updatedDocument ?: previousDocument
+        var updatedPage = page
+        var persistenceIssue: ChatActionValidationMetadata? = null
+        if (didUpdatePage) {
+            val nextPage = page.copy(
+                title = execution.updatedTitle ?: page.title,
+                content = PageBlockCodec.encodeDocument(currentDocument),
+                updatedAt = System.currentTimeMillis(),
+            )
+            runCatching {
+                pageRepository.upsertPage(nextPage)
+                reconcileTableDateRemindersUseCase(
+                    previousPage = page,
+                    currentPage = nextPage,
+                    previousDocument = previousDocument,
+                    currentDocument = currentDocument,
+                )
+            }.onSuccess {
+                updatedPage = nextPage
+            }.onFailure { error ->
+                val failedCandidate = execution.executedActionIndexes
+                    .lastOrNull()
+                    ?.let(supportedCandidates::getOrNull)
+                    ?: supportedCandidates.first()
+                persistenceIssue = failedCandidate.executionIssue(
+                    error = error,
+                    code = "page_commit_failed",
+                )
+            }
+        }
+
+        val pageLinks = buildList {
+            if (didUpdatePage && persistenceIssue == null) add(updatedPage.toChatPageLink())
+            addAll(execution.pageLinks)
+            addAll(execution.createdPages.map { createdPage -> createdPage.toChatPageLink() })
+        }.distinctBy { link -> "${link.pageId}:${link.targetType}:${link.targetId}" }
+        val messages = execution.messages.ifEmpty {
+            if (didUpdatePage && persistenceIssue == null) {
+                listOf("Done: Updated ${updatedPage.title.ifBlank { "Untitled page" }}")
+            } else {
+                emptyList()
+            }
+        } + listOfNotNull(persistenceIssue?.message)
+
+        return AiActionExecutionResult(
+            messages = messages,
+            pageLinks = pageLinks,
+            validationIssues = execution.validationIssues.map { issue ->
+                ChatActionValidationMetadata(
+                    actionIndex = issue.actionIndex?.let { index ->
+                        supportedCandidates.getOrNull(index)?.originalIndex ?: index
+                    },
+                    actionType = issue.actionType,
+                    actionDomain = issue.actionDomain,
+                    field = issue.field,
+                    code = issue.code,
+                    message = issue.message,
+                )
+            } + listOfNotNull(persistenceIssue),
+            undoCommands = execution.undoCommands.map { command ->
+                command.copy(
+                    actionIndex = supportedCandidates.getOrNull(command.actionIndex)?.originalIndex
+                        ?: command.actionIndex,
+                )
+            },
+            executedActionIndexes = execution.executedActionIndexes.mapNotNull { index ->
+                supportedCandidates.getOrNull(index)?.originalIndex
+            },
+        )
     }
 
     private suspend fun executeTargetedPageActions(
@@ -409,12 +555,20 @@ class AiActionExecutionUseCase @Inject constructor(
             }
         }
 
-        return groupedActions.entries.fold(AiActionExecutionResult(validationIssues = validationIssues)) { result, entry ->
-            result + executePageScopedActions(
+        if (validationIssues.isNotEmpty()) {
+            return AiActionExecutionResult(validationIssues = validationIssues)
+        }
+
+        var result = AiActionExecutionResult()
+        for (entry in groupedActions.entries) {
+            val pageResult = executePageScopedActions(
                 page = requireNotNull(targetPagesById[entry.key]),
                 actions = entry.value,
             )
+            result += pageResult
+            if (pageResult.hasPlanFailure()) break
         }
+        return result
     }
 }
 
@@ -462,6 +616,35 @@ private fun AiActionExecutionCandidate.targetPageIssue(
     )
 }
 
+private fun AiActionExecutionCandidate.executionIssue(
+    error: Throwable,
+    code: String = "execution_failed",
+): ChatActionValidationMetadata {
+    val trace = AiActionExecutionRegistry.trace(originalIndex, action)
+    return ChatActionValidationMetadata(
+        actionIndex = originalIndex,
+        actionType = trace.actionType,
+        actionDomain = trace.domain.id,
+        field = "type",
+        code = code,
+        message = error.message ?: "Action failed before it could be committed.",
+    )
+}
+
+private fun atomicPlanIssue(
+    code: String,
+    message: String,
+): ChatActionValidationMetadata {
+    return ChatActionValidationMetadata(
+        actionIndex = null,
+        actionType = "ATOMIC_PLAN",
+        actionDomain = "plan",
+        field = "actions",
+        code = code,
+        message = message,
+    )
+}
+
 data class AiActionExecutionResult(
     val messages: List<String> = emptyList(),
     val pageLinks: List<AiChatPageLink> = emptyList(),
@@ -469,6 +652,10 @@ data class AiActionExecutionResult(
     val undoCommands: List<AiUndoCommandSummary> = emptyList(),
     val executedActionIndexes: List<Int> = emptyList(),
 )
+
+private fun AiActionExecutionResult.hasPlanFailure(): Boolean {
+    return validationIssues.isNotEmpty()
+}
 
 operator fun AiActionExecutionResult.plus(other: AiActionExecutionResult): AiActionExecutionResult {
     return AiActionExecutionResult(

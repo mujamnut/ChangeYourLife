@@ -134,6 +134,8 @@ data class PageTableViewConfig(
     val dataSourcePageId: String = "",
     val dataSourceTableBlockId: String = "",
     val dataSourceTitle: String = "",
+    val savedViews: List<PageTableSavedView> = emptyList(),
+    val activeSavedViewId: String = "",
 )
 
 @Stable
@@ -160,12 +162,15 @@ data class PageTableFilter(
 @Serializable
 enum class PageTableFilterOperator {
     Contains,
+    NotContains,
     Equals,
     NotEquals,
     IsEmpty,
     IsNotEmpty,
     GreaterThan,
+    GreaterThanOrEqual,
     LessThan,
+    LessThanOrEqual,
     Before,
     After,
     OnOrBefore,
@@ -178,6 +183,22 @@ fun PageTableFilter.isActive(): Boolean {
         operator == PageTableFilterOperator.IsNotEmpty ||
         query.isNotBlank()
 }
+
+@Stable
+@Serializable
+data class PageTableSavedView(
+    val id: String,
+    val name: String,
+    val view: PageTableView = PageTableView.Table,
+    val calendarDateColumnId: String = "",
+    val timelineStartColumnId: String = "",
+    val timelineEndColumnId: String = "",
+    val dashboardMetricColumnId: String = "",
+    val dashboardGroupColumnId: String = "",
+    val sort: PageTableSort = PageTableSort(),
+    val filter: PageTableFilter = PageTableFilter(),
+    val groupByColumnId: String = "",
+)
 
 @Stable
 @Serializable

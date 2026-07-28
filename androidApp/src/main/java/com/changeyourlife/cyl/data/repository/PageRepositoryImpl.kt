@@ -29,6 +29,7 @@ import com.changeyourlife.cyl.domain.model.PageTableColumn
 import com.changeyourlife.cyl.domain.model.PageTableColumnType
 import com.changeyourlife.cyl.domain.model.PageTableFilter
 import com.changeyourlife.cyl.domain.model.PageTableRow
+import com.changeyourlife.cyl.domain.model.PageTableSavedView
 import com.changeyourlife.cyl.domain.model.PageTableSort
 import com.changeyourlife.cyl.domain.model.PageTableViewConfig
 import com.changeyourlife.cyl.domain.model.toTypedCellValue
@@ -704,6 +705,55 @@ class PageRepositoryImpl @Inject constructor(
         return page
     }
 
+    override suspend fun getPageTreeSnapshot(pageId: String): List<Page> {
+        val root = pageDao.getPage(pageId)?.toDomain() ?: return emptyList()
+        val pagesByParentId = pageDao
+            .getPagesForWorkspaceIncludingDeleted(root.workspaceId)
+            .map(PageEntity::toDomain)
+            .groupBy(Page::parentPageId)
+        val visited = mutableSetOf<String>()
+        return buildList {
+            fun collect(page: Page) {
+                if (!visited.add(page.id)) return
+                add(page)
+                pagesByParentId[page.id].orEmpty().forEach(::collect)
+            }
+            collect(root)
+        }
+    }
+
+    override suspend fun restorePageSnapshots(pages: List<Page>): Boolean {
+        val snapshots = pages
+            .distinctBy(Page::id)
+            .parentFirst()
+        if (snapshots.isEmpty()) return false
+
+        val now = System.currentTimeMillis()
+        val restoredPages = database.withTransaction {
+            snapshots.mapIndexed { index, snapshot ->
+                syncTombstoneDao.deleteTombstone(
+                    entityType = SyncTombstoneType.PagePermanentDelete,
+                    entityId = snapshot.id,
+                )
+                val current = pageDao.getPage(snapshot.id)
+                val requestedUpdatedAt = now + index
+                snapshot.toEntity().copy(
+                    updatedAt = current?.nextUpdatedAt(requestedUpdatedAt)
+                        ?: maxOf(snapshot.updatedAt, requestedUpdatedAt),
+                    syncStatus = SyncStatus.PendingPush,
+                    remoteUpdatedAt = current?.remoteUpdatedAt ?: 0L,
+                    lastSyncedAt = current?.lastSyncedAt ?: 0L,
+                    revision = current?.revision ?: 0L,
+                ).also { restored ->
+                    persistPageState(restored)
+                }
+            }
+        }
+        restoredPages.forEach { restored -> searchIndexRebuilder.rebuildPage(restored) }
+        backgroundSyncQueue.enqueuePendingPushDebounced()
+        return true
+    }
+
     override suspend fun deletePage(pageId: String) {
         val deletedAt = System.currentTimeMillis()
         pageDao.softDeletePageTree(
@@ -1058,6 +1108,20 @@ class PageRepositoryImpl @Inject constructor(
             timelineEndColumnId = timelineEndColumnId.takeUnless { it == columnId }.orEmpty(),
             dashboardMetricColumnId = dashboardMetricColumnId.takeUnless { it == columnId }.orEmpty(),
             dashboardGroupColumnId = dashboardGroupColumnId.takeUnless { it == columnId }.orEmpty(),
+            savedViews = savedViews.map { saved -> saved.withoutColumn(columnId) },
+        )
+    }
+
+    private fun PageTableSavedView.withoutColumn(columnId: String): PageTableSavedView {
+        return copy(
+            calendarDateColumnId = calendarDateColumnId.takeUnless { it == columnId }.orEmpty(),
+            timelineStartColumnId = timelineStartColumnId.takeUnless { it == columnId }.orEmpty(),
+            timelineEndColumnId = timelineEndColumnId.takeUnless { it == columnId }.orEmpty(),
+            dashboardMetricColumnId = dashboardMetricColumnId.takeUnless { it == columnId }.orEmpty(),
+            dashboardGroupColumnId = dashboardGroupColumnId.takeUnless { it == columnId }.orEmpty(),
+            sort = if (sort.columnId == columnId) PageTableSort() else sort,
+            filter = if (filter.columnId == columnId) PageTableFilter() else filter,
+            groupByColumnId = groupByColumnId.takeUnless { it == columnId }.orEmpty(),
         )
     }
 
@@ -1137,3 +1201,23 @@ private data class BlockListMutation(
     val blocks: List<PageBlock>,
     val changed: Boolean,
 )
+
+private fun List<Page>.parentFirst(): List<Page> {
+    val pagesById = associateBy(Page::id)
+    val depthById = mutableMapOf<String, Int>()
+
+    fun depth(page: Page, visiting: Set<String> = emptySet()): Int {
+        depthById[page.id]?.let { return it }
+        if (page.id in visiting) return 0
+        val parent = page.parentPageId?.let(pagesById::get)
+        val resolved = if (parent == null) {
+            0
+        } else {
+            depth(parent, visiting + page.id) + 1
+        }
+        depthById[page.id] = resolved
+        return resolved
+    }
+
+    return sortedBy { page -> depth(page) }
+}

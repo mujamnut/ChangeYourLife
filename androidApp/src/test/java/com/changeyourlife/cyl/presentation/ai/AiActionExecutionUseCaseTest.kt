@@ -1,5 +1,6 @@
 package com.changeyourlife.cyl.presentation.ai
 
+import com.changeyourlife.cyl.domain.model.AiUndoCommandType
 import com.changeyourlife.cyl.domain.model.Page
 import com.changeyourlife.cyl.domain.model.PageBlock
 import com.changeyourlife.cyl.domain.model.PageBlockDocument
@@ -18,7 +19,10 @@ import com.changeyourlife.cyl.domain.repository.ChatTableColumn
 import com.changeyourlife.cyl.domain.repository.PageRepository
 import com.changeyourlife.cyl.domain.repository.ReminderRepository
 import com.changeyourlife.cyl.domain.repository.TaskRepository
+import com.changeyourlife.cyl.domain.usecase.ApplyAiUndoCommandsUseCase
 import com.changeyourlife.cyl.domain.usecase.ApplyEditorCommandUseCase
+import com.changeyourlife.cyl.domain.usecase.ReconcileTableDateRemindersUseCase
+import com.changeyourlife.cyl.domain.usecase.ScheduleTableDateReminderUseCase
 import com.changeyourlife.cyl.presentation.page.PageBlockCodec
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
@@ -53,6 +57,8 @@ class AiActionExecutionUseCaseTest {
         assertEquals(listOf("Done: Created page Budget"), result.messages)
         assertEquals("Budget", pageRepository.createdPages.single().title)
         assertEquals("Budget", result.pageLinks.single().title)
+        assertEquals(AiUndoCommandType.DeleteCreatedPage, result.undoCommands.single().commandType)
+        assertEquals(pageRepository.createdPages.single().id, result.undoCommands.single().pageId)
         val document = PageBlockCodec.decodeDocument(pageRepository.createdPages.single().content)
         val table = document.blocks.single().table
         assertEquals("Budget", table.title)
@@ -265,6 +271,131 @@ class AiActionExecutionUseCaseTest {
     }
 
     @Test
+    fun rollsBackEarlierPageMutationWhenLaterActionFails() = runBlocking {
+        val page = page(PageBlockDocument())
+        val pageRepository = FakePageRepository(page)
+        val useCase = useCase(pageRepository)
+
+        val result = useCase.execute(
+            workspaceId = "workspace-1",
+            scopedTargetPage = page,
+            actions = listOf(
+                ChatAction(
+                    type = "ADD_BLOCK",
+                    title = "",
+                    content = "Must be rolled back",
+                ),
+                ChatAction(
+                    type = "DELETE_BLOCK",
+                    title = "",
+                    blockText = "Block that does not exist",
+                ),
+            ),
+        )
+
+        val restoredDocument = PageBlockCodec.decodeDocument(
+            requireNotNull(pageRepository.getPage(page.id)).content,
+        )
+        assertTrue(restoredDocument.meaningfulBlocks().isEmpty())
+        assertTrue(result.executedActionIndexes.isEmpty())
+        assertTrue(result.undoCommands.isEmpty())
+        assertTrue(result.pageLinks.isEmpty())
+        assertTrue(result.validationIssues.any { issue -> issue.code == "atomic_plan_rolled_back" })
+    }
+
+    @Test
+    fun removesHomeCreatedPageWhenLaterTargetedActionFails() = runBlocking {
+        val pageRepository = FakePageRepository()
+        val useCase = useCase(pageRepository)
+
+        val result = useCase.execute(
+            workspaceId = "workspace-1",
+            scopedTargetPage = null,
+            actions = listOf(
+                ChatAction(
+                    type = "CREATE_PAGE",
+                    title = "Atomic page",
+                ),
+                ChatAction(
+                    type = "DELETE_BLOCK",
+                    title = "",
+                    targetTitle = "Atomic page",
+                    blockText = "Missing block",
+                ),
+            ),
+        )
+
+        assertEquals(null, pageRepository.getPage("created-1"))
+        assertTrue(result.executedActionIndexes.isEmpty())
+        assertTrue(result.undoCommands.isEmpty())
+        assertTrue(result.pageLinks.isEmpty())
+        assertTrue(result.validationIssues.any { issue -> issue.code == "atomic_plan_rolled_back" })
+    }
+
+    @Test
+    fun preservesTruthfulMetadataWhenAutomaticRollbackFails() = runBlocking {
+        val pageRepository = FakePageRepository().apply {
+            failPermanentDelete = true
+        }
+        val useCase = useCase(pageRepository)
+
+        val result = useCase.execute(
+            workspaceId = "workspace-1",
+            scopedTargetPage = null,
+            actions = listOf(
+                ChatAction(
+                    type = "CREATE_PAGE",
+                    title = "Rollback failure",
+                ),
+                ChatAction(
+                    type = "DELETE_BLOCK",
+                    title = "",
+                    targetTitle = "Rollback failure",
+                    blockText = "Missing block",
+                ),
+            ),
+        )
+
+        assertTrue(pageRepository.getPage("created-1") != null)
+        assertEquals(listOf(0), result.executedActionIndexes)
+        assertTrue(result.undoCommands.isNotEmpty())
+        assertTrue(result.validationIssues.any { issue -> issue.code == "atomic_rollback_failed" })
+    }
+
+    @Test
+    fun rejectsAllTargetGroupsBeforeMutationWhenAnyPageTargetIsInvalid() = runBlocking {
+        val firstPage = page(PageBlockDocument(), id = "page-first", title = "First")
+        val pageRepository = FakePageRepository(firstPage)
+        val useCase = useCase(pageRepository)
+
+        val result = useCase.execute(
+            workspaceId = "workspace-1",
+            scopedTargetPage = firstPage,
+            actions = listOf(
+                ChatAction(
+                    type = "ADD_BLOCK",
+                    title = "",
+                    targetTitle = "First",
+                    content = "Must not be applied",
+                ),
+                ChatAction(
+                    type = "ADD_BLOCK",
+                    title = "",
+                    targetTitle = "Missing page",
+                    content = "Invalid target",
+                ),
+            ),
+        )
+
+        val unchangedDocument = PageBlockCodec.decodeDocument(
+            requireNotNull(pageRepository.getPage(firstPage.id)).content,
+        )
+        assertTrue(unchangedDocument.meaningfulBlocks().isEmpty())
+        assertTrue(result.executedActionIndexes.isEmpty())
+        assertEquals("target_page_not_found", result.validationIssues.single().code)
+    }
+
+    @Test
     fun doesNotFuzzyMatchShortTargetTitleToLongerPageTitle() = runBlocking {
         val budgetTracker = page(PageBlockDocument(), id = "page-budget-tracker", title = "Budget Tracker")
         val pageRepository = FakePageRepository(budgetTracker)
@@ -313,13 +444,24 @@ class AiActionExecutionUseCaseTest {
     }
 
     private fun useCase(pageRepository: FakePageRepository): AiActionExecutionUseCase {
+        val reminderRepository = FakeReminderRepository()
+        val applyEditorCommandUseCase = ApplyEditorCommandUseCase()
+        val reconcileTableDateRemindersUseCase = ReconcileTableDateRemindersUseCase(
+            ScheduleTableDateReminderUseCase(reminderRepository),
+        )
         return AiActionExecutionUseCase(
             pageRepository = pageRepository,
             aiPageActionExecutor = AiPageActionExecutor(
                 pageRepository = pageRepository,
                 taskRepository = FakeTaskRepository(),
-                reminderRepository = FakeReminderRepository(),
-                applyEditorCommandUseCase = ApplyEditorCommandUseCase(),
+                reminderRepository = reminderRepository,
+                applyEditorCommandUseCase = applyEditorCommandUseCase,
+            ),
+            reconcileTableDateRemindersUseCase = reconcileTableDateRemindersUseCase,
+            applyAiUndoCommandsUseCase = ApplyAiUndoCommandsUseCase(
+                pageRepository = pageRepository,
+                applyEditorCommandUseCase = applyEditorCommandUseCase,
+                reconcileTableDateRemindersUseCase = reconcileTableDateRemindersUseCase,
             ),
         )
     }
@@ -361,6 +503,7 @@ class AiActionExecutionUseCaseTest {
             initialPages.forEach { page -> put(page.id, page) }
         }
         val createdPages = mutableListOf<Page>()
+        var failPermanentDelete: Boolean = false
 
         override fun observePages(workspaceId: String): Flow<List<Page>> = flowOf(pages.values.toList())
 
@@ -477,7 +620,10 @@ class AiActionExecutionUseCaseTest {
 
         override suspend fun restorePage(pageId: String) = Unit
 
-        override suspend fun deletePagePermanently(pageId: String) = Unit
+        override suspend fun deletePagePermanently(pageId: String) {
+            if (failPermanentDelete) error("Permanent delete failed")
+            pages.remove(pageId)
+        }
 
         override suspend fun keepLocalPageConflict(pageId: String) = Unit
 

@@ -9,12 +9,21 @@ import com.changeyourlife.cyl.domain.model.AiUndoCommandSummary
 import com.changeyourlife.cyl.domain.model.PageMediaAttachment
 import com.changeyourlife.cyl.domain.model.PagePropertyType
 import com.changeyourlife.cyl.domain.model.PageTable
+import com.changeyourlife.cyl.domain.model.PageTableCellValue
 import com.changeyourlife.cyl.domain.model.PageTableColumn
+import com.changeyourlife.cyl.domain.model.PageTableColumnConfig
 import com.changeyourlife.cyl.domain.model.PageTableColumnType
+import com.changeyourlife.cyl.domain.model.PageTableDateFormat
+import com.changeyourlife.cyl.domain.model.PageTableDateReminder
 import com.changeyourlife.cyl.domain.model.PageTableFilter
+import com.changeyourlife.cyl.domain.model.PageTableFilterOperator
+import com.changeyourlife.cyl.domain.model.PageTableOptionColor
 import com.changeyourlife.cyl.domain.model.PageTableRollupAggregation
 import com.changeyourlife.cyl.domain.model.PageTableRow
+import com.changeyourlife.cyl.domain.model.PageTableSelectOption
+import com.changeyourlife.cyl.domain.model.PageTableSort
 import com.changeyourlife.cyl.domain.model.PageTableSortDirection
+import com.changeyourlife.cyl.domain.model.PageTableTimeFormat
 import com.changeyourlife.cyl.domain.model.PageTableView
 import com.changeyourlife.cyl.domain.model.PageTableViewConfig
 import com.changeyourlife.cyl.domain.model.PageTextSpan
@@ -22,7 +31,10 @@ import com.changeyourlife.cyl.domain.model.Reminder
 import com.changeyourlife.cyl.domain.model.RichTextFormat
 import com.changeyourlife.cyl.domain.model.RichTextSpanEngine
 import com.changeyourlife.cyl.domain.model.TaskItem
+import com.changeyourlife.cyl.domain.model.toAiMonthReferenceOrNull
+import com.changeyourlife.cyl.domain.model.deleteCreatedPageUndo
 import com.changeyourlife.cyl.domain.model.normalizedForType
+import com.changeyourlife.cyl.domain.model.restorePageSnapshotsUndo
 import com.changeyourlife.cyl.domain.model.toAiUndoCommandSummary
 import com.changeyourlife.cyl.domain.model.toTypedCellValue
 import com.changeyourlife.cyl.domain.repository.ChatAction
@@ -31,6 +43,7 @@ import com.changeyourlife.cyl.domain.usecase.BlockMutationResult as DomainBlockM
 import com.changeyourlife.cyl.domain.usecase.PageMutationResult
 import com.changeyourlife.cyl.domain.usecase.PageMutationUseCase
 import com.changeyourlife.cyl.domain.usecase.PropertyMutationResult
+import com.changeyourlife.cyl.domain.usecase.ReconcileTableDateRemindersUseCase
 import com.changeyourlife.cyl.domain.usecase.ScheduleTableDateReminderUseCase
 import com.changeyourlife.cyl.domain.usecase.TableMutationResult
 import com.changeyourlife.cyl.domain.usecase.TableMutationUseCase
@@ -50,6 +63,7 @@ internal class AiPageActionMutationEngine(
     private val pageMutationUseCase: PageMutationUseCase,
     private val tableMutationUseCase: TableMutationUseCase,
     private val scheduleTableDateReminderUseCase: ScheduleTableDateReminderUseCase,
+    private val reconcileTableDateRemindersUseCase: ReconcileTableDateRemindersUseCase,
 ) {
     fun supports(action: ChatAction): Boolean {
         return AiActionExecutionRegistry.supports(action)
@@ -77,6 +91,11 @@ internal class AiPageActionMutationEngine(
         for ((actionIndex, action) in actions.withIndex()) {
             val trace = AiActionExecutionRegistry.trace(actionIndex, action)
             val actionType = trace.actionType
+            val persistedPageBeforeAction = pageRepository.getPage(page.id) ?: page
+            val pageBeforeAction = persistedPageBeforeAction.copy(
+                title = workingTitle,
+                content = PageBlockCodec.encodeDocument(workingDocument),
+            )
             val validationIssue = workingDocument.validateActionTarget(action, actionIndex)
             if (validationIssue != null) {
                 val issue = validationIssue.withTrace(trace)
@@ -87,13 +106,24 @@ internal class AiPageActionMutationEngine(
             runCatching {
                 when (actionType) {
                     "RENAME_CURRENT_PAGE", "RENAME_PAGE" -> {
-                        workingTitle = action.title.ifBlank { error("Missing new page title") }
-                        titleChanged = true
+                        val nextTitle = action.title.ifBlank { error("Missing new page title") }
+                        if (nextTitle != workingTitle) {
+                            undoCommands += restorePageSnapshotsUndo(
+                                actionIndex = actionIndex,
+                                pages = listOf(pageBeforeAction),
+                            )
+                            workingTitle = nextTitle
+                            titleChanged = true
+                        }
                         "Renamed page to: $workingTitle"
                     }
 
                     "UPDATE_PAGE" -> {
-                        if (action.title.isNotBlank()) {
+                        if (action.title.isNotBlank() && action.title != workingTitle) {
+                            undoCommands += restorePageSnapshotsUndo(
+                                actionIndex = actionIndex,
+                                pages = listOf(pageBeforeAction),
+                            )
                             workingTitle = action.title
                             titleChanged = true
                         }
@@ -502,14 +532,6 @@ internal class AiPageActionMutationEngine(
                         if (targetTable.table.columns.firstOrNull()?.id == targetColumn.id) {
                             error("The primary column cannot be deleted")
                         }
-                        if (targetColumn.type == PageTableColumnType.Date) {
-                            scheduleTableDateReminderUseCase.cancelColumn(
-                                page = page,
-                                table = targetTable.table,
-                                tableBlockId = targetTable.id,
-                                columnId = targetColumn.id,
-                            )
-                        }
                         val mutation = tableMutationUseCase.deleteColumn(
                             document = workingDocument,
                             tableBlockId = targetTable.id,
@@ -592,7 +614,7 @@ internal class AiPageActionMutationEngine(
                         "Changed column ${columnName.ifBlank { action.columnId }} to ${columnType.name} in ${targetTable.table.title}"
                     }
 
-                    "UPDATE_TABLE_COLUMN_CONFIG", "SET_TABLE_COLUMN_CONFIG",
+                    "UPDATE_TABLE_COLUMN_CONFIG", "SET_TABLE_COLUMN_CONFIG", "UPDATE_TABLE_DATE_CONFIG",
                     "UPDATE_FORMULA_COLUMN", "UPDATE_RELATION_COLUMN", "UPDATE_ROLLUP_COLUMN" -> {
                         val resolvedAction = action.withResolvedRelationTarget(workingDocument)
                         val columnName = resolvedAction.columnName
@@ -602,6 +624,9 @@ internal class AiPageActionMutationEngine(
                             ?: error("Could not find matching table")
                         val targetColumn = targetTable.table.findColumn(resolvedAction.columnId, columnName)
                             ?: error("Could not find column: ${columnName.ifBlank { resolvedAction.columnId }}")
+                        if (actionType == "UPDATE_TABLE_DATE_CONFIG" && targetColumn.type != PageTableColumnType.Date) {
+                            error("Date configuration can only be applied to a Date column")
+                        }
                         val relationColumn = targetTable.table.findColumn(
                             columnId = resolvedAction.rollupRelationColumnId,
                             columnName = resolvedAction.rollupRelationColumnName,
@@ -624,6 +649,94 @@ internal class AiPageActionMutationEngine(
                         workingDocument = mutation.captureForAi(actionIndex, undoCommands)
                         documentChanged = documentChanged || mutation.changed
                         "Updated column configuration in ${targetTable.table.title}"
+                    }
+
+                    "ADD_TABLE_COLUMN_OPTION", "UPDATE_TABLE_COLUMN_OPTION", "DELETE_TABLE_COLUMN_OPTION" -> {
+                        val columnName = action.columnName
+                            .ifBlank { action.propertyName }
+                            .ifBlank { action.title }
+                        val targetTable = workingDocument.blocks.findMatchingTable(action)
+                            ?: error("Could not find matching table")
+                        val targetColumn = targetTable.table.findColumn(action.columnId, columnName)
+                            ?: error("Could not find column: ${columnName.ifBlank { action.columnId }}")
+                        if (targetColumn.type !in setOf(
+                                PageTableColumnType.Select,
+                                PageTableColumnType.MultiSelect,
+                                PageTableColumnType.Status,
+                            )
+                        ) {
+                            error("Options can only be edited on Select, Multi-select, or Status columns")
+                        }
+                        val currentOptions = targetColumn.config.options
+                        var renamedOption: Pair<String, String>? = null
+                        var deletedOptionName = ""
+                        val nextOptions = when (actionType) {
+                            "ADD_TABLE_COLUMN_OPTION" -> {
+                                val optionName = action.optionName
+                                    .ifBlank { action.newOptionName }
+                                    .ifBlank { action.value }
+                                    .ifBlank { action.content }
+                                    .trim()
+                                    .ifBlank { error("Missing option name") }
+                                if (currentOptions.any { option -> option.name.equals(optionName, ignoreCase = true) }) {
+                                    error("Option already exists: $optionName")
+                                }
+                                currentOptions + PageTableSelectOption(
+                                    id = action.optionId.ifBlank { UUID.randomUUID().toString() },
+                                    name = optionName,
+                                    color = action.optionColor.toPageTableOptionColorOrNull()
+                                        ?: PageTableOptionColor.Gray,
+                                )
+                            }
+
+                            "UPDATE_TABLE_COLUMN_OPTION" -> {
+                                val targetOption = currentOptions.findAiOption(action)
+                                    ?: error("Could not find option: ${action.optionName.ifBlank { action.optionId }}")
+                                val newName = action.newOptionName
+                                    .ifBlank { action.value }
+                                    .ifBlank { action.content }
+                                    .trim()
+                                    .ifBlank { targetOption.name }
+                                if (currentOptions.any { option ->
+                                        option.id != targetOption.id &&
+                                            option.name.equals(newName, ignoreCase = true)
+                                    }
+                                ) {
+                                    error("Option already exists: $newName")
+                                }
+                                renamedOption = targetOption.name to newName
+                                currentOptions.map { option ->
+                                    if (option.id == targetOption.id) {
+                                        option.copy(
+                                            name = newName,
+                                            color = action.optionColor.toPageTableOptionColorOrNull()
+                                                ?: option.color,
+                                        )
+                                    } else {
+                                        option
+                                    }
+                                }
+                            }
+
+                            else -> {
+                                val targetOption = currentOptions.findAiOption(action)
+                                    ?: error("Could not find option: ${action.optionName.ifBlank { action.optionId }}")
+                                deletedOptionName = targetOption.name
+                                currentOptions.filterNot { option -> option.id == targetOption.id }
+                            }
+                        }
+                        val mutation = tableMutationUseCase.updateColumnOptions(
+                            document = workingDocument,
+                            tableBlockId = targetTable.id,
+                            columnId = targetColumn.id,
+                            options = nextOptions,
+                            renamedOption = renamedOption,
+                            deletedOptionName = deletedOptionName,
+                        )
+                        workingDocument = mutation.captureForAi(actionIndex, undoCommands)
+                        if (!mutation.changed) error("Column options were not changed")
+                        documentChanged = true
+                        "Updated options in ${targetColumn.name}"
                     }
 
                     "REORDER_TABLE_COLUMN", "MOVE_TABLE_COLUMN" -> {
@@ -701,12 +814,6 @@ internal class AiPageActionMutationEngine(
                             ?: error("Could not find matching table")
                         val targetRow = targetTable.table.findRow(action.rowId, rowTitle)
                             ?: error("Could not find row: ${rowTitle.ifBlank { action.rowId }}")
-                        scheduleTableDateReminderUseCase.cancelRow(
-                            page = page,
-                            table = targetTable.table,
-                            tableBlockId = targetTable.id,
-                            rowId = targetRow.id,
-                        )
                         val mutation = tableMutationUseCase.deleteRow(
                             document = workingDocument,
                             tableBlockId = targetTable.id,
@@ -731,10 +838,8 @@ internal class AiPageActionMutationEngine(
                                 }
                             }
                             action.cellValues.forEach { (columnReference, value) ->
-                                val column = targetTable.table.findColumn(
-                                    columnId = columnReference,
-                                    columnName = columnReference,
-                                ) ?: error("Could not find column: $columnReference")
+                                val column = targetTable.table.findColumnReference(columnReference)
+                                    ?: error("Could not uniquely identify column: $columnReference")
                                 put(column.id, value)
                             }
                         }
@@ -803,14 +908,6 @@ internal class AiPageActionMutationEngine(
                             ?: error("Could not find matching table")
                         val rows = targetTable.table.resolveBulkRows(action)
                         if (rows.isEmpty()) error("No rows match the requested condition")
-                        rows.forEach { row ->
-                            scheduleTableDateReminderUseCase.cancelRow(
-                                page = page,
-                                table = targetTable.table,
-                                tableBlockId = targetTable.id,
-                                rowId = row.id,
-                            )
-                        }
                         val mutation = tableMutationUseCase.deleteRows(
                             document = workingDocument,
                             tableBlockId = targetTable.id,
@@ -828,10 +925,8 @@ internal class AiPageActionMutationEngine(
                         val rows = targetTable.table.resolveBulkRows(action)
                         if (rows.isEmpty()) error("No rows match the requested condition")
                         val valuesByColumnId = action.cellValues.mapKeys { (columnReference, _) ->
-                            targetTable.table.findColumn(
-                                columnId = columnReference,
-                                columnName = columnReference,
-                            )?.id ?: error("Could not find column: $columnReference")
+                            targetTable.table.findColumnReference(columnReference)?.id
+                                ?: error("Could not uniquely identify column: $columnReference")
                         }
                         if (valuesByColumnId.isEmpty()) error("Bulk update needs cellValues")
                         val mutation = tableMutationUseCase.updateRows(
@@ -842,30 +937,6 @@ internal class AiPageActionMutationEngine(
                         )
                         workingDocument = mutation.captureForAi(actionIndex, undoCommands)
                         if (!mutation.changed) error("Matching rows were not changed")
-                        val updatedTable = workingDocument.findTableBlock(targetTable.id)
-                            ?: error("Could not reload updated table")
-                        valuesByColumnId.keys
-                            .mapNotNull { columnId ->
-                                updatedTable.table.columns.firstOrNull { column -> column.id == columnId }
-                            }
-                            .filter { column -> column.type == PageTableColumnType.Date }
-                            .forEach { dateColumn ->
-                                rows.forEach { row ->
-                                    val value = updatedTable.table.rows
-                                        .firstOrNull { updatedRow -> updatedRow.id == row.id }
-                                        ?.cells
-                                        ?.get(dateColumn.id)
-                                        .orEmpty()
-                                    scheduleTableDateReminderUseCase(
-                                        page = page,
-                                        document = workingDocument,
-                                        tableBlockId = targetTable.id,
-                                        rowId = row.id,
-                                        columnId = dateColumn.id,
-                                        value = value,
-                                    )
-                                }
-                            }
                         documentChanged = true
                         "Updated ${rows.size} matching rows in ${targetTable.table.title}"
                     }
@@ -955,13 +1026,17 @@ internal class AiPageActionMutationEngine(
                         val columnName = action.columnName.ifBlank { action.propertyName }
                         val rowTitle = action.rowTitle.ifBlank { action.title }
                         val isClearAction = actionType == "CLEAR_TABLE_CELL"
-                        val value = if (isClearAction) "" else action.resolvedTableCellUpdateValue(columnName)
                         val targetTable = workingDocument.blocks.findMatchingTable(action)
                             ?: error("Could not find matching table")
                         val targetRow = targetTable.table.findRow(action.rowId, rowTitle)
                             ?: error("Could not find row: ${rowTitle.ifBlank { action.rowId }}")
                         val targetColumn = targetTable.table.findColumn(action.columnId, columnName)
                             ?: error("Could not find column: ${columnName.ifBlank { action.columnId }}")
+                        val value = if (isClearAction) {
+                            ""
+                        } else {
+                            action.resolvedTableCellUpdateValue(targetColumn)
+                        }
                         val mutation = tableMutationUseCase.updateCell(
                             document = workingDocument,
                             tableBlockId = targetTable.id,
@@ -971,30 +1046,85 @@ internal class AiPageActionMutationEngine(
                         )
                         workingDocument = mutation.mutation.captureForAi(actionIndex, undoCommands)
                         documentChanged = documentChanged || mutation.changed
-                        if (targetColumn.type == PageTableColumnType.Date && mutation.changed) {
-                            if (value.isBlank()) {
-                                scheduleTableDateReminderUseCase.cancel(
-                                    page = page,
-                                    tableBlockId = targetTable.id,
-                                    rowId = targetRow.id,
-                                    columnId = targetColumn.id,
-                                )
-                            } else {
-                                scheduleTableDateReminderUseCase(
-                                    page = page,
-                                    document = workingDocument,
-                                    tableBlockId = targetTable.id,
-                                    rowId = targetRow.id,
-                                    columnId = targetColumn.id,
-                                    value = value,
-                                )
-                            }
-                        }
                         if (isClearAction) {
                             "Cleared ${targetColumn.name} for ${rowTitle.ifBlank { targetRow.id }} in ${targetTable.table.title}"
                         } else {
                             "Updated ${targetColumn.name} for ${rowTitle.ifBlank { targetRow.id }} in ${targetTable.table.title}"
                         }
+                    }
+
+                    "SET_RELATION_CELL", "CLEAR_RELATION_CELL" -> {
+                        val columnName = action.columnName.ifBlank { action.propertyName }
+                        val rowTitle = action.rowTitle.ifBlank { action.title }
+                        val targetTable = workingDocument.blocks.findMatchingTable(action)
+                            ?: error("Could not find matching table")
+                        val targetRow = targetTable.table.findRow(action.rowId, rowTitle)
+                            ?: error("Could not find row: ${rowTitle.ifBlank { action.rowId }}")
+                        val targetColumn = targetTable.table.findColumn(action.columnId, columnName)
+                            ?: error("Could not find column: ${columnName.ifBlank { action.columnId }}")
+                        if (targetColumn.type != PageTableColumnType.Relation) {
+                            error("${targetColumn.name} is not a Relation column")
+                        }
+                        val relationRowIds = if (actionType == "CLEAR_RELATION_CELL") {
+                            emptyList()
+                        } else {
+                            action.relationRowIds
+                        }
+                        val mutation = tableMutationUseCase.updateRelationCell(
+                            document = workingDocument,
+                            tableBlockId = targetTable.id,
+                            rowId = targetRow.id,
+                            columnId = targetColumn.id,
+                            relationRowIds = relationRowIds,
+                        )
+                        workingDocument = mutation.mutation.captureForAi(actionIndex, undoCommands)
+                        if (!mutation.changed) error("Relation cell was not changed")
+                        documentChanged = true
+                        if (actionType == "CLEAR_RELATION_CELL") {
+                            "Cleared ${targetColumn.name} relation"
+                        } else {
+                            "Updated ${targetColumn.name} relation"
+                        }
+                    }
+
+                    "ADD_MEDIA_CELL", "REMOVE_MEDIA_CELL", "CLEAR_MEDIA_CELL" -> {
+                        val columnName = action.columnName.ifBlank { action.propertyName }
+                        val rowTitle = action.rowTitle.ifBlank { action.title }
+                        val targetTable = workingDocument.blocks.findMatchingTable(action)
+                            ?: error("Could not find matching table")
+                        val targetRow = targetTable.table.findRow(action.rowId, rowTitle)
+                            ?: error("Could not find row: ${rowTitle.ifBlank { action.rowId }}")
+                        val targetColumn = targetTable.table.findColumn(action.columnId, columnName)
+                            ?: error("Could not find column: ${columnName.ifBlank { action.columnId }}")
+                        if (targetColumn.type != PageTableColumnType.FilesMedia) {
+                            error("${targetColumn.name} is not a Files & media column")
+                        }
+                        val mutation = tableMutationUseCase.updateMediaCell(
+                            document = workingDocument,
+                            tableBlockId = targetTable.id,
+                            rowId = targetRow.id,
+                            columnId = targetColumn.id,
+                        ) { files ->
+                            when (actionType) {
+                                "ADD_MEDIA_CELL" -> {
+                                    val uri = action.mediaUri.trim().ifBlank { error("Missing media URI") }
+                                    files + PageMediaAttachment(
+                                        id = action.mediaId.ifBlank { UUID.randomUUID().toString() },
+                                        uri = uri,
+                                        name = action.mediaName.trim().ifBlank { uri.substringAfterLast('/') },
+                                        mimeType = action.mediaMimeType,
+                                        sizeBytes = action.mediaSizeBytes,
+                                    )
+                                }
+
+                                "REMOVE_MEDIA_CELL" -> files.filterNot { file -> file.matchesAiMedia(action) }
+                                else -> emptyList()
+                            }
+                        }
+                        workingDocument = mutation.mutation.captureForAi(actionIndex, undoCommands)
+                        if (!mutation.changed) error("Media cell was not changed")
+                        documentChanged = true
+                        "Updated ${targetColumn.name} media"
                     }
 
                     "CLEAR_TABLE_CELLS" -> {
@@ -1014,16 +1144,6 @@ internal class AiPageActionMutationEngine(
                         val rowIds = targetTable.table.rowsMatchingCell(column, matchQuery)
                             .map(PageTableRow::id)
                             .toSet()
-                        if (column.type == PageTableColumnType.Date) {
-                            rowIds.forEach { rowId ->
-                                scheduleTableDateReminderUseCase.cancel(
-                                    page = page,
-                                    tableBlockId = targetTable.id,
-                                    rowId = rowId,
-                                    columnId = column.id,
-                                )
-                            }
-                        }
                         val mutation = tableMutationUseCase.updateCells(
                             document = workingDocument,
                             tableBlockId = targetTable.id,
@@ -1063,6 +1183,104 @@ internal class AiPageActionMutationEngine(
                         "Updated ${targetTable.table.title} view config"
                     }
 
+                    "CREATE_TABLE_SAVED_VIEW" -> {
+                        val targetTable = workingDocument.blocks.findMatchingTable(action)
+                            ?: error("Could not find matching table")
+                        val viewName = action.viewName
+                            .ifBlank { action.title }
+                            .ifBlank { action.value }
+                            .ifBlank { action.content }
+                            .trim()
+                            .ifBlank { error("Missing saved view name") }
+                        val view = action.tableView
+                            .takeIf(String::isNotBlank)
+                            ?.toPageTableView()
+                            ?: targetTable.table.view
+                        val configuredView = action.toTableViewConfig(targetTable.table)
+                        val ruleColumn = targetTable.table.findColumn(action.columnId, action.columnName)
+                        val sort = ruleColumn?.takeIf { action.sortDirection.isNotBlank() }?.let { column ->
+                            PageTableSort(
+                                columnId = column.id,
+                                direction = action.sortDirection.toPageTableSortDirection(),
+                            )
+                        }
+                        val filterOperator = action.filterOperator.toPageTableFilterOperator()
+                        val filter = ruleColumn?.takeIf {
+                            action.filterQuery.isNotBlank() ||
+                                filterOperator in setOf(
+                                    PageTableFilterOperator.IsEmpty,
+                                    PageTableFilterOperator.IsNotEmpty,
+                                )
+                        }?.let { column ->
+                            PageTableFilter(
+                                columnId = column.id,
+                                query = action.filterQuery,
+                                operator = filterOperator,
+                            )
+                        }
+                        val groupColumnId = targetTable.table.findColumn(
+                            action.groupByColumnId,
+                            action.groupByColumnName,
+                        )?.id
+                        val mutation = tableMutationUseCase.createSavedView(
+                            document = workingDocument,
+                            tableBlockId = targetTable.id,
+                            name = viewName,
+                            view = view,
+                            viewId = action.viewId.ifBlank { UUID.randomUUID().toString() },
+                            calendarDateColumnId = configuredView.calendarDateColumnId,
+                            timelineStartColumnId = configuredView.timelineStartColumnId,
+                            timelineEndColumnId = configuredView.timelineEndColumnId,
+                            dashboardMetricColumnId = configuredView.dashboardMetricColumnId,
+                            dashboardGroupColumnId = configuredView.dashboardGroupColumnId,
+                            sort = sort,
+                            filter = filter,
+                            groupByColumnId = groupColumnId,
+                        )
+                        workingDocument = mutation.captureForAi(actionIndex, undoCommands)
+                        if (!mutation.changed) error("Saved view already exists: $viewName")
+                        documentChanged = true
+                        "Created saved view $viewName"
+                    }
+
+                    "RENAME_TABLE_SAVED_VIEW", "DELETE_TABLE_SAVED_VIEW", "ACTIVATE_TABLE_SAVED_VIEW" -> {
+                        val targetTable = workingDocument.blocks.findMatchingTable(action)
+                            ?: error("Could not find matching table")
+                        val mutation = when (actionType) {
+                            "RENAME_TABLE_SAVED_VIEW" -> tableMutationUseCase.renameSavedView(
+                                document = workingDocument,
+                                tableBlockId = targetTable.id,
+                                viewId = action.viewId,
+                                viewName = action.viewName,
+                                newName = action.newViewName
+                                    .ifBlank { action.value }
+                                    .ifBlank { action.content },
+                            )
+
+                            "DELETE_TABLE_SAVED_VIEW" -> tableMutationUseCase.deleteSavedView(
+                                document = workingDocument,
+                                tableBlockId = targetTable.id,
+                                viewId = action.viewId,
+                                viewName = action.viewName,
+                            )
+
+                            else -> tableMutationUseCase.activateSavedView(
+                                document = workingDocument,
+                                tableBlockId = targetTable.id,
+                                viewId = action.viewId,
+                                viewName = action.viewName,
+                            )
+                        }
+                        workingDocument = mutation.captureForAi(actionIndex, undoCommands)
+                        if (!mutation.changed) error("Could not update the requested saved view")
+                        documentChanged = true
+                        when (actionType) {
+                            "RENAME_TABLE_SAVED_VIEW" -> "Renamed saved view"
+                            "DELETE_TABLE_SAVED_VIEW" -> "Deleted saved view"
+                            else -> "Activated saved view"
+                        }
+                    }
+
                     "SORT_TABLE", "SET_TABLE_SORT" -> {
                         val columnName = action.columnName.ifBlank { action.propertyName }.ifBlank { action.title }
                         val direction = action.sortDirection.ifBlank { action.value }.ifBlank { action.content }.toPageTableSortDirection()
@@ -1097,7 +1315,15 @@ internal class AiPageActionMutationEngine(
 
                     "FILTER_TABLE", "SET_TABLE_FILTER" -> {
                         val columnName = action.columnName.ifBlank { action.propertyName }.ifBlank { action.title }
-                        val query = action.filterQuery.ifBlank { action.value }.ifBlank { action.content }.ifBlank { error("Missing filter query") }
+                        val operator = action.filterOperator.toPageTableFilterOperator()
+                        val query = action.filterQuery.ifBlank { action.value }.ifBlank { action.content }
+                        if (query.isBlank() && operator !in setOf(
+                                PageTableFilterOperator.IsEmpty,
+                                PageTableFilterOperator.IsNotEmpty,
+                            )
+                        ) {
+                            error("Missing filter query")
+                        }
                         val targetTable = workingDocument.blocks.findMatchingTable(action)
                             ?: error("Could not find matching table")
                         val targetColumn = targetTable.table.findColumn(action.columnId, columnName)
@@ -1105,8 +1331,11 @@ internal class AiPageActionMutationEngine(
                         val mutation = tableMutationUseCase.updateFilter(
                             document = workingDocument,
                             tableBlockId = targetTable.id,
-                            columnId = targetColumn.id,
-                            query = query,
+                            filter = PageTableFilter(
+                                columnId = targetColumn.id,
+                                query = query,
+                                operator = operator,
+                            ),
                         )
                         workingDocument = mutation.captureForAi(actionIndex, undoCommands)
                         documentChanged = documentChanged || mutation.changed
@@ -1165,6 +1394,14 @@ internal class AiPageActionMutationEngine(
                             parentPageId = page.id,
                         )
                         createdPages += created
+                        undoCommands += deleteCreatedPageUndo(
+                            actionIndex = actionIndex,
+                            pageId = created.id,
+                        )
+                        reconcileTableDateRemindersUseCase.scheduleAll(
+                            page = created,
+                            document = PageBlockCodec.decodeDocument(created.content),
+                        )
                         "Created subpage: $pageTitle"
                     }
 
@@ -1181,6 +1418,14 @@ internal class AiPageActionMutationEngine(
                             parentPageId = if (moduleType != null) page.id else null,
                         )
                         createdPages += created
+                        undoCommands += deleteCreatedPageUndo(
+                            actionIndex = actionIndex,
+                            pageId = created.id,
+                        )
+                        reconcileTableDateRemindersUseCase.scheduleAll(
+                            page = created,
+                            document = PageBlockCodec.decodeDocument(created.content),
+                        )
                         if (moduleType != null) "Created ${moduleType.label} module: $pageTitle" else "Created page: $pageTitle"
                     }
 
@@ -1188,13 +1433,17 @@ internal class AiPageActionMutationEngine(
                         val workspacePages = pageRepository.observePages(page.workspaceId).first()
                         val parentPageId = workspacePages.resolveParentPageId(
                             action = action,
-                            movingPage = page,
+                            movingPage = pageBeforeAction,
                         )
-                        if (page.parentPageId == parentPageId) {
+                        if (pageBeforeAction.parentPageId == parentPageId) {
                             error("Page is already in the requested location")
                         }
+                        undoCommands += restorePageSnapshotsUndo(
+                            actionIndex = actionIndex,
+                            pages = listOf(pageBeforeAction),
+                        )
                         pageRepository.upsertPage(
-                            page.copy(
+                            pageBeforeAction.copy(
                                 parentPageId = parentPageId,
                                 updatedAt = System.currentTimeMillis(),
                             ),
@@ -1218,24 +1467,59 @@ internal class AiPageActionMutationEngine(
                             parentPageId = page.parentPageId,
                         )
                         createdPages += created
+                        undoCommands += deleteCreatedPageUndo(
+                            actionIndex = actionIndex,
+                            pageId = created.id,
+                        )
+                        reconcileTableDateRemindersUseCase.scheduleAll(
+                            page = created,
+                            document = PageBlockCodec.decodeDocument(created.content),
+                        )
                         "Duplicated page as $duplicateTitle"
                     }
 
                     "TRASH_PAGE" -> {
+                        val snapshots = pageRepository
+                            .getPageTreeSnapshot(page.id)
+                            .withRootSnapshot(pageBeforeAction)
+                        undoCommands += restorePageSnapshotsUndo(
+                            actionIndex = actionIndex,
+                            pages = snapshots,
+                        )
                         pageRepository.deletePage(page.id)
+                        reconcileTableDateRemindersUseCase.cancelAll(page, document)
                         "Moved page to trash"
                     }
 
                     "RESTORE_PAGE" -> {
+                        val snapshots = pageRepository
+                            .getPageTreeSnapshot(page.id)
+                            .withRootSnapshot(pageBeforeAction)
+                        undoCommands += restorePageSnapshotsUndo(
+                            actionIndex = actionIndex,
+                            pages = snapshots,
+                        )
                         pageRepository.restorePage(page.id)
+                        reconcileTableDateRemindersUseCase.scheduleAll(
+                            page = pageBeforeAction.copy(deletedAt = null),
+                            document = workingDocument,
+                        )
                         "Restored page"
                     }
 
                     "DELETE_PAGE_PERMANENTLY" -> {
-                        if (page.deletedAt == null) {
+                        if (pageBeforeAction.deletedAt == null) {
                             error("Move the page to trash before deleting it permanently")
                         }
+                        val snapshots = pageRepository
+                            .getPageTreeSnapshot(page.id)
+                            .withRootSnapshot(pageBeforeAction)
+                        undoCommands += restorePageSnapshotsUndo(
+                            actionIndex = actionIndex,
+                            pages = snapshots,
+                        )
                         pageRepository.deletePagePermanently(page.id)
+                        reconcileTableDateRemindersUseCase.cancelAll(page, document)
                         "Deleted page permanently"
                     }
 
@@ -1259,7 +1543,7 @@ internal class AiPageActionMutationEngine(
                             actionIndex = actionIndex,
                             undoCommands = reminderUndoCommands,
                         )
-                        val reminder = scheduleTableDateReminderUseCase(
+                        val reminder = scheduleTableDateReminderUseCase.resolve(
                             page = page,
                             document = nextDocument,
                             tableBlockId = plan.tableBlock.id,
@@ -1297,7 +1581,7 @@ internal class AiPageActionMutationEngine(
                                 )
                                 workingDocument = mutation.mutation.captureForAi(actionIndex, undoCommands)
                                 if (!mutation.changed) error("Reminder date was not changed")
-                                val reminder = scheduleTableDateReminderUseCase(
+                                val reminder = scheduleTableDateReminderUseCase.resolve(
                                     page = page,
                                     document = workingDocument,
                                     tableBlockId = targetTable.id,
@@ -1311,12 +1595,6 @@ internal class AiPageActionMutationEngine(
                             }
 
                             "CANCEL_REMINDER", "COMPLETE_REMINDER" -> {
-                                scheduleTableDateReminderUseCase.cancel(
-                                    page = page,
-                                    tableBlockId = targetTable.id,
-                                    rowId = targetRow.id,
-                                    columnId = dateColumn.id,
-                                )
                                 val valuesByColumnId = buildMap {
                                     put(dateColumn.id, currentValue.withoutReminderMetadata())
                                     if (actionType == "COMPLETE_REMINDER") {
@@ -1753,6 +2031,8 @@ private fun PageBlockDocument.validateActionTarget(
     action: ChatAction,
     actionIndex: Int,
 ): AiPageActionValidationIssue? {
+    val actionType = action.type.normalizedActionType()
+
     fun targetNotFound(field: String, targetKind: String, targetLabel: String): AiPageActionValidationIssue {
         val label = targetLabel.ifBlank { "target $targetKind" }
         return AiPageActionValidationIssue(
@@ -1763,17 +2043,30 @@ private fun PageBlockDocument.validateActionTarget(
         )
     }
 
+    fun invalidAction(field: String, code: String, message: String): AiPageActionValidationIssue {
+        return AiPageActionValidationIssue(
+            actionIndex = actionIndex,
+            field = field,
+            code = code,
+            message = message,
+        )
+    }
+
     fun targetTable(): PageBlock? = blocks.findMatchingTable(action)
 
     fun tableIssue(): AiPageActionValidationIssue? {
-        return if (targetTable() == null) {
-            targetNotFound(
+        return when (blocks.resolveMatchingTable(action)) {
+            is AiTableResolution.Found -> null
+            AiTableResolution.Ambiguous -> invalidAction(
+                field = "tableTitle",
+                code = "ambiguous_target",
+                message = "More than one table matched. Specify the exact table name or table block ID.",
+            )
+            AiTableResolution.Missing -> targetNotFound(
                 field = "tableTitle",
                 targetKind = "table",
                 targetLabel = action.tableTitle.ifBlank { action.title },
             )
-        } else {
-            null
         }
     }
 
@@ -1784,19 +2077,37 @@ private fun PageBlockDocument.validateActionTarget(
         columnName: String,
     ): AiPageActionValidationIssue? {
         if (columnId.isBlank() && columnName.isBlank()) return null
-        return if (table.table.findColumn(columnId, columnName) == null) {
-            targetNotFound(
+        return when (table.table.resolveColumn(columnId, columnName)) {
+            is AiColumnResolution.Found -> null
+            AiColumnResolution.Ambiguous -> invalidAction(
+                field = field,
+                code = "ambiguous_target",
+                message = "More than one column matched ${columnName.ifBlank { columnId }}. " +
+                    "Specify the exact column name or column ID.",
+            )
+            AiColumnResolution.Missing -> targetNotFound(
                 field = field,
                 targetKind = "column",
                 targetLabel = columnName.ifBlank { columnId },
             )
-        } else {
-            null
         }
     }
 
+    fun targetColumn(table: PageBlock): PageTableColumn? {
+        val columnId = when (actionType) {
+            "GROUP_TABLE", "SET_TABLE_GROUP" -> action.groupByColumnId
+            else -> action.columnId
+        }
+        val columnName = when (actionType) {
+            "GROUP_TABLE", "SET_TABLE_GROUP" -> action.groupByColumnName
+            else -> action.columnName
+        }
+            .ifBlank { action.propertyName }
+            .ifBlank { action.title }
+        return table.table.findColumn(columnId, columnName)
+    }
+
     fun columnIssue(table: PageBlock): AiPageActionValidationIssue? {
-        val actionType = action.type.normalizedActionType()
         val columnId = when (actionType) {
             "GROUP_TABLE", "SET_TABLE_GROUP" -> action.groupByColumnId
             else -> action.columnId
@@ -1826,6 +2137,9 @@ private fun PageBlockDocument.validateActionTarget(
             null
         }
     }
+
+    fun targetRow(table: PageBlock): PageTableRow? =
+        table.table.findRow(action.rowId, action.rowTitle.ifBlank { action.title })
 
     fun viewConfigColumnIssue(table: PageBlock): AiPageActionValidationIssue? {
         return missingColumnIssue(
@@ -1863,15 +2177,17 @@ private fun PageBlockDocument.validateActionTarget(
 
     fun missingTableIssue(field: String, tableId: String, tableTitle: String): AiPageActionValidationIssue? {
         if (tableId.isBlank() && tableTitle.isBlank()) return null
-        val found = if (tableId.isNotBlank()) {
-            findTableBlock(tableId) != null
-        } else {
-            findTableBlockId(tableTitle) != null
-        }
-        return if (found) {
-            null
-        } else {
-            targetNotFound(
+        // A non-blank ID may point to a database on another page. Treat that
+        // opaque workspace ID as authoritative; title-only targets must resolve locally.
+        if (tableId.isNotBlank()) return null
+        return when (blocks.resolveTableByTitle(tableTitle)) {
+            is AiTableResolution.Found -> null
+            AiTableResolution.Ambiguous -> invalidAction(
+                field = field,
+                code = "ambiguous_target",
+                message = "More than one relation target table matched. Specify the exact table block ID.",
+            )
+            AiTableResolution.Missing -> targetNotFound(
                 field = field,
                 targetKind = "table",
                 targetLabel = tableTitle.ifBlank { tableId },
@@ -1917,17 +2233,26 @@ private fun PageBlockDocument.validateActionTarget(
                 message = "Formula cannot reference its own column: ${targetColumn.name}.",
             )
         }
-        val missingReference = FormulaColumnReferenceRegex.findAll(formula)
+        val referenceIssue = FormulaColumnReferenceRegex.findAll(formula)
             .map { match -> match.groupValues.getOrNull(1).orEmpty().trim() }
             .filter { columnName -> columnName.isNotBlank() }
-            .firstOrNull { columnName -> table.table.findColumn(columnName = columnName) == null }
-        if (missingReference != null) {
-            return targetNotFound(
-                field = "formula",
-                targetKind = "formula column",
-                targetLabel = missingReference,
-            )
-        }
+            .firstNotNullOfOrNull { referencedColumnName ->
+                when (table.table.resolveColumn(columnName = referencedColumnName)) {
+                    is AiColumnResolution.Found -> null
+                    AiColumnResolution.Ambiguous -> invalidAction(
+                        field = "formula",
+                        code = "ambiguous_target",
+                        message = "Formula reference $referencedColumnName matches more than one column. " +
+                            "Use the exact column name.",
+                    )
+                    AiColumnResolution.Missing -> targetNotFound(
+                        field = "formula",
+                        targetKind = "formula column",
+                        targetLabel = referencedColumnName,
+                    )
+                }
+            }
+        if (referenceIssue != null) return referenceIssue
         if (!formula.isValidAiFormula(table.table)) {
             return AiPageActionValidationIssue(
                 actionIndex = actionIndex,
@@ -1940,19 +2265,16 @@ private fun PageBlockDocument.validateActionTarget(
     }
 
     fun rollupConfigIssue(table: PageBlock): AiPageActionValidationIssue? {
+        missingColumnIssue(
+            table = table,
+            field = "rollupRelationColumnName",
+            columnId = action.rollupRelationColumnId,
+            columnName = action.rollupRelationColumnName,
+        )?.let { issue -> return issue }
         val relationColumn = table.table.findColumn(
             columnId = action.rollupRelationColumnId,
             columnName = action.rollupRelationColumnName,
         )
-        if ((action.rollupRelationColumnId.isNotBlank() || action.rollupRelationColumnName.isNotBlank()) &&
-            relationColumn == null
-        ) {
-            return targetNotFound(
-                field = "rollupRelationColumnName",
-                targetKind = "column",
-                targetLabel = action.rollupRelationColumnName.ifBlank { action.rollupRelationColumnId },
-            )
-        }
 
         val targetColumnId = action.rollupTargetColumnId
         val targetColumnName = action.rollupTargetColumnName
@@ -1988,8 +2310,607 @@ private fun PageBlockDocument.validateActionTarget(
         )
     }
 
+    fun columnDefaultValueIssue(column: PageTableColumn): AiPageActionValidationIssue? {
+        val value = action.defaultValue.trim()
+        if (value.isBlank() || action.clearDefaultValue == true) return null
+        return when (column.type) {
+            PageTableColumnType.Text -> null
+            PageTableColumnType.Number -> if (value.toDoubleOrNull() != null) {
+                null
+            } else {
+                invalidAction(
+                    field = "defaultValue",
+                    code = "invalid_default_value",
+                    message = "Default value for ${column.name} must be a number.",
+                )
+            }
+
+            PageTableColumnType.Checkbox -> if (value.normalizedAiKey() in setOf(
+                    "true",
+                    "false",
+                    "yes",
+                    "no",
+                    "checked",
+                    "unchecked",
+                    "done",
+                    "notdone",
+                    "1",
+                    "0",
+                )
+            ) {
+                null
+            } else {
+                invalidAction(
+                    field = "defaultValue",
+                    code = "invalid_default_value",
+                    message = "Default value for ${column.name} must be true or false.",
+                )
+            }
+
+            PageTableColumnType.Date -> if (value.isValidAiDateCellValue()) {
+                null
+            } else {
+                invalidAction(
+                    field = "defaultValue",
+                    code = "invalid_date",
+                    message = "Could not parse date value: $value.",
+                )
+            }
+            PageTableColumnType.Select,
+            PageTableColumnType.Status,
+            -> {
+                val optionNames = (action.options.takeIf { options -> options.isNotEmpty() }
+                    ?: column.config.options.map(PageTableSelectOption::name))
+                if (optionNames.any { option -> option.equals(value, ignoreCase = true) }) {
+                    null
+                } else {
+                    invalidAction(
+                        field = "defaultValue",
+                        code = "invalid_default_value",
+                        message = "Default value for ${column.name} must match an existing option.",
+                    )
+                }
+            }
+
+            PageTableColumnType.MultiSelect -> {
+                val optionNames = (action.options.takeIf { options -> options.isNotEmpty() }
+                    ?: column.config.options.map(PageTableSelectOption::name))
+                val requested = value
+                    .split(',', ';', '\n')
+                    .map(String::trim)
+                    .filter(String::isNotBlank)
+                if (
+                    requested.isNotEmpty() &&
+                    requested.all { selected ->
+                        optionNames.any { option -> option.equals(selected, ignoreCase = true) }
+                    }
+                ) {
+                    null
+                } else {
+                    invalidAction(
+                        field = "defaultValue",
+                        code = "invalid_default_value",
+                        message = "Default values for ${column.name} must match existing options.",
+                    )
+                }
+            }
+
+            PageTableColumnType.Formula,
+            PageTableColumnType.Rollup,
+            PageTableColumnType.Relation,
+            PageTableColumnType.FilesMedia,
+            -> invalidAction(
+                field = "defaultValue",
+                code = "invalid_default_value",
+                message = "${column.type.name} columns do not support a text default value.",
+            )
+        }
+    }
+
     fun columnConfigIssue(table: PageBlock): AiPageActionValidationIssue? {
-        return formulaConfigIssue(table) ?: relationConfigIssue() ?: rollupConfigIssue(table)
+        val column = targetColumn(table) ?: return columnIssue(table)
+        return when (actionType) {
+            "UPDATE_FORMULA_COLUMN" -> {
+                if (column.type != PageTableColumnType.Formula) {
+                    invalidAction(
+                        field = "columnName",
+                        code = "invalid_target_type",
+                        message = "${column.name} is not a Formula column.",
+                    )
+                } else {
+                    formulaConfigIssue(table)
+                }
+            }
+
+            "UPDATE_RELATION_COLUMN" -> {
+                if (column.type != PageTableColumnType.Relation) {
+                    invalidAction(
+                        field = "columnName",
+                        code = "invalid_target_type",
+                        message = "${column.name} is not a Relation column.",
+                    )
+                } else {
+                    relationConfigIssue()
+                }
+            }
+
+            "UPDATE_ROLLUP_COLUMN" -> {
+                if (column.type != PageTableColumnType.Rollup) {
+                    invalidAction(
+                        field = "columnName",
+                        code = "invalid_target_type",
+                        message = "${column.name} is not a Rollup column.",
+                    )
+                } else {
+                    rollupConfigIssue(table)
+                }
+            }
+
+            "UPDATE_TABLE_DATE_CONFIG" -> {
+                if (column.type == PageTableColumnType.Date) {
+                    null
+                } else {
+                    invalidAction(
+                        field = "columnName",
+                        code = "invalid_target_type",
+                        message = "${column.name} is not a Date column.",
+                    )
+                }
+            }
+
+            "UPDATE_TABLE_COLUMN_CONFIG", "SET_TABLE_COLUMN_CONFIG" -> {
+                if (action.options.isNotEmpty() &&
+                    column.type !in setOf(
+                        PageTableColumnType.Select,
+                        PageTableColumnType.MultiSelect,
+                        PageTableColumnType.Status,
+                    )
+                ) {
+                    invalidAction(
+                        field = "options",
+                        code = "invalid_target_type",
+                        message = "Options are only valid for Select, Multi-select, or Status columns.",
+                    )
+                } else {
+                    columnDefaultValueIssue(column)
+                }
+            }
+
+            else -> null
+        }
+    }
+
+    fun columnOptionIssue(table: PageBlock): AiPageActionValidationIssue? {
+        val column = targetColumn(table) ?: return columnIssue(table)
+        if (column.type !in setOf(
+                PageTableColumnType.Select,
+                PageTableColumnType.MultiSelect,
+                PageTableColumnType.Status,
+            )
+        ) {
+            return invalidAction(
+                field = "columnName",
+                code = "invalid_target_type",
+                message = "${column.name} does not support options.",
+            )
+        }
+        val options = column.config.options
+        return when (actionType) {
+            "ADD_TABLE_COLUMN_OPTION" -> {
+                val name = action.optionName
+                    .ifBlank { action.newOptionName }
+                    .ifBlank { action.value }
+                    .ifBlank { action.content }
+                    .trim()
+                if (options.any { option -> option.name.equals(name, ignoreCase = true) }) {
+                    invalidAction(
+                        field = "optionName",
+                        code = "duplicate_target",
+                        message = "Option already exists: $name.",
+                    )
+                } else {
+                    null
+                }
+            }
+
+            "UPDATE_TABLE_COLUMN_OPTION", "DELETE_TABLE_COLUMN_OPTION" -> {
+                val targetOption = options.findAiOption(action)
+                    ?: return targetNotFound(
+                        field = "optionId",
+                        targetKind = "option",
+                        targetLabel = action.optionName.ifBlank { action.optionId },
+                    )
+                val newName = action.newOptionName
+                    .ifBlank { action.value }
+                    .ifBlank { action.content }
+                    .trim()
+                if (
+                    actionType == "UPDATE_TABLE_COLUMN_OPTION" &&
+                    newName.isNotBlank() &&
+                    options.any { option ->
+                        option.id != targetOption.id &&
+                            option.name.equals(newName, ignoreCase = true)
+                    }
+                ) {
+                    invalidAction(
+                        field = "newOptionName",
+                        code = "duplicate_target",
+                        message = "Option already exists: $newName.",
+                    )
+                } else {
+                    null
+                }
+            }
+
+            else -> null
+        }
+    }
+
+    fun filterRuleIssue(table: PageBlock): AiPageActionValidationIssue? {
+        val column = targetColumn(table) ?: return columnIssue(table)
+        val operator = action.filterOperator.toPageTableFilterOperator()
+        val supported = when (column.type) {
+            PageTableColumnType.Number,
+            PageTableColumnType.Formula,
+            PageTableColumnType.Rollup,
+            -> operator in setOf(
+                PageTableFilterOperator.Equals,
+                PageTableFilterOperator.NotEquals,
+                PageTableFilterOperator.GreaterThan,
+                PageTableFilterOperator.GreaterThanOrEqual,
+                PageTableFilterOperator.LessThan,
+                PageTableFilterOperator.LessThanOrEqual,
+                PageTableFilterOperator.IsEmpty,
+                PageTableFilterOperator.IsNotEmpty,
+            )
+
+            PageTableColumnType.Date -> operator in setOf(
+                PageTableFilterOperator.Equals,
+                PageTableFilterOperator.Before,
+                PageTableFilterOperator.After,
+                PageTableFilterOperator.OnOrBefore,
+                PageTableFilterOperator.OnOrAfter,
+                PageTableFilterOperator.IsEmpty,
+                PageTableFilterOperator.IsNotEmpty,
+            )
+
+            PageTableColumnType.Checkbox -> operator in setOf(
+                PageTableFilterOperator.Equals,
+                PageTableFilterOperator.NotEquals,
+            )
+
+            else -> operator in setOf(
+                PageTableFilterOperator.Contains,
+                PageTableFilterOperator.NotContains,
+                PageTableFilterOperator.Equals,
+                PageTableFilterOperator.NotEquals,
+                PageTableFilterOperator.IsEmpty,
+                PageTableFilterOperator.IsNotEmpty,
+            )
+        }
+        if (!supported) {
+            return invalidAction(
+                field = "filterOperator",
+                code = "invalid_filter_operator",
+                message = "${action.filterOperator.ifBlank { operator.name }} cannot be used with ${column.type.name}.",
+            )
+        }
+        val query = action.filterQuery.ifBlank { action.value }.ifBlank { action.content }
+        return if (
+            query.isBlank() &&
+            operator !in setOf(PageTableFilterOperator.IsEmpty, PageTableFilterOperator.IsNotEmpty)
+        ) {
+            invalidAction(
+                field = "filterQuery",
+                code = "required",
+                message = "Filter ${operator.name} needs a value.",
+            )
+        } else {
+            null
+        }
+    }
+
+    fun viewConfigTypeIssue(table: PageBlock): AiPageActionValidationIssue? {
+        fun configuredColumn(
+            field: String,
+            columnId: String,
+            columnName: String,
+            allowedTypes: Set<PageTableColumnType>,
+        ): AiPageActionValidationIssue? {
+            if (columnId.isBlank() && columnName.isBlank()) return null
+            val column = table.table.findColumn(columnId, columnName) ?: return null
+            return if (column.type in allowedTypes) {
+                null
+            } else {
+                invalidAction(
+                    field = field,
+                    code = "invalid_target_type",
+                    message = "${column.name} must be ${allowedTypes.joinToString(" or ") { it.name }}.",
+                )
+            }
+        }
+
+        val explicitIssue = configuredColumn(
+            field = "calendarDateColumnName",
+            columnId = action.calendarDateColumnId,
+            columnName = action.calendarDateColumnName,
+            allowedTypes = setOf(PageTableColumnType.Date),
+        ) ?: configuredColumn(
+            field = "timelineStartColumnName",
+            columnId = action.timelineStartColumnId,
+            columnName = action.timelineStartColumnName,
+            allowedTypes = setOf(PageTableColumnType.Date),
+        ) ?: configuredColumn(
+            field = "timelineEndColumnName",
+            columnId = action.timelineEndColumnId,
+            columnName = action.timelineEndColumnName,
+            allowedTypes = setOf(PageTableColumnType.Date),
+        ) ?: configuredColumn(
+            field = "dashboardMetricColumnName",
+            columnId = action.dashboardMetricColumnId,
+            columnName = action.dashboardMetricColumnName,
+            allowedTypes = setOf(
+                PageTableColumnType.Number,
+                PageTableColumnType.Formula,
+                PageTableColumnType.Rollup,
+            ),
+        )
+        if (explicitIssue != null) return explicitIssue
+
+        if (action.columnId.isBlank() && action.columnName.isBlank() && action.propertyName.isBlank()) {
+            return null
+        }
+        val requestedView = action.tableView.toPageTableView()
+        val usesGenericColumn = when (requestedView) {
+            PageTableView.Calendar ->
+                action.calendarDateColumnId.isBlank() && action.calendarDateColumnName.isBlank()
+            PageTableView.Timeline ->
+                action.timelineStartColumnId.isBlank() && action.timelineStartColumnName.isBlank()
+            PageTableView.Dashboard ->
+                action.dashboardMetricColumnId.isBlank() && action.dashboardMetricColumnName.isBlank()
+            else -> false
+        }
+        if (!usesGenericColumn) return null
+        val column = targetColumn(table) ?: return columnIssue(table)
+        val allowedTypes = when (requestedView) {
+            PageTableView.Calendar,
+            PageTableView.Timeline,
+            -> setOf(PageTableColumnType.Date)
+            PageTableView.Dashboard -> setOf(
+                PageTableColumnType.Number,
+                PageTableColumnType.Formula,
+                PageTableColumnType.Rollup,
+            )
+            else -> return null
+        }
+        return if (column.type in allowedTypes) {
+            null
+        } else {
+            invalidAction(
+                field = "columnName",
+                code = "invalid_target_type",
+                message = "${column.name} must be ${allowedTypes.joinToString(" or ") { it.name }}.",
+            )
+        }
+    }
+
+    fun savedViewIssue(table: PageBlock): AiPageActionValidationIssue? {
+        val views = table.table.viewConfig.savedViews
+        val target = when {
+            action.viewId.isNotBlank() -> views.firstOrNull { view -> view.id == action.viewId }
+            action.viewName.isNotBlank() -> views.firstOrNull { view ->
+                view.name.equals(action.viewName, ignoreCase = true)
+            }
+            else -> null
+        }
+        return when (actionType) {
+            "CREATE_TABLE_SAVED_VIEW" -> {
+                val name = action.viewName
+                    .ifBlank { action.title }
+                    .ifBlank { action.value }
+                    .ifBlank { action.content }
+                    .trim()
+                when {
+                    action.viewId.isNotBlank() && views.any { view -> view.id == action.viewId } ->
+                        invalidAction(
+                            field = "viewId",
+                            code = "duplicate_target",
+                            message = "Saved view ID already exists: ${action.viewId}.",
+                        )
+
+                    views.any { view -> view.name.equals(name, ignoreCase = true) } ->
+                        invalidAction(
+                            field = "viewName",
+                            code = "duplicate_target",
+                            message = "Saved view already exists: $name.",
+                        )
+
+                    else -> viewConfigColumnIssue(table)
+                        ?: viewConfigTypeIssue(table)
+                        ?: if (action.sortDirection.isNotBlank()) {
+                            columnIssue(table)
+                        } else {
+                            null
+                        }
+                        ?: if (
+                            action.filterQuery.isNotBlank() ||
+                            action.filterOperator.isNotBlank()
+                        ) {
+                            filterRuleIssue(table)
+                        } else {
+                            null
+                        }
+                }
+            }
+
+            "RENAME_TABLE_SAVED_VIEW" -> {
+                if (target == null) {
+                    targetNotFound(
+                        field = "viewId",
+                        targetKind = "saved view",
+                        targetLabel = action.viewName.ifBlank { action.viewId },
+                    )
+                } else {
+                    val newName = action.newViewName
+                        .ifBlank { action.value }
+                        .ifBlank { action.content }
+                        .trim()
+                    if (views.any { view ->
+                            view.id != target.id && view.name.equals(newName, ignoreCase = true)
+                        }
+                    ) {
+                        invalidAction(
+                            field = "newViewName",
+                            code = "duplicate_target",
+                            message = "Saved view already exists: $newName.",
+                        )
+                    } else {
+                        null
+                    }
+                }
+            }
+
+            "DELETE_TABLE_SAVED_VIEW" -> target?.let { null } ?: targetNotFound(
+                field = "viewId",
+                targetKind = "saved view",
+                targetLabel = action.viewName.ifBlank { action.viewId },
+            )
+
+            "ACTIVATE_TABLE_SAVED_VIEW" -> when {
+                target == null -> targetNotFound(
+                    field = "viewId",
+                    targetKind = "saved view",
+                    targetLabel = action.viewName.ifBlank { action.viewId },
+                )
+                table.table.viewConfig.activeSavedViewId == target.id -> invalidAction(
+                    field = "viewId",
+                    code = "already_applied",
+                    message = "Saved view is already active: ${target.name}.",
+                )
+                else -> null
+            }
+
+            else -> null
+        }
+    }
+
+    fun relationCellIssue(table: PageBlock): AiPageActionValidationIssue? {
+        val row = targetRow(table) ?: return targetNotFound(
+            field = "rowTitle",
+            targetKind = "row",
+            targetLabel = action.rowTitle.ifBlank { action.title }.ifBlank { action.rowId },
+        )
+        val column = targetColumn(table) ?: return columnIssue(table)
+        if (column.type != PageTableColumnType.Relation) {
+            return invalidAction(
+                field = "columnName",
+                code = "invalid_target_type",
+                message = "${column.name} is not a Relation column.",
+            )
+        }
+        val currentIds = row.cellValues[column.id]?.relationRowIds.orEmpty()
+        if (actionType == "CLEAR_RELATION_CELL") {
+            return if (currentIds.isEmpty()) {
+                invalidAction(
+                    field = "columnName",
+                    code = "already_applied",
+                    message = "${column.name} is already empty.",
+                )
+            } else {
+                null
+            }
+        }
+        val targetTableId = column.relationTargetTableId
+        if (targetTableId.isBlank()) {
+            return targetNotFound(
+                field = "relationTargetTableId",
+                targetKind = "relation table",
+                targetLabel = targetTableId,
+            )
+        }
+        val relationTable = findTableBlock(targetTableId)
+        if (relationTable == null) {
+            // Cross-page relation IDs are opaque here. They were selected from
+            // workspace context, so preserve them instead of rejecting a valid target.
+            return null
+        }
+        val missingRowId = action.relationRowIds
+            .map(String::trim)
+            .filter(String::isNotBlank)
+            .firstOrNull { rowId -> relationTable.table.rows.none { row -> row.id == rowId } }
+        if (missingRowId != null) {
+            return targetNotFound(
+                field = "relationRowIds",
+                targetKind = "relation row",
+                targetLabel = missingRowId,
+            )
+        }
+        val requestedIds = action.relationRowIds.map(String::trim).filter(String::isNotBlank).distinct()
+        return if (requestedIds == currentIds) {
+            invalidAction(
+                field = "relationRowIds",
+                code = "already_applied",
+                message = "${column.name} already contains the requested relation rows.",
+            )
+        } else {
+            null
+        }
+    }
+
+    fun mediaCellIssue(table: PageBlock): AiPageActionValidationIssue? {
+        val row = targetRow(table) ?: return targetNotFound(
+            field = "rowTitle",
+            targetKind = "row",
+            targetLabel = action.rowTitle.ifBlank { action.title }.ifBlank { action.rowId },
+        )
+        val column = targetColumn(table) ?: return columnIssue(table)
+        if (column.type != PageTableColumnType.FilesMedia) {
+            return invalidAction(
+                field = "columnName",
+                code = "invalid_target_type",
+                message = "${column.name} is not a Files & media column.",
+            )
+        }
+        val files = row.cellValues[column.id]?.files.orEmpty()
+        return when (actionType) {
+            "ADD_MEDIA_CELL" -> {
+                val duplicate = files.any { file ->
+                    (action.mediaId.isNotBlank() && file.id == action.mediaId) ||
+                        file.uri == action.mediaUri
+                }
+                if (duplicate) {
+                    invalidAction(
+                        field = "mediaUri",
+                        code = "duplicate_target",
+                        message = "That media file is already attached.",
+                    )
+                } else {
+                    null
+                }
+            }
+
+            "REMOVE_MEDIA_CELL" -> if (files.none { file -> file.matchesAiMedia(action) }) {
+                targetNotFound(
+                    field = "mediaId",
+                    targetKind = "media file",
+                    targetLabel = action.mediaName.ifBlank { action.mediaId }.ifBlank { action.mediaUri },
+                )
+            } else {
+                null
+            }
+
+            "CLEAR_MEDIA_CELL" -> if (files.isEmpty()) {
+                invalidAction(
+                    field = "columnName",
+                    code = "already_applied",
+                    message = "${column.name} is already empty.",
+                )
+            } else {
+                null
+            }
+
+            else -> null
+        }
     }
 
     fun invalidDateIssue(field: String, value: String): AiPageActionValidationIssue? {
@@ -2039,15 +2960,31 @@ private fun PageBlockDocument.validateActionTarget(
     }
 
     fun addedRowDateCellIssue(table: PageBlock): AiPageActionValidationIssue? {
-        table.table.columns
-            .filter { column -> column.type == PageTableColumnType.Date }
-            .forEach { column ->
-                val value = action.cellValues.entries.firstOrNull { entry ->
-                    entry.key.normalizedAiKey() == column.name.normalizedAiKey()
-                }?.value.orEmpty()
+        action.cellValues.forEach { (columnReference, value) ->
+            val column = table.table.findColumnReference(columnReference) ?: return@forEach
+            if (column.type == PageTableColumnType.Date) {
                 invalidDateIssue("cellValues.${column.name}", value)?.let { issue -> return issue }
             }
+        }
         return null
+    }
+
+    fun cellValuesColumnIssue(table: PageBlock): AiPageActionValidationIssue? {
+        return action.cellValues.keys.firstNotNullOfOrNull { columnReference ->
+            when (table.table.resolveColumnReference(columnReference)) {
+                is AiColumnResolution.Found -> null
+                AiColumnResolution.Ambiguous -> invalidAction(
+                    field = "cellValues.$columnReference",
+                    code = "ambiguous_target",
+                    message = "More than one column matched $columnReference. Use the exact column name or column ID.",
+                )
+                AiColumnResolution.Missing -> targetNotFound(
+                    field = "cellValues.$columnReference",
+                    targetKind = "column",
+                    targetLabel = columnReference,
+                )
+            }
+        }
     }
 
     fun rowIssue(table: PageBlock): AiPageActionValidationIssue? {
@@ -2073,13 +3010,66 @@ private fun PageBlockDocument.validateActionTarget(
         val row = table.table.findRow(action.rowId, rowTitle)
             ?: return rowIssue(table)
         val effectiveAction = action.copy(blockId = action.rowBlockId.ifBlank { action.blockId })
-        return if (row.blocks.anyMatchingBlock(effectiveAction)) {
-            null
-        } else {
-            targetNotFound(
+        return when (row.blocks.resolveMatchingBlock(effectiveAction)) {
+            is AiBlockResolution.Found -> null
+            AiBlockResolution.Ambiguous -> invalidAction(
+                field = "rowBlockId",
+                code = "ambiguous_target",
+                message = "More than one row content block matched. Specify the exact block ID.",
+            )
+            AiBlockResolution.Missing -> targetNotFound(
                 field = "rowBlockId",
                 targetKind = "row content block",
                 targetLabel = action.blockText.ifBlank { action.content }.ifBlank { action.title },
+            )
+        }
+    }
+
+    fun reminderDateColumnIssue(table: PageBlock): AiPageActionValidationIssue? {
+        val requestedName = action.columnName.ifBlank { action.propertyName }
+        if (action.columnId.isNotBlank() || requestedName.isNotBlank()) {
+            missingColumnIssue(
+                table = table,
+                field = "columnName",
+                columnId = action.columnId,
+                columnName = requestedName,
+            )?.let { issue -> return issue }
+            val column = table.table.findColumn(action.columnId, requestedName)
+                ?: return targetNotFound(
+                    field = "columnName",
+                    targetKind = "date column",
+                    targetLabel = requestedName.ifBlank { action.columnId },
+                )
+            return if (column.type == PageTableColumnType.Date) {
+                null
+            } else {
+                invalidAction(
+                    field = "columnName",
+                    code = "invalid_target_type",
+                    message = "${column.name} is not a Date column.",
+                )
+            }
+        }
+
+        val dateColumns = table.table.columns.filter { column -> column.type == PageTableColumnType.Date }
+        if (dateColumns.size <= 1) {
+            return if (dateColumns.isEmpty()) {
+                targetNotFound(
+                    field = "columnName",
+                    targetKind = "date column",
+                    targetLabel = "",
+                )
+            } else {
+                null
+            }
+        }
+        return if (dateColumns.count { column -> column.name.equals("Date", ignoreCase = true) } == 1) {
+            null
+        } else {
+            invalidAction(
+                field = "columnName",
+                code = "ambiguous_target",
+                message = "More than one Date column matched. Specify the exact column name or column ID.",
             )
         }
     }
@@ -2099,10 +3089,14 @@ private fun PageBlockDocument.validateActionTarget(
         "CHECK_BLOCK",
         "UNCHECK_BLOCK",
         -> {
-            if (blocks.anyMatchingBlock(action)) {
-                null
-            } else {
-                targetNotFound(
+            when (blocks.resolveMatchingBlock(action)) {
+                is AiBlockResolution.Found -> null
+                AiBlockResolution.Ambiguous -> invalidAction(
+                    field = "blockText",
+                    code = "ambiguous_target",
+                    message = "More than one block matched. Specify the exact block ID.",
+                )
+                AiBlockResolution.Missing -> targetNotFound(
                     field = "blockText",
                     targetKind = "block",
                     targetLabel = action.blockText.ifBlank { action.title }.ifBlank { action.content },
@@ -2129,33 +3123,53 @@ private fun PageBlockDocument.validateActionTarget(
         "CHANGE_TABLE_VIEW", "SET_TABLE_VIEW",
         "CLEAR_TABLE_SORT", "CLEAR_TABLE_FILTER", "CLEAR_TABLE_GROUP" -> tableIssue()
 
+        "CREATE_TABLE_SAVED_VIEW", "RENAME_TABLE_SAVED_VIEW",
+        "DELETE_TABLE_SAVED_VIEW", "ACTIVATE_TABLE_SAVED_VIEW" -> {
+            val table = targetTable() ?: return tableIssue()
+            savedViewIssue(table)
+        }
+
         "ADD_TABLE_ROW" -> {
             val table = targetTable() ?: return tableIssue()
-            addedRowDateCellIssue(table)
+            cellValuesColumnIssue(table) ?: addedRowDateCellIssue(table)
         }
 
         "SET_TABLE_VIEW_CONFIG", "CONFIGURE_TABLE_VIEW", "UPDATE_TABLE_VIEW_CONFIG" -> {
             val table = targetTable() ?: return tableIssue()
-            viewConfigColumnIssue(table)
+            viewConfigColumnIssue(table) ?: viewConfigTypeIssue(table)
         }
 
         "DELETE_TABLE_COLUMN", "RENAME_TABLE_COLUMN", "UPDATE_TABLE_COLUMN",
         "UPDATE_TABLE_COLUMN_TYPE", "CHANGE_TABLE_COLUMN_TYPE", "SET_TABLE_COLUMN_TYPE",
-        "UPDATE_TABLE_COLUMN_CONFIG", "SET_TABLE_COLUMN_CONFIG",
+        "UPDATE_TABLE_COLUMN_CONFIG", "SET_TABLE_COLUMN_CONFIG", "UPDATE_TABLE_DATE_CONFIG",
         "UPDATE_FORMULA_COLUMN", "UPDATE_RELATION_COLUMN", "UPDATE_ROLLUP_COLUMN",
         "REORDER_TABLE_COLUMN", "MOVE_TABLE_COLUMN", "DUPLICATE_TABLE_COLUMN",
         "SORT_TABLE", "SET_TABLE_SORT",
-        "FILTER_TABLE", "SET_TABLE_FILTER",
         "GROUP_TABLE", "SET_TABLE_GROUP" -> {
             val table = targetTable() ?: return tableIssue()
             columnIssue(table) ?: columnConfigIssue(table)
         }
 
-        "DELETE_TABLE_ROW", "UPDATE_TABLE_ROW", "RENAME_TABLE_ROW",
+        "ADD_TABLE_COLUMN_OPTION", "UPDATE_TABLE_COLUMN_OPTION", "DELETE_TABLE_COLUMN_OPTION" -> {
+            val table = targetTable() ?: return tableIssue()
+            columnIssue(table) ?: columnOptionIssue(table)
+        }
+
+        "FILTER_TABLE", "SET_TABLE_FILTER" -> {
+            val table = targetTable() ?: return tableIssue()
+            columnIssue(table) ?: filterRuleIssue(table)
+        }
+
+        "DELETE_TABLE_ROW",
         "REORDER_TABLE_ROW", "MOVE_TABLE_ROW", "DUPLICATE_TABLE_ROW",
         "ADD_ROW_PAGE_BLOCK", "APPEND_ROW_PAGE_BLOCK", "ADD_TABLE_ROW_BLOCK" -> {
             val table = targetTable() ?: return tableIssue()
             rowIssue(table)
+        }
+
+        "UPDATE_TABLE_ROW", "RENAME_TABLE_ROW" -> {
+            val table = targetTable() ?: return tableIssue()
+            rowIssue(table) ?: cellValuesColumnIssue(table)
         }
 
         "UPDATE_ROW_PAGE_BLOCK", "EDIT_ROW_PAGE_BLOCK", "UPDATE_TABLE_ROW_BLOCK",
@@ -2167,7 +3181,28 @@ private fun PageBlockDocument.validateActionTarget(
 
         "UPDATE_TABLE_CELL", "CLEAR_TABLE_CELL" -> {
             val table = targetTable() ?: return tableIssue()
-            rowIssue(table) ?: columnIssue(table) ?: tableDateCellIssue(table)
+            rowIssue(table) ?: columnIssue(table) ?: run {
+                val column = targetColumn(table) ?: return columnIssue(table)
+                if (column.type in setOf(PageTableColumnType.Relation, PageTableColumnType.FilesMedia)) {
+                    invalidAction(
+                        field = "columnName",
+                        code = "typed_action_required",
+                        message = "${column.type.name} cells require their dedicated typed action.",
+                    )
+                } else {
+                    tableDateCellIssue(table)
+                }
+            }
+        }
+
+        "SET_RELATION_CELL", "CLEAR_RELATION_CELL" -> {
+            val table = targetTable() ?: return tableIssue()
+            rowIssue(table) ?: columnIssue(table) ?: relationCellIssue(table)
+        }
+
+        "ADD_MEDIA_CELL", "REMOVE_MEDIA_CELL", "CLEAR_MEDIA_CELL" -> {
+            val table = targetTable() ?: return tableIssue()
+            rowIssue(table) ?: columnIssue(table) ?: mediaCellIssue(table)
         }
 
         "CLEAR_TABLE_CELLS" -> {
@@ -2199,6 +3234,14 @@ private fun PageBlockDocument.validateActionTarget(
 
         "DELETE_TABLE_ROWS", "UPDATE_TABLE_ROWS" -> {
             val table = targetTable() ?: return tableIssue()
+            if (action.rowIds.isEmpty()) {
+                missingColumnIssue(
+                    table = table,
+                    field = "columnName",
+                    columnId = action.columnId,
+                    columnName = action.columnName.ifBlank { action.propertyName },
+                )?.let { issue -> return issue }
+            }
             val rows = table.table.resolveBulkRows(action)
             if (rows.isEmpty()) {
                 targetNotFound(
@@ -2207,14 +3250,10 @@ private fun PageBlockDocument.validateActionTarget(
                     targetLabel = action.filterQuery.ifBlank { action.rowIds.joinToString() },
                 )
             } else if (action.type.normalizedActionType() == "UPDATE_TABLE_ROWS") {
-                action.cellValues.entries.firstNotNullOfOrNull { (columnReference, value) ->
-                    val column = table.table.findColumn(columnReference, columnReference)
-                        ?: return@firstNotNullOfOrNull AiPageActionValidationIssue(
-                            actionIndex = actionIndex,
-                            field = "cellValues.$columnReference",
-                            code = "target_not_found",
-                            message = "Could not find column: $columnReference.",
-                        )
+                cellValuesColumnIssue(table) ?: action.cellValues.entries.firstNotNullOfOrNull {
+                        (columnReference, value) ->
+                    val column = table.table.findColumnReference(columnReference)
+                        ?: return@firstNotNullOfOrNull null
                     if (column.type == PageTableColumnType.Date) {
                         invalidDateIssue("cellValues.${column.name}", value)
                     } else {
@@ -2232,29 +3271,14 @@ private fun PageBlockDocument.validateActionTarget(
 
         "CANCEL_REMINDER", "COMPLETE_REMINDER" -> {
             val table = targetTable() ?: return tableIssue()
-            rowIssue(table) ?: if (table.table.resolveReminderDateColumn(action) == null) {
-                targetNotFound(
-                    field = "columnName",
-                    targetKind = "date column",
-                    targetLabel = action.columnName.ifBlank { action.columnId },
-                )
-            } else {
-                null
-            }
+            rowIssue(table) ?: reminderDateColumnIssue(table)
         }
 
         "RESCHEDULE_REMINDER" -> {
             val table = targetTable() ?: return tableIssue()
             rowIssue(table)
-                ?: if (table.table.resolveReminderDateColumn(action) == null) {
-                    targetNotFound(
-                        field = "columnName",
-                        targetKind = "date column",
-                        targetLabel = action.columnName.ifBlank { action.columnId },
-                    )
-                } else {
-                    missingReminderDateIssue()
-                }
+                ?: reminderDateColumnIssue(table)
+                ?: missingReminderDateIssue()
         }
 
         else -> null
@@ -2549,22 +3573,7 @@ private fun ChatAction.withResolvedRelationTarget(document: PageBlockDocument): 
 }
 
 private fun PageBlockDocument.findTableBlockId(tableTitle: String): String? {
-    fun walk(blocks: List<PageBlock>): String? {
-        blocks.forEach { block ->
-            if (block.type == PageBlockType.DatabaseTable) {
-                val title = block.table.title
-                if (title.equals(tableTitle, ignoreCase = true) ||
-                    title.contains(tableTitle, ignoreCase = true) ||
-                    tableTitle.contains(title, ignoreCase = true)
-                ) {
-                    return block.id
-                }
-            }
-            walk(block.children)?.let { return it }
-        }
-        return null
-    }
-    return walk(blocks)
+    return (blocks.resolveTableByTitle(tableTitle) as? AiTableResolution.Found)?.table?.id
 }
 
 private fun PageBlockDocument.findTableBlock(tableBlockId: String): PageBlock? {
@@ -2584,10 +3593,10 @@ private fun PageBlockDocument.findTableBlock(tableBlockId: String): PageBlock? {
     return walk(blocks)
 }
 
-private fun List<PageBlock>.findMatchingTable(action: ChatAction): PageBlock? {
+private fun List<PageBlock>.resolveMatchingTable(action: ChatAction): AiTableResolution {
     val tableBlocks = collectAiTableBlocks()
     if (action.blockId.isNotBlank()) {
-        tableBlocks.firstOrNull { block -> block.id == action.blockId }?.let { return it }
+        return tableBlocks.resolveUniqueTable { block -> block.id == action.blockId }
     }
     val actionType = action.normalizedExecutionType()
     val tableName = if (actionType in cellTargetActionTypes) {
@@ -2596,15 +3605,18 @@ private fun List<PageBlock>.findMatchingTable(action: ChatAction): PageBlock? {
         action.tableTitle.ifBlank { action.title }
     }
     if (tableName.isNotBlank()) {
-        tableBlocks.firstOrNull { block ->
+        tableBlocks.resolveUniqueTable { block ->
             block.table.title.equals(tableName, ignoreCase = true)
-        }?.let { return it }
-        tableBlocks.firstOrNull { block ->
-            block.table.title.contains(tableName, ignoreCase = true)
-        }?.let { return it }
+        }.unlessMissing()?.let { return it }
+        return tableBlocks.resolveUniqueTable { block ->
+            block.table.title.contains(tableName, ignoreCase = true) ||
+                tableName.contains(block.table.title, ignoreCase = true)
+        }
     }
     if (actionType == "ADD_TABLE_ROW" && tableName.isBlank()) {
-        tableBlocks.firstOrNull { block -> block.isTransactionLedgerTable() }?.let { return it }
+        tableBlocks.resolveUniqueTable { block -> block.isTransactionLedgerTable() }
+            .unlessMissing()
+            ?.let { return it }
     }
     val databaseTables = tableBlocks.filter { block -> block.type == PageBlockType.DatabaseTable }
     if (actionType in cellTargetActionTypes && tableName.isBlank()) {
@@ -2642,18 +3654,39 @@ private fun List<PageBlock>.findMatchingTable(action: ChatAction): PageBlock? {
                 }
             }
         }
-        matchingTables.singleOrNull()?.let { return it }
-        if (databaseTables.size > 1) return null
+        matchingTables.toTableResolution().unlessMissing()?.let { return it }
+        if (databaseTables.size > 1) return AiTableResolution.Ambiguous
     }
-    return databaseTables.singleOrNull()
-        ?: databaseTables.firstOrNull()
-        ?: tableBlocks.singleOrNull()
-        ?: tableBlocks.firstOrNull()
+    return when {
+        databaseTables.isNotEmpty() -> databaseTables.toTableResolution()
+        else -> tableBlocks.toTableResolution()
+    }
 }
+
+private fun List<PageBlock>.resolveTableByTitle(tableTitle: String): AiTableResolution {
+    val databaseTables = collectAiTableBlocks()
+        .filter { block -> block.type == PageBlockType.DatabaseTable }
+    val exact = databaseTables.resolveUniqueTable { block ->
+        block.table.title.equals(tableTitle, ignoreCase = true)
+    }
+    if (exact != AiTableResolution.Missing) return exact
+    return databaseTables.resolveUniqueTable { block ->
+        block.table.title.contains(tableTitle, ignoreCase = true) ||
+            tableTitle.contains(block.table.title, ignoreCase = true)
+    }
+}
+
+private fun List<PageBlock>.findMatchingTable(action: ChatAction): PageBlock? =
+    (resolveMatchingTable(action) as? AiTableResolution.Found)?.table
 
 private val cellTargetActionTypes = setOf(
     "UPDATE_TABLE_CELL",
     "CLEAR_TABLE_CELL",
+    "SET_RELATION_CELL",
+    "CLEAR_RELATION_CELL",
+    "ADD_MEDIA_CELL",
+    "REMOVE_MEDIA_CELL",
+    "CLEAR_MEDIA_CELL",
     "CLEAR_TABLE_CELLS",
     "DELETE_TABLE_ROWS",
     "UPDATE_TABLE_ROWS",
@@ -2662,22 +3695,32 @@ private val cellTargetActionTypes = setOf(
     "COMPLETE_REMINDER",
 )
 
-private fun List<PageBlock>.anyMatchingBlock(action: ChatAction): Boolean {
-    return any { block ->
-        block.matchesBlockAction(action) || block.children.anyMatchingBlock(action)
+private fun List<PageBlock>.resolveMatchingBlock(action: ChatAction): AiBlockResolution {
+    val matches = buildList {
+        collectMatchingBlocks(action, this)
+    }
+    return when (matches.size) {
+        0 -> AiBlockResolution.Missing
+        1 -> AiBlockResolution.Found(matches.single())
+        else -> AiBlockResolution.Ambiguous
     }
 }
 
-private fun List<PageBlock>.findMatchingBlock(action: ChatAction): PageBlock? {
-    for (block in this) {
-        if (block.matchesBlockAction(action)) return block
-        block.children.findMatchingBlock(action)?.let { return it }
+private fun List<PageBlock>.collectMatchingBlocks(
+    action: ChatAction,
+    destination: MutableList<PageBlock>,
+) {
+    forEach { block ->
+        if (block.matchesBlockAction(action)) destination += block
+        block.children.collectMatchingBlocks(action, destination)
     }
-    return null
 }
+
+private fun List<PageBlock>.findMatchingBlock(action: ChatAction): PageBlock? =
+    (resolveMatchingBlock(action) as? AiBlockResolution.Found)?.block
 
 private fun PageBlock.matchesBlockAction(action: ChatAction): Boolean {
-    if (action.blockId.isNotBlank() && id == action.blockId) return true
+    if (action.blockId.isNotBlank()) return id == action.blockId
     val requestedType = action.blockType.toPageBlockTypeOrNull()
     if (requestedType != null && type != requestedType) return false
     if (type == PageBlockType.DatabaseTable) {
@@ -2751,13 +3794,15 @@ private fun PageBlock.resolveRollupTargetColumnId(
         .orEmpty()
 }
 
-private fun ChatAction.resolvedTableCellUpdateValue(columnName: String): String {
+private fun ChatAction.resolvedTableCellUpdateValue(column: PageTableColumn): String {
     if (value.isNotBlank()) return value
     if (content.isNotBlank()) return content
 
-    val normalizedColumnName = columnName.normalizedAiKey()
     return cellValues.entries
-        .firstOrNull { entry -> entry.key.normalizedAiKey() == normalizedColumnName }
+        .firstOrNull { entry ->
+            entry.key == column.id ||
+                entry.key.normalizedAiKey() == column.name.normalizedAiKey()
+        }
         ?.value
         ?: cellValues.values.singleOrNull()
         .orEmpty()
@@ -2768,15 +3813,26 @@ private fun PageTable.newRowFromAction(action: ChatAction): PageTableRow {
     val values = action.cellValues.toMutableMap()
     val firstColumn = columns.firstOrNull()
     if (title.isNotBlank() && firstColumn != null) {
-        val hasFirstColumnValue = values.keys.any { key -> key.normalizedAiKey() == firstColumn.name.normalizedAiKey() }
+        val hasFirstColumnValue = values.keys.any { reference ->
+            findColumnReference(reference)?.id == firstColumn.id
+        }
         if (!hasFirstColumnValue) values[firstColumn.name] = title
     }
     return columns.newRow(values)
 }
 
 private fun List<PageTableColumn>.newRow(valuesByColumnName: Map<String, String>): PageTableRow {
-    val valuesByNormalizedName = valuesByColumnName.entries.associate { entry -> entry.key.normalizedAiKey() to entry.value }
-    val cellsByColumnId = associate { column -> column.id to valuesByNormalizedName[column.name.normalizedAiKey()].orEmpty() }
+    val tableShape = PageTable(columns = this)
+    val requestedValuesByColumnId = buildMap {
+        valuesByColumnName.forEach { (columnReference, value) ->
+            tableShape.findColumnReference(columnReference)?.let { column ->
+                put(column.id, value)
+            }
+        }
+    }
+    val cellsByColumnId = associate { column ->
+        column.id to requestedValuesByColumnId[column.id].orEmpty()
+    }
     return PageBlockCodec.newTableRow(this).copy(
         cells = cellsByColumnId,
         cellValues = associate { column ->
@@ -2787,15 +3843,52 @@ private fun List<PageTableColumn>.newRow(valuesByColumnName: Map<String, String>
 }
 
 private fun PageTable.findColumn(columnId: String = "", columnName: String): PageTableColumn? {
-    if (columnId.isNotBlank()) columns.firstOrNull { column -> column.id == columnId }?.let { return it }
-    if (columnName.isBlank()) return null
-    val normalized = columnName.normalizedAiKey()
-    return columns.firstOrNull { column -> column.name.normalizedAiKey() == normalized }
-        ?: columns.firstOrNull { column ->
-            val current = column.name.normalizedAiKey()
-            current.contains(normalized) || normalized.contains(current)
-        }
+    return (resolveColumn(columnId, columnName) as? AiColumnResolution.Found)?.column
 }
+
+private fun PageTable.resolveColumn(
+    columnId: String = "",
+    columnName: String,
+): AiColumnResolution {
+    val requestedId = columnId.trim()
+    if (requestedId.isNotBlank()) {
+        return columns
+            .filter { column -> column.id == requestedId }
+            .toColumnResolution()
+    }
+
+    val normalizedName = columnName.normalizedAiKey()
+    if (normalizedName.isBlank()) return AiColumnResolution.Missing
+
+    val exact = columns
+        .filter { column -> column.name.normalizedAiKey() == normalizedName }
+        .toColumnResolution()
+    if (exact != AiColumnResolution.Missing) return exact
+
+    return columns
+        .filter { column ->
+            val currentName = column.name.normalizedAiKey()
+            currentName.isNotBlank() &&
+                (currentName.contains(normalizedName) || normalizedName.contains(currentName))
+        }
+        .toColumnResolution()
+}
+
+private fun PageTable.resolveColumnReference(reference: String): AiColumnResolution {
+    val normalizedReference = reference.trim()
+    if (normalizedReference.isBlank()) return AiColumnResolution.Missing
+    val idResolution = columns
+        .filter { column -> column.id == normalizedReference }
+        .toColumnResolution()
+    return if (idResolution == AiColumnResolution.Missing) {
+        resolveColumn(columnName = normalizedReference)
+    } else {
+        idResolution
+    }
+}
+
+private fun PageTable.findColumnReference(reference: String): PageTableColumn? =
+    (resolveColumnReference(reference) as? AiColumnResolution.Found)?.column
 
 private fun PageTable.findRow(rowId: String = "", rowTitle: String): PageTableRow? {
     return (resolveRow(rowId = rowId, rowTitle = rowTitle) as? AiRowResolution.Found)?.row
@@ -2823,7 +3916,9 @@ private fun PageTable.resolveReminderDateColumn(action: ChatAction): PageTableCo
     }
     val dateColumns = columns.filter { column -> column.type == PageTableColumnType.Date }
     return dateColumns.singleOrNull()
-        ?: dateColumns.firstOrNull { column -> column.name.equals("Date", ignoreCase = true) }
+        ?: dateColumns
+            .filter { column -> column.name.equals("Date", ignoreCase = true) }
+            .singleOrNull()
 }
 
 private fun PageTableRow.primaryTitle(table: PageTable): String {
@@ -2990,6 +4085,43 @@ private fun String.matchesAiCellQuery(query: String): Boolean {
         currentMonth.matches(targetMonth)
 }
 
+private sealed interface AiTableResolution {
+    data class Found(val table: PageBlock) : AiTableResolution
+    data object Missing : AiTableResolution
+    data object Ambiguous : AiTableResolution
+}
+
+private fun AiTableResolution.unlessMissing(): AiTableResolution? =
+    takeUnless { resolution -> resolution == AiTableResolution.Missing }
+
+private inline fun List<PageBlock>.resolveUniqueTable(
+    predicate: (PageBlock) -> Boolean,
+): AiTableResolution = filter(predicate).toTableResolution()
+
+private fun List<PageBlock>.toTableResolution(): AiTableResolution = when (size) {
+    0 -> AiTableResolution.Missing
+    1 -> AiTableResolution.Found(single())
+    else -> AiTableResolution.Ambiguous
+}
+
+private sealed interface AiBlockResolution {
+    data class Found(val block: PageBlock) : AiBlockResolution
+    data object Missing : AiBlockResolution
+    data object Ambiguous : AiBlockResolution
+}
+
+private sealed interface AiColumnResolution {
+    data class Found(val column: PageTableColumn) : AiColumnResolution
+    data object Missing : AiColumnResolution
+    data object Ambiguous : AiColumnResolution
+}
+
+private fun List<PageTableColumn>.toColumnResolution(): AiColumnResolution = when (size) {
+    0 -> AiColumnResolution.Missing
+    1 -> AiColumnResolution.Found(single())
+    else -> AiColumnResolution.Ambiguous
+}
+
 private sealed interface AiRowResolution {
     data class Found(val row: PageTableRow) : AiRowResolution
     data object Missing : AiRowResolution
@@ -3011,113 +4143,40 @@ private inline fun List<PageTableRow>.resolveUniqueRow(
     return match?.let { row -> AiRowResolution.Found(row) } ?: AiRowResolution.Missing
 }
 
-private data class AiMonthReference(
-    val year: Int?,
-    val month: Int,
-) {
-    fun matches(other: AiMonthReference): Boolean {
-        return month == other.month &&
-            (year == null || other.year == null || year == other.year)
-    }
-}
-
-private fun String.toAiMonthReferenceOrNull(): AiMonthReference? {
-    val value = trim().lowercase(Locale.ROOT)
-    if (value.isBlank()) return null
-
-    AiYearMonthRegex.find(value)?.let { match ->
-        val month = match.groupValues[2].toIntOrNull() ?: return@let
-        return AiMonthReference(
-            year = match.groupValues[1].toIntOrNull(),
-            month = month,
-        )
-    }
-    AiNamedMonthNumberRegex.find(value)?.let { match ->
-        val month = match.groupValues[1].toIntOrNull() ?: return@let
-        return AiMonthReference(
-            year = match.groupValues[2].toIntOrNull(),
-            month = month,
-        )
-    }
-
-    val normalizedWords = value
-        .replace(Regex("[^a-z0-9]+"), " ")
-        .trim()
-        .split(Regex("\\s+"))
-    val month = normalizedWords
-        .firstNotNullOfOrNull { word -> AiMonthNames[word] }
-        ?: return null
-    val year = normalizedWords
-        .firstNotNullOfOrNull { word ->
-            word.toIntOrNull()?.takeIf { number -> number in 1900..2999 }
-        }
-    return AiMonthReference(year = year, month = month)
-}
-
-private val AiYearMonthRegex by lazy {
-    Regex("""(?<!\d)(\d{4})[-/.](0?[1-9]|1[0-2])(?:[-/.]\d{1,2})?(?!\d)""")
-}
-
-private val AiNamedMonthNumberRegex by lazy {
-    Regex(
-        """\b(?:bulan|month|bln)\s*(?:ke[-\s]*)?(0?[1-9]|1[0-2])(?:\s*(?:tahun|year)?\s*(\d{4}))?\b""",
-        RegexOption.IGNORE_CASE,
-    )
-}
-
-private val AiMonthNames = mapOf(
-    "january" to 1,
-    "januari" to 1,
-    "jan" to 1,
-    "february" to 2,
-    "februari" to 2,
-    "feb" to 2,
-    "march" to 3,
-    "maret" to 3,
-    "mac" to 3,
-    "mar" to 3,
-    "april" to 4,
-    "apr" to 4,
-    "may" to 5,
-    "mei" to 5,
-    "june" to 6,
-    "juni" to 6,
-    "jun" to 6,
-    "july" to 7,
-    "juli" to 7,
-    "julai" to 7,
-    "jul" to 7,
-    "august" to 8,
-    "agustus" to 8,
-    "ogos" to 8,
-    "agu" to 8,
-    "aug" to 8,
-    "september" to 9,
-    "sep" to 9,
-    "october" to 10,
-    "oktober" to 10,
-    "okt" to 10,
-    "oct" to 10,
-    "november" to 11,
-    "nov" to 11,
-    "december" to 12,
-    "disember" to 12,
-    "desember" to 12,
-    "dis" to 12,
-    "dec" to 12,
-)
-
 private fun PageTableColumn.withActionConfig(
     action: ChatAction,
     relationColumn: PageTableColumn? = null,
     resolvedRollupTargetColumnId: String = "",
 ): PageTableColumn {
-    val optionConfig = action.options.toAiTableSelectOptions()
+    val configuredOptions = action.options
+        .toPreservedAiTableSelectOptions(config.options)
         .takeIf { options -> options.isNotEmpty() }
-        ?.let { options -> config.copy(options = options).normalizedForType(type) }
-        ?: config.normalizedForType(type)
+        ?: config.options
+    val configuredDefaultValue = when {
+        action.clearDefaultValue == true -> ""
+        action.defaultValue.isNotBlank() -> action.defaultValue
+        else -> config.defaultValue
+    }
+    val configuredDescription = when {
+        action.clearDescription == true -> ""
+        action.description.isNotBlank() -> action.description
+        else -> config.description
+    }
+    val configuredColumn = config.copy(
+        options = configuredOptions,
+        isHidden = action.isHidden ?: config.isHidden,
+        isRequired = action.isRequired ?: config.isRequired,
+        wrapContent = action.wrapContent ?: config.wrapContent,
+        widthDp = action.widthDp ?: config.widthDp,
+        defaultValue = configuredDefaultValue,
+        description = configuredDescription,
+    ).normalizedForType(type)
     return copy(
-        config = optionConfig,
+        config = configuredColumn,
+        dateFormat = action.dateFormat.toPageTableDateFormatOrNull() ?: dateFormat,
+        timeFormat = action.timeFormat.toPageTableTimeFormatOrNull() ?: timeFormat,
+        dateReminder = action.dateReminder.toPageTableDateReminderOrNull() ?: dateReminder,
+        timezoneLabel = action.timezoneLabel.ifBlank { timezoneLabel },
         formula = action.effectiveFormula().ifBlank { formula },
         relationTargetTableId = action.relationTargetTableId.ifBlank { relationTargetTableId },
         rollupRelationColumnId = relationColumn?.id ?: action.rollupRelationColumnId.ifBlank { rollupRelationColumnId },
@@ -3129,6 +4188,30 @@ private fun PageTableColumn.withActionConfig(
             ?.toPageTableRollupAggregation()
             ?: rollupAggregation,
     )
+}
+
+private fun List<String>.toPreservedAiTableSelectOptions(
+    existing: List<PageTableSelectOption>,
+): List<PageTableSelectOption> {
+    val generated = toAiTableSelectOptions()
+    return generated.map { option ->
+        existing.firstOrNull { current -> current.name.equals(option.name, ignoreCase = true) }
+            ?.copy(name = option.name)
+            ?: option.copy(id = UUID.randomUUID().toString())
+    }
+}
+
+private fun List<PageTableSelectOption>.findAiOption(action: ChatAction): PageTableSelectOption? {
+    if (action.optionId.isNotBlank()) {
+        firstOrNull { option -> option.id == action.optionId }?.let { return it }
+    }
+    return firstOrNull { option -> option.name.equals(action.optionName, ignoreCase = true) }
+}
+
+private fun PageMediaAttachment.matchesAiMedia(action: ChatAction): Boolean {
+    return (action.mediaId.isNotBlank() && id == action.mediaId) ||
+        (action.mediaUri.isNotBlank() && uri == action.mediaUri) ||
+        (action.mediaName.isNotBlank() && name.equals(action.mediaName, ignoreCase = true))
 }
 
 private fun ChatAction.toTableViewConfig(table: PageTable): PageTableViewConfig {
@@ -3241,6 +4324,73 @@ private fun String.toPageTableSortDirection(): PageTableSortDirection {
     }
 }
 
+private fun String.toPageTableFilterOperator(): PageTableFilterOperator {
+    return when (normalizedAiKey()) {
+        "equals", "equal", "is", "eq" -> PageTableFilterOperator.Equals
+        "notequals", "isnot", "neq" -> PageTableFilterOperator.NotEquals
+        "notcontains", "doesnotcontain", "excludes" -> PageTableFilterOperator.NotContains
+        "isempty", "empty", "blank" -> PageTableFilterOperator.IsEmpty
+        "isnotempty", "notempty", "notblank" -> PageTableFilterOperator.IsNotEmpty
+        "greaterthan", "greater", "morethan", "above" -> PageTableFilterOperator.GreaterThan
+        "greaterthanorequal", "greaterthanorequals", "atleast", "gte" ->
+            PageTableFilterOperator.GreaterThanOrEqual
+        "lessthan", "less", "below" -> PageTableFilterOperator.LessThan
+        "lessthanorequal", "lessthanorequals", "atmost", "lte" ->
+            PageTableFilterOperator.LessThanOrEqual
+        "before" -> PageTableFilterOperator.Before
+        "after" -> PageTableFilterOperator.After
+        "onorbefore", "beforeorequal" -> PageTableFilterOperator.OnOrBefore
+        "onorafter", "afterorequal" -> PageTableFilterOperator.OnOrAfter
+        else -> PageTableFilterOperator.Contains
+    }
+}
+
+private fun String.toPageTableDateFormatOrNull(): PageTableDateFormat? {
+    if (isBlank()) return null
+    return when (normalizedAiKey()) {
+        "daymonthyear", "ddmmyyyy" -> PageTableDateFormat.DayMonthYear
+        "monthdayyear", "mmddyyyy" -> PageTableDateFormat.MonthDayYear
+        "yearmonthday", "yyyymmdd", "iso" -> PageTableDateFormat.YearMonthDay
+        else -> null
+    }
+}
+
+private fun String.toPageTableTimeFormatOrNull(): PageTableTimeFormat? {
+    if (isBlank()) return null
+    return when (normalizedAiKey()) {
+        "hidden", "none", "off" -> PageTableTimeFormat.Hidden
+        "twelvehour", "12hour" -> PageTableTimeFormat.TwelveHour
+        "twentyfourhour", "24hour" -> PageTableTimeFormat.TwentyFourHour
+        else -> null
+    }
+}
+
+private fun String.toPageTableDateReminderOrNull(): PageTableDateReminder? {
+    if (isBlank()) return null
+    return when (normalizedAiKey()) {
+        "none", "off" -> PageTableDateReminder.None
+        "attimeofevent", "attime", "eventtime" -> PageTableDateReminder.AtTimeOfEvent
+        "fiveminutesbefore", "5minutesbefore", "5minbefore" -> PageTableDateReminder.FiveMinutesBefore
+        "tenminutesbefore", "10minutesbefore", "10minbefore" -> PageTableDateReminder.TenMinutesBefore
+        "fifteenminutesbefore", "15minutesbefore", "15minbefore" -> PageTableDateReminder.FifteenMinutesBefore
+        "thirtyminutesbefore", "30minutesbefore", "30minbefore" -> PageTableDateReminder.ThirtyMinutesBefore
+        "onehourbefore", "1hourbefore" -> PageTableDateReminder.OneHourBefore
+        "twohoursbefore", "2hoursbefore" -> PageTableDateReminder.TwoHoursBefore
+        "ondayofevent", "sameday", "eventday" -> PageTableDateReminder.OnDayOfEvent
+        "onedaybefore", "1daybefore" -> PageTableDateReminder.OneDayBefore
+        "twodaysbefore", "2daysbefore" -> PageTableDateReminder.TwoDaysBefore
+        "oneweekbefore", "1weekbefore" -> PageTableDateReminder.OneWeekBefore
+        else -> null
+    }
+}
+
+private fun String.toPageTableOptionColorOrNull(): PageTableOptionColor? {
+    if (isBlank()) return null
+    return PageTableOptionColor.entries.firstOrNull { color ->
+        color.name.equals(trim(), ignoreCase = true)
+    }
+}
+
 private fun String.toPageTableRollupAggregation(): PageTableRollupAggregation {
     return when (normalizedAiKey()) {
         "sum", "total" -> PageTableRollupAggregation.Sum
@@ -3284,6 +4434,20 @@ private fun String.normalizedActionType(): String = trim().uppercase()
 
 private fun String.normalizedAiKey(): String {
     return trim().lowercase().replace(Regex("[^a-z0-9]"), "")
+}
+
+private fun List<Page>.withRootSnapshot(root: Page): List<Page> {
+    if (isEmpty()) return listOf(root)
+    var replaced = false
+    val snapshots = map { page ->
+        if (page.id == root.id) {
+            replaced = true
+            root
+        } else {
+            page
+        }
+    }
+    return if (replaced) snapshots else listOf(root) + snapshots
 }
 
 private fun Page.toChatPageLink(): AiChatPageLink {

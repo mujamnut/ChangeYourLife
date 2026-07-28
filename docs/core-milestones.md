@@ -507,6 +507,11 @@ Tasks:
   - edit/action: context untuk target resolution.
 - Done: search result hanya dihantar sebagai private system context; action tetap datang dari backend AI result dan executor Android masih validate target.
 - Done: chat answer yang guna search context dapat page/row/table links supaya user boleh navigate ke match.
+- Done: action context tidak lagi senyap potong page ke-25, row ke-12/20, row-page block, atau block ke-140.
+- Done: Android hantar table column/row/cell sebagai data berstruktur bersama jumlah sebenar, focus page, dan coverage.
+- Done: backend bina manifest semua page/table, utamakan detail page semasa/mention/query match, dan guna budget context 128k aksara.
+- Done: jika data benar-benar melebihi budget model, prompt menerima `CYL_CONTEXT_COVERAGE=PARTIAL` bersama included/total counts; AI dilarang menganggap data yang tertinggal sebagai kosong.
+- Done: regression source cover row ke-40, page ke-35, priority page fokus, dan partial coverage yang eksplisit.
 - Done: compile Android lulus untuk AI Search Context 5F.
 - Acceptance:
   - Done: prompt seperti `berapa makan bulan 7` sekarang boleh diberi top row/table/page match sebagai private AI context.
