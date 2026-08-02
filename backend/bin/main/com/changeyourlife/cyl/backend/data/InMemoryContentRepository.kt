@@ -3,6 +3,11 @@ package com.changeyourlife.cyl.backend.data
 import com.changeyourlife.cyl.backend.domain.ContentRepository
 import com.changeyourlife.cyl.backend.domain.ContentSearchQuery
 import com.changeyourlife.cyl.backend.domain.ContentSearchResult
+import com.changeyourlife.cyl.backend.domain.AiActionPlanCommitCommand
+import com.changeyourlife.cyl.backend.domain.AiActionPlanCommitReceipt
+import com.changeyourlife.cyl.backend.domain.AiActionPlanCommitResult
+import com.changeyourlife.cyl.backend.domain.AiActionPlanPageMutation
+import com.changeyourlife.cyl.backend.domain.AiActionPlanPageOperation
 import com.changeyourlife.cyl.backend.domain.PageMutationResult
 import com.changeyourlife.cyl.backend.domain.PageRecord
 import com.changeyourlife.cyl.backend.domain.WorkspaceRecord
@@ -11,6 +16,7 @@ import java.util.concurrent.ConcurrentHashMap
 class InMemoryContentRepository : ContentRepository {
     private val workspacesByKey = ConcurrentHashMap<String, WorkspaceRecord>()
     private val pagesByKey = ConcurrentHashMap<String, PageRecord>()
+    private val aiPlanCommitsByKey = ConcurrentHashMap<String, InMemoryAiPlanCommit>()
 
     override suspend fun listWorkspaces(userId: String, includeDeleted: Boolean): List<WorkspaceRecord> {
         return workspacesByKey.values
@@ -264,6 +270,161 @@ class InMemoryContentRepository : ContentRepository {
         }
     }
 
+    override suspend fun commitAiActionPlan(
+        userId: String,
+        command: AiActionPlanCommitCommand,
+    ): AiActionPlanCommitResult = synchronized(pagesByKey) {
+        val ledgerKey = "$userId:${command.idempotencyKey}"
+        aiPlanCommitsByKey[ledgerKey]?.let { existing ->
+            return@synchronized if (existing.requestFingerprint == command.requestFingerprint) {
+                AiActionPlanCommitResult.Committed(
+                    receipt = existing.receipt,
+                    replayed = true,
+                )
+            } else {
+                AiActionPlanCommitResult.IdempotencyConflict(existing.requestFingerprint)
+            }
+        }
+
+        val duplicatePageId = command.mutations
+            .groupingBy { mutation -> mutation.pageId }
+            .eachCount()
+            .entries
+            .firstOrNull { entry -> entry.value > 1 }
+            ?.key
+        if (duplicatePageId != null) {
+            return@synchronized AiActionPlanCommitResult.Rejected(
+                code = "duplicate_page_mutation",
+                message = "Page $duplicatePageId appears more than once in the AI plan.",
+            )
+        }
+        val deletePageIds = command.mutations
+            .filter { mutation -> mutation.operation == AiActionPlanPageOperation.PERMANENT_DELETE }
+            .mapTo(mutableSetOf(), AiActionPlanPageMutation::pageId)
+        val upsertBelowDeletedPage = command.mutations.firstOrNull { mutation ->
+            mutation.operation == AiActionPlanPageOperation.UPSERT &&
+                mutation.page?.parentPageId in deletePageIds
+        }
+        if (upsertBelowDeletedPage != null) {
+            return@synchronized AiActionPlanCommitResult.Rejected(
+                code = "parent_scheduled_for_deletion",
+                message = "Page ${upsertBelowDeletedPage.pageId} cannot be saved under a page being deleted.",
+            )
+        }
+        if (workspacesByKey[workspaceKey(userId, command.workspaceId)] == null) {
+            return@synchronized AiActionPlanCommitResult.Forbidden(command.workspaceId)
+        }
+
+        val stagedPages = pagesByKey.toMutableMap()
+        for (mutation in command.mutations.sortedBy { mutation -> mutation.pageId }) {
+            val current = stagedPages[pageKey(userId, mutation.pageId)]
+            if (current == null) {
+                if (mutation.operation == AiActionPlanPageOperation.PERMANENT_DELETE) {
+                    return@synchronized AiActionPlanCommitResult.NotFound(mutation.pageId)
+                }
+                if (mutation.expectedRevision != 0L) {
+                    return@synchronized AiActionPlanCommitResult.NotFound(mutation.pageId)
+                }
+            } else if (current.revision != mutation.expectedRevision) {
+                return@synchronized AiActionPlanCommitResult.RevisionConflict(
+                    pageId = mutation.pageId,
+                    expectedRevision = mutation.expectedRevision,
+                    currentPage = current,
+                )
+            }
+
+            val requestedPage = mutation.page
+            if (mutation.operation == AiActionPlanPageOperation.UPSERT) {
+                if (
+                    requestedPage == null ||
+                    requestedPage.id != mutation.pageId ||
+                    requestedPage.workspaceId != command.workspaceId
+                ) {
+                    return@synchronized AiActionPlanCommitResult.Rejected(
+                        code = "invalid_page_snapshot",
+                        message = "The upsert mutation for ${mutation.pageId} has an invalid page snapshot.",
+                    )
+                }
+            } else if (current?.deletedAt == null) {
+                return@synchronized AiActionPlanCommitResult.Rejected(
+                    code = "page_not_in_trash",
+                    message = "Page ${mutation.pageId} must be in trash before permanent deletion.",
+                )
+            }
+        }
+
+        val upserts = command.mutations
+            .filter { mutation -> mutation.operation == AiActionPlanPageOperation.UPSERT }
+            .orderParentFirst()
+        for (mutation in upserts) {
+            val requestedPage = requireNotNull(mutation.page)
+            val parent = requestedPage.parentPageId?.let { parentId ->
+                stagedPages[pageKey(userId, parentId)]
+            }
+            if (
+                requestedPage.parentPageId != null &&
+                (parent == null || parent.workspaceId != command.workspaceId)
+            ) {
+                return@synchronized AiActionPlanCommitResult.Forbidden(requestedPage.parentPageId)
+            }
+
+            val key = pageKey(userId, mutation.pageId)
+            val current = stagedPages[key]
+            stagedPages[key] = if (current == null) {
+                requestedPage.copy(revision = 1L)
+            } else {
+                requestedPage.copy(
+                    createdAt = current.createdAt,
+                    updatedAt = maxOf(requestedPage.updatedAt, current.updatedAt + 1L),
+                    revision = current.revision + 1L,
+                )
+            }
+        }
+
+        val permanentlyDeletedPageIds = mutableListOf<String>()
+        command.mutations
+            .filter { mutation -> mutation.operation == AiActionPlanPageOperation.PERMANENT_DELETE }
+            .forEach { mutation ->
+                val pending = ArrayDeque<String>().apply { add(mutation.pageId) }
+                while (pending.isNotEmpty()) {
+                    val deletingPageId = pending.removeFirst()
+                    stagedPages.entries
+                        .asSequence()
+                        .filter { entry ->
+                            entry.key.startsWith("$userId:") &&
+                                entry.value.parentPageId == deletingPageId
+                        }
+                        .mapTo(pending) { entry -> entry.value.id }
+                    stagedPages.remove(pageKey(userId, deletingPageId))
+                    permanentlyDeletedPageIds += deletingPageId
+                }
+            }
+
+        val userPrefix = "$userId:"
+        pagesByKey.keys
+            .filter { key -> key.startsWith(userPrefix) }
+            .forEach(pagesByKey::remove)
+        stagedPages
+            .filterKeys { key -> key.startsWith(userPrefix) }
+            .forEach(pagesByKey::put)
+
+        val receipt = AiActionPlanCommitReceipt(
+            auditId = command.auditId,
+            workspaceId = command.workspaceId,
+            pages = upserts.map { mutation ->
+                requireNotNull(pagesByKey[pageKey(userId, mutation.pageId)])
+            },
+            permanentlyDeletedPageIds = permanentlyDeletedPageIds.distinct(),
+            actionCount = command.actionCount,
+            committedAt = command.committedAt,
+        )
+        aiPlanCommitsByKey[ledgerKey] = InMemoryAiPlanCommit(
+            requestFingerprint = command.requestFingerprint,
+            receipt = receipt,
+        )
+        AiActionPlanCommitResult.Committed(receipt = receipt, replayed = false)
+    }
+
     private fun mutatePageTreeDeletion(
         userId: String,
         pageId: String,
@@ -296,6 +457,32 @@ class InMemoryContentRepository : ContentRepository {
         }
         PageMutationResult.Applied(nextRoot)
     }
+}
+
+private data class InMemoryAiPlanCommit(
+    val requestFingerprint: String,
+    val receipt: AiActionPlanCommitReceipt,
+)
+
+private fun List<com.changeyourlife.cyl.backend.domain.AiActionPlanPageMutation>.orderParentFirst():
+    List<com.changeyourlife.cyl.backend.domain.AiActionPlanPageMutation> {
+    val mutationsByPageId = associateBy { mutation -> mutation.pageId }
+    val depthByPageId = mutableMapOf<String, Int>()
+
+    fun depth(pageId: String, visiting: Set<String> = emptySet()): Int {
+        depthByPageId[pageId]?.let { return it }
+        if (pageId in visiting) return 0
+        val parentId = mutationsByPageId[pageId]?.page?.parentPageId
+        val value = if (parentId == null || parentId !in mutationsByPageId) {
+            0
+        } else {
+            depth(parentId, visiting + pageId) + 1
+        }
+        depthByPageId[pageId] = value
+        return value
+    }
+
+    return sortedWith(compareBy({ mutation -> depth(mutation.pageId) }, { mutation -> mutation.pageId }))
 }
 
 private val WorkspaceRecord.key: String

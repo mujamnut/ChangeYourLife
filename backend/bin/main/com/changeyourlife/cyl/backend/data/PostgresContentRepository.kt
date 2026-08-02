@@ -1,5 +1,10 @@
 package com.changeyourlife.cyl.backend.data
 
+import com.changeyourlife.cyl.backend.domain.AiActionPlanCommitCommand
+import com.changeyourlife.cyl.backend.domain.AiActionPlanCommitReceipt
+import com.changeyourlife.cyl.backend.domain.AiActionPlanCommitResult
+import com.changeyourlife.cyl.backend.domain.AiActionPlanPageMutation
+import com.changeyourlife.cyl.backend.domain.AiActionPlanPageOperation
 import com.changeyourlife.cyl.backend.domain.ContentRepository
 import com.changeyourlife.cyl.backend.domain.ContentSearchQuery
 import com.changeyourlife.cyl.backend.domain.ContentSearchResult
@@ -13,6 +18,9 @@ import java.util.UUID
 import javax.sql.DataSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 
 class PostgresContentRepository(
     private val dataSource: DataSource,
@@ -588,6 +596,383 @@ class PostgresContentRepository(
             }
         }
     }
+
+    override suspend fun commitAiActionPlan(
+        userId: String,
+        command: AiActionPlanCommitCommand,
+    ): AiActionPlanCommitResult = withContext(Dispatchers.IO) {
+        dataSource.connection.use { connection ->
+            connection.autoCommit = false
+            try {
+                val duplicatePageId = command.mutations
+                    .groupingBy(AiActionPlanPageMutation::pageId)
+                    .eachCount()
+                    .entries
+                    .firstOrNull { entry -> entry.value > 1 }
+                    ?.key
+                if (duplicatePageId != null) {
+                    return@withContext connection.rollbackWith(
+                        AiActionPlanCommitResult.Rejected(
+                            code = "duplicate_page_mutation",
+                            message = "Page $duplicatePageId appears more than once in the AI plan.",
+                        ),
+                    )
+                }
+                val deletePageIds = command.mutations
+                    .filter { mutation ->
+                        mutation.operation == AiActionPlanPageOperation.PERMANENT_DELETE
+                    }
+                    .mapTo(mutableSetOf(), AiActionPlanPageMutation::pageId)
+                val upsertBelowDeletedPage = command.mutations.firstOrNull { mutation ->
+                    mutation.operation == AiActionPlanPageOperation.UPSERT &&
+                        mutation.page?.parentPageId in deletePageIds
+                }
+                if (upsertBelowDeletedPage != null) {
+                    return@withContext connection.rollbackWith(
+                        AiActionPlanCommitResult.Rejected(
+                            code = "parent_scheduled_for_deletion",
+                            message = "Page ${upsertBelowDeletedPage.pageId} cannot be saved under a page being deleted.",
+                        ),
+                    )
+                }
+
+                val claimed = connection.claimAiActionPlan(userId, command)
+                if (!claimed) {
+                    val existing = connection.selectAiActionPlanCommit(
+                        userId = userId,
+                        idempotencyKey = command.idempotencyKey,
+                    ) ?: return@withContext connection.rollbackWith(
+                        AiActionPlanCommitResult.Rejected(
+                            code = "idempotency_ledger_unavailable",
+                            message = "The existing AI plan ledger entry could not be loaded.",
+                        ),
+                    )
+                    if (existing.requestFingerprint != command.requestFingerprint) {
+                        return@withContext connection.rollbackWith(
+                            AiActionPlanCommitResult.IdempotencyConflict(existing.requestFingerprint),
+                        )
+                    }
+                    if (existing.state != AppliedAiActionPlanState || existing.resultJson.isBlank()) {
+                        return@withContext connection.rollbackWith(
+                            AiActionPlanCommitResult.Rejected(
+                                code = "idempotent_plan_in_progress",
+                                message = "This AI plan is already being committed.",
+                            ),
+                        )
+                    }
+                    val receipt = aiActionPlanJson.decodeFromString<AiActionPlanCommitReceipt>(
+                        existing.resultJson,
+                    )
+                    connection.commit()
+                    return@withContext AiActionPlanCommitResult.Committed(
+                        receipt = receipt,
+                        replayed = true,
+                    )
+                }
+
+                val workspaceServerId = connection.resolveWorkspaceServerId(
+                    userId = userId,
+                    workspaceId = command.workspaceId,
+                ) ?: return@withContext connection.rollbackWith(
+                    AiActionPlanCommitResult.Forbidden(command.workspaceId),
+                )
+
+                val currentPagesById = linkedMapOf<String, PageRecord?>()
+                for (mutation in command.mutations.sortedBy(AiActionPlanPageMutation::pageId)) {
+                    val current = connection.selectOwnedPage(
+                        userId = userId,
+                        pageId = mutation.pageId,
+                        includeDeleted = true,
+                        forUpdate = true,
+                    )
+                    if (current == null && connection.pageExists(mutation.pageId)) {
+                        return@withContext connection.rollbackWith(
+                            AiActionPlanCommitResult.Forbidden(mutation.pageId),
+                        )
+                    }
+                    if (current == null) {
+                        if (
+                            mutation.operation == AiActionPlanPageOperation.PERMANENT_DELETE ||
+                            mutation.expectedRevision != 0L
+                        ) {
+                            return@withContext connection.rollbackWith(
+                                AiActionPlanCommitResult.NotFound(mutation.pageId),
+                            )
+                        }
+                    } else {
+                        if (current.workspaceId != command.workspaceId) {
+                            return@withContext connection.rollbackWith(
+                                AiActionPlanCommitResult.Forbidden(mutation.pageId),
+                            )
+                        }
+                        if (current.revision != mutation.expectedRevision) {
+                            return@withContext connection.rollbackWith(
+                                AiActionPlanCommitResult.RevisionConflict(
+                                    pageId = mutation.pageId,
+                                    expectedRevision = mutation.expectedRevision,
+                                    currentPage = current,
+                                ),
+                            )
+                        }
+                    }
+
+                    val requestedPage = mutation.page
+                    if (mutation.operation == AiActionPlanPageOperation.UPSERT) {
+                        if (
+                            requestedPage == null ||
+                            requestedPage.id != mutation.pageId ||
+                            requestedPage.workspaceId != command.workspaceId
+                        ) {
+                            return@withContext connection.rollbackWith(
+                                AiActionPlanCommitResult.Rejected(
+                                    code = "invalid_page_snapshot",
+                                    message = "The upsert mutation for ${mutation.pageId} has an invalid page snapshot.",
+                                ),
+                            )
+                        }
+                    } else if (current?.deletedAt == null) {
+                        return@withContext connection.rollbackWith(
+                            AiActionPlanCommitResult.Rejected(
+                                code = "page_not_in_trash",
+                                message = "Page ${mutation.pageId} must be in trash before permanent deletion.",
+                            ),
+                        )
+                    }
+                    currentPagesById[mutation.pageId] = current
+                }
+
+                val upserts = command.mutations
+                    .filter { mutation -> mutation.operation == AiActionPlanPageOperation.UPSERT }
+                    .orderParentFirst()
+                val upsertPageIds = upserts.mapTo(mutableSetOf(), AiActionPlanPageMutation::pageId)
+                for (mutation in upserts) {
+                    val requestedPage = requireNotNull(mutation.page)
+                    val parentPageId = requestedPage.parentPageId
+                    if (
+                        parentPageId != null &&
+                        parentPageId !in upsertPageIds &&
+                        !connection.parentPageBelongsToWorkspace(
+                            userId = userId,
+                            parentPageId = parentPageId,
+                            workspaceServerId = workspaceServerId,
+                        )
+                    ) {
+                        return@withContext connection.rollbackWith(
+                            AiActionPlanCommitResult.Forbidden(parentPageId),
+                        )
+                    }
+                }
+
+                val appliedPages = mutableListOf<PageRecord>()
+                for (mutation in upserts) {
+                    val requestedPage = requireNotNull(mutation.page)
+                    val current = currentPagesById[mutation.pageId]
+                    val applied = if (current == null) {
+                        connection.insertPage(
+                            page = requestedPage,
+                            workspaceServerId = workspaceServerId,
+                        ) ?: return@withContext connection.rollbackWith(
+                            AiActionPlanCommitResult.Rejected(
+                                code = "page_create_failed",
+                                message = "Page ${mutation.pageId} could not be created.",
+                            ),
+                        )
+                    } else {
+                        connection.updatePage(
+                            page = requestedPage,
+                            workspaceServerId = workspaceServerId,
+                            expectedRevision = mutation.expectedRevision,
+                        )
+                    }
+                    projectionWriter.replace(connection, applied.toProjectionSource())
+                    appliedPages += applied
+                }
+
+                val deleteRoots = deletePageIds.filter { pageId ->
+                    currentPagesById[pageId]?.parentPageId !in deletePageIds
+                }
+                val permanentlyDeletedPageIds = mutableListOf<String>()
+                for (rootPageId in deleteRoots.sorted()) {
+                    permanentlyDeletedPageIds += connection.deleteOwnedPageTree(
+                        userId = userId,
+                        rootPageId = rootPageId,
+                    )
+                }
+
+                val receipt = AiActionPlanCommitReceipt(
+                    auditId = command.auditId,
+                    workspaceId = command.workspaceId,
+                    pages = appliedPages,
+                    permanentlyDeletedPageIds = permanentlyDeletedPageIds.distinct(),
+                    actionCount = command.actionCount,
+                    committedAt = command.committedAt,
+                )
+                connection.markAiActionPlanApplied(
+                    userId = userId,
+                    idempotencyKey = command.idempotencyKey,
+                    receipt = receipt,
+                    updatedAt = command.committedAt,
+                )
+                connection.commit()
+                AiActionPlanCommitResult.Committed(receipt = receipt, replayed = false)
+            } catch (error: Throwable) {
+                runCatching { connection.rollback() }
+                throw error
+            }
+        }
+    }
+}
+
+private data class StoredAiActionPlanCommit(
+    val requestFingerprint: String,
+    val state: String,
+    val resultJson: String,
+)
+
+private fun Connection.claimAiActionPlan(
+    userId: String,
+    command: AiActionPlanCommitCommand,
+): Boolean {
+    prepareStatement(
+        """
+        INSERT INTO ai_action_plan_commits (
+            user_id,
+            idempotency_key,
+            request_fingerprint,
+            audit_id,
+            workspace_id,
+            state,
+            action_count,
+            mutation_count,
+            result_json,
+            created_at,
+            updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?)
+        ON CONFLICT (user_id, idempotency_key) DO NOTHING
+        """.trimIndent(),
+    ).use { statement ->
+        statement.setString(1, userId)
+        statement.setString(2, command.idempotencyKey)
+        statement.setString(3, command.requestFingerprint)
+        statement.setString(4, command.auditId)
+        statement.setString(5, command.workspaceId)
+        statement.setString(6, ClaimedAiActionPlanState)
+        statement.setInt(7, command.actionCount)
+        statement.setInt(8, command.mutations.size)
+        statement.setLong(9, command.committedAt)
+        statement.setLong(10, command.committedAt)
+        return statement.executeUpdate() == 1
+    }
+}
+
+private fun Connection.selectAiActionPlanCommit(
+    userId: String,
+    idempotencyKey: String,
+): StoredAiActionPlanCommit? {
+    prepareStatement(
+        """
+        SELECT request_fingerprint, state, result_json
+        FROM ai_action_plan_commits
+        WHERE user_id = ? AND idempotency_key = ?
+        FOR UPDATE
+        """.trimIndent(),
+    ).use { statement ->
+        statement.setString(1, userId)
+        statement.setString(2, idempotencyKey)
+        statement.executeQuery().use { resultSet ->
+            return if (resultSet.next()) {
+                StoredAiActionPlanCommit(
+                    requestFingerprint = resultSet.getString("request_fingerprint"),
+                    state = resultSet.getString("state"),
+                    resultJson = resultSet.getString("result_json"),
+                )
+            } else {
+                null
+            }
+        }
+    }
+}
+
+private fun Connection.markAiActionPlanApplied(
+    userId: String,
+    idempotencyKey: String,
+    receipt: AiActionPlanCommitReceipt,
+    updatedAt: Long,
+) {
+    val updated = prepareStatement(
+        """
+        UPDATE ai_action_plan_commits
+        SET state = ?,
+            result_json = ?,
+            updated_at = ?
+        WHERE user_id = ?
+          AND idempotency_key = ?
+          AND state = ?
+        """.trimIndent(),
+    ).use { statement ->
+        statement.setString(1, AppliedAiActionPlanState)
+        statement.setString(2, aiActionPlanJson.encodeToString(receipt))
+        statement.setLong(3, updatedAt)
+        statement.setString(4, userId)
+        statement.setString(5, idempotencyKey)
+        statement.setString(6, ClaimedAiActionPlanState)
+        statement.executeUpdate()
+    }
+    check(updated == 1) { "AI action plan ledger could not be finalized." }
+}
+
+private fun Connection.deleteOwnedPageTree(
+    userId: String,
+    rootPageId: String,
+): List<String> {
+    prepareStatement(
+        """
+        WITH RECURSIVE page_tree(id) AS (
+            SELECT pages.id
+            FROM pages
+            INNER JOIN workspaces ON workspaces.id = pages.workspace_id
+            WHERE pages.id = ?
+              AND workspaces.user_id = ?
+            UNION
+            SELECT child.id
+            FROM pages child
+            INNER JOIN page_tree parent ON child.parent_page_id = parent.id
+        )
+        DELETE FROM pages
+        WHERE id IN (SELECT id FROM page_tree)
+        RETURNING id
+        """.trimIndent(),
+    ).use { statement ->
+        statement.setString(1, rootPageId)
+        statement.setString(2, userId)
+        statement.executeQuery().use { resultSet ->
+            return buildList {
+                while (resultSet.next()) add(resultSet.getString("id"))
+            }
+        }
+    }
+}
+
+private fun List<AiActionPlanPageMutation>.orderParentFirst():
+    List<AiActionPlanPageMutation> {
+    val mutationsByPageId = associateBy(AiActionPlanPageMutation::pageId)
+    val depthByPageId = mutableMapOf<String, Int>()
+
+    fun depth(pageId: String, visiting: Set<String> = emptySet()): Int {
+        depthByPageId[pageId]?.let { return it }
+        if (pageId in visiting) return 0
+        val parentId = mutationsByPageId[pageId]?.page?.parentPageId
+        val value = if (parentId == null || parentId !in mutationsByPageId) {
+            0
+        } else {
+            depth(parentId, visiting + pageId) + 1
+        }
+        depthByPageId[pageId] = value
+        return value
+    }
+
+    return sortedWith(compareBy({ mutation -> depth(mutation.pageId) }, AiActionPlanPageMutation::pageId))
 }
 
 private fun java.sql.Connection.resolveWorkspaceServerId(userId: String, workspaceId: String): String? {
@@ -1076,3 +1461,11 @@ private fun ResultSet.getNullableLong(columnLabel: String): Long? {
     val value = getLong(columnLabel)
     return if (wasNull()) null else value
 }
+
+private val aiActionPlanJson = Json {
+    encodeDefaults = true
+    ignoreUnknownKeys = true
+}
+
+private const val ClaimedAiActionPlanState = "CLAIMED"
+private const val AppliedAiActionPlanState = "APPLIED"

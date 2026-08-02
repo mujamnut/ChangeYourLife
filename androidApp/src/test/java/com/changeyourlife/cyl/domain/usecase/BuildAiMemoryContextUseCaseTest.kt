@@ -80,6 +80,44 @@ class BuildAiMemoryContextUseCaseTest {
         assertFalse(memory.isNotBlank)
     }
 
+    @Test
+    fun pageScopedMemoryExcludesMessagesLinkedToOtherPages() {
+        val sessions = listOf(
+            chatSession(id = "current", title = "Current", updatedAt = 3_000L),
+            chatSession(id = "budget", title = "Budget", updatedAt = 2_000L),
+            chatSession(id = "private", title = "Private", updatedAt = 1_000L),
+        )
+        val messages = listOf(
+            chatMessage(
+                id = "budget-ai",
+                sessionId = "budget",
+                role = "assistant",
+                content = "Target budget amount is 1488.",
+                pageLinks = listOf(ChatPageLink(pageId = "page-budget", title = "Budget")),
+            ),
+            chatMessage(
+                id = "private-ai",
+                sessionId = "private",
+                role = "assistant",
+                content = "Unrelated private salary is 9999.",
+                pageLinks = listOf(ChatPageLink(pageId = "page-private", title = "Private")),
+            ),
+        )
+
+        val memory = useCase(
+            currentSessionId = "current",
+            prompt = "berapa amount budget",
+            sessions = sessions,
+            messages = messages,
+            pageScopeIds = setOf("page-budget"),
+            restrictToPageScope = true,
+        )
+
+        assertTrue(memory.content.contains("1488"))
+        assertFalse(memory.content.contains("9999"))
+        assertFalse(memory.content.contains("Private"))
+    }
+
     private fun chatSession(
         id: String,
         title: String,

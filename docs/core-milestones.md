@@ -142,6 +142,9 @@ Goal: AI faham arahan Malay/English dan execute action secara konsisten.
 - Android AI executor sekarang validate formula reference `{Column}` supaya formula tidak rujuk column yang tidak wujud.
 - Android AI executor sekarang validate Date cell untuk `UPDATE_TABLE_CELL` dan `ADD_TABLE_ROW`, serta reject `CREATE_REMINDER` tanpa tarikh/masa.
 - Android AI executor regression test sekarang cover row page nested block missing target supaya delete/update dalam row tidak mutate bila block tidak wujud.
+- Pelan mutation AI sekarang dihantar ke satu endpoint server `POST /api/v1/ai/action-plans/commit`; backend mengunci semua revision sasaran dan commit semua page snapshot/delete dalam satu transaksi.
+- Flyway `V15__ai_action_plan_commits.sql` menyimpan ledger idempotency kekal; retry dengan key dan action identity sama replay receipt asal tanpa menaikkan revision atau mengulang mutation.
+- Android menangguhkan granular/background sync sepanjang pelan AI, memulihkan snapshot local penuh jika mana-mana action atau server commit gagal, kemudian menerima receipt server sebagai state autoritatif.
 - AI action schema dan Android executor sekarang support media attachment payload (`mediaUri`, `mediaName`, `mediaMimeType`, `mediaSizeBytes`) untuk `MediaFile` block.
 - Android AI executor regression test cover create media block dengan attachment payload dan reject `MediaFile` block tanpa `mediaUri`.
 - Backend schema validation sekarang reject `UPDATE_FORMULA_COLUMN` tanpa `formula`, `value`, atau `content`.
@@ -512,6 +515,12 @@ Tasks:
 - Done: backend bina manifest semua page/table, utamakan detail page semasa/mention/query match, dan guna budget context 128k aksara.
 - Done: jika data benar-benar melebihi budget model, prompt menerima `CYL_CONTEXT_COVERAGE=PARTIAL` bersama included/total counts; AI dilarang menganggap data yang tertinggal sebagai kosong.
 - Done: regression source cover row ke-40, page ke-35, priority page fokus, dan partial coverage yang eksplisit.
+- Done: AI retrieval sekarang ada explicit workspace/target scope: current dan `@mention` ialah `Target`, local-search match ialah `Retrieved`, page lain hanya `Metadata`.
+- Done: Android hanya decode/hantar kandungan penuh untuk `Target`/`Retrieved`; katalog metadata dihadkan kepada 250 page dan task hanya dihantar untuk task/reminder intent.
+- Done: page-scoped search dan memory ditapis kepada target yang dibenarkan; Home search tanpa target dihadkan kepada empat retrieved page supaya snippet tidak melepasi boundary.
+- Done: backend semak workspace daripada JWT, menolak target silang workspace/deleted, membuang block/count metadata dan task luar workspace untuk direct serta async AI route.
+- Done: planner context dan post-model action gate melarang AI membaca atau memutasi page `Metadata`; user perlu buka atau mention page itu sebelum action diteruskan.
+- Done: regression source cover scope selection, catalog cap, page memory isolation, metadata stripping, task workspace, cross-workspace rejection dan action targeting.
 - Done: compile Android lulus untuk AI Search Context 5F.
 - Acceptance:
   - Done: prompt seperti `berapa makan bulan 7` sekarang boleh diberi top row/table/page match sebagai private AI context.

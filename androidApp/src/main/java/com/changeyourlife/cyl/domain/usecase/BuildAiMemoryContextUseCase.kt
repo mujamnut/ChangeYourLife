@@ -10,15 +10,30 @@ class BuildAiMemoryContextUseCase @Inject constructor() {
         prompt: String,
         sessions: List<ChatSession>,
         messages: List<ChatMessage>,
+        pageScopeIds: Set<String> = emptySet(),
+        restrictToPageScope: Boolean = false,
     ): AiMemoryContext {
+        val eligibleMessages = if (restrictToPageScope) {
+            if (pageScopeIds.isEmpty()) {
+                emptyList()
+            } else {
+                messages.filter { message ->
+                    message.pageLinks.any { link -> link.pageId in pageScopeIds }
+                }
+            }
+        } else {
+            messages
+        }
+        val eligibleSessionIds = eligibleMessages.map(ChatMessage::sessionId).toSet()
         val priorSessions = sessions
             .filterNot { session -> session.id == currentSessionId }
+            .filter { session -> !restrictToPageScope || session.id in eligibleSessionIds }
             .sortedByDescending { session -> session.updatedAt }
-        val messagesBySession = messages
+        val messagesBySession = eligibleMessages
             .filterNot { message -> message.sessionId == currentSessionId }
             .filter { message -> message.content.isNotBlank() }
             .groupBy { message -> message.sessionId }
-        val preferenceLines = messages
+        val preferenceLines = eligibleMessages
             .filterNot { message -> message.sessionId == currentSessionId }
             .filter { message -> message.role.equals("user", ignoreCase = true) }
             .sortedByDescending { message -> message.createdAt }
@@ -66,6 +81,7 @@ class BuildAiMemoryContextUseCase @Inject constructor() {
             content = """
                 CYL_MEMORY_CONTEXT:
                 Use this as private background memory only when it helps answer or edit correctly.
+                This memory has already been restricted to the active workspace and retrieval target.
                 Do not quote this section, mention memory internals, or expose hidden IDs.
                 Prefer current user instructions over memory if they conflict.
 

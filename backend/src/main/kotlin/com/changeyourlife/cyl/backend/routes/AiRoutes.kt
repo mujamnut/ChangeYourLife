@@ -8,7 +8,10 @@ import com.changeyourlife.cyl.backend.model.ai.AiChatActionsJobAcceptedResponse
 import com.changeyourlife.cyl.backend.model.ai.AiChatActionsJobStatusResponse
 import com.changeyourlife.cyl.backend.domain.AiChatActionsJob
 import com.changeyourlife.cyl.backend.domain.AiIdempotencyConflictException
+import com.changeyourlife.cyl.backend.domain.ContentRepository
 import com.changeyourlife.cyl.backend.service.AiJobService
+import com.changeyourlife.cyl.backend.service.AiRetrievalBoundaryResult
+import com.changeyourlife.cyl.backend.service.AiRetrievalPrivacyBoundary
 import com.changeyourlife.cyl.backend.service.AiService
 import com.changeyourlife.cyl.backend.service.toContractWire
 import io.ktor.http.HttpStatusCode
@@ -33,7 +36,9 @@ import java.security.MessageDigest
 fun Route.aiRoutes(
     aiService: AiService,
     aiJobService: AiJobService,
+    contentRepository: ContentRepository,
 ) {
+    val retrievalPrivacyBoundary = AiRetrievalPrivacyBoundary(contentRepository)
     route("/ai") {
         get("/status") {
             call.respond(
@@ -64,7 +69,13 @@ fun Route.aiRoutes(
             }
 
             post("/chat-actions") {
-                val request = call.receive<ChatWithActionsRequest>()
+                val userId = call.requireUserId() ?: return@post
+                val rawRequest = call.receive<ChatWithActionsRequest>()
+                val request = call.enforceRetrievalBoundary(
+                    boundary = retrievalPrivacyBoundary,
+                    userId = userId,
+                    request = rawRequest,
+                ) ?: return@post
                 val result = withContext(Dispatchers.IO) {
                     aiService.chatWithActions(
                         messages = request.messages,
@@ -83,7 +94,12 @@ fun Route.aiRoutes(
             post("/chat-actions/jobs") {
                 val userId = call.requireUserId() ?: return@post
                 val idempotencyKey = call.requireIdempotencyKey() ?: return@post
-                val request = call.receive<ChatWithActionsRequest>()
+                val rawRequest = call.receive<ChatWithActionsRequest>()
+                val request = call.enforceRetrievalBoundary(
+                    boundary = retrievalPrivacyBoundary,
+                    userId = userId,
+                    request = rawRequest,
+                ) ?: return@post
                 val job = try {
                     aiJobService.createChatActionsJob(
                         ownerId = userId,
@@ -128,6 +144,28 @@ fun Route.aiRoutes(
                 call.respond(job.toStatusResponse())
             }
 
+        }
+    }
+}
+
+private suspend fun ApplicationCall.enforceRetrievalBoundary(
+    boundary: AiRetrievalPrivacyBoundary,
+    userId: String,
+    request: ChatWithActionsRequest,
+): ChatWithActionsRequest? {
+    return when (val result = boundary.enforce(userId = userId, request = request)) {
+        is AiRetrievalBoundaryResult.Allowed -> result.request
+        is AiRetrievalBoundaryResult.Rejected -> {
+            respond(
+                if (result.forbidden) HttpStatusCode.Forbidden else HttpStatusCode.UnprocessableEntity,
+                mapOf(
+                    "error" to mapOf(
+                        "code" to result.code,
+                        "message" to result.message,
+                    ),
+                ),
+            )
+            null
         }
     }
 }
@@ -178,9 +216,17 @@ private fun ChatWithActionsRequest.idempotencyFingerprint(): String {
         digest.updateField(message.role)
         digest.updateField(message.content)
     }
+    digest.updateField(retrievalScope.workspaceId)
+    digest.updateField(retrievalScope.mode)
+    digest.updateField(retrievalScope.currentPageId)
+    retrievalScope.explicitPageIds.forEach(digest::updateField)
+    retrievalScope.retrievedPageIds.forEach(digest::updateField)
+    digest.updateField(retrievalScope.includeTasks.toString())
     pages.forEach { page ->
         digest.updateField(page.id)
         digest.updateField(page.title)
+        digest.updateField(page.workspaceId)
+        digest.updateField(page.access)
         digest.updateField(page.totalBlockCount.toString())
         digest.updateField(page.isFocused.toString())
         digest.updateField(page.contextComplete.toString())
@@ -218,6 +264,7 @@ private fun ChatWithActionsRequest.idempotencyFingerprint(): String {
     tasks.forEach { task ->
         digest.updateField(task.id)
         digest.updateField(task.title)
+        digest.updateField(task.workspaceId)
     }
     digest.updateField(clientDate)
     digest.updateField(clientTimezone)

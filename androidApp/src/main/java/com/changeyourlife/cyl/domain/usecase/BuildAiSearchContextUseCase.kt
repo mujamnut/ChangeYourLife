@@ -15,6 +15,7 @@ class BuildAiSearchContextUseCase @Inject constructor(
         workspaceId: String,
         prompt: String,
         currentPageId: String = "",
+        allowedPageIds: Set<String>? = null,
         limit: Int = DefaultAiSearchLimit,
     ): AiSearchContext {
         val query = SearchQuery(
@@ -29,6 +30,11 @@ class BuildAiSearchContextUseCase @Inject constructor(
 
         val results = searchRepository.search(query)
             .asSequence()
+            .filter { result -> result.target.workspaceId == workspaceId }
+            .filter { result -> result.target.pageId.isNotBlank() }
+            .filter { result ->
+                allowedPageIds == null || result.target.pageId in allowedPageIds
+            }
             .filter { result -> result.title.isNotBlank() || result.snippet.isNotBlank() }
             .take(query.limit)
             .toList()

@@ -77,6 +77,7 @@ fun Application.configureRouting(
         aiRoutes(
             aiService = aiService,
             aiJobService = aiJobService,
+            contentRepository = contentRepository,
         )
     }
 }

@@ -1,5 +1,6 @@
 package com.changeyourlife.cyl.data.sync
 
+import android.util.Log
 import androidx.room.withTransaction
 import com.changeyourlife.cyl.data.local.CylDatabase
 import com.changeyourlife.cyl.data.local.dao.AiActionLogDao
@@ -25,6 +26,8 @@ import com.changeyourlife.cyl.data.local.session.AuthTokenStore
 import com.changeyourlife.cyl.data.local.session.WorkspaceSelectionStore
 import com.changeyourlife.cyl.data.search.SearchIndexRebuilder
 import com.changeyourlife.cyl.data.remote.sync.AiActionLogSyncDto
+import com.changeyourlife.cyl.data.remote.sync.AiActionPlanCommitRequestDto
+import com.changeyourlife.cyl.data.remote.sync.AiActionPlanCommitResponseDto
 import com.changeyourlife.cyl.data.remote.sync.AiSkillSyncDto
 import com.changeyourlife.cyl.data.remote.sync.ChatMessageSyncDto
 import com.changeyourlife.cyl.data.remote.sync.ChatSessionSyncDto
@@ -62,6 +65,8 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import retrofit2.HttpException
 
 @Singleton
@@ -79,6 +84,12 @@ class SessionSyncCoordinator @Inject constructor(
     private val selectionStore: WorkspaceSelectionStore,
     private val searchIndexRebuilder: SearchIndexRebuilder,
 ) {
+    private val syncOperationMutex = Mutex()
+
+    suspend fun <T> withExclusiveSyncOperation(block: suspend () -> T): T {
+        return syncOperationMutex.withLock { block() }
+    }
+
     suspend fun syncAfterAuth() {
         val header = authHeader() ?: return
 
@@ -119,18 +130,43 @@ class SessionSyncCoordinator @Inject constructor(
         pushPendingAiSkills()
     }
 
-    suspend fun pushPendingChangesForWorker(): Boolean {
-        if (authHeader() == null) return true
+    suspend fun pushPendingChangesForWorker(): Boolean = withExclusiveSyncOperation {
+        if (authHeader() == null) return@withExclusiveSyncOperation true
         pushPendingChanges()
-        if (authHeader() == null) return true
-        return !hasRetryablePendingChanges()
+        if (authHeader() == null) return@withExclusiveSyncOperation true
+        !hasRetryablePendingChanges()
     }
 
-    suspend fun syncSessionForWorker(): Boolean {
-        if (authHeader() == null) return true
+    suspend fun syncSessionForWorker(): Boolean = withExclusiveSyncOperation {
+        if (authHeader() == null) return@withExclusiveSyncOperation true
         syncAfterAuth()
-        if (authHeader() == null) return true
-        return !hasRetryablePendingChanges()
+        if (authHeader() == null) return@withExclusiveSyncOperation true
+        !hasRetryablePendingChanges()
+    }
+
+    suspend fun commitAiActionPlan(
+        idempotencyKey: String,
+        request: AiActionPlanCommitRequestDto,
+    ): AiActionPlanCommitResponseDto {
+        val header = authHeader() ?: error("Authentication is required to commit an AI action plan.")
+        val response = syncApi.commitAiActionPlan(
+            authorization = header,
+            idempotencyKey = idempotencyKey,
+            request = request,
+        )
+        runCatching {
+            persistAiActionPlanCommit(
+                request = request,
+                response = response,
+            )
+        }.onFailure { error ->
+            Log.e(
+                AiPlanSyncTag,
+                "AI plan committed remotely but its local sync receipt could not be persisted.",
+                error,
+            )
+        }
+        return response
     }
 
     suspend fun refreshWorkspaces() {
@@ -1390,6 +1426,84 @@ class SessionSyncCoordinator @Inject constructor(
         searchIndexRebuilder.rebuildPage(page)
     }
 
+    private suspend fun persistAiActionPlanCommit(
+        request: AiActionPlanCommitRequestDto,
+        response: AiActionPlanCommitResponseDto,
+    ) {
+        val now = System.currentTimeMillis()
+        val submittedPagesById = request.mutations
+            .mapNotNull { mutation -> mutation.page }
+            .associateBy(PageSyncDto::id)
+        val remotePagesById = response.pages.associateBy(PageSyncDto::id)
+        val replayOnlyLocalPageIds = if (response.replayed) {
+            request.mutations
+                .asSequence()
+                .filter { mutation ->
+                    mutation.expectedRevision == 0L &&
+                        mutation.page != null &&
+                        mutation.pageId !in remotePagesById
+                }
+                .map { mutation -> mutation.pageId }
+                .toSet()
+        } else {
+            emptySet()
+        }
+
+        database.withTransaction {
+            response.pages.forEach { remotePage ->
+                val currentPage = pageDao.getPage(remotePage.id)
+                val submittedPage = submittedPagesById[remotePage.id]
+                    ?.remoteToDomain()
+                    ?.toEntity()
+                val entity = if (
+                    currentPage != null &&
+                    submittedPage != null &&
+                    currentPage.hasLocalMutationAfter(submittedPage)
+                ) {
+                    currentPage.copy(
+                        syncStatus = SyncStatus.PendingPush,
+                        revision = remotePage.revision,
+                        remoteUpdatedAt = maxOf(currentPage.remoteUpdatedAt, remotePage.updatedAt),
+                        lastSyncedAt = now,
+                    )
+                } else {
+                    remotePage.toSyncedEntity(previous = currentPage, now = now)
+                }
+                pageDao.upsertPage(entity)
+                entity.toContentProjection()?.let { projection ->
+                    pageContentDao.replacePageContentProjection(
+                        pageId = entity.id,
+                        blocks = projection.blocks,
+                        properties = projection.properties,
+                        tables = projection.tables,
+                        columns = projection.columns,
+                        rows = projection.rows,
+                        cells = projection.cells,
+                    )
+                }
+            }
+
+            (response.permanentlyDeletedPageIds + replayOnlyLocalPageIds)
+                .distinct()
+                .forEach { pageId ->
+                    syncTombstoneDao.deleteTombstone(
+                        entityType = SyncTombstoneType.PagePermanentDelete,
+                        entityId = pageId,
+                    )
+                    pageDao.deletePageTreePermanently(pageId)
+                }
+        }
+
+        response.pages.forEach { remotePage ->
+            pageDao.getPage(remotePage.id)?.let { page ->
+                searchIndexRebuilder.rebuildPage(page)
+            }
+        }
+        for (pageId in (response.permanentlyDeletedPageIds + replayOnlyLocalPageIds).distinct()) {
+            searchIndexRebuilder.deletePageTree(pageId)
+        }
+    }
+
     private suspend fun recoverPermanentDeleteConflict(pageId: String) {
         val header = authHeader() ?: return
         runCatching {
@@ -1410,6 +1524,10 @@ class SessionSyncCoordinator @Inject constructor(
                 entityId = pageId,
             )
         }.onFailure(::handleSyncFailure)
+    }
+
+    private companion object {
+        const val AiPlanSyncTag = "CYLAiPlanSync"
     }
 
     private suspend fun reconcileRecreatedPageWithExistingRemote(

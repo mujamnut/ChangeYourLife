@@ -1,5 +1,6 @@
 package com.changeyourlife.cyl.data.remote.sync
 
+import com.changeyourlife.cyl.aicontract.AiActionWire
 import com.changeyourlife.cyl.domain.model.Page
 import com.changeyourlife.cyl.domain.model.PageBlock
 import com.changeyourlife.cyl.domain.model.PageTableCellValue
@@ -42,6 +43,35 @@ data class PageSyncDto(
 @Serializable
 data class PageListResponseDto(
     val pages: List<PageSyncDto>,
+)
+
+@Serializable
+data class AiActionPlanPageMutationDto(
+    val operation: String,
+    val pageId: String,
+    val expectedRevision: Long,
+    val page: PageSyncDto? = null,
+)
+
+@Serializable
+data class AiActionPlanCommitRequestDto(
+    val auditId: String,
+    val workspaceId: String,
+    val schemaName: String,
+    val schemaVersion: Int,
+    val actions: List<AiActionWire>,
+    val mutations: List<AiActionPlanPageMutationDto>,
+)
+
+@Serializable
+data class AiActionPlanCommitResponseDto(
+    val auditId: String,
+    val workspaceId: String,
+    val replayed: Boolean,
+    val pages: List<PageSyncDto>,
+    val permanentlyDeletedPageIds: List<String>,
+    val actionCount: Int,
+    val committedAt: Long,
 )
 
 @Serializable

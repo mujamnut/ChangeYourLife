@@ -1,6 +1,11 @@
 package com.changeyourlife.cyl.aicontract
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 
 const val CYL_ACTION_SCHEMA_NAME = "CYL_ACTION_SCHEMA"
 const val CYL_ACTION_SCHEMA_VERSION = 4
@@ -832,6 +837,54 @@ object AiActionContractSchema {
         appendLine("Do not invent action types, field names, or table column types outside this contract.")
     }.trimEnd()
 
+    /**
+     * Provider-facing JSON Schema for the complete assistant envelope.
+     *
+     * Runtime validation remains authoritative. This schema narrows generation before
+     * decoding and is shared by native function calling and json_schema responses.
+     */
+    fun structuredResponseJsonSchema(): JsonObject = buildJsonObject {
+        put("type", "object")
+        put("additionalProperties", false)
+        put(
+            "required",
+            buildJsonArray {
+                add(JsonPrimitive("reply"))
+                add(JsonPrimitive("actions"))
+            },
+        )
+        put(
+            "properties",
+            buildJsonObject {
+                put(
+                    "reply",
+                    buildJsonObject {
+                        put("type", "string")
+                        put("description", "Concise user-facing reply in the user's language.")
+                    },
+                )
+                put(
+                    "actions",
+                    buildJsonObject {
+                        put("type", "array")
+                        put("maxItems", 64)
+                        put(
+                            "items",
+                            buildJsonObject {
+                                put(
+                                    "oneOf",
+                                    buildJsonArray {
+                                        specs.forEach { spec -> add(spec.toJsonSchema()) }
+                                    },
+                                )
+                            },
+                        )
+                    },
+                )
+            },
+        )
+    }
+
     fun domainFor(type: String): AiActionDomain? {
         val normalizedType = normalizeType(type)
         return specs.firstOrNull { spec -> normalizedType in spec.types }?.domain
@@ -903,6 +956,147 @@ object AiActionContractSchema {
             ),
         ),
     )
+
+    private fun ContractSpec.toJsonSchema(): JsonObject = buildJsonObject {
+        put("type", "object")
+        put("additionalProperties", false)
+        put(
+            "required",
+            buildJsonArray {
+                add(JsonPrimitive("type"))
+            },
+        )
+        put(
+            "properties",
+            buildJsonObject {
+                put("type", stringSchema(types))
+                allowedFields.sorted().forEach { field ->
+                    put(field, actionFieldJsonSchema(field))
+                }
+            },
+        )
+    }
+
+    private fun actionFieldJsonSchema(field: String): JsonObject = when (field) {
+        "isChecked",
+        "isHidden",
+        "isRequired",
+        "wrapContent",
+        "clearDefaultValue",
+        "clearDescription",
+        -> primitiveSchema("boolean")
+
+        "rangeStart",
+        "rangeEnd",
+        "targetIndex",
+        -> primitiveSchema("integer")
+
+        "widthDp" -> buildJsonObject {
+            put("type", "integer")
+            put("minimum", 56)
+            put("maximum", 640)
+        }
+
+        "mediaSizeBytes",
+        "delayMinutes",
+        -> buildJsonObject {
+            put("type", "integer")
+            put("minimum", 0)
+        }
+
+        "options",
+        "rowIds",
+        "relationRowIds",
+        -> stringArraySchema()
+
+        "cellValues" -> stringMapSchema()
+        "tableRows" -> buildJsonObject {
+            put("type", "array")
+            put(
+                "items",
+                stringMapSchema(),
+            )
+        }
+
+        "tableColumns" -> buildJsonObject {
+            put("type", "array")
+            put("items", tableColumnJsonSchema())
+        }
+
+        "columnType" -> stringSchema(supportedTableColumnTypes)
+        "tableView" -> stringSchema(supportedTableViews)
+        "filterOperator" -> stringSchema(supportedFilterOperators)
+        "dateFormat" -> stringSchema(supportedDateFormats)
+        "timeFormat" -> stringSchema(supportedTimeFormats)
+        "dateReminder" -> stringSchema(supportedDateReminders)
+        "optionColor" -> stringSchema(supportedOptionColors)
+        else -> primitiveSchema("string")
+    }
+
+    private fun tableColumnJsonSchema(): JsonObject = buildJsonObject {
+        put("type", "object")
+        put("additionalProperties", false)
+        put(
+            "required",
+            buildJsonArray {
+                add(JsonPrimitive("name"))
+            },
+        )
+        put(
+            "properties",
+            buildJsonObject {
+                put("name", primitiveSchema("string"))
+                put("type", stringSchema(supportedTableColumnTypes))
+                put("options", stringArraySchema())
+                put("dateFormat", stringSchema(supportedDateFormats))
+                put("timeFormat", stringSchema(supportedTimeFormats))
+                put("dateReminder", stringSchema(supportedDateReminders))
+                put("timezoneLabel", primitiveSchema("string"))
+                put("isHidden", primitiveSchema("boolean"))
+                put("isRequired", primitiveSchema("boolean"))
+                put("wrapContent", primitiveSchema("boolean"))
+                put(
+                    "widthDp",
+                    buildJsonObject {
+                        put("type", "integer")
+                        put("minimum", 56)
+                        put("maximum", 640)
+                    },
+                )
+                put("defaultValue", primitiveSchema("string"))
+                put("description", primitiveSchema("string"))
+                put("formula", primitiveSchema("string"))
+                put("relationTargetTableId", primitiveSchema("string"))
+                put("rollupRelationColumnName", primitiveSchema("string"))
+                put("rollupTargetColumnName", primitiveSchema("string"))
+                put("rollupAggregation", primitiveSchema("string"))
+            },
+        )
+    }
+
+    private fun primitiveSchema(type: String): JsonObject = buildJsonObject {
+        put("type", type)
+    }
+
+    private fun stringSchema(values: Set<String>): JsonObject = buildJsonObject {
+        put("type", "string")
+        put(
+            "enum",
+            buildJsonArray {
+                values.sorted().forEach { value -> add(JsonPrimitive(value)) }
+            },
+        )
+    }
+
+    private fun stringArraySchema(): JsonObject = buildJsonObject {
+        put("type", "array")
+        put("items", primitiveSchema("string"))
+    }
+
+    private fun stringMapSchema(): JsonObject = buildJsonObject {
+        put("type", "object")
+        put("additionalProperties", primitiveSchema("string"))
+    }
 }
 
 private fun AiActionDomain.toAction(payload: AiActionWire): CylAiAction = when (this) {

@@ -1,5 +1,6 @@
 package com.changeyourlife.cyl.backend.model.sync
 
+import com.changeyourlife.cyl.aicontract.AiActionWire
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -44,6 +45,45 @@ data class PageRevisionConflictResponse(
     val expectedRevision: Long,
     val actualRevision: Long,
     val currentPage: PageSyncDto,
+)
+
+@Serializable
+data class AiActionPlanPageMutationDto(
+    val operation: String,
+    val pageId: String,
+    val expectedRevision: Long,
+    val page: PageSyncDto? = null,
+)
+
+@Serializable
+data class AiActionPlanCommitRequest(
+    val auditId: String,
+    val workspaceId: String,
+    val schemaName: String,
+    val schemaVersion: Int,
+    val actions: List<AiActionWire>,
+    val mutations: List<AiActionPlanPageMutationDto>,
+)
+
+@Serializable
+data class AiActionPlanCommitResponse(
+    val auditId: String,
+    val workspaceId: String,
+    val replayed: Boolean,
+    val pages: List<PageSyncDto>,
+    val permanentlyDeletedPageIds: List<String>,
+    val actionCount: Int,
+    val committedAt: Long,
+)
+
+@Serializable
+data class AiActionPlanConflictResponse(
+    val code: String,
+    val message: String,
+    val pageId: String = "",
+    val expectedRevision: Long? = null,
+    val actualRevision: Long? = null,
+    val currentPage: PageSyncDto? = null,
 )
 
 @Serializable

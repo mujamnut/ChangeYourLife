@@ -9,6 +9,7 @@ interface AiRepository {
     suspend fun chatWithActions(
         idempotencyKey: String,
         messages: List<Pair<String, String>>,
+        retrievalScope: AiRetrievalScope = AiRetrievalScope(),
         pages: List<AiPageContext> = emptyList(),
         tasks: List<Pair<String, String>> = emptyList(),
         clientDate: String = "",
@@ -58,6 +59,33 @@ data class AiImageAttachment(
     val kind: String = "image",
 )
 
+enum class AiRetrievalMode {
+    Workspace,
+    Page,
+}
+
+enum class AiPageContextAccess {
+    Metadata,
+    Target,
+    Retrieved,
+}
+
+data class AiRetrievalScope(
+    val workspaceId: String = "",
+    val mode: AiRetrievalMode = AiRetrievalMode.Workspace,
+    val currentPageId: String = "",
+    val explicitPageIds: List<String> = emptyList(),
+    val retrievedPageIds: List<String> = emptyList(),
+    val includeTasks: Boolean = false,
+) {
+    val detailedPageIds: Set<String>
+        get() = buildSet {
+            if (currentPageId.isNotBlank()) add(currentPageId)
+            addAll(explicitPageIds.filter(String::isNotBlank))
+            addAll(retrievedPageIds.filter(String::isNotBlank))
+        }
+}
+
 data class ChatActionResult(
     val reply: String,
     val actions: List<ChatAction> = emptyList(),
@@ -77,6 +105,8 @@ data class ChatActionValidationIssue(
 data class AiPageContext(
     val id: String,
     val title: String,
+    val workspaceId: String = "",
+    val access: AiPageContextAccess = AiPageContextAccess.Metadata,
     val blocks: List<AiBlockContext> = emptyList(),
     val totalBlockCount: Int = blocks.size,
     val isFocused: Boolean = false,

@@ -6,8 +6,15 @@ import com.changeyourlife.cyl.domain.repository.ChatAction
 object AiActionExecutionPolicy {
     fun decide(
         backendActions: List<ChatAction>,
+        destructiveActionsConfirmed: Boolean = false,
     ): AiActionExecutionDecision {
         val validationIssues = mutableListOf<ChatActionValidationMetadata>()
+        val confirmationIndexes = if (destructiveActionsConfirmed) {
+            emptySet()
+        } else {
+            AiDestructiveActionPolicy.confirmationIndexes(backendActions)
+        }
+        val confirmationCandidates = mutableListOf<AiActionExecutionCandidate>()
         val executableCandidates = backendActions.mapIndexedNotNull { index, action ->
             when {
                 action.type.isBlank() -> {
@@ -30,15 +37,30 @@ object AiActionExecutionPolicy {
                     null
                 }
 
-                else -> AiActionExecutionCandidate(
-                    originalIndex = index,
-                    action = action,
-                )
+                else -> {
+                    val candidate = AiActionExecutionCandidate(
+                        originalIndex = index,
+                        action = action,
+                    )
+                    if (index in confirmationIndexes) {
+                        confirmationCandidates += candidate
+                        validationIssues += ChatActionValidationMetadata(
+                            actionIndex = index,
+                            actionType = action.type,
+                            actionDomain = AiActionExecutionRegistry.domainFor(action.type).id,
+                            field = "confirmation",
+                            code = DestructiveConfirmationRequiredCode,
+                            message = "Explicit user confirmation is required before destructive data removal.",
+                        )
+                    }
+                    candidate
+                }
             }
         }
         return AiActionExecutionDecision(
             executableCandidates = executableCandidates,
             validationIssues = validationIssues,
+            confirmationCandidates = confirmationCandidates,
         )
     }
 }
@@ -46,6 +68,7 @@ object AiActionExecutionPolicy {
 data class AiActionExecutionDecision(
     val executableCandidates: List<AiActionExecutionCandidate>,
     val validationIssues: List<ChatActionValidationMetadata> = emptyList(),
+    val confirmationCandidates: List<AiActionExecutionCandidate> = emptyList(),
 ) {
     val executableActions: List<ChatAction> = executableCandidates.map { candidate -> candidate.action }
 }

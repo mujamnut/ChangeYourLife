@@ -363,6 +363,73 @@ class AiChatActionOrchestratorTest {
         assertEquals(listOf("rowTitle"), result.actionMetadata.pendingActions.single().issueFields)
     }
 
+    @Test
+    fun destructiveActionSuspendsTheWholePlanUntilConfirmation() = runBlocking {
+        var executorCalled = false
+        val actions = listOf(
+            ChatAction(
+                type = "ADD_TABLE_ROW",
+                title = "",
+                tableTitle = "Transactions",
+                rowTitle = "Food",
+            ),
+            ChatAction(
+                type = "DELETE_TABLE_ROWS",
+                title = "",
+                tableTitle = "Transactions",
+                columnName = "Month",
+                filterQuery = "2026-04",
+            ),
+        )
+
+        val result = AiChatActionOrchestrator.orchestrate(
+            workspaceId = "workspace-1",
+            scopedTargetPage = page(),
+            prompt = "tambah food dan padam semua row bulan 4",
+            backendResult = ChatActionResult(reply = "Siap.", actions = actions),
+        ) { _, _, _ ->
+            executorCalled = true
+            AiActionExecutionResult()
+        }
+
+        assertTrue(!executorCalled)
+        assertTrue(result.reply.contains("Sahkan untuk teruskan"))
+        assertEquals(2, result.actionMetadata.pendingActions.size)
+        assertTrue(result.actionMetadata.pendingActions.all { pending ->
+            DestructiveConfirmationRequiredCode in pending.issueCodes
+        })
+        assertTrue(result.actionMetadata.executedActions.isEmpty())
+    }
+
+    @Test
+    fun confirmedDestructivePlanExecutesWithoutASecondPolicyBlock() = runBlocking {
+        var capturedActions = emptyList<ChatAction>()
+        val action = ChatAction(
+            type = "DELETE_TABLE_ROWS",
+            title = "",
+            tableTitle = "Transactions",
+            columnName = "Month",
+            filterQuery = "2026-04",
+        )
+
+        val result = AiChatActionOrchestrator.orchestrate(
+            workspaceId = "workspace-1",
+            scopedTargetPage = page(),
+            prompt = ConfirmDestructiveActionsPrompt,
+            backendResult = ChatActionResult(reply = "Confirmed.", actions = listOf(action)),
+            destructiveActionsConfirmed = true,
+        ) { _, _, candidates ->
+            capturedActions = candidates.map { candidate -> candidate.action }
+            AiActionExecutionResult(
+                executedActionIndexes = candidates.map { candidate -> candidate.originalIndex },
+            )
+        }
+
+        assertEquals(listOf(action), capturedActions)
+        assertEquals(listOf("DELETE_TABLE_ROWS"), result.actionMetadata.executedActions.map { it.type })
+        assertTrue(result.actionMetadata.pendingActions.isEmpty())
+    }
+
     private fun page(): Page {
         return Page(
             id = "page-1",

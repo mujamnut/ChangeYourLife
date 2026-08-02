@@ -4,6 +4,10 @@ import com.changeyourlife.cyl.backend.config.DatabaseConfig
 import com.changeyourlife.cyl.backend.data.PostgresContentRepository
 import com.changeyourlife.cyl.backend.data.PostgresPageContentProjectionBackfill
 import com.changeyourlife.cyl.backend.database.DatabaseFactory
+import com.changeyourlife.cyl.backend.domain.AiActionPlanCommitCommand
+import com.changeyourlife.cyl.backend.domain.AiActionPlanCommitResult
+import com.changeyourlife.cyl.backend.domain.AiActionPlanPageMutation
+import com.changeyourlife.cyl.backend.domain.AiActionPlanPageOperation
 import com.changeyourlife.cyl.backend.domain.ContentSearchQuery
 import com.changeyourlife.cyl.backend.domain.PageMutationResult
 import com.changeyourlife.cyl.backend.domain.PageRecord
@@ -97,6 +101,104 @@ class PostgresContentRepositoryIntegrationTest {
         } finally {
             dataSource.deleteTestUser(firstUserId)
             dataSource.deleteTestUser(secondUserId)
+            dataSource.close()
+        }
+    }
+
+    @Test
+    fun postgresAiActionPlanCommitIsAtomicAndIdempotent() = runBlocking {
+        val config = testDatabaseConfig()
+        assumeTrue(
+            "Set CYL_TEST_DATABASE_URL to run PostgreSQL integration tests.",
+            config.isConfigured,
+        )
+
+        val userId = "test-user-${UUID.randomUUID()}"
+        val workspaceId = "ai-plan-workspace-${UUID.randomUUID()}"
+        val dataSource = DatabaseFactory.createDataSource(config)
+        try {
+            DatabaseFactory.migrate(dataSource)
+            dataSource.createTestUser(userId, "$userId@example.test")
+            assertTrue(dataSource.tableExists("ai_action_plan_commits"))
+            val repository = PostgresContentRepository(dataSource)
+            assertNotNull(
+                repository.upsertWorkspace(
+                    WorkspaceRecord(
+                        id = workspaceId,
+                        userId = userId,
+                        name = "AI plan workspace",
+                        createdAt = 1L,
+                        updatedAt = 1L,
+                        deletedAt = null,
+                    ),
+                ),
+            )
+            val first = repository.upsertPage(
+                userId,
+                PageRecord(
+                    id = "page-${UUID.randomUUID()}",
+                    workspaceId = workspaceId,
+                    parentPageId = null,
+                    title = "Before first",
+                    content = """{"version":1,"blocks":[]}""",
+                    sortOrder = 0,
+                    createdAt = 2L,
+                    updatedAt = 2L,
+                    deletedAt = null,
+                ),
+            ).appliedPage()
+            val second = repository.upsertPage(
+                userId,
+                first.copy(
+                    id = "page-${UUID.randomUUID()}",
+                    title = "Before second",
+                    revision = 0L,
+                ),
+            ).appliedPage()
+
+            val staleResult = repository.commitAiActionPlan(
+                userId = userId,
+                command = AiActionPlanCommitCommand(
+                    idempotencyKey = "stale-${UUID.randomUUID()}",
+                    requestFingerprint = "stale-fingerprint",
+                    auditId = "stale-audit",
+                    workspaceId = workspaceId,
+                    actionCount = 2,
+                    mutations = listOf(
+                        first.aiPlanUpsert("Must not persist"),
+                        second.aiPlanUpsert("Stale").copy(expectedRevision = second.revision + 1L),
+                    ),
+                    committedAt = 10L,
+                ),
+            )
+            assertIs<AiActionPlanCommitResult.RevisionConflict>(staleResult)
+            assertEquals("Before first", repository.getPage(userId, first.id)?.title)
+
+            val idempotencyKey = "commit-${UUID.randomUUID()}"
+            val command = AiActionPlanCommitCommand(
+                idempotencyKey = idempotencyKey,
+                requestFingerprint = "stable-fingerprint",
+                auditId = "stable-audit",
+                workspaceId = workspaceId,
+                actionCount = 2,
+                mutations = listOf(
+                    first.aiPlanUpsert("After first"),
+                    second.aiPlanUpsert("After second"),
+                ),
+                committedAt = 20L,
+            )
+            val committed = assertIs<AiActionPlanCommitResult.Committed>(
+                repository.commitAiActionPlan(userId, command),
+            )
+            assertTrue(!committed.replayed)
+            val replayed = assertIs<AiActionPlanCommitResult.Committed>(
+                repository.commitAiActionPlan(userId, command),
+            )
+            assertTrue(replayed.replayed)
+            assertEquals(committed.receipt, replayed.receipt)
+            assertEquals(2L, repository.getPage(userId, first.id)?.revision)
+        } finally {
+            dataSource.deleteTestUser(userId)
             dataSource.close()
         }
     }
@@ -426,6 +528,17 @@ class PostgresContentRepositoryIntegrationTest {
 private fun PageMutationResult.appliedPage(): PageRecord {
     return assertIs<PageMutationResult.Applied>(this).page
 }
+
+private fun PageRecord.aiPlanUpsert(title: String): AiActionPlanPageMutation =
+    AiActionPlanPageMutation(
+        operation = AiActionPlanPageOperation.UPSERT,
+        pageId = id,
+        expectedRevision = revision,
+        page = copy(
+            title = title,
+            updatedAt = updatedAt + 1L,
+        ),
+    )
 
 private fun databasePageContent(
     tableId: String,

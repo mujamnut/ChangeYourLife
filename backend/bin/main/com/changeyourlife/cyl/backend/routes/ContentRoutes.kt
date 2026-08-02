@@ -1,6 +1,14 @@
 package com.changeyourlife.cyl.backend.routes
 
+import com.changeyourlife.cyl.aicontract.AiActionContractSchema
+import com.changeyourlife.cyl.aicontract.AiActionWire
+import com.changeyourlife.cyl.aicontract.CYL_ACTION_SCHEMA_NAME
+import com.changeyourlife.cyl.aicontract.CYL_ACTION_SCHEMA_VERSION
 import com.changeyourlife.cyl.backend.data.PageContentJsonMutator
+import com.changeyourlife.cyl.backend.domain.AiActionPlanCommitCommand
+import com.changeyourlife.cyl.backend.domain.AiActionPlanCommitResult
+import com.changeyourlife.cyl.backend.domain.AiActionPlanPageMutation
+import com.changeyourlife.cyl.backend.domain.AiActionPlanPageOperation
 import com.changeyourlife.cyl.backend.domain.ContentSearchQuery
 import com.changeyourlife.cyl.backend.domain.ContentSearchResult
 import com.changeyourlife.cyl.backend.domain.ContentRepository
@@ -10,6 +18,9 @@ import com.changeyourlife.cyl.backend.domain.WorkspaceRecord
 import com.changeyourlife.cyl.backend.model.ErrorResponse
 import com.changeyourlife.cyl.backend.model.search.SearchListResponse
 import com.changeyourlife.cyl.backend.model.search.SearchResultDto
+import com.changeyourlife.cyl.backend.model.sync.AiActionPlanCommitRequest
+import com.changeyourlife.cyl.backend.model.sync.AiActionPlanCommitResponse
+import com.changeyourlife.cyl.backend.model.sync.AiActionPlanConflictResponse
 import com.changeyourlife.cyl.backend.model.sync.PageBlockCreateRequest
 import com.changeyourlife.cyl.backend.model.sync.PageListResponse
 import com.changeyourlife.cyl.backend.model.sync.PageBlockPatchRequest
@@ -41,10 +52,116 @@ import io.ktor.server.routing.patch
 import io.ktor.server.routing.post
 import io.ktor.server.routing.put
 import io.ktor.server.routing.route
+import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 
 fun Route.contentRoutes(contentRepository: ContentRepository) {
     authenticate("auth-jwt") {
         route("/api/v1") {
+            post("/ai/action-plans/commit") {
+                val userId = call.requireUserId() ?: return@post
+                val idempotencyKey = call.requireAiPlanIdempotencyKey() ?: return@post
+                val request = call.receive<AiActionPlanCommitRequest>()
+                val validationError = request.validateAiActionPlan()
+                if (validationError != null) {
+                    call.respond(
+                        HttpStatusCode.UnprocessableEntity,
+                        AiActionPlanConflictResponse(
+                            code = validationError.first,
+                            message = validationError.second,
+                        ),
+                    )
+                    return@post
+                }
+
+                val result = contentRepository.commitAiActionPlan(
+                    userId = userId,
+                    command = request.toCommitCommand(
+                        idempotencyKey = idempotencyKey,
+                        requestFingerprint = request.identityFingerprint(),
+                        committedAt = System.currentTimeMillis(),
+                    ),
+                )
+                when (result) {
+                    is AiActionPlanCommitResult.Committed -> {
+                        val receipt = result.receipt
+                        call.respond(
+                            AiActionPlanCommitResponse(
+                                auditId = receipt.auditId,
+                                workspaceId = receipt.workspaceId,
+                                replayed = result.replayed,
+                                pages = receipt.pages.map(PageRecord::toDto),
+                                permanentlyDeletedPageIds = receipt.permanentlyDeletedPageIds,
+                                actionCount = receipt.actionCount,
+                                committedAt = receipt.committedAt,
+                            ),
+                        )
+                    }
+
+                    is AiActionPlanCommitResult.IdempotencyConflict -> {
+                        call.respond(
+                            HttpStatusCode.Conflict,
+                            AiActionPlanConflictResponse(
+                                code = "idempotency_conflict",
+                                message = "The Idempotency-Key was already used for a different AI plan.",
+                            ),
+                        )
+                    }
+
+                    is AiActionPlanCommitResult.RevisionConflict -> {
+                        call.respond(
+                            HttpStatusCode.Conflict,
+                            AiActionPlanConflictResponse(
+                                code = "page_revision_conflict",
+                                message = "A page changed before the AI plan could be committed.",
+                                pageId = result.pageId,
+                                expectedRevision = result.expectedRevision,
+                                actualRevision = result.currentPage.revision,
+                                currentPage = result.currentPage.toDto(),
+                            ),
+                        )
+                    }
+
+                    is AiActionPlanCommitResult.NotFound -> {
+                        call.respond(
+                            HttpStatusCode.NotFound,
+                            AiActionPlanConflictResponse(
+                                code = "page_not_found",
+                                message = "Page ${result.pageId} was not found.",
+                                pageId = result.pageId,
+                            ),
+                        )
+                    }
+
+                    is AiActionPlanCommitResult.Forbidden -> {
+                        call.respond(
+                            HttpStatusCode.Forbidden,
+                            AiActionPlanConflictResponse(
+                                code = "page_forbidden",
+                                message = "The AI plan contains a page or workspace that is not accessible.",
+                                pageId = result.pageId,
+                            ),
+                        )
+                    }
+
+                    is AiActionPlanCommitResult.Rejected -> {
+                        call.respond(
+                            HttpStatusCode.UnprocessableEntity,
+                            AiActionPlanConflictResponse(
+                                code = result.code,
+                                message = result.message,
+                            ),
+                        )
+                    }
+                }
+            }
+
             get("/search") {
                 val userId = call.requireUserId() ?: return@get
                 val workspaceId = call.request.queryParameters["workspaceId"]
@@ -964,3 +1081,185 @@ private fun PageSyncDto.toRecord(): PageRecord {
         revision = revision,
     )
 }
+
+private suspend fun io.ktor.server.application.ApplicationCall.requireAiPlanIdempotencyKey(): String? {
+    val key = request.headers["Idempotency-Key"]?.trim().orEmpty()
+    if (key.length !in MinAiPlanIdempotencyKeyLength..MaxAiPlanIdempotencyKeyLength) {
+        respond(
+            HttpStatusCode.BadRequest,
+            AiActionPlanConflictResponse(
+                code = "invalid_idempotency_key",
+                message = "Idempotency-Key must contain 8 to 200 characters.",
+            ),
+        )
+        return null
+    }
+    return key
+}
+
+private fun AiActionPlanCommitRequest.validateAiActionPlan(): Pair<String, String>? {
+    if (auditId.isBlank()) return "audit_id_required" to "auditId is required."
+    if (workspaceId.isBlank()) return "workspace_id_required" to "workspaceId is required."
+    if (schemaName != CYL_ACTION_SCHEMA_NAME || schemaVersion != CYL_ACTION_SCHEMA_VERSION) {
+        return "action_schema_mismatch" to
+            "Expected $CYL_ACTION_SCHEMA_NAME version $CYL_ACTION_SCHEMA_VERSION."
+    }
+    if (actions.isEmpty()) return "actions_required" to "At least one AI action is required."
+    if (actions.size > MaxAiPlanActions) {
+        return "too_many_actions" to "An AI plan cannot contain more than $MaxAiPlanActions actions."
+    }
+    if (mutations.size > MaxAiPlanPageMutations) {
+        return "too_many_page_mutations" to
+            "An AI plan cannot mutate more than $MaxAiPlanPageMutations pages."
+    }
+    val duplicatePageId = mutations
+        .groupingBy { mutation -> mutation.pageId }
+        .eachCount()
+        .entries
+        .firstOrNull { entry -> entry.value > 1 }
+        ?.key
+    if (duplicatePageId != null) {
+        return "duplicate_page_mutation" to "Page $duplicatePageId appears more than once in the AI plan."
+    }
+
+    actions.forEachIndexed { index, action ->
+        val validation = AiActionContractSchema.parse(actionIndex = index, payload = action)
+        validation.issues.firstOrNull()?.let { issue ->
+            return "invalid_action_contract" to
+                "Action $index is invalid at ${issue.field}: ${issue.message}"
+        }
+    }
+
+    var contentBytes = 0L
+    mutations.forEachIndexed { index, mutation ->
+        if (mutation.pageId.isBlank()) {
+            return "page_id_required" to "Mutation $index requires pageId."
+        }
+        if (mutation.expectedRevision < 0L) {
+            return "invalid_expected_revision" to "Mutation $index has a negative expectedRevision."
+        }
+        val operation = mutation.operation.toAiPlanPageOperation()
+            ?: return "unsupported_page_operation" to
+                "Mutation $index has unsupported operation '${mutation.operation}'."
+        when (operation) {
+            AiActionPlanPageOperation.UPSERT -> {
+                val page = mutation.page
+                    ?: return "page_snapshot_required" to "Mutation $index requires a page snapshot."
+                page.validate()?.let { error ->
+                    return "invalid_page_snapshot" to "Mutation $index: $error"
+                }
+                if (page.id != mutation.pageId) {
+                    return "page_id_mismatch" to "Mutation $index page id does not match pageId."
+                }
+                if (page.workspaceId != workspaceId) {
+                    return "workspace_id_mismatch" to
+                        "Mutation $index page belongs to a different workspace."
+                }
+                if (page.revision != mutation.expectedRevision) {
+                    return "revision_mismatch" to
+                        "Mutation $index page revision must equal expectedRevision."
+                }
+                contentBytes += page.content.toByteArray(StandardCharsets.UTF_8).size
+            }
+
+            AiActionPlanPageOperation.PERMANENT_DELETE -> {
+                if (mutation.page != null) {
+                    return "unexpected_page_snapshot" to
+                        "Permanent-delete mutation $index must not include a page snapshot."
+                }
+            }
+        }
+    }
+    if (contentBytes > MaxAiPlanContentBytes) {
+        return "plan_payload_too_large" to
+            "The combined AI page content exceeds ${MaxAiPlanContentBytes / (1024 * 1024)} MiB."
+    }
+    return null
+}
+
+private fun AiActionPlanCommitRequest.toCommitCommand(
+    idempotencyKey: String,
+    requestFingerprint: String,
+    committedAt: Long,
+): AiActionPlanCommitCommand {
+    return AiActionPlanCommitCommand(
+        idempotencyKey = idempotencyKey,
+        requestFingerprint = requestFingerprint,
+        auditId = auditId.trim(),
+        workspaceId = workspaceId.trim(),
+        actionCount = actions.size,
+        mutations = mutations.map { mutation ->
+            AiActionPlanPageMutation(
+                operation = requireNotNull(mutation.operation.toAiPlanPageOperation()),
+                pageId = mutation.pageId,
+                expectedRevision = mutation.expectedRevision,
+                page = mutation.page?.toRecord(),
+            )
+        },
+        committedAt = committedAt,
+    )
+}
+
+/**
+ * The idempotency identity intentionally excludes materialized page snapshots.
+ * A retry after a lost response may regenerate local UUIDs, but the same ordered
+ * action plan must replay the first committed receipt instead of becoming a new plan.
+ */
+private fun AiActionPlanCommitRequest.identityFingerprint(): String {
+    val identity = AiActionPlanIdentity(
+        auditId = auditId.trim(),
+        workspaceId = workspaceId.trim(),
+        schemaName = schemaName,
+        schemaVersion = schemaVersion,
+        actions = actions,
+    )
+    val canonicalJson = aiPlanRouteJson
+        .encodeToJsonElement(AiActionPlanIdentity.serializer(), identity)
+        .sortedRecursively()
+        .toString()
+    return MessageDigest.getInstance("SHA-256")
+        .digest(canonicalJson.toByteArray(StandardCharsets.UTF_8))
+        .joinToString(separator = "") { byte -> "%02x".format(byte.toInt() and 0xff) }
+}
+
+private fun String.toAiPlanPageOperation(): AiActionPlanPageOperation? {
+    return runCatching {
+        enumValueOf<AiActionPlanPageOperation>(
+            trim().uppercase().replace('-', '_').replace(' ', '_'),
+        )
+    }.getOrNull()
+}
+
+private fun JsonElement.sortedRecursively(): JsonElement {
+    return when (this) {
+        is JsonObject -> JsonObject(
+            entries
+                .sortedBy(Map.Entry<String, JsonElement>::key)
+                .associateTo(linkedMapOf()) { entry ->
+                    entry.key to entry.value.sortedRecursively()
+                },
+        )
+        is JsonArray -> JsonArray(map(JsonElement::sortedRecursively))
+        else -> this
+    }
+}
+
+@Serializable
+private data class AiActionPlanIdentity(
+    val auditId: String,
+    val workspaceId: String,
+    val schemaName: String,
+    val schemaVersion: Int,
+    val actions: List<AiActionWire>,
+)
+
+private val aiPlanRouteJson = Json {
+    encodeDefaults = true
+    explicitNulls = false
+}
+
+private const val MinAiPlanIdempotencyKeyLength = 8
+private const val MaxAiPlanIdempotencyKeyLength = 200
+private const val MaxAiPlanActions = 100
+private const val MaxAiPlanPageMutations = 100
+private const val MaxAiPlanContentBytes = 8L * 1024L * 1024L

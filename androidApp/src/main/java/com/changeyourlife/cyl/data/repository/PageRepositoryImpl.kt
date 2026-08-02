@@ -1,6 +1,8 @@
 package com.changeyourlife.cyl.data.repository
 
 import androidx.room.withTransaction
+import com.changeyourlife.cyl.aicontract.CYL_ACTION_SCHEMA_NAME
+import com.changeyourlife.cyl.aicontract.CYL_ACTION_SCHEMA_VERSION
 import com.changeyourlife.cyl.data.local.CylDatabase
 import com.changeyourlife.cyl.data.local.dao.PageDao
 import com.changeyourlife.cyl.data.local.dao.PageContentDao
@@ -14,6 +16,10 @@ import com.changeyourlife.cyl.data.local.mapper.toDomain
 import com.changeyourlife.cyl.data.local.mapper.toEntity
 import com.changeyourlife.cyl.data.local.mapper.toDocument
 import com.changeyourlife.cyl.data.search.SearchIndexRebuilder
+import com.changeyourlife.cyl.data.remote.sync.AiActionPlanCommitRequestDto
+import com.changeyourlife.cyl.data.remote.sync.AiActionPlanPageMutationDto
+import com.changeyourlife.cyl.data.remote.sync.toSyncDto
+import com.changeyourlife.cyl.data.remote.sync.toDomain as remotePageToDomain
 import com.changeyourlife.cyl.data.sync.BackgroundSyncQueue
 import com.changeyourlife.cyl.data.sync.SessionSyncCoordinator
 import com.changeyourlife.cyl.domain.model.Page
@@ -34,12 +40,19 @@ import com.changeyourlife.cyl.domain.model.PageTableSort
 import com.changeyourlife.cyl.domain.model.PageTableViewConfig
 import com.changeyourlife.cyl.domain.model.toTypedCellValue
 import com.changeyourlife.cyl.domain.model.withColumnType
+import com.changeyourlife.cyl.domain.repository.AiActionPlanCommit
+import com.changeyourlife.cyl.domain.repository.AiActionPlanPageOperation
+import com.changeyourlife.cyl.domain.repository.AiActionPlanRemoteCommitResult
 import com.changeyourlife.cyl.domain.repository.PageRepository
 import java.util.UUID
 import javax.inject.Inject
+import kotlin.coroutines.AbstractCoroutineContextElement
+import kotlin.coroutines.CoroutineContext
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onStart
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
@@ -51,6 +64,26 @@ private val pageRepositoryJson = Json {
 private enum class PageRemoteSyncPolicy {
     Immediate,
     DebouncedPendingPush,
+}
+
+private class AiPlanRemoteSyncContext(
+    val workspaceId: String,
+    val originalPagesById: Map<String, PageEntity>,
+    val originalTombstonesByPageId: Map<String, SyncTombstoneEntity>,
+) : AbstractCoroutineContextElement(Key) {
+    private val touchedPageIds = linkedSetOf<String>()
+
+    fun touch(pageIds: Iterable<String>) {
+        synchronized(touchedPageIds) {
+            touchedPageIds += pageIds
+        }
+    }
+
+    fun touchedPageIds(): Set<String> {
+        return synchronized(touchedPageIds) { touchedPageIds.toSet() }
+    }
+
+    companion object Key : CoroutineContext.Key<AiPlanRemoteSyncContext>
 }
 
 class PageRepositoryImpl @Inject constructor(
@@ -139,7 +172,103 @@ class PageRepositoryImpl @Inject constructor(
         return pageDao.getPage(pageId)?.toDomain()
     }
 
+    override suspend fun getWorkspacePageSnapshots(workspaceId: String): List<Page> {
+        return pageDao.getPagesForWorkspaceIncludingDeleted(workspaceId).map(PageEntity::toDomain)
+    }
+
+    override suspend fun <T> withAiActionPlanRemoteCommit(
+        workspaceId: String,
+        block: suspend () -> T,
+    ): T {
+        return sessionSyncCoordinator.withExclusiveSyncOperation {
+            val context = AiPlanRemoteSyncContext(
+                workspaceId = workspaceId,
+                originalPagesById = pageDao
+                    .getPagesForWorkspaceIncludingDeleted(workspaceId)
+                    .associateBy(PageEntity::id),
+                originalTombstonesByPageId = syncTombstoneDao
+                    .getPendingTombstones()
+                    .filter { tombstone -> tombstone.entityType == SyncTombstoneType.PagePermanentDelete }
+                    .associateBy(SyncTombstoneEntity::entityId),
+            )
+            withContext(context) {
+                try {
+                    block()
+                } catch (error: Throwable) {
+                    rollbackAiActionPlanLocalState()
+                    throw error
+                }
+            }
+        }
+    }
+
+    override suspend fun commitAiActionPlan(
+        plan: AiActionPlanCommit,
+    ): AiActionPlanRemoteCommitResult {
+        val response = sessionSyncCoordinator.commitAiActionPlan(
+            idempotencyKey = plan.idempotencyKey,
+            request = AiActionPlanCommitRequestDto(
+                auditId = plan.auditId,
+                workspaceId = plan.workspaceId,
+                schemaName = CYL_ACTION_SCHEMA_NAME,
+                schemaVersion = CYL_ACTION_SCHEMA_VERSION,
+                actions = plan.actions,
+                mutations = plan.mutations.map { mutation ->
+                    AiActionPlanPageMutationDto(
+                        operation = when (mutation.operation) {
+                            AiActionPlanPageOperation.Upsert -> "UPSERT"
+                            AiActionPlanPageOperation.PermanentDelete -> "PERMANENT_DELETE"
+                        },
+                        pageId = mutation.pageId,
+                        expectedRevision = mutation.expectedRevision,
+                        page = mutation.page?.toSyncDto(),
+                    )
+                },
+            ),
+        )
+        return AiActionPlanRemoteCommitResult.Committed(
+            replayed = response.replayed,
+            pages = response.pages.map { page -> page.remotePageToDomain() },
+            permanentlyDeletedPageIds = response.permanentlyDeletedPageIds,
+        )
+    }
+
+    override suspend fun rollbackAiActionPlanLocalState() {
+        val context = currentCoroutineContext()[AiPlanRemoteSyncContext] ?: return
+        val touchedPageIds = context.touchedPageIds()
+        if (touchedPageIds.isEmpty()) return
+
+        database.withTransaction {
+            touchedPageIds.forEach { pageId ->
+                syncTombstoneDao.deleteTombstone(
+                    entityType = SyncTombstoneType.PagePermanentDelete,
+                    entityId = pageId,
+                )
+                val originalTombstone = context.originalTombstonesByPageId[pageId]
+                if (originalTombstone != null) {
+                    syncTombstoneDao.upsertTombstone(originalTombstone)
+                }
+
+                val originalPage = context.originalPagesById[pageId]
+                if (originalPage == null) {
+                    pageDao.deletePageById(pageId)
+                } else {
+                    persistPageState(originalPage)
+                }
+            }
+        }
+        touchedPageIds.forEach { pageId ->
+            val originalPage = context.originalPagesById[pageId]
+            if (originalPage == null) {
+                searchIndexRebuilder.deletePageTree(pageId)
+            } else {
+                searchIndexRebuilder.rebuildPage(originalPage)
+            }
+        }
+    }
+
     override suspend fun upsertPage(page: Page) {
+        markAiPlanPagesTouched(listOf(page.id))
         val requestedEntity = page.toEntity()
         val entity = database.withTransaction {
             val currentEntity = pageDao.getPage(page.id)
@@ -152,7 +281,9 @@ class PageRepositoryImpl @Inject constructor(
             }
         }
         searchIndexRebuilder.rebuildPage(entity)
-        backgroundSyncQueue.enqueuePendingPushDebounced()
+        if (!isAiPlanRemoteSyncDeferred()) {
+            backgroundSyncQueue.enqueuePendingPushDebounced()
+        }
     }
 
     override suspend fun updateBlockText(
@@ -699,9 +830,12 @@ class PageRepositoryImpl @Inject constructor(
             updatedAt = now,
             deletedAt = null,
         )
+        markAiPlanPagesTouched(listOf(page.id))
         val entity = page.toEntity().copy(syncStatus = SyncStatus.PendingPush)
         persistPage(entity)
-        backgroundSyncQueue.enqueue("createPage:${entity.id}") { pushPage(entity) }
+        if (!isAiPlanRemoteSyncDeferred()) {
+            backgroundSyncQueue.enqueue("createPage:${entity.id}") { pushPage(entity) }
+        }
         return page
     }
 
@@ -727,6 +861,7 @@ class PageRepositoryImpl @Inject constructor(
             .distinctBy(Page::id)
             .parentFirst()
         if (snapshots.isEmpty()) return false
+        markAiPlanPagesTouched(snapshots.map(Page::id))
 
         val now = System.currentTimeMillis()
         val restoredPages = database.withTransaction {
@@ -750,31 +885,40 @@ class PageRepositoryImpl @Inject constructor(
             }
         }
         restoredPages.forEach { restored -> searchIndexRebuilder.rebuildPage(restored) }
-        backgroundSyncQueue.enqueuePendingPushDebounced()
+        if (!isAiPlanRemoteSyncDeferred()) {
+            backgroundSyncQueue.enqueuePendingPushDebounced()
+        }
         return true
     }
 
     override suspend fun deletePage(pageId: String) {
+        markAiPlanPagesTouched(getPageTreeSnapshot(pageId).map(Page::id).ifEmpty { listOf(pageId) })
         val deletedAt = System.currentTimeMillis()
         pageDao.softDeletePageTree(
             pageId = pageId,
             deletedAt = deletedAt,
         )
         searchIndexRebuilder.markPageTreeDeleted(pageId = pageId, deletedAt = deletedAt)
-        backgroundSyncQueue.enqueue("deletePage:$pageId") { this.deletePage(pageId) }
+        if (!isAiPlanRemoteSyncDeferred()) {
+            backgroundSyncQueue.enqueue("deletePage:$pageId") { this.deletePage(pageId) }
+        }
     }
 
     override suspend fun restorePage(pageId: String) {
+        markAiPlanPagesTouched(getPageTreeSnapshot(pageId).map(Page::id).ifEmpty { listOf(pageId) })
         val restoredAt = System.currentTimeMillis()
         pageDao.restorePageTree(
             pageId = pageId,
             restoredAt = restoredAt,
         )
         searchIndexRebuilder.markPageTreeRestored(pageId = pageId, restoredAt = restoredAt)
-        backgroundSyncQueue.enqueue("restorePage:$pageId") { this.restorePage(pageId) }
+        if (!isAiPlanRemoteSyncDeferred()) {
+            backgroundSyncQueue.enqueue("restorePage:$pageId") { this.restorePage(pageId) }
+        }
     }
 
     override suspend fun deletePagePermanently(pageId: String) {
+        markAiPlanPagesTouched(getPageTreeSnapshot(pageId).map(Page::id).ifEmpty { listOf(pageId) })
         val now = System.currentTimeMillis()
         database.withTransaction {
             val expectedRevision = pageDao.getPage(pageId)?.revision ?: 0L
@@ -790,8 +934,10 @@ class PageRepositoryImpl @Inject constructor(
             pageDao.deletePageTreePermanently(pageId)
         }
         searchIndexRebuilder.deletePageTree(pageId)
-        backgroundSyncQueue.enqueue("deletePagePermanently:$pageId") {
-            this.deletePagePermanently(pageId)
+        if (!isAiPlanRemoteSyncDeferred()) {
+            backgroundSyncQueue.enqueue("deletePagePermanently:$pageId") {
+                this.deletePagePermanently(pageId)
+            }
         }
     }
 
@@ -824,6 +970,7 @@ class PageRepositoryImpl @Inject constructor(
         remoteSync: suspend (PageEntity) -> Unit,
         mutation: suspend (updatedAt: Long) -> Boolean,
     ): Boolean {
+        markAiPlanPagesTouched(listOf(pageId))
         val mutationResult = database.withTransaction {
             val currentPage = pageDao.getPage(pageId) ?: return@withTransaction null
             ensureProjectionForPage(currentPage)
@@ -859,6 +1006,7 @@ class PageRepositoryImpl @Inject constructor(
         remoteSync: suspend (PageEntity) -> Unit,
         mutation: (PageBlockDocument) -> PageBlockDocument?,
     ): Boolean {
+        markAiPlanPagesTouched(listOf(pageId))
         val mutationResult = database.withTransaction {
             val currentPage = pageDao.getPage(pageId) ?: return@withTransaction null
             val currentDocument = PageContentCodec.decodeDocument(currentPage.content)
@@ -883,12 +1031,13 @@ class PageRepositoryImpl @Inject constructor(
         return true
     }
 
-    private fun enqueueRemotePageMutation(
+    private suspend fun enqueueRemotePageMutation(
         name: String,
         policy: PageRemoteSyncPolicy,
         updatedPage: PageEntity,
         remoteSync: suspend (PageEntity) -> Unit,
     ) {
+        if (isAiPlanRemoteSyncDeferred()) return
         when (policy) {
             PageRemoteSyncPolicy.Immediate -> backgroundSyncQueue.enqueue(name) {
                 remoteSync(updatedPage)
@@ -910,6 +1059,15 @@ class PageRepositoryImpl @Inject constructor(
                 cells = projection.cells,
             )
         }
+    }
+
+    private suspend fun markAiPlanPagesTouched(pageIds: Iterable<String>) {
+        currentCoroutineContext()[AiPlanRemoteSyncContext]
+            ?.touch(pageIds.filter(String::isNotBlank))
+    }
+
+    private suspend fun isAiPlanRemoteSyncDeferred(): Boolean {
+        return currentCoroutineContext()[AiPlanRemoteSyncContext] != null
     }
 
     private suspend fun persistPageState(page: PageEntity) {

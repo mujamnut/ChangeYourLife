@@ -32,27 +32,32 @@ internal class AiActionContextBuilder(
                 }.thenBy { indexed -> indexed.index },
             )
             .map(IndexedValue<AiPageContext>::value)
+        val readablePages = rankedPages.filter { page -> page.hasReadableContent() }
         val detail = StringBuilder()
         var remainingChars = maxDetailChars.coerceAtLeast(MinimumDetailChars)
-        var detailedPages = 0
+        var renderedPageCount = 0
         var includedRows = 0
         var contextComplete = true
 
-        rankedPages.forEach { page ->
+        readablePages.forEach { page ->
             val rendered = renderPage(page, remainingChars)
             if (rendered.text.isNotBlank()) {
                 detail.append(rendered.text)
                 remainingChars -= rendered.text.length
-                detailedPages += 1
+                renderedPageCount += 1
                 includedRows += rendered.includedRows
             }
             if (!rendered.complete) contextComplete = false
         }
 
-        val totalRows = pages.sumOf { page ->
+        val totalRows = readablePages.sumOf { page ->
             page.blocks.sumOf { block -> block.totalRowCount.coerceAtLeast(block.tableRows.size) }
         }
-        if (includedRows < totalRows || detailedPages < pages.size || pages.any { !it.contextComplete }) {
+        if (
+            includedRows < totalRows ||
+            renderedPageCount < readablePages.size ||
+            readablePages.any { !it.contextComplete }
+        ) {
             contextComplete = false
         }
         val coverage = if (contextComplete) CoverageFull else CoveragePartial
@@ -60,17 +65,29 @@ internal class AiActionContextBuilder(
             appendLine("Client date: ${clientDate.ifBlank { "unknown" }}")
             appendLine("Client timezone: ${clientTimezone.ifBlank { "unknown" }}")
             appendLine()
+            appendLine("CYL_RETRIEVAL_BOUNDARY:")
+            appendLine(
+                "Only pages marked access=Target or access=Retrieved contain readable user content. " +
+                    "Pages marked access=Metadata expose title metadata only.",
+            )
+            appendLine(
+                "Never infer blocks, rows, cells, properties, or facts from a Metadata page. " +
+                    "Ask the user to mention or target that page before using its content.",
+            )
+            appendLine()
             appendLine("CYL_WORKSPACE_MANIFEST:")
             if (pages.isEmpty()) {
                 appendLine("- none")
             } else {
                 pages.forEach { page ->
                     appendLine(page.manifestLine())
-                    page.blocks
-                        .filter { block -> block.isTableContext() }
-                        .forEach { table ->
-                            appendLine(table.manifestLine())
-                        }
+                    if (page.hasReadableContent()) {
+                        page.blocks
+                            .filter { block -> block.isTableContext() }
+                            .forEach { table ->
+                                appendLine(table.manifestLine())
+                            }
+                    }
                 }
             }
             appendLine()
@@ -92,7 +109,7 @@ internal class AiActionContextBuilder(
             appendLine()
             appendLine(
                 "CYL_CONTEXT_COVERAGE: status=$coverage " +
-                    "detailedPages=$detailedPages/${pages.size} rows=$includedRows/$totalRows",
+                    "detailedPages=$renderedPageCount/${readablePages.size} rows=$includedRows/$totalRows",
             )
             if (!contextComplete) {
                 appendLine(
@@ -104,8 +121,8 @@ internal class AiActionContextBuilder(
         return AiActionContextResult(
             text = text,
             coverage = coverage,
-            detailedPageCount = detailedPages,
-            totalPageCount = pages.size,
+            detailedPageCount = renderedPageCount,
+            totalPageCount = readablePages.size,
             includedRowCount = includedRows,
             totalRowCount = totalRows,
         )
@@ -115,13 +132,17 @@ internal class AiActionContextBuilder(
         page: AiPageContext,
         availableChars: Int,
     ): RenderedPage {
+        if (!page.hasReadableContent()) {
+            return RenderedPage(complete = true)
+        }
         if (availableChars < MinimumPageDetailChars) {
             return RenderedPage(complete = page.blocks.isEmpty() && page.contextComplete)
         }
         val builder = StringBuilder()
         builder.appendLine(
             "page id=${page.id.quoted()} title=${page.title.compactForContext().quoted()} " +
-                "focused=${page.isFocused} blocks=${page.blocks.size}/${page.totalBlockCount}",
+                "access=${page.access.normalizedAccess()} focused=${page.isFocused} " +
+                "blocks=${page.blocks.size}/${page.totalBlockCount}",
         )
         val pageCoverageReserve = 140
         var remaining = availableChars - builder.length - pageCoverageReserve
@@ -275,9 +296,13 @@ internal class AiActionContextBuilder(
     }
 
     private fun AiPageContext.manifestLine(): String {
+        if (!hasReadableContent()) {
+            return "- page id=${id.quoted()} title=${title.compactForContext().quoted()} access=$AccessMetadata"
+        }
         val tableCount = blocks.count { block -> block.isTableContext() }
         return "- page id=${id.quoted()} title=${title.compactForContext().quoted()} " +
-            "focused=$isFocused blocks=${blocks.size}/$totalBlockCount tables=$tableCount " +
+            "access=${access.normalizedAccess()} focused=$isFocused " +
+            "blocks=${blocks.size}/$totalBlockCount tables=$tableCount " +
             "sourceComplete=$contextComplete"
     }
 
@@ -306,6 +331,7 @@ internal class AiActionContextBuilder(
         }
         val terms = prompt.contextTerms()
         score += terms.count { term -> normalizedTitle.contains(term) } * TitleTermScore
+        if (!hasReadableContent()) return score
         blocks.forEach { block ->
             val metadata = "${block.tableTitle} ${block.rowTitle}".lowercase()
             score += terms.count { term -> metadata.contains(term) } * MetadataTermScore
@@ -318,6 +344,15 @@ internal class AiActionContextBuilder(
             }
         }
         return score
+    }
+
+    private fun AiPageContext.hasReadableContent(): Boolean =
+        access.normalizedAccess() in ReadableAccessLevels
+
+    private fun String.normalizedAccess(): String = when {
+        equals(AccessTarget, ignoreCase = true) -> AccessTarget
+        equals(AccessRetrieved, ignoreCase = true) -> AccessRetrieved
+        else -> AccessMetadata
     }
 
     private fun String.contextTerms(): List<String> =
@@ -374,8 +409,12 @@ internal class AiActionContextBuilder(
         const val RowMatchScore = 1_000
         const val CoverageFull = "FULL"
         const val CoveragePartial = "PARTIAL"
+        const val AccessMetadata = "Metadata"
+        const val AccessTarget = "Target"
+        const val AccessRetrieved = "Retrieved"
 
         val NonWordPattern = Regex("[^a-z0-9@_-]+")
+        val ReadableAccessLevels = setOf(AccessTarget, AccessRetrieved)
         val ContextStopWords = setOf(
             "ai",
             "aku",

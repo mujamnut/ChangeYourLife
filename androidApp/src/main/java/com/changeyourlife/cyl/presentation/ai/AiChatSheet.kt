@@ -41,6 +41,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -49,6 +50,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.SheetState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -422,6 +424,22 @@ fun AiChatSheet(
                 isGenerating = isGenerating,
                 attachedPageTitle = attachedPageTitle,
                 onOpenPage = onOpenPage,
+                onConfirmDestructiveActions = {
+                    onSendMessage(
+                        ConfirmDestructiveActionsPrompt,
+                        emptyList(),
+                        emptyList(),
+                        false,
+                    )
+                },
+                onCancelDestructiveActions = {
+                    onSendMessage(
+                        CancelDestructiveActionsPrompt,
+                        emptyList(),
+                        emptyList(),
+                        false,
+                    )
+                },
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f),
@@ -583,6 +601,8 @@ private fun AiChatMessageList(
     isGenerating: Boolean,
     attachedPageTitle: String?,
     onOpenPage: (String, String, String) -> Unit,
+    onConfirmDestructiveActions: () -> Unit,
+    onCancelDestructiveActions: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -630,7 +650,7 @@ private fun AiChatMessageList(
             key = { index, message ->
                 message.id.ifBlank { "${message.role}:${message.content.hashCode()}:$index" }
             },
-        ) { _, message ->
+        ) { index, message ->
             val isUser = message.role == "user"
             val messageText = message.content.trim().ifBlank {
                 if (message.attachments.isEmpty()) "No response content." else ""
@@ -679,6 +699,31 @@ private fun AiChatMessageList(
                             links = message.pageLinks,
                             onOpenPage = onOpenPage,
                         )
+                    }
+                    val needsDestructiveConfirmation =
+                        index == messages.lastIndex &&
+                            !isGenerating &&
+                            message.actionMetadata
+                                ?.validationIssues
+                                .orEmpty()
+                                .any { issue ->
+                                    issue.code.equals(
+                                        DestructiveConfirmationRequiredCode,
+                                        ignoreCase = true,
+                                    )
+                                }
+                    if (needsDestructiveConfirmation) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Button(onClick = onConfirmDestructiveActions) {
+                                Text("Confirm")
+                            }
+                            TextButton(onClick = onCancelDestructiveActions) {
+                                Text("Cancel")
+                            }
+                        }
                     }
                     if (!isUser && messageText.isNotBlank()) {
                         IconButton(

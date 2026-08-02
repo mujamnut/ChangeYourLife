@@ -76,6 +76,52 @@ class AiActionContextBuilderTest {
         assertFalse(result.includedRowCount == result.totalRowCount)
     }
 
+    @Test
+    fun metadataPageAppearsInManifestWithoutExposingItsBlocks() {
+        val result = AiActionContextBuilder().build(
+            pages = listOf(
+                AiPageContext(
+                    id = "target",
+                    title = "Target",
+                    access = "Target",
+                    blocks = listOf(
+                        AiBlockContext(id = "visible", type = "Text", text = "visible-content"),
+                    ),
+                ),
+                AiPageContext(
+                    id = "metadata",
+                    title = "Catalog only",
+                    access = "Metadata",
+                    blocks = listOf(
+                        AiBlockContext(
+                            id = "hidden",
+                            type = "DatabaseTable",
+                            text = "must-not-leak",
+                            tableTitle = "Secret table title",
+                            tableRows = listOf(row(index = 999, value = "must-not-leak")),
+                        ),
+                    ),
+                ),
+            ),
+            tasks = emptyList(),
+            latestUserPrompt = "summarize target",
+            clientDate = "",
+            clientTimezone = "",
+        )
+
+        assertTrue(result.text.contains("id=\"metadata\" title=\"Catalog only\" access=Metadata"))
+        assertTrue(result.text.contains("visible-content"))
+        assertFalse(result.text.contains("must-not-leak"))
+        assertFalse(result.text.contains("Secret table title"))
+        assertFalse(
+            result.text.lineSequence()
+                .first { line -> line.contains("id=\"metadata\"") }
+                .contains("blocks="),
+        )
+        assertEquals(1, result.detailedPageCount)
+        assertEquals(1, result.totalPageCount)
+    }
+
     private fun page(
         title: String,
         rows: List<AiTableRowContext>,

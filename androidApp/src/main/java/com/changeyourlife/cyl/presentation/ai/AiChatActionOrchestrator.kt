@@ -23,6 +23,7 @@ object AiChatActionOrchestrator {
         executedAt: Long = System.currentTimeMillis(),
         provider: String = "",
         model: String = "",
+        destructiveActionsConfirmed: Boolean = false,
         executeActions: suspend (
             workspaceId: String,
             scopedTargetPage: Page?,
@@ -59,6 +60,7 @@ object AiChatActionOrchestrator {
             .toSet()
         val actionDecision = AiActionExecutionPolicy.decide(
             backendActions = proposedActions,
+            destructiveActionsConfirmed = destructiveActionsConfirmed,
         )
         val preExecutionValidationIssues =
             actionDecision.validationIssues +
@@ -90,32 +92,51 @@ object AiChatActionOrchestrator {
                 .filter { index -> index in proposedActions.indices }
                 .toList()
         }
-        val visibleValidationMessages = finalValidationIssues.toUserVisibleMessages(prompt)
         val needsClarification = proposedActions.isNotEmpty() &&
             appliedActionIndexes.isEmpty() &&
             finalValidationIssues.isNotEmpty() &&
             finalValidationIssues.all(ChatActionValidationMetadata::requiresClarification)
-        val pendingActions = proposedActions.mapIndexedNotNull { index, action ->
-            if (index in appliedActionIndexes) return@mapIndexedNotNull null
-            val issues = finalValidationIssues.filter { issue ->
-                issue.requiresClarification() &&
-                    (issue.actionIndex == index || issue.actionIndex == null && proposedActions.size == 1)
-            }
-            if (issues.isEmpty()) {
-                null
-            } else {
+        val needsDestructiveConfirmation =
+            !destructiveActionsConfirmed &&
+                actionDecision.confirmationCandidates.isNotEmpty() &&
+                finalValidationIssues.isNotEmpty() &&
+                finalValidationIssues.all(ChatActionValidationMetadata::requiresDestructiveConfirmation)
+        val pendingActions = if (needsDestructiveConfirmation) {
+            proposedActions.map { action ->
                 ChatPendingActionMetadata(
                     action = action.toContractWire(),
-                    issueFields = issues.map(ChatActionValidationMetadata::field)
-                        .filter(String::isNotBlank)
-                        .distinct(),
-                    issueCodes = issues.map(ChatActionValidationMetadata::code)
-                        .filter(String::isNotBlank)
-                        .distinct(),
+                    issueFields = listOf("confirmation"),
+                    issueCodes = listOf(DestructiveConfirmationRequiredCode),
                 )
+            }
+        } else {
+            proposedActions.mapIndexedNotNull { index, action ->
+                if (index in appliedActionIndexes) return@mapIndexedNotNull null
+                val issues = finalValidationIssues.filter { issue ->
+                    issue.requiresClarification() &&
+                        (issue.actionIndex == index || issue.actionIndex == null && proposedActions.size == 1)
+                }
+                if (issues.isEmpty()) {
+                    null
+                } else {
+                    ChatPendingActionMetadata(
+                        action = action.toContractWire(),
+                        issueFields = issues.map(ChatActionValidationMetadata::field)
+                            .filter(String::isNotBlank)
+                            .distinct(),
+                        issueCodes = issues.map(ChatActionValidationMetadata::code)
+                            .filter(String::isNotBlank)
+                            .distinct(),
+                    )
+                }
             }
         }
         val assistantReply = when {
+            needsDestructiveConfirmation -> AiDestructiveActionPolicy.confirmationSummary(
+                actions = actionDecision.confirmationCandidates.map { candidate -> candidate.action },
+                useMalay = prompt.prefersMalayExecutionText(),
+            )
+
             needsClarification -> ""
 
             proposedActions.isNotEmpty() && appliedActionIndexes.isEmpty() ->
@@ -131,6 +152,11 @@ object AiChatActionOrchestrator {
         }
         val diagnosticMessages = backendResult.diagnostics.toUserDiagnosticMessages()
         val visibleExecutionMessages = actionResults.messages.visibleInChat()
+        val visibleValidationMessages = finalValidationIssues
+            .filterNot { issue ->
+                needsDestructiveConfirmation && issue.requiresDestructiveConfirmation()
+            }
+            .toUserVisibleMessages(prompt)
         val replyWithResults = listOf(
             assistantReply,
             diagnosticMessages.joinToString("\n"),
@@ -187,6 +213,11 @@ private fun List<ChatActionValidationMetadata>.toUserVisibleMessages(
                     issue.field.ambiguousTargetMessage(useMalay)
                 "target_page_required" ->
                     "targetTitle".missingRequiredMessage(useMalay)
+                "target_outside_retrieval_scope" -> if (useMalay) {
+                    "Buka atau mention page itu dengan @ sebelum kandungannya digunakan atau diubah."
+                } else {
+                    "Open or mention that page with @ before its content is used or changed."
+                }
                 "unsupported_action_type" -> if (useMalay) {
                     "Tindakan itu belum disokong."
                 } else {
@@ -218,6 +249,10 @@ private fun List<ChatActionValidationMetadata>.toUserVisibleMessages(
 
 private fun ChatActionValidationMetadata.requiresClarification(): Boolean {
     return code.trim().lowercase(Locale.ROOT) in ClarificationIssueCodes
+}
+
+private fun ChatActionValidationMetadata.requiresDestructiveConfirmation(): Boolean {
+    return code.equals(DestructiveConfirmationRequiredCode, ignoreCase = true)
 }
 
 private fun String.missingRequiredMessage(useMalay: Boolean): String {
@@ -402,6 +437,7 @@ private val ClarificationIssueCodes = setOf(
     "target_page_ambiguous",
     "target_page_not_found",
     "target_page_required",
+    "target_outside_retrieval_scope",
 )
 
 private fun AiDiagnostics.toUserDiagnosticMessages(): List<String> {

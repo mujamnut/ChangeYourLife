@@ -135,4 +135,7 @@ interface PageDao {
 
     @Query("DELETE FROM pages WHERE id = :pageId OR parentPageId = :pageId")
     suspend fun deletePageTreePermanently(pageId: String)
+
+    @Query("DELETE FROM pages WHERE id = :pageId")
+    suspend fun deletePageById(pageId: String)
 }

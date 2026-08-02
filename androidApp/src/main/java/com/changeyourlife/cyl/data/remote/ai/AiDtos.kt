@@ -66,6 +66,7 @@ data class AiDiagnosticsDto(
 @Serializable
 data class ChatWithActionsRequestDto(
     val messages: List<ChatMessageDto>,
+    val retrievalScope: AiRetrievalScopeDto = AiRetrievalScopeDto(),
     val pages: List<AiPageContextDto> = emptyList(),
     val tasks: List<AiTaskContextDto> = emptyList(),
     val clientDate: String = "",
@@ -76,9 +77,21 @@ data class ChatWithActionsRequestDto(
 )
 
 @Serializable
+data class AiRetrievalScopeDto(
+    val workspaceId: String = "",
+    val mode: String = "Workspace",
+    val currentPageId: String = "",
+    val explicitPageIds: List<String> = emptyList(),
+    val retrievedPageIds: List<String> = emptyList(),
+    val includeTasks: Boolean = false,
+)
+
+@Serializable
 data class AiPageContextDto(
     val id: String,
     val title: String,
+    val workspaceId: String = "",
+    val access: String = "Metadata",
     val blocks: List<AiBlockContextDto> = emptyList(),
     val totalBlockCount: Int = blocks.size,
     val isFocused: Boolean = false,
@@ -129,7 +142,8 @@ data class AiTableCellContextDto(
 @Serializable
 data class AiTaskContextDto(
     val id: String,
-    val title: String
+    val title: String,
+    val workspaceId: String = "",
 )
 
 @Serializable

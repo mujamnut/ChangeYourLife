@@ -122,6 +122,42 @@ class AiPendingClarificationTest {
     }
 
     @Test
+    fun destructiveConfirmationReplaysThePersistedPlanWithoutModelRegeneration() {
+        val pending = listOf(
+            ChatPendingActionMetadata(
+                action = ChatAction(
+                    type = "DELETE_TABLE_ROWS",
+                    title = "",
+                    targetTitle = "Budget",
+                    tableTitle = "Transactions",
+                    columnName = "Month",
+                    filterQuery = "2026-04",
+                ).toContractWire(),
+                issueFields = listOf("confirmation"),
+                issueCodes = listOf(DestructiveConfirmationRequiredCode),
+            ),
+        )
+
+        assertEquals(
+            AiPendingDestructiveDecision.None,
+            pending.destructiveDecision("okay"),
+        )
+        assertEquals(
+            AiPendingDestructiveDecision.Confirm,
+            pending.destructiveDecision(ConfirmDestructiveActionsPrompt),
+        )
+        assertEquals(
+            AiPendingDestructiveDecision.Cancel,
+            pending.destructiveDecision(CancelDestructiveActionsPrompt),
+        )
+
+        val confirmed = pending.toConfirmedDestructiveActionResult()
+        assertEquals(1, confirmed.actions.size)
+        assertEquals("DELETE_TABLE_ROWS", confirmed.actions.single().type)
+        assertEquals("2026-04", confirmed.actions.single().filterQuery)
+    }
+
+    @Test
     fun exactMalayRowReplyResolvesLocallyWhenProviderReturnsNoRepairedAction() {
         val page = budgetPage()
         val pendingAction = ChatAction(
@@ -230,6 +266,66 @@ class AiPendingClarificationTest {
         assertEquals("amount", action.columnId)
         assertEquals("transactions", action.blockId)
         assertEquals("29", action.value)
+    }
+
+    @Test
+    fun selectedMentionResolvesPendingRetrievalTargetWithoutFuzzyText() {
+        val selectedPage = budgetPage()
+        val pending = ChatAction(
+            type = "RENAME_PAGE",
+            title = "July Budget",
+            targetTitle = "",
+        )
+
+        val resolved = ChatActionResult(reply = "Open or mention the page.")
+            .resolvePendingClarification(
+                pendingActions = listOf(
+                    ChatPendingActionMetadata(
+                        action = pending.toContractWire(),
+                        issueFields = listOf("targetTitle"),
+                        issueCodes = listOf("target_outside_retrieval_scope"),
+                    ),
+                ),
+                userPrompt = "teruskan",
+                pages = listOf(selectedPage),
+                scopedTargetPage = selectedPage,
+            )
+
+        assertEquals(1, resolved.actions.size)
+        assertEquals(selectedPage.title, resolved.actions.single().targetTitle)
+    }
+
+    @Test
+    fun selectedMentionResolvesPendingSourcePageByIdAndTitle() {
+        val targetPage = budgetPage()
+        val sourcePage = budgetPage().copy(id = "source-page", title = "Source Data")
+        val pending = ChatAction(
+            type = "ATTACH_TABLE_DATA_SOURCE",
+            title = "",
+            targetTitle = targetPage.title,
+            blockId = "transactions",
+            tableTitle = "Transactions",
+            sourceTableBlockId = "transactions",
+            sourceTableTitle = "Transactions",
+        )
+
+        val resolved = ChatActionResult(reply = "Open or mention the source page.")
+            .resolvePendingClarification(
+                pendingActions = listOf(
+                    ChatPendingActionMetadata(
+                        action = pending.toContractWire(),
+                        issueFields = listOf("sourcePageTitle"),
+                        issueCodes = listOf("target_outside_retrieval_scope"),
+                    ),
+                ),
+                userPrompt = "guna page yang saya mention",
+                pages = listOf(targetPage, sourcePage),
+                scopedTargetPage = sourcePage,
+            )
+
+        val action = resolved.actions.single()
+        assertEquals(sourcePage.id, action.sourcePageId)
+        assertEquals(sourcePage.title, action.sourcePageTitle)
     }
 
     @Test

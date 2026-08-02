@@ -42,6 +42,8 @@ import com.changeyourlife.cyl.domain.repository.SyncStatusRepository
 import com.changeyourlife.cyl.domain.repository.TaskRepository
 import com.changeyourlife.cyl.domain.repository.WorkspaceRepository
 import com.changeyourlife.cyl.domain.repository.AiPageContext
+import com.changeyourlife.cyl.domain.repository.AiPageContextAccess
+import com.changeyourlife.cyl.domain.repository.AiRetrievalMode
 import com.changeyourlife.cyl.domain.repository.AiRepository
 import com.changeyourlife.cyl.domain.repository.AiSkillRepository
 import com.changeyourlife.cyl.domain.repository.AiException
@@ -50,6 +52,7 @@ import com.changeyourlife.cyl.domain.repository.AiStatus
 import com.changeyourlife.cyl.domain.repository.AiActionLogRepository
 import com.changeyourlife.cyl.domain.usecase.ApplyAiActionUndoUseCase
 import com.changeyourlife.cyl.domain.usecase.BuildAiMemoryContextUseCase
+import com.changeyourlife.cyl.domain.usecase.BuildAiRetrievalScopeUseCase
 import com.changeyourlife.cyl.domain.usecase.BuildAiSearchContextUseCase
 import com.changeyourlife.cyl.domain.usecase.BuildAiSkillContextUseCase
 import com.changeyourlife.cyl.domain.usecase.ResolveMentionUseCase
@@ -60,9 +63,13 @@ import com.changeyourlife.cyl.presentation.ai.AiChatActionOrchestrator
 import com.changeyourlife.cyl.presentation.ai.AiChatMessageMapper
 import com.changeyourlife.cyl.presentation.ai.AiChatMessage
 import com.changeyourlife.cyl.presentation.ai.AiChatPageLink
+import com.changeyourlife.cyl.presentation.ai.AiPendingDestructiveDecision
 import com.changeyourlife.cyl.presentation.ai.ChatHistorySearchResult
+import com.changeyourlife.cyl.presentation.ai.cancelledDestructiveActionResult
+import com.changeyourlife.cyl.presentation.ai.destructiveDecision
 import com.changeyourlife.cyl.presentation.ai.latestPendingAiActions
 import com.changeyourlife.cyl.presentation.ai.resolvePendingClarification
+import com.changeyourlife.cyl.presentation.ai.toConfirmedDestructiveActionResult
 import com.changeyourlife.cyl.presentation.ai.toPendingClarificationContext
 import com.changeyourlife.cyl.presentation.ai.toRoleContentPairs
 import com.changeyourlife.cyl.presentation.page.PageBlockCodec
@@ -108,6 +115,7 @@ class HomeViewModel @Inject constructor(
     private val aiActionExecutionUseCase: AiActionExecutionUseCase,
     private val applyAiActionUndoUseCase: ApplyAiActionUndoUseCase,
     private val buildAiMemoryContextUseCase: BuildAiMemoryContextUseCase,
+    private val buildAiRetrievalScopeUseCase: BuildAiRetrievalScopeUseCase,
     private val buildAiSearchContextUseCase: BuildAiSearchContextUseCase,
     private val buildAiSkillContextUseCase: BuildAiSkillContextUseCase,
     private val searchWorkspaceUseCase: SearchWorkspaceUseCase,
@@ -782,6 +790,7 @@ class HomeViewModel @Inject constructor(
                 responseSessionId = session.id
                 val currentSessionMessages = chatHistoryRepository.observeMessages(session.id).first()
                 val pendingClarification = currentSessionMessages.latestPendingAiActions()
+                val pendingDestructiveDecision = pendingClarification.destructiveDecision(visiblePrompt)
                 val currentMessages = AiChatMessageMapper.toAiChatMessages(currentSessionMessages)
                 val userMessage = AiChatMessage(role = "user", content = visiblePrompt)
                 val messageAttachments = images.map { image ->
@@ -827,18 +836,6 @@ class HomeViewModel @Inject constructor(
                 val actionTargetPages = explicitlyMentionedPages.ifEmpty {
                     listOfNotNull(attachedPage)
                 }
-                val pageContext = withContext(Dispatchers.Default) {
-                    pages
-                        .withMentionedPagesFirst(contextualPageIds)
-                        .map { page ->
-                            page.toAiPageContext(
-                                isFocused = page.id in contextualPageIds,
-                            )
-                        }
-                }
-                val openTasks = taskRepository.observeOpenTasks(workspaceId)
-                    .first()
-                val taskContext = openTasks.map { task -> task.id to task.title }
                 val allChatSessions = chatHistoryRepository.observeSessions(scopeId).first()
                 val allChatMessages = chatHistoryRepository.observeMessagesForScope(scopeId)
                     .first()
@@ -847,11 +844,40 @@ class HomeViewModel @Inject constructor(
                     buildAiSearchContextUseCase(
                         workspaceId = workspaceId,
                         prompt = requestPrompt,
-                        currentPageId = scopedTargetPage?.id.orEmpty(),
-                        limit = HomeAiSearchContextLimit,
+                        currentPageId = attachedPage?.id.orEmpty(),
+                        allowedPageIds = contextualPageIds
+                            .toSet()
+                            .takeIf { pageIds -> pageIds.isNotEmpty() },
+                        limit = if (contextualPageIds.isEmpty()) {
+                            HomeAiRetrievedSearchContextLimit
+                        } else {
+                            HomeAiSearchContextLimit
+                        },
                     )
                 } else {
                     AiSearchContext.Empty
+                }
+                val retrievalSelection = buildAiRetrievalScopeUseCase(
+                    workspaceId = workspaceId,
+                    pages = pages,
+                    prompt = requestPrompt,
+                    attachedPageId = attachedPage?.id,
+                    explicitlyMentionedPageIds = explicitlyMentionedPageIds,
+                    searchResults = searchContext.results,
+                )
+                val pageContext = withContext(Dispatchers.Default) {
+                    retrievalSelection.pages.map { page ->
+                        page.toAiPageContext(
+                            access = retrievalSelection.accessFor(page.id),
+                        )
+                    }
+                }
+                val taskContext = if (retrievalSelection.scope.includeTasks) {
+                    taskRepository.observeOpenTasks(workspaceId)
+                        .first()
+                        .map { task -> task.id to task.title }
+                } else {
+                    emptyList()
                 }
 
                 val memoryContext = buildAiMemoryContextUseCase(
@@ -859,6 +885,9 @@ class HomeViewModel @Inject constructor(
                     prompt = requestPrompt,
                     sessions = allChatSessions,
                     messages = allChatMessages,
+                    pageScopeIds = retrievalSelection.detailedPageIds,
+                    restrictToPageScope =
+                        retrievalSelection.scope.mode == AiRetrievalMode.Page,
                 )
                 val memoryMessages = if (memoryContext.isNotBlank) {
                     listOf(AiChatMessage(role = "system", content = memoryContext.content))
@@ -890,22 +919,37 @@ class HomeViewModel @Inject constructor(
                             hasExplicitTargets = explicitlyMentionedPages.isNotEmpty(),
                         ),
                     )
-                aiRepository.chatWithActions(
-                    idempotencyKey = savedUserMessage.id,
-                    messages = messagesForAi.toRoleContentPairs(),
-                    pages = pageContext,
-                    tasks = taskContext,
-                    images = images,
-                    webSearchEnabled = webSearchEnabled,
-                    webSearchQuery = requestPrompt,
-                )
-                    .onSuccess { backendResult ->
-                        val result = backendResult.resolvePendingClarification(
-                            pendingActions = pendingClarification,
-                            userPrompt = visiblePrompt,
-                            pages = pages,
-                            scopedTargetPage = scopedTargetPage,
+                val aiResult = when (pendingDestructiveDecision) {
+                    AiPendingDestructiveDecision.Confirm ->
+                        Result.success(pendingClarification.toConfirmedDestructiveActionResult())
+
+                    AiPendingDestructiveDecision.Cancel ->
+                        Result.success(cancelledDestructiveActionResult())
+
+                    AiPendingDestructiveDecision.None ->
+                        aiRepository.chatWithActions(
+                            idempotencyKey = savedUserMessage.id,
+                            messages = messagesForAi.toRoleContentPairs(),
+                            retrievalScope = retrievalSelection.scope,
+                            pages = pageContext,
+                            tasks = taskContext,
+                            images = images,
+                            webSearchEnabled = webSearchEnabled,
+                            webSearchQuery = requestPrompt,
                         )
+                }
+                aiResult
+                    .onSuccess { backendResult ->
+                        val result = if (pendingDestructiveDecision == AiPendingDestructiveDecision.None) {
+                            backendResult.resolvePendingClarification(
+                                pendingActions = pendingClarification,
+                                userPrompt = visiblePrompt,
+                                pages = pages,
+                                scopedTargetPage = scopedTargetPage,
+                            )
+                        } else {
+                            backendResult
+                        }
                         val auditId = "ai-action:${savedUserMessage.id}"
                         val orchestration = AiChatActionOrchestrator.orchestrate(
                             workspaceId = workspaceId,
@@ -916,6 +960,8 @@ class HomeViewModel @Inject constructor(
                             requestMessageId = savedUserMessage.id,
                             provider = aiStatusState.value.provider,
                             model = aiStatusState.value.model,
+                            destructiveActionsConfirmed =
+                                pendingDestructiveDecision == AiPendingDestructiveDecision.Confirm,
                         ) { targetWorkspaceId, targetPage, actions ->
                             aiActionExecutionUseCase.executeCandidates(
                                 workspaceId = targetWorkspaceId,
@@ -1016,13 +1062,6 @@ class HomeViewModel @Inject constructor(
         return pageIds.mapNotNull { pageId ->
             firstOrNull { page -> page.id == pageId }
         }.distinctBy { page -> page.id }
-    }
-
-    private fun List<Page>.withMentionedPagesFirst(pageIds: List<String>): List<Page> {
-        val mentionedPages = findPagesByIds(pageIds)
-        if (mentionedPages.isEmpty()) return this
-        val mentionedIds = mentionedPages.map { page -> page.id }.toSet()
-        return mentionedPages + filterNot { page -> page.id in mentionedIds }
     }
 
     private fun String.withMentionContext(
@@ -1146,8 +1185,20 @@ class HomeViewModel @Inject constructor(
     }
 
     private fun Page.toAiPageContext(
-        isFocused: Boolean,
+        access: AiPageContextAccess,
     ): AiPageContext {
+        if (access == AiPageContextAccess.Metadata) {
+            return AiPageContext(
+                id = id,
+                title = title.ifBlank { "Untitled page" },
+                workspaceId = workspaceId,
+                access = access,
+                blocks = emptyList(),
+                totalBlockCount = 0,
+                isFocused = false,
+                contextComplete = false,
+            )
+        }
         val document = PageBlockCodec.decodeDocument(content)
         val propertyContexts = document.properties.map { property ->
             AiBlockContext(
@@ -1161,9 +1212,11 @@ class HomeViewModel @Inject constructor(
         return AiPageContext(
             id = id,
             title = title.ifBlank { "Untitled page" },
+            workspaceId = workspaceId,
+            access = access,
             blocks = blockContexts,
             totalBlockCount = blockContexts.size,
-            isFocused = isFocused,
+            isFocused = access == AiPageContextAccess.Target,
             contextComplete = true,
         )
     }
@@ -1395,6 +1448,7 @@ private const val SearchTargetRow = "row"
 const val SearchTargetChat = "chat"
 private const val HomeSearchResultLimit = 40
 private const val HomeAiSearchContextLimit = 8
+private const val HomeAiRetrievedSearchContextLimit = 4
 private const val ChatHistorySearchResultLimit = 40
 private const val ChatHistorySearchDebounceMs = 250L
 private const val DraftHomeChatSessionId = "draft-home-chat"

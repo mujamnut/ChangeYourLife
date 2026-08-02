@@ -102,6 +102,44 @@ class SearchUseCaseRegressionTest {
         assertFalse(nonTargetContent.contains("block-secret-456"))
     }
 
+    @Test
+    fun aiSearchContextRejectsForeignOrUnscopedResultsAndHonorsAllowedPages() = runBlocking {
+        val repository = CapturingSearchRepository(
+            results = listOf(
+                pageResult(pageId = "allowed", title = "Allowed"),
+                pageResult(pageId = "not-selected", title = "Not selected"),
+                SearchResult(
+                    target = SearchTarget(
+                        type = SearchTargetType.Page,
+                        workspaceId = "workspace-2",
+                        pageId = "foreign",
+                    ),
+                    title = "Foreign",
+                ),
+                SearchResult(
+                    target = SearchTarget(
+                        type = SearchTargetType.Block,
+                        workspaceId = WorkspaceId,
+                        pageId = "",
+                        blockId = "orphan",
+                    ),
+                    title = "Orphan",
+                ),
+            ),
+        )
+
+        val context = BuildAiSearchContextUseCase(repository)(
+            workspaceId = WorkspaceId,
+            prompt = "allowed",
+            allowedPageIds = setOf("allowed"),
+        )
+
+        assertEquals(listOf("allowed"), context.results.map { result -> result.target.pageId })
+        assertFalse(context.content.contains("Foreign"))
+        assertFalse(context.content.contains("Not selected"))
+        assertFalse(context.content.contains("Orphan"))
+    }
+
     private fun pageResult(
         pageId: String,
         title: String,

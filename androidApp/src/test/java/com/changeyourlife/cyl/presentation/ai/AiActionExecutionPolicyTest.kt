@@ -2,6 +2,7 @@ package com.changeyourlife.cyl.presentation.ai
 
 import com.changeyourlife.cyl.domain.repository.ChatAction
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -66,6 +67,81 @@ class AiActionExecutionPolicyTest {
         )
 
         assertEquals(listOf(rename), decision.executableActions)
+        assertTrue(decision.validationIssues.isEmpty())
+    }
+
+    @Test
+    fun requiresConfirmationBeforePermanentOrBulkDeletion() {
+        val actions = listOf(
+            ChatAction(type = "DELETE_PAGE_PERMANENTLY", title = "", targetTitle = "Budget"),
+            ChatAction(
+                type = "DELETE_TABLE_ROWS",
+                title = "",
+                targetTitle = "Budget",
+                tableTitle = "Transactions",
+                columnName = "Month",
+                filterQuery = "2026-04",
+            ),
+        )
+
+        val decision = AiActionExecutionPolicy.decide(actions)
+
+        assertEquals(actions, decision.executableActions)
+        assertEquals(2, decision.confirmationCandidates.size)
+        assertTrue(decision.validationIssues.all { issue ->
+            issue.code == DestructiveConfirmationRequiredCode
+        })
+    }
+
+    @Test
+    fun explicitConfirmationReleasesTheExactDestructivePlan() {
+        val action = ChatAction(
+            type = "DELETE_TABLE_COLUMN",
+            title = "",
+            targetTitle = "Budget",
+            tableTitle = "Transactions",
+            columnName = "Notes",
+        )
+
+        val decision = AiActionExecutionPolicy.decide(
+            backendActions = listOf(action),
+            destructiveActionsConfirmed = true,
+        )
+
+        assertEquals(listOf(action), decision.executableActions)
+        assertTrue(decision.confirmationCandidates.isEmpty())
+        assertTrue(decision.validationIssues.isEmpty())
+    }
+
+    @Test
+    fun repeatedSmallDeletesAreTreatedAsBulkRemoval() {
+        val actions = listOf("Food", "Fuel", "Rent").map { row ->
+            ChatAction(
+                type = "DELETE_TABLE_ROW",
+                title = "",
+                tableTitle = "Transactions",
+                rowTitle = row,
+            )
+        }
+
+        val decision = AiActionExecutionPolicy.decide(actions)
+
+        assertEquals(3, decision.confirmationCandidates.size)
+        assertFalse(decision.validationIssues.isEmpty())
+    }
+
+    @Test
+    fun oneReversibleRowDeleteDoesNotAddConfirmationFriction() {
+        val action = ChatAction(
+            type = "DELETE_TABLE_ROW",
+            title = "",
+            tableTitle = "Transactions",
+            rowTitle = "Food",
+        )
+
+        val decision = AiActionExecutionPolicy.decide(listOf(action))
+
+        assertTrue(decision.confirmationCandidates.isEmpty())
         assertTrue(decision.validationIssues.isEmpty())
     }
 }

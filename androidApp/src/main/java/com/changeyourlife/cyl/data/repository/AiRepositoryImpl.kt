@@ -5,6 +5,7 @@ import com.changeyourlife.cyl.data.remote.ai.AiApi
 import com.changeyourlife.cyl.data.remote.ai.AiBlockContextDto
 import com.changeyourlife.cyl.data.remote.ai.AiImageInputDto
 import com.changeyourlife.cyl.data.remote.ai.AiPageContextDto
+import com.changeyourlife.cyl.data.remote.ai.AiRetrievalScopeDto
 import com.changeyourlife.cyl.data.remote.ai.AiTableCellContextDto
 import com.changeyourlife.cyl.data.remote.ai.AiTableColumnContextDto
 import com.changeyourlife.cyl.data.remote.ai.AiTableRowContextDto
@@ -19,6 +20,7 @@ import com.changeyourlife.cyl.domain.repository.AiException
 import com.changeyourlife.cyl.domain.repository.AiImageAttachment
 import com.changeyourlife.cyl.domain.repository.AiRepository
 import com.changeyourlife.cyl.domain.repository.AiPageContext
+import com.changeyourlife.cyl.domain.repository.AiRetrievalScope
 import com.changeyourlife.cyl.domain.repository.ChatActionResult
 import java.time.LocalDate
 import java.util.TimeZone
@@ -83,6 +85,7 @@ class AiRepositoryImpl @Inject constructor(
     override suspend fun chatWithActions(
         idempotencyKey: String,
         messages: List<Pair<String, String>>,
+        retrievalScope: AiRetrievalScope,
         pages: List<AiPageContext>,
         tasks: List<Pair<String, String>>,
         clientDate: String,
@@ -95,10 +98,20 @@ class AiRepositoryImpl @Inject constructor(
             val header = getAuthHeader()
             val request = ChatWithActionsRequestDto(
                 messages = messages.map { ChatMessageDto(role = it.first, content = it.second) },
+                retrievalScope = AiRetrievalScopeDto(
+                    workspaceId = retrievalScope.workspaceId,
+                    mode = retrievalScope.mode.name,
+                    currentPageId = retrievalScope.currentPageId,
+                    explicitPageIds = retrievalScope.explicitPageIds,
+                    retrievedPageIds = retrievalScope.retrievedPageIds,
+                    includeTasks = retrievalScope.includeTasks,
+                ),
                 pages = pages.map { page ->
                     AiPageContextDto(
                         id = page.id,
                         title = page.title,
+                        workspaceId = page.workspaceId,
+                        access = page.access.name,
                         totalBlockCount = page.totalBlockCount,
                         isFocused = page.isFocused,
                         contextComplete = page.contextComplete,
@@ -142,7 +155,13 @@ class AiRepositoryImpl @Inject constructor(
                         },
                     )
                 },
-                tasks = tasks.map { AiTaskContextDto(id = it.first, title = it.second) },
+                tasks = tasks.map {
+                    AiTaskContextDto(
+                        id = it.first,
+                        title = it.second,
+                        workspaceId = retrievalScope.workspaceId,
+                    )
+                },
                 clientDate = clientDate.ifBlank { LocalDate.now().toString() },
                 clientTimezone = clientTimezone.ifBlank { TimeZone.getDefault().id },
                 images = images.map { image ->

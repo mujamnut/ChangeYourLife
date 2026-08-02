@@ -178,4 +178,17 @@ interface PageRepository {
     suspend fun keepLocalPageConflict(pageId: String)
 
     suspend fun useRemotePageConflict(pageId: String)
+
+    suspend fun getWorkspacePageSnapshots(workspaceId: String): List<Page> = emptyList()
+
+    suspend fun <T> withAiActionPlanRemoteCommit(
+        workspaceId: String,
+        block: suspend () -> T,
+    ): T = block()
+
+    suspend fun commitAiActionPlan(
+        plan: AiActionPlanCommit,
+    ): AiActionPlanRemoteCommitResult = AiActionPlanRemoteCommitResult.NotSupported
+
+    suspend fun rollbackAiActionPlanLocalState() = Unit
 }

@@ -1,6 +1,7 @@
 package com.changeyourlife.cyl.backend.domain
 
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.Serializable
 
 data class WorkspaceRecord(
     val id: String,
@@ -11,6 +12,7 @@ data class WorkspaceRecord(
     val deletedAt: Long?,
 )
 
+@Serializable
 data class PageRecord(
     val id: String,
     val workspaceId: String,
@@ -142,4 +144,9 @@ interface ContentRepository {
         pageId: String,
         expectedRevision: Long,
     ): PageMutationResult
+
+    suspend fun commitAiActionPlan(
+        userId: String,
+        command: AiActionPlanCommitCommand,
+    ): AiActionPlanCommitResult
 }

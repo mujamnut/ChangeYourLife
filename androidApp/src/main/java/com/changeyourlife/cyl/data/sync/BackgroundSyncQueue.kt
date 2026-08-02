@@ -41,7 +41,9 @@ class BackgroundSyncQueue @Inject constructor(
                     )
                 }
                 runCatching {
-                    operation.block(syncCoordinator)
+                    syncCoordinator.withExclusiveSyncOperation {
+                        operation.block(syncCoordinator)
+                    }
                     _state.update {
                         SyncRunState(
                             lastCompletedAt = System.currentTimeMillis(),

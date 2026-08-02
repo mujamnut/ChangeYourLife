@@ -11,6 +11,13 @@ import retrofit2.http.Path
 import retrofit2.http.Query
 
 interface SyncApi {
+    @POST("api/v1/ai/action-plans/commit")
+    suspend fun commitAiActionPlan(
+        @Header("Authorization") authorization: String,
+        @Header("Idempotency-Key") idempotencyKey: String,
+        @Body request: AiActionPlanCommitRequestDto,
+    ): AiActionPlanCommitResponseDto
+
     @GET("api/v1/search")
     suspend fun search(
         @Header("Authorization") authorization: String,

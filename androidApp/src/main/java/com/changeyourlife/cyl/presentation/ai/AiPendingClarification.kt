@@ -24,8 +24,57 @@ internal fun List<ChatMessage>.latestPendingAiActions(): List<ChatPendingActionM
     return lastMessage.actionMetadata?.pendingActions.orEmpty()
 }
 
+internal enum class AiPendingDestructiveDecision {
+    None,
+    Confirm,
+    Cancel,
+}
+
+internal fun List<ChatPendingActionMetadata>.destructiveDecision(
+    userPrompt: String,
+): AiPendingDestructiveDecision {
+    if (none(ChatPendingActionMetadata::requiresDestructiveConfirmation)) {
+        return AiPendingDestructiveDecision.None
+    }
+    return when {
+        userPrompt.explicitlyConfirmsDestructiveActions() -> AiPendingDestructiveDecision.Confirm
+        userPrompt.cancelsPendingAction() -> AiPendingDestructiveDecision.Cancel
+        else -> AiPendingDestructiveDecision.None
+    }
+}
+
+internal fun List<ChatPendingActionMetadata>.toConfirmedDestructiveActionResult(): ChatActionResult {
+    return ChatActionResult(
+        reply = "Confirmed. Applying the saved action plan.",
+        actions = map { pending -> pending.action.toChatAction() },
+    )
+}
+
+internal fun cancelledDestructiveActionResult(): ChatActionResult {
+    return ChatActionResult(
+        reply = "Cancelled. No changes were made.",
+        actions = emptyList(),
+    )
+}
+
+internal fun ChatPendingActionMetadata.requiresDestructiveConfirmation(): Boolean {
+    return issueCodes.any { code ->
+        code.equals(DestructiveConfirmationRequiredCode, ignoreCase = true)
+    }
+}
+
 internal fun List<ChatPendingActionMetadata>.toPendingClarificationContext(): String {
     if (isEmpty()) return ""
+    if (all(ChatPendingActionMetadata::requiresDestructiveConfirmation)) {
+        return buildString {
+            appendLine("CYL_PENDING_DESTRUCTIVE_CONFIRMATION:")
+            appendLine("The exact action plan below is suspended and must not execute until the user explicitly confirms it.")
+            appendLine("Do not alter, regenerate, or broaden this saved plan.")
+            this@toPendingClarificationContext.forEachIndexed { index, pending ->
+                appendLine("Pending action ${index + 1}: ${PendingActionJson.encodeToString(pending.action)}")
+            }
+        }.trim()
+    }
     return buildString {
         appendLine("CYL_PENDING_CLARIFICATION:")
         appendLine("The previous edit is suspended, not discarded.")
@@ -83,10 +132,29 @@ private fun ChatPendingActionMetadata.resolveLocally(
     var payload = action
     var changed = false
     val issueFieldKeys = issueFields.map(String::clarificationKey).toSet()
+    val clarifiedPage = pages.uniquePageMatching(userPrompt) ?: scopedTargetPage
 
     if ("targettitle" in issueFieldKeys) {
-        pages.uniquePageMatching(userPrompt)?.let { page ->
+        clarifiedPage?.let { page ->
             payload = payload.copy(targetTitle = page.title)
+            changed = true
+        }
+    }
+    if (issueFieldKeys.any { field -> field in SourcePageClarificationFields }) {
+        clarifiedPage?.let { page ->
+            payload = payload.copy(
+                sourcePageId = page.id,
+                sourcePageTitle = page.title,
+            )
+            changed = true
+        }
+    }
+    if (issueFieldKeys.any { field -> field in ParentPageClarificationFields }) {
+        clarifiedPage?.let { page ->
+            payload = payload.copy(
+                parentPageId = page.id,
+                parentPageTitle = page.title,
+            )
             changed = true
         }
     }
@@ -310,6 +378,9 @@ private fun String.matchesClarificationValue(query: String): Boolean {
     return currentMonth != null && queryMonth != null && currentMonth.matches(queryMonth)
 }
 
+private val SourcePageClarificationFields = setOf("sourcepageid", "sourcepagetitle")
+private val ParentPageClarificationFields = setOf("parentpageid", "parentpagetitle")
+
 private fun String.cleanClarificationReply(): String {
     return trim()
         .removePrefix("@")
@@ -339,10 +410,28 @@ private fun String.cancelsPendingAction(): Boolean {
     return words.any { word -> word in CancelWords }
 }
 
+private fun String.explicitlyConfirmsDestructiveActions(): Boolean {
+    val normalized = clarificationKey()
+    return normalized in ExplicitConfirmationPhrases
+}
+
 private val ColumnClarificationFields = setOf("columnid", "columnname", "propertyname")
 private val RowClarificationFields = setOf("rowid", "rowtitle")
 private val AllMatchWords = setOf("all", "semua", "kesemua", "seluruh")
 private val CancelWords = setOf("batal", "batalkan", "cancel", "nevermind", "stop")
+private val ExplicitConfirmationPhrases = setOf(
+    "confirm",
+    "confirm changes",
+    "confirm destructive changes",
+    "confirm deletion",
+    "sahkan",
+    "sahkan perubahan",
+    "sahkan pemadaman",
+    "ya padam",
+    "yes delete",
+    "proceed with deletion",
+    "teruskan pemadaman",
+)
 
 private val PendingActionJson = Json {
     encodeDefaults = true

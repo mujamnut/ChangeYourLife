@@ -14,6 +14,10 @@ import com.changeyourlife.cyl.domain.model.PageTableView
 import com.changeyourlife.cyl.domain.model.deleteCreatedPageUndo
 import com.changeyourlife.cyl.domain.model.toTypedCellValue
 import com.changeyourlife.cyl.domain.repository.ChatAction
+import com.changeyourlife.cyl.domain.repository.AiActionPlanCommit
+import com.changeyourlife.cyl.domain.repository.AiActionPlanPageMutation
+import com.changeyourlife.cyl.domain.repository.AiActionPlanPageOperation
+import com.changeyourlife.cyl.domain.repository.AiActionPlanRemoteCommitResult
 import com.changeyourlife.cyl.domain.repository.AiAppliedActionClaimResult
 import com.changeyourlife.cyl.domain.repository.AiAppliedActionLedgerRepository
 import com.changeyourlife.cyl.domain.repository.AiAppliedActionRecord
@@ -72,6 +76,8 @@ class AiActionExecutionUseCase @Inject constructor(
                 workspaceId = workspaceId,
                 scopedTargetPage = scopedTargetPage,
                 actions = actions,
+                idempotencyKey = "",
+                auditId = "",
             )
         }
 
@@ -167,6 +173,8 @@ class AiActionExecutionUseCase @Inject constructor(
             workspaceId = workspaceId,
             scopedTargetPage = scopedTargetPage,
             actions = claimedActions,
+            idempotencyKey = requestKey,
+            auditId = requestAuditId,
         )
         val executedIndexes = execution.executedActionIndexes.toSet()
         claimedActions.forEach { candidate ->
@@ -216,64 +224,117 @@ class AiActionExecutionUseCase @Inject constructor(
         workspaceId: String,
         scopedTargetPage: Page?,
         actions: List<AiActionExecutionCandidate>,
-    ): AiActionExecutionResult {
-        val execution = executeCandidatePlan(
+        idempotencyKey: String,
+        auditId: String,
+    ): AiActionExecutionResult = pageRepository.withAiActionPlanRemoteCommit(workspaceId) {
+        val beforePages = pageRepository.getWorkspacePageSnapshots(workspaceId)
+        var execution = executeCandidatePlan(
             workspaceId = workspaceId,
             scopedTargetPage = scopedTargetPage,
             actions = actions,
         )
+
+        if (!execution.hasPlanFailure() && idempotencyKey.isNotBlank()) {
+            val afterPages = pageRepository.getWorkspacePageSnapshots(workspaceId)
+            execution = runCatching {
+                when (
+                    pageRepository.commitAiActionPlan(
+                        AiActionPlanCommit(
+                            idempotencyKey = idempotencyKey,
+                            auditId = auditId.ifBlank { "ai-action:$idempotencyKey" },
+                            workspaceId = workspaceId,
+                            actions = actions
+                                .sortedBy(AiActionExecutionCandidate::originalIndex)
+                                .map { candidate -> candidate.action.toContractWire() },
+                            mutations = buildAiActionPlanPageMutations(
+                                beforePages = beforePages,
+                                afterPages = afterPages,
+                            ),
+                        ),
+                    )
+                ) {
+                    is AiActionPlanRemoteCommitResult.Committed,
+                    AiActionPlanRemoteCommitResult.NotSupported,
+                    -> execution
+                }
+            }.getOrElse { error ->
+                execution.copy(
+                    validationIssues = execution.validationIssues + atomicPlanIssue(
+                        code = "server_plan_commit_failed",
+                        message = error.message
+                            ?.takeIf(String::isNotBlank)
+                            ?.let { detail ->
+                                "The AI plan could not be committed atomically: $detail"
+                            }
+                            ?: "The AI plan could not be committed atomically.",
+                    ),
+                )
+            }
+        }
+
         if (
             !execution.hasPlanFailure() ||
             execution.executedActionIndexes.isEmpty() && execution.undoCommands.isEmpty()
         ) {
-            return execution
-        }
-        if (execution.undoCommands.isEmpty()) {
-            return execution.copy(
-                validationIssues = execution.validationIssues + atomicPlanIssue(
-                    code = "atomic_rollback_unavailable",
-                    message = "The AI plan failed, but no rollback payload was available.",
-                ),
-            )
+            return@withAiActionPlanRemoteCommit execution
         }
 
-        val rollback = withContext(NonCancellable) {
-            runCatching {
-                applyAiUndoCommandsUseCase(
-                    undoCommands = execution.undoCommands,
-                    fallbackPageId = scopedTargetPage?.id.orEmpty(),
-                )
-            }
-        }.getOrElse { error ->
-            return execution.copy(
-                validationIssues = execution.validationIssues + atomicPlanIssue(
+        val rollbackIssues = mutableListOf<ChatActionValidationMetadata>()
+        if (execution.undoCommands.isNotEmpty()) {
+            val rollback = withContext(NonCancellable) {
+                runCatching {
+                    applyAiUndoCommandsUseCase(
+                        undoCommands = execution.undoCommands,
+                        fallbackPageId = scopedTargetPage?.id.orEmpty(),
+                    )
+                }
+            }.getOrElse { error ->
+                rollbackIssues += atomicPlanIssue(
                     code = "atomic_rollback_failed",
                     message = error.message
                         ?.let { detail -> "The AI plan failed and rollback crashed: $detail" }
                         ?: "The AI plan failed and rollback crashed.",
-                ),
-            )
-        }
-        if (!rollback.succeeded) {
-            return execution.copy(
-                validationIssues = execution.validationIssues + atomicPlanIssue(
+                )
+                null
+            }
+            if (rollback != null && !rollback.succeeded) {
+                rollbackIssues += atomicPlanIssue(
                     code = "atomic_rollback_failed",
                     message = rollback.failures.joinToString(
                         separator = " ",
                         prefix = "The AI plan failed and rollback was incomplete: ",
                     ) { failure -> failure.message },
-                ),
+                )
+            }
+        }
+
+        withContext(NonCancellable) {
+            runCatching { pageRepository.rollbackAiActionPlanLocalState() }
+        }.onFailure { error ->
+            rollbackIssues += atomicPlanIssue(
+                code = "atomic_local_restore_failed",
+                message = error.message
+                    ?.let { detail -> "The local AI plan snapshot could not be restored: $detail" }
+                    ?: "The local AI plan snapshot could not be restored.",
             )
         }
 
-        return execution.copy(
+        execution.copy(
             messages = execution.messages.filterNot { message ->
                 message.trimStart().startsWith("Done:", ignoreCase = true)
             },
             pageLinks = emptyList(),
-            validationIssues = execution.validationIssues + atomicPlanIssue(
-                code = "atomic_plan_rolled_back",
-                message = "One action failed, so every change from this AI plan was rolled back.",
+            validationIssues = execution.validationIssues + rollbackIssues + atomicPlanIssue(
+                code = if (rollbackIssues.isEmpty()) {
+                    "atomic_plan_rolled_back"
+                } else {
+                    "atomic_plan_rollback_incomplete"
+                },
+                message = if (rollbackIssues.isEmpty()) {
+                    "One action failed, so every change from this AI plan was rolled back."
+                } else {
+                    "One action failed and rollback needs attention."
+                },
             ),
             undoCommands = emptyList(),
             executedActionIndexes = emptyList(),
@@ -570,6 +631,47 @@ class AiActionExecutionUseCase @Inject constructor(
         }
         return result
     }
+}
+
+internal fun buildAiActionPlanPageMutations(
+    beforePages: List<Page>,
+    afterPages: List<Page>,
+): List<AiActionPlanPageMutation> {
+    val beforeById = beforePages.associateBy(Page::id)
+    val afterById = afterPages.associateBy(Page::id)
+    val upserts = afterPages
+        .asSequence()
+        .mapNotNull { afterPage ->
+            val beforePage = beforeById[afterPage.id]
+            if (beforePage != null && beforePage.sameMaterializedPageState(afterPage)) {
+                return@mapNotNull null
+            }
+            val expectedRevision = beforePage?.revision ?: 0L
+            AiActionPlanPageMutation(
+                operation = AiActionPlanPageOperation.Upsert,
+                pageId = afterPage.id,
+                expectedRevision = expectedRevision,
+                page = afterPage.copy(revision = expectedRevision),
+            )
+        }
+        .toList()
+
+    val permanentlyDeletedIds = beforeById.keys - afterById.keys
+    val permanentDeleteRoots = permanentlyDeletedIds
+        .filter { pageId -> beforeById[pageId]?.parentPageId !in permanentlyDeletedIds }
+        .sorted()
+        .map { pageId ->
+            AiActionPlanPageMutation(
+                operation = AiActionPlanPageOperation.PermanentDelete,
+                pageId = pageId,
+                expectedRevision = requireNotNull(beforeById[pageId]).revision,
+            )
+        }
+    return upserts + permanentDeleteRoots
+}
+
+private fun Page.sameMaterializedPageState(other: Page): Boolean {
+    return copy(revision = 0L) == other.copy(revision = 0L)
 }
 
 private fun String.toActionIdempotencyKey(actionIndex: Int): String {

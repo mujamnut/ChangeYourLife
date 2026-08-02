@@ -6,6 +6,10 @@ import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
+import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.runner.RunWith
 import org.junit.runners.Parameterized
 
@@ -35,6 +39,36 @@ class AiActionContractRegressionInvariantTest {
                 message = "$actionType must appear exactly once in the generated prompt catalog.",
             )
         }
+    }
+
+    @Test
+    fun providerSchemaCoversExactlyAllSharedActions() {
+        val schema = AiActionContractSchema.structuredResponseJsonSchema()
+        val actionVariants = schema["properties"]
+            ?.jsonObject
+            ?.get("actions")
+            ?.jsonObject
+            ?.get("items")
+            ?.jsonObject
+            ?.get("oneOf")
+            ?.jsonArray
+            .orEmpty()
+        val schemaTypes = actionVariants.flatMap { variant ->
+            variant.jsonObject["properties"]
+                ?.jsonObject
+                ?.get("type")
+                ?.jsonObject
+                ?.get("enum")
+                ?.jsonArray
+                .orEmpty()
+                .map { value -> value.jsonPrimitive.content }
+        }.toSet()
+
+        assertEquals(AiActionContractSchema.supportedTypes, schemaTypes)
+        assertFalse(schema["additionalProperties"]!!.jsonPrimitive.boolean)
+        assertTrue(actionVariants.all { variant ->
+            !variant.jsonObject["additionalProperties"]!!.jsonPrimitive.boolean
+        })
     }
 
     @Test
