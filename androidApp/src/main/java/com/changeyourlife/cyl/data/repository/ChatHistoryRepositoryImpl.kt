@@ -19,6 +19,8 @@ import java.util.UUID
 import javax.inject.Inject
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -27,6 +29,7 @@ class ChatHistoryRepositoryImpl @Inject constructor(
     private val chatSyncScheduler: ChatSyncScheduler,
     private val chatSearchIndexUpdater: ChatSearchIndexUpdater,
 ) : ChatHistoryRepository {
+    private val attachmentSnapshotMutex = Mutex()
     private val json = Json {
         ignoreUnknownKeys = true
         encodeDefaults = true
@@ -116,6 +119,35 @@ class ChatHistoryRepositoryImpl @Inject constructor(
         chatSyncScheduler.pushSession(session.id)
         chatSyncScheduler.pushMessage(message.id)
         return message
+    }
+
+    override suspend fun updateMessageAttachment(
+        messageId: String,
+        attachment: ChatMessageAttachment,
+        syncRemote: Boolean,
+    ): Boolean = attachmentSnapshotMutex.withLock {
+        val entity = chatMessageDao.getMessage(messageId) ?: return@withLock false
+        val attachments = runCatching {
+            json.decodeFromString<List<ChatMessageAttachmentDto>>(entity.attachmentsJson)
+        }.getOrDefault(emptyList())
+        val index = attachments.indexOfFirst { item -> item.id == attachment.id }
+        if (index < 0) return@withLock false
+
+        val updatedAttachments = attachments.toMutableList().apply {
+            this[index] = attachment.toDto()
+        }
+        val now = System.currentTimeMillis()
+        chatMessageDao.upsertMessage(
+            entity.copy(
+                attachmentsJson = json.encodeToString(updatedAttachments),
+                updatedAt = if (syncRemote) now else entity.updatedAt,
+                syncStatus = if (syncRemote) SyncStatus.PendingPush else entity.syncStatus,
+            ),
+        )
+        if (syncRemote) {
+            chatSyncScheduler.pushMessage(messageId)
+        }
+        true
     }
 
     override suspend fun clearMessages(sessionId: String) {
@@ -219,6 +251,17 @@ private data class ChatMessageAttachmentDto(
     val dataUrl: String = "",
     val textContent: String = "",
     val previewDataUrl: String = "",
+    val durationMs: Long? = null,
+    val sha256: String = "",
+    val localPath: String = "",
+    val remoteAssetId: String = "",
+    val waveform: List<Int> = emptyList(),
+    val transcript: String = "",
+    val language: String = "",
+    val status: String = "",
+    val progressPercent: Int = 0,
+    val aiJobId: String = "",
+    val errorCode: String = "",
 )
 
 @Serializable
@@ -291,6 +334,17 @@ private fun ChatMessageAttachmentDto.toDomain(): ChatMessageAttachment {
         dataUrl = dataUrl,
         textContent = textContent,
         previewDataUrl = previewDataUrl,
+        durationMs = durationMs,
+        sha256 = sha256,
+        localPath = localPath,
+        remoteAssetId = remoteAssetId,
+        waveform = waveform,
+        transcript = transcript,
+        language = language,
+        status = status,
+        progressPercent = progressPercent,
+        aiJobId = aiJobId,
+        errorCode = errorCode,
     )
 }
 
@@ -304,6 +358,17 @@ private fun ChatMessageAttachment.toDto(): ChatMessageAttachmentDto {
         dataUrl = dataUrl,
         textContent = textContent,
         previewDataUrl = previewDataUrl,
+        durationMs = durationMs,
+        sha256 = sha256,
+        localPath = localPath,
+        remoteAssetId = remoteAssetId,
+        waveform = waveform,
+        transcript = transcript,
+        language = language,
+        status = status,
+        progressPercent = progressPercent,
+        aiJobId = aiJobId,
+        errorCode = errorCode,
     )
 }
 

@@ -5,9 +5,11 @@ import android.app.Activity
 import android.os.Bundle
 import com.changeyourlife.cyl.data.sync.BackgroundSyncQueue
 import com.changeyourlife.cyl.domain.repository.ReminderRepository
+import com.changeyourlife.cyl.domain.repository.ChatAttachmentUploadScheduler
 import dagger.hilt.android.HiltAndroidApp
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
@@ -18,6 +20,8 @@ class ChangeYourLifeApplication : Application() {
     lateinit var backgroundSyncQueue: BackgroundSyncQueue
     @Inject
     lateinit var reminderRepository: ReminderRepository
+    @Inject
+    lateinit var chatAttachmentUploadScheduler: ChatAttachmentUploadScheduler
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var startedActivityCount = 0
 
@@ -28,6 +32,15 @@ class ChangeYourLifeApplication : Application() {
         backgroundSyncQueue.syncSessionSoon()
         applicationScope.launch {
             reminderRepository.reschedulePendingReminders()
+        }
+        applicationScope.launch {
+            try {
+                chatAttachmentUploadScheduler.resumePendingUploads()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Throwable) {
+                // WorkManager and the next app start will retry durable queued attachments.
+            }
         }
     }
 

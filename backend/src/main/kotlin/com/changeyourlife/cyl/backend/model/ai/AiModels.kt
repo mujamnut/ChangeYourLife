@@ -1,6 +1,7 @@
 package com.changeyourlife.cyl.backend.model.ai
 
 import com.changeyourlife.cyl.aicontract.AiActionWire
+import com.changeyourlife.cyl.aicontract.AiAttachmentInputWire
 import com.changeyourlife.cyl.aicontract.AiTableColumnWire
 import kotlinx.serialization.Serializable
 
@@ -16,20 +17,14 @@ data class ChatMessage(
     val content: String
 )
 
-@Serializable
-data class AiImageInput(
-    val dataUrl: String = "",
-    val textContent: String = "",
-    val mimeType: String = "",
-    val name: String = "",
-    val sizeBytes: Long = 0,
-    val kind: String = "image",
-)
+typealias AiAttachmentInput = AiAttachmentInputWire
+
+typealias AiImageInput = AiAttachmentInput
 
 @Serializable
 data class ChatRequest(
     val messages: List<ChatMessage>,
-    val images: List<AiImageInput> = emptyList(),
+    val images: List<AiAttachmentInput> = emptyList(),
 )
 
 @Serializable
@@ -73,7 +68,7 @@ data class ChatWithActionsRequest(
     val tasks: List<AiTaskContext> = emptyList(),
     val clientDate: String = "",
     val clientTimezone: String = "",
-    val images: List<AiImageInput> = emptyList(),
+    val images: List<AiAttachmentInput> = emptyList(),
     val webSearchEnabled: Boolean = false,
     val webSearchQuery: String = "",
 )

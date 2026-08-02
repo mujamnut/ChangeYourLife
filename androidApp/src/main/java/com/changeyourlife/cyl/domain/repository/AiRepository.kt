@@ -2,6 +2,7 @@ package com.changeyourlife.cyl.domain.repository
 
 import com.changeyourlife.cyl.aicontract.CYL_ACTION_SCHEMA_NAME
 import com.changeyourlife.cyl.aicontract.CYL_ACTION_SCHEMA_VERSION
+import com.changeyourlife.cyl.domain.model.AiAttachment
 
 interface AiRepository {
     suspend fun status(): Result<AiStatus>
@@ -14,7 +15,7 @@ interface AiRepository {
         tasks: List<Pair<String, String>> = emptyList(),
         clientDate: String = "",
         clientTimezone: String = "",
-        images: List<AiImageAttachment> = emptyList(),
+        images: List<AiAttachment> = emptyList(),
         webSearchEnabled: Boolean = false,
         webSearchQuery: String = "",
     ): Result<ChatActionResult>
@@ -49,15 +50,7 @@ data class AiDiagnostics(
         get() = imageCount > 0 || textFileCount > 0 || visionAttempted || warning.isNotBlank()
 }
 
-data class AiImageAttachment(
-    val dataUrl: String = "",
-    val previewDataUrl: String = "",
-    val textContent: String = "",
-    val mimeType: String = "",
-    val name: String = "",
-    val sizeBytes: Long = 0,
-    val kind: String = "image",
-)
+typealias AiImageAttachment = AiAttachment
 
 enum class AiRetrievalMode {
     Workspace,

@@ -1,11 +1,17 @@
 package com.changeyourlife.cyl.presentation.ai
 
+import android.Manifest
+import android.app.Activity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.ContextWrapper
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.provider.Settings
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -52,6 +58,7 @@ import androidx.compose.material3.SheetState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -71,6 +78,13 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.unit.dp
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.changeyourlife.cyl.aicontract.ChatAttachmentKind
+import com.changeyourlife.cyl.aicontract.ChatAttachmentStatus
+import com.changeyourlife.cyl.domain.model.ChatAttachment
 import com.changeyourlife.cyl.domain.repository.AiImageAttachment
 import com.changeyourlife.cyl.domain.model.MentionCandidate
 import com.changeyourlife.cyl.presentation.page.RichTextCommandPaletteKind
@@ -108,6 +122,8 @@ fun AiChatSheet(
     sheetState: SheetState,
     attachedPageId: String? = null,
     attachedPageTitle: String? = null,
+    activeChatSessionId: String? = null,
+    voiceNoteController: VoiceNoteController = hiltViewModel(),
 ) {
     val inputState = rememberTextFieldState()
     val inputText = inputState.text.toString()
@@ -120,6 +136,9 @@ fun AiChatSheet(
     var stagedImageAttachments by remember {
         mutableStateOf(emptyList<AiImageAttachment>())
     }
+    val voiceState by voiceNoteController.state.collectAsStateWithLifecycle()
+    val voicePlaybackState by voiceNoteController.playbackState.collectAsStateWithLifecycle()
+    var hasRequestedMicrophonePermission by rememberSaveable { mutableStateOf(false) }
     val context = LocalContext.current
     val configuration = LocalConfiguration.current
     val focusManager = LocalFocusManager.current
@@ -128,6 +147,22 @@ fun AiChatSheet(
     val composerScope = rememberCoroutineScope()
     val stableSheetMaxHeight = remember(configuration.screenHeightDp) {
         configuration.screenHeightDp.dp * 0.90f
+    }
+    val microphonePermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) {
+            voiceNoteController.startRecording(activeChatSessionId.orEmpty())
+        } else {
+            val activity = context.findActivity()
+            val permanentlyDenied = hasRequestedMicrophonePermission &&
+                activity != null &&
+                !ActivityCompat.shouldShowRequestPermissionRationale(
+                    activity,
+                    Manifest.permission.RECORD_AUDIO,
+                )
+            voiceNoteController.onPermissionDenied(permanentlyDenied)
+        }
     }
     fun stageAttachmentResult(
         result: AiAttachmentReadResult,
@@ -255,6 +290,23 @@ fun AiChatSheet(
     var activePanel by rememberSaveable { mutableStateOf<AiComposerPanel?>(null) }
     var isMentionPickerOpen by rememberSaveable { mutableStateOf(false) }
     var isWebSearchEnabled by rememberSaveable { mutableStateOf(false) }
+    val requestVoiceRecording: () -> Unit = {
+        activePanel = null
+        isMentionPickerOpen = false
+        focusManager.clearFocus(force = true)
+        keyboardController?.hide()
+        if (ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.RECORD_AUDIO,
+            ) == PackageManager.PERMISSION_GRANTED
+        ) {
+            voiceNoteController.startRecording(activeChatSessionId.orEmpty())
+        } else {
+            voiceNoteController.markPermissionRequesting()
+            hasRequestedMicrophonePermission = true
+            microphonePermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
     val shouldShowKeyboardReplacement = activePanel != null || isMentionPickerOpen
     val avatarSpec = remember(persona) { persona.toAvatarSpec() }
     val stagedAttachmentPreviews = remember(stagedImageAttachments) {
@@ -311,20 +363,26 @@ fun AiChatSheet(
         }
     }
     val sendCurrentPrompt = {
-        if ((inputText.isNotBlank() || stagedImageAttachments.isNotEmpty()) && !isGenerating) {
+        val voiceDraft = voiceState.draft
+        if ((inputText.isNotBlank() || stagedImageAttachments.isNotEmpty() || voiceDraft != null) &&
+            !isGenerating
+        ) {
             val message = inputText.trim()
+            val outboundAttachments = stagedImageAttachments +
+                listOfNotNull(voiceDraft?.toAiAttachment())
             onSendMessage(
                 message,
                 selectedMentionPageIds
                     .filter { pageId -> pageId.isNotBlank() }
                     .distinct(),
-                stagedImageAttachments,
+                outboundAttachments,
                 isWebSearchEnabled,
             )
             inputState.setTextAndPlaceCursorAtEnd("")
             selectedMentionPageIds = emptyList()
             selectedMentionTitles = emptyMap()
             stagedImageAttachments = emptyList()
+            if (voiceDraft != null) voiceNoteController.markDraftSent()
             activePanel = null
             isMentionPickerOpen = false
         }
@@ -347,6 +405,9 @@ fun AiChatSheet(
 
     LaunchedEffect(attachedPageId) {
         inputState.setTextAndPlaceCursorAtEnd("")
+    }
+    DisposableEffect(voiceNoteController) {
+        onDispose { voiceNoteController.discardComposer() }
     }
     LaunchedEffect(activeMentionQuery?.query, isMentionPickerOpen) {
         onMentionQueryChange(
@@ -373,7 +434,10 @@ fun AiChatSheet(
     }
 
     ModalBottomSheet(
-        onDismissRequest = onDismiss,
+        onDismissRequest = {
+            voiceNoteController.discardComposer()
+            onDismiss()
+        },
         sheetState = sheetState,
         sheetGesturesEnabled = false,
     ) {
@@ -396,6 +460,7 @@ fun AiChatSheet(
                 onCreateChatSession = {
                     activePanel = null
                     isMentionPickerOpen = false
+                    voiceNoteController.discardComposer()
                     onCreateChatSession()
                 },
             )
@@ -423,6 +488,10 @@ fun AiChatSheet(
                 messages = messages,
                 isGenerating = isGenerating,
                 attachedPageTitle = attachedPageTitle,
+                voicePlaybackState = voicePlaybackState,
+                onToggleVoicePlayback = { attachment ->
+                    voiceNoteController.togglePlayback(attachment.toDomainAttachment())
+                },
                 onOpenPage = onOpenPage,
                 onConfirmDestructiveActions = {
                     onSendMessage(
@@ -473,6 +542,23 @@ fun AiChatSheet(
                 },
                 onOpenSettings = {
                     openComposerPanel(AiComposerPanel.Settings)
+                },
+                voiceState = voiceState,
+                voicePlaybackState = voicePlaybackState,
+                onStartVoice = requestVoiceRecording,
+                onStopVoice = voiceNoteController::stopRecording,
+                onCancelVoice = voiceNoteController::cancelRecording,
+                onToggleVoicePlayback = {
+                    voiceState.draft?.let(voiceNoteController::togglePlayback)
+                },
+                onDeleteVoice = voiceNoteController::deleteDraft,
+                onOpenMicrophoneSettings = {
+                    context.startActivity(
+                        Intent(
+                            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                            Uri.parse("package:${context.packageName}"),
+                        ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                    )
                 },
                 onSend = sendCurrentPrompt,
                 isGenerating = isGenerating,
@@ -600,6 +686,8 @@ private fun AiChatMessageList(
     messages: List<AiChatMessage>,
     isGenerating: Boolean,
     attachedPageTitle: String?,
+    voicePlaybackState: com.changeyourlife.cyl.domain.model.ChatAudioPlaybackState,
+    onToggleVoicePlayback: (AiChatAttachment) -> Unit,
     onOpenPage: (String, String, String) -> Unit,
     onConfirmDestructiveActions: () -> Unit,
     onCancelDestructiveActions: () -> Unit,
@@ -669,7 +757,11 @@ private fun AiChatMessageList(
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                     if (message.attachments.isNotEmpty()) {
-                        AiChatMessageAttachments(attachments = message.attachments)
+                        AiChatMessageAttachments(
+                            attachments = message.attachments,
+                            playbackState = voicePlaybackState,
+                            onToggleAudio = onToggleVoicePlayback,
+                        )
                     }
                     if (messageText.isNotBlank()) {
                         Text(
@@ -804,3 +896,46 @@ private fun List<MentionCandidate>.toAiMentionPaletteItems(): List<RichTextComma
     }
 
 private fun MentionCandidate.toPaletteItemId(): String = "mention:$pageId"
+
+private fun ChatAttachment.toAiAttachment(): AiImageAttachment = AiImageAttachment(
+    id = id,
+    assetId = remoteAssetId.orEmpty(),
+    mimeType = mimeType,
+    name = name,
+    sizeBytes = sizeBytes,
+    kind = kind.wireValue,
+    durationMs = durationMs,
+    sha256 = sha256,
+    localPath = localPath.orEmpty(),
+    waveform = waveform,
+    status = status.wireValue,
+)
+
+private fun AiChatAttachment.toDomainAttachment(): ChatAttachment = ChatAttachment(
+    id = id,
+    messageId = null,
+    sessionId = "",
+    kind = ChatAttachmentKind.fromWireValue(kind),
+    name = name,
+    mimeType = mimeType,
+    sizeBytes = sizeBytes,
+    durationMs = durationMs,
+    sha256 = sha256,
+    localPath = localPath.takeIf(String::isNotBlank),
+    remoteAssetId = remoteAssetId.takeIf(String::isNotBlank),
+    waveform = waveform,
+    transcript = transcript.takeIf(String::isNotBlank),
+    language = language.takeIf(String::isNotBlank),
+    status = ChatAttachmentStatus.fromWireValue(status),
+    progressPercent = progressPercent,
+    aiJobId = aiJobId.takeIf(String::isNotBlank),
+    errorCode = errorCode.takeIf(String::isNotBlank),
+    createdAt = 0L,
+    updatedAt = 0L,
+)
+
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
+}

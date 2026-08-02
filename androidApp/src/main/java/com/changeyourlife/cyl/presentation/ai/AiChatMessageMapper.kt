@@ -24,6 +24,17 @@ object AiChatMessageMapper {
                         dataUrl = attachment.dataUrl,
                         textContent = attachment.textContent,
                         previewDataUrl = attachment.previewDataUrl,
+                        durationMs = attachment.durationMs,
+                        sha256 = attachment.sha256,
+                        localPath = attachment.localPath,
+                        remoteAssetId = attachment.remoteAssetId,
+                        waveform = attachment.waveform,
+                        transcript = attachment.transcript,
+                        language = attachment.language,
+                        status = attachment.status,
+                        progressPercent = attachment.progressPercent,
+                        aiJobId = attachment.aiJobId,
+                        errorCode = attachment.errorCode,
                     )
                 },
                 pageLinks = message.pageLinks.map { link ->

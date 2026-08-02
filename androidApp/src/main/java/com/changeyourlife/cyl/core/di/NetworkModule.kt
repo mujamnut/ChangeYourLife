@@ -3,6 +3,7 @@ package com.changeyourlife.cyl.core.di
 import com.changeyourlife.cyl.BuildConfig
 import com.changeyourlife.cyl.data.remote.auth.AuthApi
 import com.changeyourlife.cyl.data.remote.ai.AiApi
+import com.changeyourlife.cyl.data.remote.attachment.ChatAttachmentApi
 import com.changeyourlife.cyl.data.remote.sync.SyncApi
 import dagger.Module
 import dagger.Provides
@@ -72,6 +73,12 @@ object NetworkModule {
     @Singleton
     fun provideSyncApi(retrofit: Retrofit): SyncApi {
         return retrofit.create(SyncApi::class.java)
+    }
+
+    @Provides
+    @Singleton
+    fun provideChatAttachmentApi(retrofit: Retrofit): ChatAttachmentApi {
+        return retrofit.create(ChatAttachmentApi::class.java)
     }
 }
 

@@ -30,6 +30,12 @@ interface ChatHistoryRepository {
         actionMetadata: ChatActionMetadata? = null,
     ): ChatMessage
 
+    suspend fun updateMessageAttachment(
+        messageId: String,
+        attachment: ChatMessageAttachment,
+        syncRemote: Boolean,
+    ): Boolean
+
     suspend fun clearMessages(sessionId: String)
 
     suspend fun deleteSession(sessionId: String)

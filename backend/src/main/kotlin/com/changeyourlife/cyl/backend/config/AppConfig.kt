@@ -20,6 +20,7 @@ data class AppConfig(
     val openRouterModel: String,
     val openRouterVisionModels: List<String>,
     val webSearch: WebSearchConfig,
+    val voiceNotes: VoiceNoteConfig = VoiceNoteConfig(),
 ) {
     companion object {
         private const val DefaultLmStudioModel = "qwen/qwen3.5-9b"
@@ -129,8 +130,62 @@ data class AppConfig(
                         propNames = listOf("web.search.cache.ttl.seconds", "WEB_SEARCH_CACHE_TTL_SECONDS"),
                     )?.toLongOrNull()?.coerceIn(60L, 86_400L) ?: 900L,
                 ),
+                voiceNotes = loadVoiceNoteConfig(environment),
             )
         }
+
+        private fun loadVoiceNoteConfig(environment: Map<String, String>): VoiceNoteConfig {
+            val accountId = environment.backendSecret("R2_ACCOUNT_ID")
+            val explicitEndpoint = environment.backendSecret("R2_ENDPOINT")
+            return VoiceNoteConfig(
+                enabled = loadSetting(
+                    environment = environment,
+                    envNames = listOf("VOICE_NOTE_ENABLED"),
+                    propNames = listOf("voice.note.enabled", "VOICE_NOTE_ENABLED"),
+                )?.toBooleanStrictOrNull() ?: false,
+                maxBytes = loadSetting(
+                    environment = environment,
+                    envNames = listOf("VOICE_MAX_BYTES"),
+                    propNames = listOf("voice.max.bytes", "VOICE_MAX_BYTES"),
+                )?.toLongOrNull()?.coerceIn(1_048_576L, 104_857_600L) ?: 10_485_760L,
+                maxDurationMs = loadSetting(
+                    environment = environment,
+                    envNames = listOf("VOICE_MAX_DURATION_SECONDS"),
+                    propNames = listOf("voice.max.duration.seconds", "VOICE_MAX_DURATION_SECONDS"),
+                )?.toLongOrNull()?.coerceIn(5L, 1_800L)?.times(1_000L) ?: 300_000L,
+                uploadUrlTtlMillis = loadSetting(
+                    environment = environment,
+                    envNames = listOf("R2_SIGNED_URL_TTL_SECONDS"),
+                    propNames = listOf("r2.signed.url.ttl.seconds", "R2_SIGNED_URL_TTL_SECONDS"),
+                )?.toLongOrNull()?.coerceIn(30L, 3_600L)?.times(1_000L) ?: 300_000L,
+                playbackUrlTtlMillis = loadSetting(
+                    environment = environment,
+                    envNames = listOf("R2_PLAYBACK_URL_TTL_SECONDS"),
+                    propNames = listOf("r2.playback.url.ttl.seconds", "R2_PLAYBACK_URL_TTL_SECONDS"),
+                )?.toLongOrNull()?.coerceIn(30L, 3_600L)?.times(1_000L) ?: 300_000L,
+                orphanTtlMillis = loadSetting(
+                    environment = environment,
+                    envNames = listOf("VOICE_ORPHAN_TTL_HOURS"),
+                    propNames = listOf("voice.orphan.ttl.hours", "VOICE_ORPHAN_TTL_HOURS"),
+                )?.toLongOrNull()?.coerceIn(1L, 168L)?.times(60L * 60L * 1_000L)
+                    ?: 24L * 60L * 60L * 1_000L,
+                cleanupIntervalMillis = loadSetting(
+                    environment = environment,
+                    envNames = listOf("VOICE_CLEANUP_INTERVAL_SECONDS"),
+                    propNames = listOf("voice.cleanup.interval.seconds", "VOICE_CLEANUP_INTERVAL_SECONDS"),
+                )?.toLongOrNull()?.coerceIn(60L, 86_400L)?.times(1_000L) ?: 3_600_000L,
+                r2 = R2Config(
+                    endpoint = explicitEndpoint
+                        ?: accountId?.let { value -> "https://$value.r2.cloudflarestorage.com" },
+                    bucket = environment.backendSecret("R2_BUCKET"),
+                    accessKeyId = environment.backendSecret("R2_ACCESS_KEY_ID"),
+                    secretAccessKey = environment.backendSecret("R2_SECRET_ACCESS_KEY"),
+                ),
+            )
+        }
+
+        private fun Map<String, String>.backendSecret(name: String): String? =
+            get(name)?.trim()?.removeSurrounding("\"")?.removeSurrounding("'")?.takeIf(String::isNotBlank)
 
         private fun String.toModelList(): List<String> {
             return split(',', ';', '|')
@@ -209,6 +264,27 @@ data class AppConfig(
             return null
         }
     }
+}
+
+data class VoiceNoteConfig(
+    val enabled: Boolean = false,
+    val maxBytes: Long = 10_485_760L,
+    val maxDurationMs: Long = 300_000L,
+    val uploadUrlTtlMillis: Long = 300_000L,
+    val playbackUrlTtlMillis: Long = 300_000L,
+    val orphanTtlMillis: Long = 86_400_000L,
+    val cleanupIntervalMillis: Long = 3_600_000L,
+    val r2: R2Config = R2Config(),
+)
+
+data class R2Config(
+    val endpoint: String? = null,
+    val bucket: String? = null,
+    val accessKeyId: String? = null,
+    val secretAccessKey: String? = null,
+) {
+    val isConfigured: Boolean = listOf(endpoint, bucket, accessKeyId, secretAccessKey)
+        .all { value -> !value.isNullOrBlank() }
 }
 
 data class WebSearchConfig(

@@ -2,6 +2,7 @@ package com.changeyourlife.cyl.data.remote.ai
 
 import com.changeyourlife.cyl.aicontract.CYL_ACTION_SCHEMA_NAME
 import com.changeyourlife.cyl.aicontract.CYL_ACTION_SCHEMA_VERSION
+import com.changeyourlife.cyl.aicontract.AiAttachmentInputWire
 import kotlinx.serialization.Serializable
 
 typealias AiActionDto = com.changeyourlife.cyl.aicontract.AiActionWire
@@ -13,20 +14,14 @@ data class ChatMessageDto(
     val content: String
 )
 
-@Serializable
-data class AiImageInputDto(
-    val dataUrl: String = "",
-    val textContent: String = "",
-    val mimeType: String = "",
-    val name: String = "",
-    val sizeBytes: Long = 0,
-    val kind: String = "image",
-)
+typealias AiAttachmentInputDto = AiAttachmentInputWire
+
+typealias AiImageInputDto = AiAttachmentInputDto
 
 @Serializable
 data class ChatRequestDto(
     val messages: List<ChatMessageDto>,
-    val images: List<AiImageInputDto> = emptyList(),
+    val images: List<AiAttachmentInputDto> = emptyList(),
 )
 
 @Serializable
@@ -71,7 +66,7 @@ data class ChatWithActionsRequestDto(
     val tasks: List<AiTaskContextDto> = emptyList(),
     val clientDate: String = "",
     val clientTimezone: String = "",
-    val images: List<AiImageInputDto> = emptyList(),
+    val images: List<AiAttachmentInputDto> = emptyList(),
     val webSearchEnabled: Boolean = false,
     val webSearchQuery: String = "",
 )

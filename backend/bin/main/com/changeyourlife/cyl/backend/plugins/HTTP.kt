@@ -21,6 +21,7 @@ fun Application.configureHTTP() {
         allowMethod(HttpMethod.Delete)
         allowHeader(HttpHeaders.Authorization)
         allowHeader(HttpHeaders.ContentType)
+        allowHeader("Idempotency-Key")
         anyHost()
     }
 

@@ -46,6 +46,7 @@ import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Extension
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Photo
+import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.CircularProgressIndicator
@@ -82,6 +83,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.changeyourlife.cyl.presentation.page.RichTextCommandPaletteItem
 import com.changeyourlife.cyl.presentation.utility.decodeBase64ImageDataUrlToImageBitmap
+import com.changeyourlife.cyl.domain.model.ChatAudioPlaybackState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -288,12 +290,25 @@ internal fun AiComposerCard(
     onInputFocus: () -> Unit,
     onOpenAttachments: () -> Unit,
     onOpenSettings: () -> Unit,
+    voiceState: VoiceNoteUiState,
+    voicePlaybackState: ChatAudioPlaybackState,
+    onStartVoice: () -> Unit,
+    onStopVoice: () -> Unit,
+    onCancelVoice: () -> Unit,
+    onToggleVoicePlayback: () -> Unit,
+    onDeleteVoice: () -> Unit,
+    onOpenMicrophoneSettings: () -> Unit,
     onSend: () -> Unit,
     isGenerating: Boolean,
     pastedImageReceiver: ReceiveContentListener,
     modifier: Modifier = Modifier,
 ) {
-    val canSend = (inputText.isNotBlank() || stagedAttachments.isNotEmpty()) && !isGenerating
+    val hasVoiceDraft = voiceState.phase == VoiceComposerPhase.Recorded && voiceState.draft != null
+    val canSend = (inputText.isNotBlank() || stagedAttachments.isNotEmpty() || hasVoiceDraft) && !isGenerating
+    val voiceOwnsInput = voiceState.phase == VoiceComposerPhase.Recording ||
+        voiceState.phase == VoiceComposerPhase.Starting ||
+        voiceState.phase == VoiceComposerPhase.Finishing ||
+        voiceState.phase == VoiceComposerPhase.RequestingPermission
     val mentionRailScroll = rememberScrollState()
     val attachmentRailScroll = rememberScrollState()
     val composerShape = RoundedCornerShape(24.dp)
@@ -344,7 +359,20 @@ internal fun AiComposerCard(
             }
         }
 
-        BasicTextField(
+        if (voiceState.phase != VoiceComposerPhase.Idle) {
+            AiVoiceComposer(
+                state = voiceState,
+                playbackState = voicePlaybackState,
+                onRetry = onStartVoice,
+                onStop = onStopVoice,
+                onCancel = onCancelVoice,
+                onTogglePlayback = onToggleVoicePlayback,
+                onDelete = onDeleteVoice,
+                onOpenPermissionSettings = onOpenMicrophoneSettings,
+            )
+        }
+
+        if (!voiceOwnsInput) BasicTextField(
             state = inputState,
             enabled = isInputEnabled,
             modifier = Modifier
@@ -383,31 +411,42 @@ internal fun AiComposerCard(
             },
         )
 
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(38.dp),
-            horizontalArrangement = Arrangement.spacedBy(2.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            AiComposerIconButton(
-                icon = Icons.Rounded.Add,
-                contentDescription = "Add attachment or context",
-                active = isAttachmentsActive,
-                onClick = onOpenAttachments,
-            )
-            AiComposerIconButton(
-                icon = Icons.Rounded.Tune,
-                contentDescription = "AI settings",
-                active = isSettingsActive,
-                onClick = onOpenSettings,
-            )
-            Spacer(modifier = Modifier.weight(1f))
-            AiSendButton(
-                enabled = canSend,
-                isGenerating = isGenerating,
-                onClick = onSend,
-            )
+        if (!voiceOwnsInput) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(38.dp),
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                AiComposerIconButton(
+                    icon = Icons.Rounded.Add,
+                    contentDescription = "Add attachment or context",
+                    active = isAttachmentsActive,
+                    onClick = onOpenAttachments,
+                )
+                AiComposerIconButton(
+                    icon = Icons.Rounded.Tune,
+                    contentDescription = "AI settings",
+                    active = isSettingsActive,
+                    onClick = onOpenSettings,
+                )
+                Spacer(modifier = Modifier.weight(1f))
+                if (inputText.isBlank() && stagedAttachments.isEmpty() && !hasVoiceDraft && !isGenerating) {
+                    AiComposerIconButton(
+                        icon = Icons.Rounded.Mic,
+                        contentDescription = "Record voice note",
+                        active = false,
+                        onClick = onStartVoice,
+                    )
+                } else {
+                    AiSendButton(
+                        enabled = canSend,
+                        isGenerating = isGenerating,
+                        onClick = onSend,
+                    )
+                }
+            }
         }
     }
 }
@@ -415,6 +454,8 @@ internal fun AiComposerCard(
 @Composable
 internal fun AiChatMessageAttachments(
     attachments: List<AiChatAttachment>,
+    playbackState: ChatAudioPlaybackState,
+    onToggleAudio: (AiChatAttachment) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     if (attachments.isEmpty()) return
@@ -431,6 +472,8 @@ internal fun AiChatMessageAttachments(
             key(attachment.id) {
                 AiChatMessageAttachmentItem(
                     attachment = attachment,
+                    playbackState = playbackState,
+                    onToggleAudio = { onToggleAudio(attachment) },
                     onPreview = { previewAttachment = attachment },
                 )
             }
@@ -447,13 +490,24 @@ internal fun AiChatMessageAttachments(
 @Composable
 private fun AiChatMessageAttachmentItem(
     attachment: AiChatAttachment,
+    playbackState: ChatAudioPlaybackState,
+    onToggleAudio: () -> Unit,
     onPreview: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val isImage = attachment.kind == "image" ||
         attachment.mimeType.startsWith("image/", ignoreCase = true)
     val thumbnailDataUrl = attachment.previewDataUrl.ifBlank { attachment.dataUrl }
-    if (isImage && thumbnailDataUrl.isNotBlank()) {
+    val isAudio = attachment.kind.equals("audio", ignoreCase = true) ||
+        attachment.mimeType.startsWith("audio/", ignoreCase = true)
+    if (isAudio) {
+        AiVoiceMessage(
+            attachment = attachment,
+            playbackState = playbackState,
+            onTogglePlayback = onToggleAudio,
+            modifier = modifier.width(260.dp),
+        )
+    } else if (isImage && thumbnailDataUrl.isNotBlank()) {
         var thumbnail by remember(thumbnailDataUrl) {
             mutableStateOf<ImageBitmap?>(null)
         }

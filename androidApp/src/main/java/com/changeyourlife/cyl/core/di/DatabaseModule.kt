@@ -9,6 +9,7 @@ import com.changeyourlife.cyl.data.local.dao.AiActionLogDao
 import com.changeyourlife.cyl.data.local.dao.AiAppliedActionDao
 import com.changeyourlife.cyl.data.local.dao.AiSkillDao
 import com.changeyourlife.cyl.data.local.dao.ChatMessageDao
+import com.changeyourlife.cyl.data.local.dao.ChatAttachmentDao
 import com.changeyourlife.cyl.data.local.dao.PageDao
 import com.changeyourlife.cyl.data.local.dao.PageContentDao
 import com.changeyourlife.cyl.data.local.dao.ReminderDao
@@ -51,6 +52,8 @@ object DatabaseModule {
             .addMigrations(MIGRATION_15_16)
             .addMigrations(MIGRATION_16_17)
             .addMigrations(MIGRATION_17_18)
+            .addMigrations(MIGRATION_18_19)
+            .addMigrations(MIGRATION_19_20)
             .build()
     }
 
@@ -82,6 +85,11 @@ object DatabaseModule {
     @Provides
     fun provideChatMessageDao(database: CylDatabase): ChatMessageDao {
         return database.chatMessageDao()
+    }
+
+    @Provides
+    fun provideChatAttachmentDao(database: CylDatabase): ChatAttachmentDao {
+        return database.chatAttachmentDao()
     }
 
     @Provides
@@ -669,6 +677,62 @@ object DatabaseModule {
                 CREATE INDEX IF NOT EXISTS `index_applied_ai_actions_state`
                 ON `applied_ai_actions` (`state`)
                 """.trimIndent(),
+            )
+        }
+    }
+
+    val MIGRATION_18_19 = object : Migration(18, 19) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `chat_attachments` (
+                    `id` TEXT NOT NULL,
+                    `messageId` TEXT,
+                    `sessionId` TEXT NOT NULL,
+                    `kind` TEXT NOT NULL,
+                    `name` TEXT NOT NULL,
+                    `mimeType` TEXT NOT NULL,
+                    `sizeBytes` INTEGER NOT NULL,
+                    `durationMs` INTEGER,
+                    `localPath` TEXT,
+                    `remoteAssetId` TEXT,
+                    `waveformJson` TEXT NOT NULL,
+                    `transcript` TEXT,
+                    `language` TEXT,
+                    `status` TEXT NOT NULL,
+                    `progressPercent` INTEGER NOT NULL,
+                    `aiJobId` TEXT,
+                    `errorCode` TEXT,
+                    `createdAt` INTEGER NOT NULL,
+                    `updatedAt` INTEGER NOT NULL,
+                    PRIMARY KEY(`id`)
+                )
+                """.trimIndent(),
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_chat_attachments_messageId` " +
+                    "ON `chat_attachments` (`messageId`)",
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_chat_attachments_sessionId` " +
+                    "ON `chat_attachments` (`sessionId`)",
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_chat_attachments_status` " +
+                    "ON `chat_attachments` (`status`)",
+            )
+            db.execSQL(
+                "CREATE UNIQUE INDEX IF NOT EXISTS `index_chat_attachments_remoteAssetId` " +
+                    "ON `chat_attachments` (`remoteAssetId`)",
+            )
+        }
+    }
+
+    val MIGRATION_19_20 = object : Migration(19, 20) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                "ALTER TABLE `chat_attachments` " +
+                    "ADD COLUMN `sha256` TEXT NOT NULL DEFAULT ''",
             )
         }
     }

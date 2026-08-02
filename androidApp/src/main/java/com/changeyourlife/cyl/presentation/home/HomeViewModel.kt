@@ -57,6 +57,8 @@ import com.changeyourlife.cyl.domain.usecase.BuildAiSearchContextUseCase
 import com.changeyourlife.cyl.domain.usecase.BuildAiSkillContextUseCase
 import com.changeyourlife.cyl.domain.usecase.ResolveMentionUseCase
 import com.changeyourlife.cyl.domain.usecase.SearchWorkspaceUseCase
+import com.changeyourlife.cyl.domain.usecase.chat.LinkVoiceNoteToMessageUseCase
+import com.changeyourlife.cyl.domain.usecase.chat.QueueVoiceNoteUploadUseCase
 import com.changeyourlife.cyl.presentation.ai.AiActionExecutionUseCase
 import com.changeyourlife.cyl.presentation.ai.AiActionLogFactory
 import com.changeyourlife.cyl.presentation.ai.AiChatActionOrchestrator
@@ -122,6 +124,8 @@ class HomeViewModel @Inject constructor(
     private val resolveMentionUseCase: ResolveMentionUseCase,
     private val aiActionLogRepository: AiActionLogRepository,
     private val chatHistoryRepository: ChatHistoryRepository,
+    private val linkVoiceNoteToMessage: LinkVoiceNoteToMessageUseCase,
+    private val queueVoiceNoteUpload: QueueVoiceNoteUploadUseCase,
     private val syncStatusRepository: SyncStatusRepository,
     private val syncSettingsStore: SyncSettingsStore,
     private val backgroundSyncQueue: com.changeyourlife.cyl.data.sync.BackgroundSyncQueue,
@@ -795,9 +799,13 @@ class HomeViewModel @Inject constructor(
                 val userMessage = AiChatMessage(role = "user", content = visiblePrompt)
                 val messageAttachments = images.map { image ->
                     ChatMessageAttachment(
-                        id = UUID.randomUUID().toString(),
+                        id = image.id.ifBlank { UUID.randomUUID().toString() },
                         name = image.name.ifBlank {
-                            if (image.kind == "text") "Attached file" else "Attached image"
+                            when (image.kind) {
+                                "audio" -> "Voice note"
+                                "text" -> "Attached file"
+                                else -> "Attached image"
+                            }
                         },
                         mimeType = image.mimeType,
                         kind = image.kind,
@@ -805,6 +813,12 @@ class HomeViewModel @Inject constructor(
                         dataUrl = image.dataUrl,
                         textContent = image.textContent,
                         previewDataUrl = image.previewDataUrl,
+                        durationMs = image.durationMs,
+                        sha256 = image.sha256,
+                        localPath = image.localPath,
+                        remoteAssetId = image.assetId,
+                        waveform = image.waveform,
+                        status = image.status,
                     )
                 }
                 val savedUserMessage = chatHistoryRepository.appendMessage(
@@ -813,6 +827,24 @@ class HomeViewModel @Inject constructor(
                     content = userMessage.content,
                     attachments = messageAttachments,
                 )
+                val localVoiceAttachments = images.filter { attachment ->
+                    attachment.kind.equals("audio", ignoreCase = true) &&
+                        attachment.assetId.isBlank() &&
+                        attachment.localPath.isNotBlank()
+                }
+                localVoiceAttachments.forEach { attachment ->
+                    attachment.id.takeIf(String::isNotBlank)?.let { attachmentId ->
+                        linkVoiceNoteToMessage(
+                            attachmentId = attachmentId,
+                            messageId = savedUserMessage.id,
+                            sessionId = session.id,
+                        )
+                        queueVoiceNoteUpload(attachmentId)
+                    }
+                }
+                if (localVoiceAttachments.isNotEmpty()) {
+                    return@launch
+                }
                 val pages = pageRepository.observePages(workspaceId)
                     .first()
                     .sortedByDescending { page -> page.updatedAt }

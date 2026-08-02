@@ -43,6 +43,8 @@ dependencies {
     implementation(libs.hikari.cp)
     implementation(libs.postgresql)
     implementation(libs.flyway.core)
+    implementation(libs.aws.sdk.s3)
+    implementation(libs.aws.sdk.url.connection.client)
 
     testImplementation(libs.ktor.server.test.host)
     testImplementation(libs.kotlin.test.junit)

@@ -6,6 +6,7 @@ import com.changeyourlife.cyl.data.local.dao.AiActionLogDao
 import com.changeyourlife.cyl.data.local.dao.AiAppliedActionDao
 import com.changeyourlife.cyl.data.local.dao.AiSkillDao
 import com.changeyourlife.cyl.data.local.dao.ChatMessageDao
+import com.changeyourlife.cyl.data.local.dao.ChatAttachmentDao
 import com.changeyourlife.cyl.data.local.dao.PageDao
 import com.changeyourlife.cyl.data.local.dao.PageContentDao
 import com.changeyourlife.cyl.data.local.dao.ReminderDao
@@ -17,6 +18,7 @@ import com.changeyourlife.cyl.data.local.entity.AiActionLogEntity
 import com.changeyourlife.cyl.data.local.entity.AiAppliedActionEntity
 import com.changeyourlife.cyl.data.local.entity.AiSkillEntity
 import com.changeyourlife.cyl.data.local.entity.ChatMessageEntity
+import com.changeyourlife.cyl.data.local.entity.ChatAttachmentEntity
 import com.changeyourlife.cyl.data.local.entity.ChatSessionEntity
 import com.changeyourlife.cyl.data.local.entity.PageBlockEntity
 import com.changeyourlife.cyl.data.local.entity.PageEntity
@@ -44,6 +46,7 @@ import com.changeyourlife.cyl.data.local.entity.WorkspaceEntity
         TaskEntity::class,
         ReminderEntity::class,
         ChatMessageEntity::class,
+        ChatAttachmentEntity::class,
         ChatSessionEntity::class,
         SyncTombstoneEntity::class,
         AiActionLogEntity::class,
@@ -51,7 +54,7 @@ import com.changeyourlife.cyl.data.local.entity.WorkspaceEntity
         AiSkillEntity::class,
         SearchIndexEntity::class,
     ],
-    version = 18,
+    version = 20,
     exportSchema = true,
 )
 abstract class CylDatabase : RoomDatabase() {
@@ -61,6 +64,7 @@ abstract class CylDatabase : RoomDatabase() {
     abstract fun taskDao(): TaskDao
     abstract fun reminderDao(): ReminderDao
     abstract fun chatMessageDao(): ChatMessageDao
+    abstract fun chatAttachmentDao(): ChatAttachmentDao
     abstract fun syncTombstoneDao(): SyncTombstoneDao
     abstract fun aiActionLogDao(): AiActionLogDao
     abstract fun aiAppliedActionDao(): AiAppliedActionDao

@@ -1683,7 +1683,7 @@ private fun String.toRemoteChatAttachmentsJson(): String {
             val attachment = element.jsonObject
             buildJsonObject {
                 attachment.forEach { (key, value) ->
-                    if (key != "dataUrl" && key != "textContent") {
+                    if (key != "dataUrl" && key != "textContent" && key != "localPath") {
                         put(key, value)
                     }
                 }
@@ -1723,6 +1723,7 @@ private fun String.mergeLocalChatAttachmentPayload(localJson: String?): String {
                 if (remoteTextContent.isBlank()) {
                     localAttachment?.get("textContent")?.let { value -> put("textContent", value) }
                 }
+                localAttachment?.get("localPath")?.let { value -> put("localPath", value) }
             }
         }
         JsonArray(merged).toString()

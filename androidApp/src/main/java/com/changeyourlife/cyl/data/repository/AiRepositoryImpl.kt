@@ -172,6 +172,9 @@ class AiRepositoryImpl @Inject constructor(
                         name = image.name,
                         sizeBytes = image.sizeBytes,
                         kind = image.kind,
+                        assetId = image.assetId,
+                        durationMs = image.durationMs,
+                        sha256 = image.sha256,
                     )
                 },
                 webSearchEnabled = webSearchEnabled,

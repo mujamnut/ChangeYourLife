@@ -22,6 +22,17 @@ data class ChatMessageAttachment(
     val dataUrl: String = "",
     val textContent: String = "",
     val previewDataUrl: String = "",
+    val durationMs: Long? = null,
+    val sha256: String = "",
+    val localPath: String = "",
+    val remoteAssetId: String = "",
+    val waveform: List<Int> = emptyList(),
+    val transcript: String = "",
+    val language: String = "",
+    val status: String = "",
+    val progressPercent: Int = 0,
+    val aiJobId: String = "",
+    val errorCode: String = "",
 )
 
 data class ChatSession(

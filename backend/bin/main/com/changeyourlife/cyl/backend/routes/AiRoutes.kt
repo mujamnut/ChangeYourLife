@@ -269,12 +269,15 @@ private fun ChatWithActionsRequest.idempotencyFingerprint(): String {
     digest.updateField(clientDate)
     digest.updateField(clientTimezone)
     images.forEach { image ->
+        digest.updateField(image.assetId)
         digest.updateField(image.dataUrl)
         digest.updateField(image.textContent)
         digest.updateField(image.mimeType)
         digest.updateField(image.name)
         digest.updateField(image.sizeBytes.toString())
         digest.updateField(image.kind)
+        digest.updateField(image.durationMs?.toString().orEmpty())
+        digest.updateField(image.sha256)
     }
     digest.updateField(webSearchEnabled.toString())
     digest.updateField(webSearchQuery)

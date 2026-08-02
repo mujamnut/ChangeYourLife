@@ -4,6 +4,9 @@ import com.changeyourlife.cyl.data.repository.AuthRepositoryImpl
 import com.changeyourlife.cyl.data.repository.AiActionLogRepositoryImpl
 import com.changeyourlife.cyl.data.repository.AiAppliedActionLedgerRepositoryImpl
 import com.changeyourlife.cyl.data.repository.ChatHistoryRepositoryImpl
+import com.changeyourlife.cyl.data.repository.ChatAttachmentRepositoryImpl
+import com.changeyourlife.cyl.data.attachment.BackgroundChatAttachmentUploadScheduler
+import com.changeyourlife.cyl.data.remote.attachment.HttpChatAttachmentUploadGateway
 import com.changeyourlife.cyl.data.repository.PageRepositoryImpl
 import com.changeyourlife.cyl.data.repository.ReminderRepositoryImpl
 import com.changeyourlife.cyl.data.repository.SearchRepositoryImpl
@@ -20,6 +23,9 @@ import com.changeyourlife.cyl.domain.repository.AuthRepository
 import com.changeyourlife.cyl.domain.repository.AiActionLogRepository
 import com.changeyourlife.cyl.domain.repository.AiAppliedActionLedgerRepository
 import com.changeyourlife.cyl.domain.repository.ChatHistoryRepository
+import com.changeyourlife.cyl.domain.repository.ChatAttachmentRepository
+import com.changeyourlife.cyl.domain.repository.ChatAttachmentUploadGateway
+import com.changeyourlife.cyl.domain.repository.ChatAttachmentUploadScheduler
 import com.changeyourlife.cyl.domain.repository.PageRepository
 import com.changeyourlife.cyl.domain.repository.ReminderRepository
 import com.changeyourlife.cyl.domain.repository.SearchRepository
@@ -90,6 +96,24 @@ abstract class RepositoryModule {
     abstract fun bindChatHistoryRepository(
         implementation: ChatHistoryRepositoryImpl,
     ): ChatHistoryRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindChatAttachmentRepository(
+        implementation: ChatAttachmentRepositoryImpl,
+    ): ChatAttachmentRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindChatAttachmentUploadGateway(
+        implementation: HttpChatAttachmentUploadGateway,
+    ): ChatAttachmentUploadGateway
+
+    @Binds
+    @Singleton
+    abstract fun bindChatAttachmentUploadScheduler(
+        implementation: BackgroundChatAttachmentUploadScheduler,
+    ): ChatAttachmentUploadScheduler
 
     @Binds
     @Singleton
