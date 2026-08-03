@@ -90,6 +90,7 @@ data class PageMediaAttachment(
     val name: String = "Untitled file",
     val mimeType: String = "",
     val sizeBytes: Long = 0,
+    val assetId: String = "",
 )
 
 @Serializable

@@ -5,6 +5,8 @@ import com.changeyourlife.cyl.data.repository.AiActionLogRepositoryImpl
 import com.changeyourlife.cyl.data.repository.AiAppliedActionLedgerRepositoryImpl
 import com.changeyourlife.cyl.data.repository.ChatHistoryRepositoryImpl
 import com.changeyourlife.cyl.data.repository.ChatAttachmentRepositoryImpl
+import com.changeyourlife.cyl.data.repository.ContentAssetRepositoryImpl
+import com.changeyourlife.cyl.data.asset.AndroidContentAssetLocalStore
 import com.changeyourlife.cyl.data.attachment.BackgroundChatAttachmentUploadScheduler
 import com.changeyourlife.cyl.data.remote.attachment.HttpChatAttachmentUploadGateway
 import com.changeyourlife.cyl.data.repository.PageRepositoryImpl
@@ -24,6 +26,8 @@ import com.changeyourlife.cyl.domain.repository.AiActionLogRepository
 import com.changeyourlife.cyl.domain.repository.AiAppliedActionLedgerRepository
 import com.changeyourlife.cyl.domain.repository.ChatHistoryRepository
 import com.changeyourlife.cyl.domain.repository.ChatAttachmentRepository
+import com.changeyourlife.cyl.domain.repository.ContentAssetLocalStore
+import com.changeyourlife.cyl.domain.repository.ContentAssetRepository
 import com.changeyourlife.cyl.domain.repository.ChatAttachmentUploadGateway
 import com.changeyourlife.cyl.domain.repository.ChatAttachmentUploadScheduler
 import com.changeyourlife.cyl.domain.repository.PageRepository
@@ -102,6 +106,18 @@ abstract class RepositoryModule {
     abstract fun bindChatAttachmentRepository(
         implementation: ChatAttachmentRepositoryImpl,
     ): ChatAttachmentRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindContentAssetRepository(
+        implementation: ContentAssetRepositoryImpl,
+    ): ContentAssetRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindContentAssetLocalStore(
+        implementation: AndroidContentAssetLocalStore,
+    ): ContentAssetLocalStore
 
     @Binds
     @Singleton

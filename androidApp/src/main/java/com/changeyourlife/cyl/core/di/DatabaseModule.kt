@@ -12,6 +12,7 @@ import com.changeyourlife.cyl.data.local.dao.ChatMessageDao
 import com.changeyourlife.cyl.data.local.dao.ChatAttachmentDao
 import com.changeyourlife.cyl.data.local.dao.PageDao
 import com.changeyourlife.cyl.data.local.dao.PageContentDao
+import com.changeyourlife.cyl.data.local.dao.PageAssetDao
 import com.changeyourlife.cyl.data.local.dao.ReminderDao
 import com.changeyourlife.cyl.data.local.dao.SearchIndexDao
 import com.changeyourlife.cyl.data.local.dao.SyncTombstoneDao
@@ -54,6 +55,7 @@ object DatabaseModule {
             .addMigrations(MIGRATION_17_18)
             .addMigrations(MIGRATION_18_19)
             .addMigrations(MIGRATION_19_20)
+            .addMigrations(MIGRATION_20_21)
             .build()
     }
 
@@ -115,6 +117,11 @@ object DatabaseModule {
     @Provides
     fun provideSearchIndexDao(database: CylDatabase): SearchIndexDao {
         return database.searchIndexDao()
+    }
+
+    @Provides
+    fun providePageAssetDao(database: CylDatabase): PageAssetDao {
+        return database.pageAssetDao()
     }
 
     val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -733,6 +740,62 @@ object DatabaseModule {
             db.execSQL(
                 "ALTER TABLE `chat_attachments` " +
                     "ADD COLUMN `sha256` TEXT NOT NULL DEFAULT ''",
+            )
+        }
+    }
+
+    val MIGRATION_20_21 = object : Migration(20, 21) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `page_assets` (
+                    `id` TEXT NOT NULL,
+                    `workspaceId` TEXT NOT NULL,
+                    `ownerPageId` TEXT,
+                    `kind` TEXT NOT NULL,
+                    `displayName` TEXT NOT NULL,
+                    `mimeType` TEXT NOT NULL,
+                    `sizeBytes` INTEGER NOT NULL,
+                    `sha256` TEXT NOT NULL,
+                    `localPath` TEXT,
+                    `remoteAssetId` TEXT,
+                    `status` TEXT NOT NULL,
+                    `progressPercent` INTEGER NOT NULL,
+                    `errorCode` TEXT,
+                    `createdAt` INTEGER NOT NULL,
+                    `updatedAt` INTEGER NOT NULL,
+                    `deletedAt` INTEGER,
+                    PRIMARY KEY(`id`),
+                    FOREIGN KEY(`workspaceId`) REFERENCES `workspaces`(`id`)
+                        ON UPDATE NO ACTION ON DELETE CASCADE,
+                    FOREIGN KEY(`ownerPageId`) REFERENCES `pages`(`id`)
+                        ON UPDATE NO ACTION ON DELETE SET NULL
+                )
+                """.trimIndent(),
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_page_assets_workspaceId` " +
+                    "ON `page_assets` (`workspaceId`)",
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_page_assets_ownerPageId` " +
+                    "ON `page_assets` (`ownerPageId`)",
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_page_assets_status_updatedAt` " +
+                    "ON `page_assets` (`status`, `updatedAt`)",
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_page_assets_deletedAt` " +
+                    "ON `page_assets` (`deletedAt`)",
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_page_assets_sha256` " +
+                    "ON `page_assets` (`sha256`)",
+            )
+            db.execSQL(
+                "CREATE UNIQUE INDEX IF NOT EXISTS `index_page_assets_remoteAssetId` " +
+                    "ON `page_assets` (`remoteAssetId`)",
             )
         }
     }
