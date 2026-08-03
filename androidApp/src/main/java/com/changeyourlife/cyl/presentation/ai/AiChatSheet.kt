@@ -85,8 +85,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.changeyourlife.cyl.aicontract.ChatAttachmentKind
 import com.changeyourlife.cyl.aicontract.ChatAttachmentStatus
 import com.changeyourlife.cyl.domain.model.ChatAttachment
-import com.changeyourlife.cyl.domain.repository.AiImageAttachment
 import com.changeyourlife.cyl.domain.model.MentionCandidate
+import com.changeyourlife.cyl.domain.repository.AiImageAttachment
 import com.changeyourlife.cyl.presentation.page.RichTextCommandPaletteKind
 import com.changeyourlife.cyl.presentation.page.RichTextCommandPaletteItem
 import com.changeyourlife.cyl.presentation.page.RichTextMentionParser
@@ -136,6 +136,7 @@ fun AiChatSheet(
         mutableStateOf(emptyList<AiImageAttachment>())
     }
     val voiceState by voiceNoteController.state.collectAsStateWithLifecycle()
+    val dictationLanguage by voiceNoteController.dictationLanguage.collectAsStateWithLifecycle()
     val voicePlaybackState by voiceNoteController.playbackState.collectAsStateWithLifecycle()
     var hasRequestedMicrophonePermission by rememberSaveable { mutableStateOf(false) }
     val context = LocalContext.current
@@ -629,10 +630,13 @@ fun AiChatSheet(
                                 enabledSkillsCount = enabledSkillsCount,
                                 totalSkillsCount = totalSkillsCount,
                                 webSearchEnabled = isWebSearchEnabled,
+                                dictationLanguage = dictationLanguage,
                                 hasMessages = messages.isNotEmpty(),
                                 onToggleWebSearch = {
                                     isWebSearchEnabled = !isWebSearchEnabled
                                 },
+                                onDictationLanguageChange =
+                                    voiceNoteController::setDictationLanguage,
                                 onOpenSkills = {
                                     activePanel = null
                                     onOpenSkillsPage()

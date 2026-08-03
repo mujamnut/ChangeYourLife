@@ -7,8 +7,10 @@ import com.changeyourlife.cyl.domain.model.ChatAttachment
 import com.changeyourlife.cyl.domain.model.ChatAudioPlaybackState
 import com.changeyourlife.cyl.domain.model.VoiceDictationError
 import com.changeyourlife.cyl.domain.model.VoiceDictationEvent
+import com.changeyourlife.cyl.domain.model.VoiceDictationLanguage
 import com.changeyourlife.cyl.domain.repository.ChatAudioPlayer
 import com.changeyourlife.cyl.domain.repository.VoiceDictationEngine
+import com.changeyourlife.cyl.domain.repository.VoiceDictationSettingsRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.util.Locale
 import javax.inject.Inject
@@ -48,10 +50,13 @@ data class VoiceNoteUiState(
 @HiltViewModel
 class VoiceNoteController @Inject constructor(
     private val dictationEngine: VoiceDictationEngine,
+    private val dictationSettingsRepository: VoiceDictationSettingsRepository,
     private val player: ChatAudioPlayer,
 ) : ViewModel() {
     private val mutableState = MutableStateFlow(VoiceNoteUiState())
     val state: StateFlow<VoiceNoteUiState> = mutableState.asStateFlow()
+    val dictationLanguage: StateFlow<VoiceDictationLanguage> =
+        dictationSettingsRepository.language
     val playbackState: StateFlow<ChatAudioPlaybackState> = player.state
 
     private var tickerJob: Job? = null
@@ -91,7 +96,15 @@ class VoiceNoteController @Inject constructor(
         dictationStartedAtMs = android.os.SystemClock.elapsedRealtime()
         mutableState.value = VoiceNoteUiState(phase = VoiceComposerPhase.Starting)
         startTicker()
-        dictationEngine.start(Locale.getDefault().toLanguageTag())
+        val selectedLanguage = dictationLanguage.value
+        val languageTag = selectedLanguage.languageTag
+            ?: Locale.getDefault().toLanguageTag()
+        dictationEngine.start(languageTag)
+    }
+
+    fun setDictationLanguage(language: VoiceDictationLanguage) {
+        if (mutableState.value.phase.isActiveDictation()) return
+        dictationSettingsRepository.setLanguage(language)
     }
 
     fun stopDictation() {

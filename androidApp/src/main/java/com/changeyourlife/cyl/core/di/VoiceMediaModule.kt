@@ -3,8 +3,10 @@ package com.changeyourlife.cyl.core.di
 import com.changeyourlife.cyl.data.media.AndroidVoiceRecorder
 import com.changeyourlife.cyl.data.media.AndroidVoiceDictationEngine
 import com.changeyourlife.cyl.data.media.Media3ChatAudioPlayer
+import com.changeyourlife.cyl.data.local.session.AndroidVoiceDictationSettingsRepository
 import com.changeyourlife.cyl.domain.repository.ChatAudioPlayer
 import com.changeyourlife.cyl.domain.repository.VoiceDictationEngine
+import com.changeyourlife.cyl.domain.repository.VoiceDictationSettingsRepository
 import com.changeyourlife.cyl.domain.repository.VoiceRecorder
 import dagger.Binds
 import dagger.Module
@@ -28,4 +30,10 @@ abstract class VoiceMediaModule {
     abstract fun bindVoiceDictationEngine(
         implementation: AndroidVoiceDictationEngine,
     ): VoiceDictationEngine
+
+    @Binds
+    @Singleton
+    abstract fun bindVoiceDictationSettingsRepository(
+        implementation: AndroidVoiceDictationSettingsRepository,
+    ): VoiceDictationSettingsRepository
 }

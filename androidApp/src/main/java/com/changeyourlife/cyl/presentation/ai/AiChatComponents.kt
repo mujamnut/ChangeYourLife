@@ -40,6 +40,7 @@ import androidx.compose.material.icons.rounded.AlternateEmail
 import androidx.compose.material.icons.rounded.AttachFile
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.CameraAlt
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
@@ -84,6 +85,7 @@ import androidx.compose.ui.window.DialogProperties
 import com.changeyourlife.cyl.presentation.page.RichTextCommandPaletteItem
 import com.changeyourlife.cyl.presentation.utility.decodeBase64ImageDataUrlToImageBitmap
 import com.changeyourlife.cyl.domain.model.ChatAudioPlaybackState
+import com.changeyourlife.cyl.domain.model.VoiceDictationLanguage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -875,13 +877,18 @@ internal fun AiSettingsPanel(
     enabledSkillsCount: Int,
     totalSkillsCount: Int,
     webSearchEnabled: Boolean,
+    dictationLanguage: VoiceDictationLanguage,
     hasMessages: Boolean,
     onToggleWebSearch: () -> Unit,
+    onDictationLanguageChange: (VoiceDictationLanguage) -> Unit,
     onOpenSkills: () -> Unit,
     onOpenPersonalize: () -> Unit,
     onClearHistory: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var isDictationLanguagePickerOpen by remember(dictationLanguage) {
+        mutableStateOf(false)
+    }
     LazyColumn(
         modifier = modifier.fillMaxWidth(),
         contentPadding = PaddingValues(bottom = 8.dp),
@@ -893,6 +900,29 @@ internal fun AiSettingsPanel(
                 label = "Model",
                 value = modelLabel.compactAiModelLabel(),
             )
+        }
+        item {
+            AiSettingRow(
+                icon = Icons.Rounded.Mic,
+                label = "Dictation language",
+                value = dictationLanguage.displayLabel(),
+                active = isDictationLanguagePickerOpen,
+                onClick = {
+                    isDictationLanguagePickerOpen = !isDictationLanguagePickerOpen
+                },
+            )
+        }
+        if (isDictationLanguagePickerOpen) {
+            items(
+                items = VoiceDictationLanguage.entries,
+                key = VoiceDictationLanguage::storageValue,
+            ) { language ->
+                AiDictationLanguageRow(
+                    language = language,
+                    selected = language == dictationLanguage,
+                    onClick = { onDictationLanguageChange(language) },
+                )
+            }
         }
         if (visionStatusLabel.isNotBlank()) {
             item {
@@ -957,6 +987,53 @@ internal fun AiSettingsPanel(
             }
         }
     }
+}
+
+@Composable
+private fun AiDictationLanguageRow(
+    language: VoiceDictationLanguage,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(42.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(
+                if (selected) {
+                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f)
+                } else {
+                    Color.Transparent
+                },
+            )
+            .clickable(onClick = onClick)
+            .padding(start = 40.dp, end = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = language.displayLabel(),
+            modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+        if (selected) {
+            Icon(
+                imageVector = Icons.Rounded.Check,
+                contentDescription = "Selected",
+                tint = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.size(18.dp),
+            )
+        }
+    }
+}
+
+private fun VoiceDictationLanguage.displayLabel(): String = when (this) {
+    VoiceDictationLanguage.AUTO -> "Auto"
+    VoiceDictationLanguage.MALAY -> "Bahasa Melayu"
+    VoiceDictationLanguage.INDONESIAN -> "Bahasa Indonesia"
+    VoiceDictationLanguage.ENGLISH -> "English"
 }
 
 @Composable

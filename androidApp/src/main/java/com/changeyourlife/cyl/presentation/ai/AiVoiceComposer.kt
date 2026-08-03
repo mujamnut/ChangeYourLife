@@ -240,6 +240,8 @@ internal fun Long.toVoiceDuration(): String {
 
 private fun String?.toVoiceErrorLabel(): String = when (this) {
     "dictation_unavailable" -> "Speech recognition is unavailable on this device"
+    "dictation_language_unavailable" ->
+        "This dictation language is unavailable. Choose Auto or install the language"
     "dictation_busy" -> "Speech recognition is busy. Try again"
     "dictation_network" -> "Dictation needs a network connection"
     "dictation_no_speech" -> "No speech was detected"

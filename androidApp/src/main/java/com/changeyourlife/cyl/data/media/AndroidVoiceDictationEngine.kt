@@ -214,10 +214,11 @@ class AndroidVoiceDictationEngine @Inject constructor(
         SpeechRecognizer.ERROR_SPEECH_TIMEOUT,
         -> VoiceDictationError.NoSpeech
         SpeechRecognizer.ERROR_AUDIO -> VoiceDictationError.Audio
-        SpeechRecognizer.ERROR_SERVER,
-        SpeechRecognizer.ERROR_SERVER_DISCONNECTED,
         SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED,
         SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE,
+        -> VoiceDictationError.LanguageUnavailable
+        SpeechRecognizer.ERROR_SERVER,
+        SpeechRecognizer.ERROR_SERVER_DISCONNECTED,
         -> VoiceDictationError.ServiceUnavailable
         else -> VoiceDictationError.Unknown
     }
