@@ -26,18 +26,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.changeyourlife.cyl.domain.model.ChatAudioPlaybackState
 
 @Composable
 internal fun AiVoiceComposer(
     state: VoiceNoteUiState,
-    playbackState: ChatAudioPlaybackState,
     onRetry: () -> Unit,
     onStop: () -> Unit,
     onCancel: () -> Unit,
-    onTogglePlayback: () -> Unit,
-    onDelete: () -> Unit,
     onOpenPermissionSettings: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -59,9 +57,9 @@ internal fun AiVoiceComposer(
                 )
                 Text(
                     text = when (state.phase) {
-                        VoiceComposerPhase.Finishing -> "Preparing voice note"
+                        VoiceComposerPhase.Finishing -> "Converting speech to text"
                         VoiceComposerPhase.RequestingPermission -> "Microphone permission"
-                        else -> "Starting recorder"
+                        else -> "Starting dictation"
                     },
                     modifier = Modifier.weight(1f),
                     style = MaterialTheme.typography.bodyMedium,
@@ -72,50 +70,39 @@ internal fun AiVoiceComposer(
                 IconButton(onClick = onCancel, modifier = Modifier.size(44.dp)) {
                     Icon(Icons.Rounded.Delete, contentDescription = "Cancel recording")
                 }
-                Text(
-                    text = state.elapsedMs.toVoiceDuration(),
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
+                val level = state.amplitude.coerceIn(6, 100)
                 AiVoiceWaveform(
-                    waveform = state.waveform,
+                    waveform = listOf(level / 2, level, level * 2 / 3, level, level / 2),
                     progress = 1f,
                     modifier = Modifier
-                        .weight(1f)
-                        .height(24.dp),
-                )
-                IconButton(onClick = onStop, modifier = Modifier.size(44.dp)) {
-                    Icon(Icons.Rounded.Stop, contentDescription = "Stop recording")
-                }
-            }
-            VoiceComposerPhase.Recorded -> {
-                val draft = state.draft
-                val isPlaying = playbackState.attachmentId == draft?.id && playbackState.isPlaying
-                IconButton(onClick = onTogglePlayback, modifier = Modifier.size(44.dp)) {
-                    Icon(
-                        imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                        contentDescription = if (isPlaying) "Pause voice note" else "Play voice note",
-                    )
-                }
-                AiVoiceWaveform(
-                    waveform = draft?.waveform.orEmpty(),
-                    progress = if (playbackState.attachmentId == draft?.id) {
-                        playbackState.progressRatio()
-                    } else {
-                        0f
-                    },
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(24.dp),
+                        .width(34.dp)
+                        .height(20.dp),
                 )
                 Text(
-                    text = (draft?.durationMs ?: state.elapsedMs).toVoiceDuration(),
+                    text = state.partialTranscript.ifBlank { "Listening..." },
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = state.elapsedMs.toVoiceDuration(),
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                IconButton(onClick = onDelete, modifier = Modifier.size(44.dp)) {
-                    Icon(Icons.Rounded.Delete, contentDescription = "Delete voice note")
+                IconButton(onClick = onStop, modifier = Modifier.size(44.dp)) {
+                    Icon(Icons.Rounded.Stop, contentDescription = "Finish dictation")
                 }
+            }
+            VoiceComposerPhase.Recorded -> {
+                CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
+                Text(
+                    text = "Text ready",
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
             VoiceComposerPhase.PermissionDenied -> {
                 Icon(Icons.Rounded.Mic, contentDescription = null, modifier = Modifier.size(22.dp))
@@ -152,7 +139,7 @@ internal fun AiVoiceComposer(
                     color = MaterialTheme.colorScheme.error,
                 )
                 IconButton(onClick = onRetry, modifier = Modifier.size(44.dp)) {
-                    Icon(Icons.Rounded.Mic, contentDescription = "Record again")
+                    Icon(Icons.Rounded.Mic, contentDescription = "Try dictation again")
                 }
             }
             VoiceComposerPhase.Idle -> Spacer(modifier = Modifier.width(1.dp))
@@ -252,9 +239,16 @@ internal fun Long.toVoiceDuration(): String {
 }
 
 private fun String?.toVoiceErrorLabel(): String = when (this) {
+    "dictation_unavailable" -> "Speech recognition is unavailable on this device"
+    "dictation_busy" -> "Speech recognition is busy. Try again"
+    "dictation_network" -> "Dictation needs a network connection"
+    "dictation_no_speech" -> "No speech was detected"
+    "microphone_permission_denied" -> "Microphone access is required"
+    "dictation_audio_error" -> "The microphone audio could not be read"
+    "dictation_failed" -> "Dictation failed. Try again"
     "recording_too_short" -> "Hold a little longer and try again"
     "audio_limit_exceeded" -> "Voice note exceeded the 5 minute limit"
-    else -> "Recording failed. Try again"
+    else -> "Dictation failed. Try again"
 }
 
 private fun AiChatAttachment.voiceUploadLabel(): String? = when (status) {

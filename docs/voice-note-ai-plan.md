@@ -1,6 +1,14 @@
 # CYL AI Voice Note Implementation Plan
 
-Status: In progress
+> Product decision (2026-08-03): the primary microphone action in AI chat is
+> voice dictation, not a persistent voice attachment. Android captures speech
+> through `SpeechRecognizer`, returns editable text to the composer, and sends
+> only that text after user confirmation. It does not create an audio attachment,
+> upload to R2, or require backend voice-note storage. The persistent attachment
+> architecture below is retained as deferred design material for a future,
+> separately exposed voice-note feature.
+
+Status: Primary dictation path implemented and compile verified; persistent voice-note path deferred
 
 Audit date: 2026-08-03
 
@@ -8,6 +16,7 @@ Implementation evidence:
 
 | Phase | State | Evidence |
 |---|---|---|
+| Dictation path | Implemented, compile verified | Android `SpeechRecognizer` engine, typed state/error handling, partial transcript UI, editable final composer text, permission handling and timeout recovery added on 2026-08-03 |
 | Phase 0 contract foundation | Implemented, compile verified | Shared generic wire contract, typed state/error, storage/transcription boundaries and non-inventing fakes added; Android/backend/shared contract compiled on 2026-08-02 |
 | Phase 0 runtime fixture gate | Not run | Tests were intentionally not executed under the current compile-only instruction |
 | Phase 1 backend asset foundation | Implemented, compile verified | V16 persistence, in-memory/PostgreSQL repositories, private R2 presigner, lifecycle service, orphan cleanup scheduler, authenticated ownership routes, idempotency and upload verification added; shared/backend/Android compile passed on 2026-08-03 |

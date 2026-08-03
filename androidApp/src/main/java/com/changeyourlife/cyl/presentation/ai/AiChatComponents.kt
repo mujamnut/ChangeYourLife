@@ -291,20 +291,16 @@ internal fun AiComposerCard(
     onOpenAttachments: () -> Unit,
     onOpenSettings: () -> Unit,
     voiceState: VoiceNoteUiState,
-    voicePlaybackState: ChatAudioPlaybackState,
     onStartVoice: () -> Unit,
     onStopVoice: () -> Unit,
     onCancelVoice: () -> Unit,
-    onToggleVoicePlayback: () -> Unit,
-    onDeleteVoice: () -> Unit,
     onOpenMicrophoneSettings: () -> Unit,
     onSend: () -> Unit,
     isGenerating: Boolean,
     pastedImageReceiver: ReceiveContentListener,
     modifier: Modifier = Modifier,
 ) {
-    val hasVoiceDraft = voiceState.phase == VoiceComposerPhase.Recorded && voiceState.draft != null
-    val canSend = (inputText.isNotBlank() || stagedAttachments.isNotEmpty() || hasVoiceDraft) && !isGenerating
+    val canSend = (inputText.isNotBlank() || stagedAttachments.isNotEmpty()) && !isGenerating
     val voiceOwnsInput = voiceState.phase == VoiceComposerPhase.Recording ||
         voiceState.phase == VoiceComposerPhase.Starting ||
         voiceState.phase == VoiceComposerPhase.Finishing ||
@@ -362,12 +358,9 @@ internal fun AiComposerCard(
         if (voiceState.phase != VoiceComposerPhase.Idle) {
             AiVoiceComposer(
                 state = voiceState,
-                playbackState = voicePlaybackState,
                 onRetry = onStartVoice,
                 onStop = onStopVoice,
                 onCancel = onCancelVoice,
-                onTogglePlayback = onToggleVoicePlayback,
-                onDelete = onDeleteVoice,
                 onOpenPermissionSettings = onOpenMicrophoneSettings,
             )
         }
@@ -432,10 +425,10 @@ internal fun AiComposerCard(
                     onClick = onOpenSettings,
                 )
                 Spacer(modifier = Modifier.weight(1f))
-                if (inputText.isBlank() && stagedAttachments.isEmpty() && !hasVoiceDraft && !isGenerating) {
+                if (inputText.isBlank() && stagedAttachments.isEmpty() && !isGenerating) {
                     AiComposerIconButton(
                         icon = Icons.Rounded.Mic,
-                        contentDescription = "Record voice note",
+                        contentDescription = "Dictate message",
                         active = false,
                         onClick = onStartVoice,
                     )

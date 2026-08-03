@@ -122,7 +122,6 @@ fun AiChatSheet(
     sheetState: SheetState,
     attachedPageId: String? = null,
     attachedPageTitle: String? = null,
-    activeChatSessionId: String? = null,
     voiceNoteController: VoiceNoteController = hiltViewModel(),
 ) {
     val inputState = rememberTextFieldState()
@@ -152,7 +151,7 @@ fun AiChatSheet(
         contract = ActivityResultContracts.RequestPermission(),
     ) { granted ->
         if (granted) {
-            voiceNoteController.startRecording(activeChatSessionId.orEmpty())
+            voiceNoteController.startDictation()
         } else {
             val activity = context.findActivity()
             val permanentlyDenied = hasRequestedMicrophonePermission &&
@@ -300,7 +299,7 @@ fun AiChatSheet(
                 Manifest.permission.RECORD_AUDIO,
             ) == PackageManager.PERMISSION_GRANTED
         ) {
-            voiceNoteController.startRecording(activeChatSessionId.orEmpty())
+            voiceNoteController.startDictation()
         } else {
             voiceNoteController.markPermissionRequesting()
             hasRequestedMicrophonePermission = true
@@ -363,26 +362,22 @@ fun AiChatSheet(
         }
     }
     val sendCurrentPrompt = {
-        val voiceDraft = voiceState.draft
-        if ((inputText.isNotBlank() || stagedImageAttachments.isNotEmpty() || voiceDraft != null) &&
+        if ((inputText.isNotBlank() || stagedImageAttachments.isNotEmpty()) &&
             !isGenerating
         ) {
             val message = inputText.trim()
-            val outboundAttachments = stagedImageAttachments +
-                listOfNotNull(voiceDraft?.toAiAttachment())
             onSendMessage(
                 message,
                 selectedMentionPageIds
                     .filter { pageId -> pageId.isNotBlank() }
                     .distinct(),
-                outboundAttachments,
+                stagedImageAttachments,
                 isWebSearchEnabled,
             )
             inputState.setTextAndPlaceCursorAtEnd("")
             selectedMentionPageIds = emptyList()
             selectedMentionTitles = emptyMap()
             stagedImageAttachments = emptyList()
-            if (voiceDraft != null) voiceNoteController.markDraftSent()
             activePanel = null
             isMentionPickerOpen = false
         }
@@ -405,6 +400,17 @@ fun AiChatSheet(
 
     LaunchedEffect(attachedPageId) {
         inputState.setTextAndPlaceCursorAtEnd("")
+    }
+    LaunchedEffect(voiceState.resultVersion) {
+        val resultVersion = voiceState.resultVersion
+        val transcript = voiceState.finalTranscript.trim()
+        if (resultVersion <= 0L || transcript.isBlank()) return@LaunchedEffect
+        val existingText = inputState.text.toString()
+        val separator = if (existingText.isBlank() || existingText.last().isWhitespace()) "" else " "
+        inputState.setTextAndPlaceCursorAtEnd(existingText + separator + transcript)
+        voiceNoteController.consumeTranscript(resultVersion)
+        inputFocusRequester.requestFocus()
+        keyboardController?.show()
     }
     DisposableEffect(voiceNoteController) {
         onDispose { voiceNoteController.discardComposer() }
@@ -544,14 +550,9 @@ fun AiChatSheet(
                     openComposerPanel(AiComposerPanel.Settings)
                 },
                 voiceState = voiceState,
-                voicePlaybackState = voicePlaybackState,
                 onStartVoice = requestVoiceRecording,
-                onStopVoice = voiceNoteController::stopRecording,
-                onCancelVoice = voiceNoteController::cancelRecording,
-                onToggleVoicePlayback = {
-                    voiceState.draft?.let(voiceNoteController::togglePlayback)
-                },
-                onDeleteVoice = voiceNoteController::deleteDraft,
+                onStopVoice = voiceNoteController::stopDictation,
+                onCancelVoice = voiceNoteController::cancelDictation,
                 onOpenMicrophoneSettings = {
                     context.startActivity(
                         Intent(
@@ -896,20 +897,6 @@ private fun List<MentionCandidate>.toAiMentionPaletteItems(): List<RichTextComma
     }
 
 private fun MentionCandidate.toPaletteItemId(): String = "mention:$pageId"
-
-private fun ChatAttachment.toAiAttachment(): AiImageAttachment = AiImageAttachment(
-    id = id,
-    assetId = remoteAssetId.orEmpty(),
-    mimeType = mimeType,
-    name = name,
-    sizeBytes = sizeBytes,
-    kind = kind.wireValue,
-    durationMs = durationMs,
-    sha256 = sha256,
-    localPath = localPath.orEmpty(),
-    waveform = waveform,
-    status = status.wireValue,
-)
 
 private fun AiChatAttachment.toDomainAttachment(): ChatAttachment = ChatAttachment(
     id = id,

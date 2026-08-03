@@ -302,7 +302,6 @@ private fun HomeScreen(
                 isChatSheetOpen = false
             },
             sheetState = chatSheetState,
-            activeChatSessionId = uiState.activeChatSessionId,
         )
     }
     if (isCreateSheetOpen) {
