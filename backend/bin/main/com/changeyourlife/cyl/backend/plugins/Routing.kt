@@ -13,11 +13,13 @@ import com.changeyourlife.cyl.backend.routes.authRoutes
 import com.changeyourlife.cyl.backend.routes.chatSyncRoutes
 import com.changeyourlife.cyl.backend.routes.chatAttachmentRoutes
 import com.changeyourlife.cyl.backend.routes.contentRoutes
+import com.changeyourlife.cyl.backend.routes.contentAssetRoutes
 import com.changeyourlife.cyl.backend.service.AiJobService
 import com.changeyourlife.cyl.backend.service.AiService
 import com.changeyourlife.cyl.backend.service.JwtService
 import com.changeyourlife.cyl.backend.service.PasswordResetEmailSender
 import com.changeyourlife.cyl.backend.service.ChatAttachmentService
+import com.changeyourlife.cyl.backend.service.ContentAssetService
 import io.ktor.server.application.Application
 import io.ktor.server.response.respond
 import io.ktor.server.response.respondText
@@ -36,6 +38,7 @@ fun Application.configureRouting(
     aiJobService: AiJobService,
     passwordResetEmailSender: PasswordResetEmailSender,
     chatAttachmentService: ChatAttachmentService,
+    contentAssetService: ContentAssetService,
 ) {
     routing {
         get("/") {
@@ -75,6 +78,10 @@ fun Application.configureRouting(
 
         chatAttachmentRoutes(
             service = chatAttachmentService,
+        )
+
+        contentAssetRoutes(
+            service = contentAssetService,
         )
 
         aiSkillSyncRoutes(

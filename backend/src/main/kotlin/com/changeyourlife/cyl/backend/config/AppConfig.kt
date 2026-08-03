@@ -21,6 +21,7 @@ data class AppConfig(
     val openRouterVisionModels: List<String>,
     val webSearch: WebSearchConfig,
     val voiceNotes: VoiceNoteConfig = VoiceNoteConfig(),
+    val contentAssets: ContentAssetConfig = ContentAssetConfig(),
 ) {
     companion object {
         private const val DefaultLmStudioModel = "qwen/qwen3.5-9b"
@@ -33,6 +34,7 @@ data class AppConfig(
         )
 
         fun fromEnvironment(environment: Map<String, String> = System.getenv()): AppConfig {
+            val r2 = loadR2Config(environment)
             return AppConfig(
                 database = DatabaseConfig.fromEnvironment(environment),
                 jwt = JwtConfig.fromEnvironment(environment),
@@ -130,13 +132,15 @@ data class AppConfig(
                         propNames = listOf("web.search.cache.ttl.seconds", "WEB_SEARCH_CACHE_TTL_SECONDS"),
                     )?.toLongOrNull()?.coerceIn(60L, 86_400L) ?: 900L,
                 ),
-                voiceNotes = loadVoiceNoteConfig(environment),
+                voiceNotes = loadVoiceNoteConfig(environment, r2),
+                contentAssets = loadContentAssetConfig(environment, r2),
             )
         }
 
-        private fun loadVoiceNoteConfig(environment: Map<String, String>): VoiceNoteConfig {
-            val accountId = environment.backendSecret("R2_ACCOUNT_ID")
-            val explicitEndpoint = environment.backendSecret("R2_ENDPOINT")
+        private fun loadVoiceNoteConfig(
+            environment: Map<String, String>,
+            r2: R2Config,
+        ): VoiceNoteConfig {
             return VoiceNoteConfig(
                 enabled = loadSetting(
                     environment = environment,
@@ -174,13 +178,74 @@ data class AppConfig(
                     envNames = listOf("VOICE_CLEANUP_INTERVAL_SECONDS"),
                     propNames = listOf("voice.cleanup.interval.seconds", "VOICE_CLEANUP_INTERVAL_SECONDS"),
                 )?.toLongOrNull()?.coerceIn(60L, 86_400L)?.times(1_000L) ?: 3_600_000L,
-                r2 = R2Config(
-                    endpoint = explicitEndpoint
-                        ?: accountId?.let { value -> "https://$value.r2.cloudflarestorage.com" },
-                    bucket = environment.backendSecret("R2_BUCKET"),
-                    accessKeyId = environment.backendSecret("R2_ACCESS_KEY_ID"),
-                    secretAccessKey = environment.backendSecret("R2_SECRET_ACCESS_KEY"),
+                r2 = r2,
+            )
+        }
+
+        private fun loadContentAssetConfig(
+            environment: Map<String, String>,
+            r2: R2Config,
+        ): ContentAssetConfig = ContentAssetConfig(
+            enabled = loadSetting(
+                environment = environment,
+                envNames = listOf("CONTENT_ASSET_ENABLED"),
+                propNames = listOf("content.asset.enabled", "CONTENT_ASSET_ENABLED"),
+            )?.toBooleanStrictOrNull() ?: r2.isConfigured,
+            maxImageBytes = loadSetting(
+                environment = environment,
+                envNames = listOf("CONTENT_ASSET_MAX_IMAGE_BYTES"),
+                propNames = listOf("content.asset.max.image.bytes", "CONTENT_ASSET_MAX_IMAGE_BYTES"),
+            )?.toLongOrNull()?.coerceIn(1_048_576L, 104_857_600L) ?: 15_728_640L,
+            maxPdfBytes = loadSetting(
+                environment = environment,
+                envNames = listOf("CONTENT_ASSET_MAX_PDF_BYTES"),
+                propNames = listOf("content.asset.max.pdf.bytes", "CONTENT_ASSET_MAX_PDF_BYTES"),
+            )?.toLongOrNull()?.coerceIn(1_048_576L, 524_288_000L) ?: 52_428_800L,
+            maxTextBytes = loadSetting(
+                environment = environment,
+                envNames = listOf("CONTENT_ASSET_MAX_TEXT_BYTES"),
+                propNames = listOf("content.asset.max.text.bytes", "CONTENT_ASSET_MAX_TEXT_BYTES"),
+            )?.toLongOrNull()?.coerceIn(65_536L, 10_485_760L) ?: 1_048_576L,
+            uploadUrlTtlMillis = loadSetting(
+                environment = environment,
+                envNames = listOf("R2_SIGNED_URL_TTL_SECONDS"),
+                propNames = listOf("r2.signed.url.ttl.seconds", "R2_SIGNED_URL_TTL_SECONDS"),
+            )?.toLongOrNull()?.coerceIn(30L, 3_600L)?.times(1_000L) ?: 300_000L,
+            downloadUrlTtlMillis = loadSetting(
+                environment = environment,
+                envNames = listOf("R2_DOWNLOAD_URL_TTL_SECONDS", "R2_PLAYBACK_URL_TTL_SECONDS"),
+                propNames = listOf(
+                    "r2.download.url.ttl.seconds",
+                    "R2_DOWNLOAD_URL_TTL_SECONDS",
+                    "r2.playback.url.ttl.seconds",
+                    "R2_PLAYBACK_URL_TTL_SECONDS",
                 ),
+            )?.toLongOrNull()?.coerceIn(30L, 3_600L)?.times(1_000L) ?: 300_000L,
+            orphanTtlMillis = loadSetting(
+                environment = environment,
+                envNames = listOf("CONTENT_ASSET_ORPHAN_TTL_HOURS"),
+                propNames = listOf("content.asset.orphan.ttl.hours", "CONTENT_ASSET_ORPHAN_TTL_HOURS"),
+            )?.toLongOrNull()?.coerceIn(1L, 168L)?.times(60L * 60L * 1_000L)
+                ?: 24L * 60L * 60L * 1_000L,
+            cleanupIntervalMillis = loadSetting(
+                environment = environment,
+                envNames = listOf("CONTENT_ASSET_CLEANUP_INTERVAL_SECONDS"),
+                propNames = listOf(
+                    "content.asset.cleanup.interval.seconds",
+                    "CONTENT_ASSET_CLEANUP_INTERVAL_SECONDS",
+                ),
+            )?.toLongOrNull()?.coerceIn(60L, 86_400L)?.times(1_000L) ?: 3_600_000L,
+            r2 = r2,
+        )
+
+        private fun loadR2Config(environment: Map<String, String>): R2Config {
+            val accountId = environment.backendSecret("R2_ACCOUNT_ID")
+            return R2Config(
+                endpoint = environment.backendSecret("R2_ENDPOINT")
+                    ?: accountId?.let { value -> "https://$value.r2.cloudflarestorage.com" },
+                bucket = environment.backendSecret("R2_BUCKET"),
+                accessKeyId = environment.backendSecret("R2_ACCESS_KEY_ID"),
+                secretAccessKey = environment.backendSecret("R2_SECRET_ACCESS_KEY"),
             )
         }
 
@@ -272,6 +337,18 @@ data class VoiceNoteConfig(
     val maxDurationMs: Long = 300_000L,
     val uploadUrlTtlMillis: Long = 300_000L,
     val playbackUrlTtlMillis: Long = 300_000L,
+    val orphanTtlMillis: Long = 86_400_000L,
+    val cleanupIntervalMillis: Long = 3_600_000L,
+    val r2: R2Config = R2Config(),
+)
+
+data class ContentAssetConfig(
+    val enabled: Boolean = false,
+    val maxImageBytes: Long = 15_728_640L,
+    val maxPdfBytes: Long = 52_428_800L,
+    val maxTextBytes: Long = 1_048_576L,
+    val uploadUrlTtlMillis: Long = 300_000L,
+    val downloadUrlTtlMillis: Long = 300_000L,
     val orphanTtlMillis: Long = 86_400_000L,
     val cleanupIntervalMillis: Long = 3_600_000L,
     val r2: R2Config = R2Config(),

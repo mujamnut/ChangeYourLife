@@ -218,6 +218,16 @@ class AndroidContentAssetLocalStore @Inject constructor(
         }.getOrDefault(false)
     }
 
+    override suspend fun isAvailable(localPath: String): Boolean = withContext(Dispatchers.IO) {
+        runCatching {
+            val root = File(context.filesDir, AssetDirectoryName).canonicalFile
+            val candidate = File(localPath).canonicalFile
+            candidate.path.startsWith(root.path + File.separator) &&
+                candidate.isFile &&
+                candidate.length() > 0L
+        }.getOrDefault(false)
+    }
+
     private fun querySourceMetadata(uri: Uri): SourceMetadata {
         var displayName = ""
         var sizeBytes: Long? = null

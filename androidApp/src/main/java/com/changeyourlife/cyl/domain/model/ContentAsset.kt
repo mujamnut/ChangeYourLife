@@ -15,10 +15,21 @@ enum class ContentAssetKind(val wireValue: String) {
             mimeType.startsWith("image/", ignoreCase = true) -> IMAGE
             mimeType.equals("application/pdf", ignoreCase = true) -> PDF
             mimeType.startsWith("text/", ignoreCase = true) -> TEXT
+            mimeType.substringBefore(';').trim().lowercase() in ReadableApplicationTextMimeTypes -> TEXT
             else -> FILE
         }
     }
 }
+
+private val ReadableApplicationTextMimeTypes = setOf(
+    "application/json",
+    "application/xml",
+    "application/yaml",
+    "application/x-yaml",
+    "application/csv",
+    "application/sql",
+    "application/javascript",
+)
 
 enum class ContentAssetStatus(val wireValue: String) {
     LOCAL_READY("local_ready"),

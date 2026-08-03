@@ -82,18 +82,18 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.changeyourlife.cyl.aicontract.CYL_MAX_AI_ATTACHMENTS
 import com.changeyourlife.cyl.aicontract.ChatAttachmentKind
 import com.changeyourlife.cyl.aicontract.ChatAttachmentStatus
+import com.changeyourlife.cyl.domain.model.AiAttachmentSources
 import com.changeyourlife.cyl.domain.model.ChatAttachment
 import com.changeyourlife.cyl.domain.model.MentionCandidate
 import com.changeyourlife.cyl.domain.repository.AiImageAttachment
 import com.changeyourlife.cyl.presentation.page.RichTextCommandPaletteKind
 import com.changeyourlife.cyl.presentation.page.RichTextCommandPaletteItem
 import com.changeyourlife.cyl.presentation.page.RichTextMentionParser
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class, ExperimentalComposeUiApi::class)
 @Composable
@@ -122,7 +122,10 @@ fun AiChatSheet(
     sheetState: SheetState,
     attachedPageId: String? = null,
     attachedPageTitle: String? = null,
+    initialSharedDraftId: String? = null,
+    onSharedDraftPrepared: (String) -> Unit = {},
     voiceNoteController: VoiceNoteController = hiltViewModel(),
+    attachmentComposer: AiAttachmentComposerViewModel = hiltViewModel(),
 ) {
     val inputState = rememberTextFieldState()
     val inputText = inputState.text.toString()
@@ -132,9 +135,7 @@ fun AiChatSheet(
     var selectedMentionTitles by remember(attachedPageId) {
         mutableStateOf(emptyMap<String, String>())
     }
-    var stagedImageAttachments by remember {
-        mutableStateOf(emptyList<AiImageAttachment>())
-    }
+    val attachmentState by attachmentComposer.state.collectAsStateWithLifecycle()
     val voiceState by voiceNoteController.state.collectAsStateWithLifecycle()
     val dictationLanguage by voiceNoteController.dictationLanguage.collectAsStateWithLifecycle()
     val voicePlaybackState by voiceNoteController.playbackState.collectAsStateWithLifecycle()
@@ -164,64 +165,33 @@ fun AiChatSheet(
             voiceNoteController.onPermissionDenied(permanentlyDenied)
         }
     }
-    fun stageAttachmentResult(
-        result: AiAttachmentReadResult,
-        successMessage: String? = null,
-    ) {
-        result.attachment?.let { attachment ->
-            if (stagedImageAttachments.size >= MaxAiChatImages) {
-                Toast.makeText(
-                    context,
-                    "You can attach up to $MaxAiChatImages files.",
-                    Toast.LENGTH_SHORT,
-                ).show()
-                return
-            }
-            stagedImageAttachments = stagedImageAttachments + attachment
-            if (!successMessage.isNullOrBlank()) {
-                Toast.makeText(context, successMessage, Toast.LENGTH_SHORT).show()
-            }
-            return
-        }
-        if (!result.userMessage.isNullOrBlank()) {
-            Toast.makeText(context, result.userMessage, Toast.LENGTH_SHORT).show()
-        }
-    }
     val photoPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent(),
     ) { uri ->
-        if (uri != null) {
-            composerScope.launch {
-                val result = withContext(Dispatchers.IO) {
-                    context.readAiImageAttachment(uri, fallbackName = "Photo")
-                }
-                stageAttachmentResult(result)
-            }
+        uri?.let { selected ->
+            attachmentComposer.prepareUri(
+                sourceUri = selected.toString(),
+                fallbackName = "Photo",
+                source = AiAttachmentSources.ComposerPicker,
+                imageOnly = true,
+            )
         }
     }
     val filePicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent(),
     ) { uri ->
-        if (uri != null) {
-            composerScope.launch {
-                val result = withContext(Dispatchers.IO) {
-                    context.readAiImageAttachment(uri, fallbackName = "Image file")
-                }
-                stageAttachmentResult(result)
-            }
+        uri?.let { selected ->
+            attachmentComposer.prepareUri(
+                sourceUri = selected.toString(),
+                fallbackName = "Attached file",
+                source = AiAttachmentSources.ComposerPicker,
+            )
         }
     }
-    val cameraPreview = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.TakePicturePreview(),
-    ) { bitmap ->
-        if (bitmap != null) {
-            composerScope.launch {
-                val result = withContext(Dispatchers.Default) {
-                    bitmap.toAiImageAttachmentResult(name = "Camera")
-                }
-                stageAttachmentResult(result)
-            }
-        }
+    val cameraCapture = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicture(),
+    ) { success ->
+        attachmentComposer.onCameraCaptureResult(success)
     }
     val pastedImageReceiver = ReceiveContentListener { transferableContent ->
         if (!transferableContent.hasMediaType(MediaType.Image)) {
@@ -243,41 +213,29 @@ fun AiChatSheet(
         }
         if (queuedUris.isNotEmpty()) {
             composerScope.launch {
-                val availableSlots = (MaxAiChatImages - stagedImageAttachments.size).coerceAtLeast(0)
+                val availableSlots =
+                    (CYL_MAX_AI_ATTACHMENTS - attachmentState.attachments.size).coerceAtLeast(0)
                 if (availableSlots == 0) {
                     Toast.makeText(
                         context,
-                        "You can attach up to $MaxAiChatImages files.",
+                        "You can attach up to $CYL_MAX_AI_ATTACHMENTS files.",
                         Toast.LENGTH_SHORT,
                     ).show()
                     return@launch
                 }
                 val acceptedUris = queuedUris.take(availableSlots)
-                val results = withContext(Dispatchers.IO) {
-                    acceptedUris.map { imageUri ->
-                        context.readPastedImageAttachment(imageUri, fallbackName = "Pasted image")
-                    }
-                }
-                val acceptedAttachments = results
-                    .mapNotNull(AiAttachmentReadResult::attachment)
-                stagedImageAttachments = stagedImageAttachments + acceptedAttachments
-                val attachedCount = acceptedAttachments.size
-                if (attachedCount > 0) {
+                attachmentComposer.prepareUris(
+                    sourceUris = acceptedUris.map(Uri::toString),
+                    fallbackName = "Pasted image",
+                    source = AiAttachmentSources.ComposerPaste,
+                    imageOnly = true,
+                )
+                if (queuedUris.size > acceptedUris.size) {
                     Toast.makeText(
                         context,
-                        if (attachedCount == 1) "Image pasted" else "$attachedCount images pasted",
+                        "Only $CYL_MAX_AI_ATTACHMENTS attachments can be added at once.",
                         Toast.LENGTH_SHORT,
                     ).show()
-                    if (queuedUris.size > acceptedUris.size) {
-                        Toast.makeText(
-                            context,
-                            "Only $MaxAiChatImages attachments can be added at once.",
-                            Toast.LENGTH_SHORT,
-                        ).show()
-                    }
-                } else {
-                    val message = results.lastOrNull()?.userMessage?.takeIf { it.isNotBlank() }
-                    message?.let { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
                 }
             }
         }
@@ -309,17 +267,26 @@ fun AiChatSheet(
     }
     val shouldShowKeyboardReplacement = activePanel != null || isMentionPickerOpen
     val avatarSpec = remember(persona) { persona.toAvatarSpec() }
-    val stagedAttachmentPreviews = remember(stagedImageAttachments) {
-        stagedImageAttachments.mapIndexed { index, attachment ->
+    val stagedAttachmentPreviews = remember(attachmentState.attachments) {
+        attachmentState.attachments.mapIndexed { index, attachment ->
             AiAttachmentPreviewUi(
                 label = attachment.name.ifBlank {
-                    if (attachment.kind == "text") "File ${index + 1}" else "Image ${index + 1}"
+                    when (attachment.attachmentKind) {
+                        ChatAttachmentKind.TextFile -> "File ${index + 1}"
+                        ChatAttachmentKind.Pdf -> "PDF ${index + 1}"
+                        else -> "Image ${index + 1}"
+                    }
                 },
                 mimeType = attachment.mimeType,
-                dataUrl = attachment.previewDataUrl.ifBlank { attachment.dataUrl },
+                dataUrl = if (attachment.attachmentKind == ChatAttachmentKind.Image) {
+                    attachment.previewDataUrl.ifBlank { attachment.dataUrl }
+                } else {
+                    ""
+                },
                 kind = attachment.kind,
                 statusLabel = when {
-                    attachment.kind == "text" -> "Text ready"
+                    attachment.attachmentKind == ChatAttachmentKind.TextFile -> "Text ready"
+                    attachment.attachmentKind == ChatAttachmentKind.Pdf -> "PDF ready"
                     attachment.mimeType.startsWith("image/", ignoreCase = true) -> "Vision ready"
                     else -> "Attached"
                 },
@@ -363,8 +330,9 @@ fun AiChatSheet(
         }
     }
     val sendCurrentPrompt = {
-        if ((inputText.isNotBlank() || stagedImageAttachments.isNotEmpty()) &&
-            !isGenerating
+        if ((inputText.isNotBlank() || attachmentState.attachments.isNotEmpty()) &&
+            !isGenerating &&
+            !attachmentState.isPreparing
         ) {
             val message = inputText.trim()
             onSendMessage(
@@ -372,13 +340,13 @@ fun AiChatSheet(
                 selectedMentionPageIds
                     .filter { pageId -> pageId.isNotBlank() }
                     .distinct(),
-                stagedImageAttachments,
+                attachmentState.attachments,
                 isWebSearchEnabled,
             )
             inputState.setTextAndPlaceCursorAtEnd("")
             selectedMentionPageIds = emptyList()
             selectedMentionTitles = emptyMap()
-            stagedImageAttachments = emptyList()
+            attachmentComposer.clearAfterSend()
             activePanel = null
             isMentionPickerOpen = false
         }
@@ -401,6 +369,29 @@ fun AiChatSheet(
 
     LaunchedEffect(attachedPageId) {
         inputState.setTextAndPlaceCursorAtEnd("")
+    }
+    LaunchedEffect(initialSharedDraftId) {
+        initialSharedDraftId
+            ?.takeIf(String::isNotBlank)
+            ?.let(attachmentComposer::prepareIncomingShare)
+    }
+    LaunchedEffect(attachmentState.lastPreparedIncomingShareDraftId) {
+        attachmentState.lastPreparedIncomingShareDraftId?.let { draftId ->
+            onSharedDraftPrepared(draftId)
+            attachmentComposer.consumePreparedIncomingShare(draftId)
+        }
+    }
+    LaunchedEffect(attachmentState.errorVersion) {
+        val message = attachmentState.errorMessage?.takeIf(String::isNotBlank) ?: return@LaunchedEffect
+        Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+        attachmentComposer.consumeError(attachmentState.errorVersion)
+    }
+    LaunchedEffect(attachmentComposer) {
+        attachmentComposer.events.collect { event ->
+            when (event) {
+                is AiAttachmentComposerEvent.LaunchCamera -> cameraCapture.launch(Uri.parse(event.uri))
+            }
+        }
     }
     LaunchedEffect(voiceState.resultVersion) {
         val resultVersion = voiceState.resultVersion
@@ -468,6 +459,7 @@ fun AiChatSheet(
                     activePanel = null
                     isMentionPickerOpen = false
                     voiceNoteController.discardComposer()
+                    attachmentComposer.discardComposer()
                     onCreateChatSession()
                 },
             )
@@ -532,9 +524,9 @@ fun AiChatSheet(
                 },
                 stagedAttachments = stagedAttachmentPreviews,
                 onRemoveAttachment = { index ->
-                    stagedImageAttachments = stagedImageAttachments.filterIndexed { itemIndex, _ ->
-                        itemIndex != index
-                    }
+                    attachmentState.attachments.getOrNull(index)?.id?.let(
+                        attachmentComposer::removeAttachment,
+                    )
                 },
                 isInputEnabled = true,
                 isAttachmentsActive = activePanel == AiComposerPanel.Attachments,
@@ -563,7 +555,7 @@ fun AiChatSheet(
                     )
                 },
                 onSend = sendCurrentPrompt,
-                isGenerating = isGenerating,
+                isGenerating = isGenerating || attachmentState.isPreparing,
                 pastedImageReceiver = pastedImageReceiver,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
             )
@@ -619,7 +611,7 @@ fun AiChatSheet(
                                     activePanel = null
                                     isMentionPickerOpen = true
                                 },
-                                onOpenCamera = { cameraPreview.launch(null) },
+                                onOpenCamera = attachmentComposer::requestCameraCapture,
                             )
                         }
                         activePanel == AiComposerPanel.Settings -> {

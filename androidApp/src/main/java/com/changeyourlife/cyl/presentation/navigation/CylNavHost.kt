@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -30,6 +31,8 @@ import com.changeyourlife.cyl.presentation.home.HomeRoute
 import com.changeyourlife.cyl.presentation.home.HomeSearchRoute
 import com.changeyourlife.cyl.presentation.home.HomeViewModel
 import com.changeyourlife.cyl.presentation.page.PageEditorRoute
+import com.changeyourlife.cyl.presentation.share.DraftIdArgument
+import com.changeyourlife.cyl.presentation.share.ShareImportRoute
 
 private object Routes {
     const val Auth = "auth"
@@ -39,6 +42,8 @@ private object Routes {
     const val AiProfile = "ai/profile"
     const val AiSkills = "ai/skills"
     const val PageEditor = "page"
+    const val ShareImport = "share/import"
+    const val ShareImportPattern = "$ShareImport/{$DraftIdArgument}"
 
     fun pageEditor(
         pageId: String,
@@ -57,6 +62,8 @@ private object Routes {
         ) { (key, value) -> "$key=${Uri.encode(value)}" }
     }
 
+    fun shareImport(draftId: String): String = "$ShareImport/${Uri.encode(draftId)}"
+
 }
 
 @Composable
@@ -66,6 +73,7 @@ fun CylNavHost(
     val navController = rememberNavController()
     val homeViewModel: HomeViewModel = hiltViewModel()
     val authState by viewModel.authState.collectAsStateWithLifecycle()
+    val pendingShareDraftId by viewModel.pendingShareDraftId.collectAsStateWithLifecycle()
     val homeUiState by homeViewModel.uiState.collectAsStateWithLifecycle()
     var aiDisplayName by rememberSaveable { mutableStateOf("CYL AI") }
     var aiAvatarColorIndex by rememberSaveable { mutableStateOf(0) }
@@ -92,6 +100,19 @@ fun CylNavHost(
             )
         }
         return
+    }
+
+    LaunchedEffect(authState, pendingShareDraftId) {
+        val draftId = pendingShareDraftId?.takeIf(String::isNotBlank) ?: return@LaunchedEffect
+        if (authState !is AuthState.SignedIn) return@LaunchedEffect
+        val currentRoute = navController.currentDestination?.route
+        val currentDraftId = navController.currentBackStackEntry?.arguments?.getString(DraftIdArgument)
+        if (currentRoute != Routes.ShareImportPattern || currentDraftId != draftId) {
+            navController.navigate(Routes.shareImport(draftId)) {
+                launchSingleTop = true
+            }
+        }
+        viewModel.consumeShareNavigation(draftId)
     }
 
     NavHost(
@@ -257,6 +278,35 @@ fun CylNavHost(
                 },
                 onOpenAiSkills = {
                     navController.navigate(Routes.AiSkills) {
+                        launchSingleTop = true
+                    }
+                },
+            )
+        }
+        composable(
+            route = Routes.ShareImportPattern,
+            arguments = listOf(
+                navArgument(DraftIdArgument) {
+                    type = NavType.StringType
+                },
+            ),
+        ) {
+            ShareImportRoute(
+                onBack = {
+                    if (!navController.popBackStack()) {
+                        navController.navigate(Routes.Home) { launchSingleTop = true }
+                    }
+                },
+                onImported = { pageId ->
+                    navController.navigate(Routes.pageEditor(pageId)) {
+                        popUpTo(Routes.ShareImportPattern) { inclusive = true }
+                        launchSingleTop = true
+                    }
+                },
+                onAskAi = { draftId ->
+                    homeViewModel.openIncomingShareInAi(draftId)
+                    navController.navigate(Routes.Home) {
+                        popUpTo(Routes.ShareImportPattern) { inclusive = true }
                         launchSingleTop = true
                     }
                 },

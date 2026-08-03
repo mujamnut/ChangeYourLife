@@ -82,6 +82,7 @@ class ChatHistoryRepositoryImpl @Inject constructor(
         actionMetadata: ChatActionMetadata?,
     ): ChatMessage {
         val now = System.currentTimeMillis()
+        val persistedAttachments = attachments.map(ChatMessageAttachment::toPersistedSnapshot)
         val messageCount = chatMessageDao.getMessageCount(sessionId)
         val existingSession = chatMessageDao.getSession(sessionId)
         val session = existingSession ?: ChatSessionEntity(
@@ -110,7 +111,7 @@ class ChatHistoryRepositoryImpl @Inject constructor(
             role = role,
             content = content,
             pageLinks = pageLinks,
-            attachments = attachments,
+            attachments = persistedAttachments,
             actionMetadata = actionMetadata,
             createdAt = now,
         )
@@ -134,7 +135,7 @@ class ChatHistoryRepositoryImpl @Inject constructor(
         if (index < 0) return@withLock false
 
         val updatedAttachments = attachments.toMutableList().apply {
-            this[index] = attachment.toDto()
+            this[index] = attachment.toPersistedSnapshot().toDto()
         }
         val now = System.currentTimeMillis()
         chatMessageDao.upsertMessage(
@@ -262,6 +263,9 @@ private data class ChatMessageAttachmentDto(
     val progressPercent: Int = 0,
     val aiJobId: String = "",
     val errorCode: String = "",
+    val source: String = "",
+    val sourceReferenceId: String = "",
+    val approvedAtEpochMillis: Long = 0L,
 )
 
 @Serializable
@@ -345,6 +349,9 @@ private fun ChatMessageAttachmentDto.toDomain(): ChatMessageAttachment {
         progressPercent = progressPercent,
         aiJobId = aiJobId,
         errorCode = errorCode,
+        source = source,
+        sourceReferenceId = sourceReferenceId,
+        approvedAtEpochMillis = approvedAtEpochMillis,
     )
 }
 
@@ -369,6 +376,17 @@ private fun ChatMessageAttachment.toDto(): ChatMessageAttachmentDto {
         progressPercent = progressPercent,
         aiJobId = aiJobId,
         errorCode = errorCode,
+        source = source,
+        sourceReferenceId = sourceReferenceId,
+        approvedAtEpochMillis = approvedAtEpochMillis,
+    )
+}
+
+private fun ChatMessageAttachment.toPersistedSnapshot(): ChatMessageAttachment {
+    if (remoteAssetId.isBlank()) return this
+    return copy(
+        dataUrl = "",
+        textContent = "",
     )
 }
 

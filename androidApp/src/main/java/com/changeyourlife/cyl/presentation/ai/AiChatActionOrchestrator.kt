@@ -445,6 +445,7 @@ private fun AiDiagnostics.toUserDiagnosticMessages(): List<String> {
     val attachmentParts = buildList {
         if (imageCount > 0) add("$imageCount image${if (imageCount == 1) "" else "s"}")
         if (textFileCount > 0) add("$textFileCount file${if (textFileCount == 1) "" else "s"}")
+        if (pdfFileCount > 0) add("$pdfFileCount PDF${if (pdfFileCount == 1) "" else "s"}")
     }.joinToString(" + ")
     val visionPart = when {
         !visionAttempted -> ""
@@ -455,10 +456,22 @@ private fun AiDiagnostics.toUserDiagnosticMessages(): List<String> {
         visionStatus.isNotBlank() -> "Vision: $visionStatus"
         else -> "Vision: attempted"
     }
+    val pdfPart = when {
+        pdfFileCount == 0 -> ""
+        pdfExtractionStatus.equals("succeeded", ignoreCase = true) ->
+            "PDF: read $pdfPageCount page${if (pdfPageCount == 1) "" else "s"}"
+        pdfExtractionStatus.equals("partial", ignoreCase = true) ->
+            "PDF: read $pdfPageCount page${if (pdfPageCount == 1) "" else "s"} (partial)"
+        pdfExtractionStatus.equals("no_text", ignoreCase = true) -> "PDF: no selectable text"
+        pdfExtractionStatus.equals("failed", ignoreCase = true) -> "PDF: extraction failed"
+        pdfExtractionStatus.isNotBlank() -> "PDF: $pdfExtractionStatus"
+        else -> "PDF: attempted"
+    }
     return listOf(
         listOf(
             "Attachment: $attachmentParts".takeIf { attachmentParts.isNotBlank() },
             visionPart.takeIf { it.isNotBlank() },
+            pdfPart.takeIf { it.isNotBlank() },
         )
             .filterNotNull()
             .joinToString(" | "),

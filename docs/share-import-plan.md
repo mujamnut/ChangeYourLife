@@ -1,6 +1,6 @@
 # CYL Share Import Plan
 
-Status: Phase A asset foundation implemented. Share intake is not enabled yet.
+Status: Phase A through Phase E implemented. Phase F hardening remains.
 
 Last reviewed: 2026-08-03
 
@@ -12,17 +12,17 @@ The implementation must remain reliable across cold start, warm start, process r
 
 ## Current Audit
 
-The current app is not ready to advertise itself as an Android share target.
+The supported share flow is now implemented through explicit domain boundaries:
 
-1. `androidApp/src/main/AndroidManifest.xml` only declares `MAIN` and `LAUNCHER`. There are no `ACTION_SEND` or `ACTION_SEND_MULTIPLE` filters.
-2. `MainActivity` does not process an initial share intent or `onNewIntent()`.
-3. `CylNavHost` has no dedicated share-import route or process-safe incoming-share state.
-4. `PageMediaAttachment` stores a raw `content://` URI inside page content. A URI supplied by another app can lose access and is meaningless on another device.
-5. Existing page media attempts `takePersistableUriPermission()`. This is useful for documents selected through the Storage Access Framework, but cannot be assumed for every `ACTION_SEND` provider.
-6. Existing R2 and chat attachment upload infrastructure is restricted by service validation to voice-note audio.
-7. AI chat currently reads images and small text files into memory. It does not support PDF input and must not become the canonical file-import pipeline.
+1. `MainActivity` accepts supported cold-start and warm-start share intents and delegates them to durable intake.
+2. `ShareIntentParser`, `IncomingShareCoordinator`, Room drafts, and the dedicated import route prevent raw intent payloads from becoming navigation state.
+3. Images, PDFs, and selected files are copied into app-private generic content assets before page or AI use.
+4. Page import commits through the page repository with revision checks and queues asset upload separately.
+5. `Ask AI` is an explicit handoff. Send approval is stamped with source, source reference, and approval time before the backend accepts an attachment.
+6. Composer file IO, bounded reads, hashing, image validation, and thumbnail generation live outside Compose UI.
+7. The backend validates the shared attachment contract and extracts selectable PDF text with bounded file, page, and context limits. Scanned PDFs still require later OCR support.
 
-Conclusion: build a generic page-asset foundation first. Add Android share intent filters only after staging, preview, import, and cleanup are working.
+The remaining work is Phase F operational hardening and broader device/cross-device verification.
 
 ## Product Scope
 
@@ -56,8 +56,8 @@ Limits must be centralized in a domain policy rather than duplicated in UI and b
 - Office documents
 - CSV/JSON/Markdown as imported text or files
 - Audio and video media blocks
-- PDF text extraction
-- OCR and AI analysis
+- OCR for scanned PDFs and images
+- Broader document AI analysis
 - Direct Share shortcuts
 
 ## User Experience
@@ -319,14 +319,20 @@ Recoverable failures expose Retry. Permanent failures explain the rejected item.
 - [x] Atomic staging cleanup when metadata persistence fails
 - [x] Soft-delete cleanup use case with path-boundary enforcement
 - [x] Backward-compatible `assetId` field and legacy URI migration use case
-- [ ] Wire generic assets into the current page media editor
-- [ ] Backend upload/download lifecycle
-- [ ] Durable incoming share drafts and Android intent intake
-- [ ] Share import UI and atomic page mutation
+- [x] Generic private R2 transport with unchanged voice-note validation
+- [x] Backend content-asset migration, ownership checks, idempotency, verification, and cleanup
+- [x] Android typed upload gateway, persisted progress, and WorkManager retry/resume
+- [x] Stable owner-scoped asset identity and lazy signed-URL hydration for another device
+- [x] Resolve imported page media through stable asset IDs, private local files, and signed remote URLs
+- [x] Durable incoming share drafts and Android intent intake
+- [x] Share import UI and atomic page mutation
+- [x] Explicit Incoming Share to AI handoff with auditable approval metadata
+- [x] Generic image/text/PDF attachment preparation outside Compose UI
+- [x] Backend attachment validation and bounded selectable-text PDF extraction
 
-The manifest intentionally has no share intent filter at this checkpoint. Existing page media still
-uses its legacy URI path until the editor is switched to `ContentAssetRepository`; the migration
-bridge exists, but is not invoked automatically yet.
+The manifest advertises only the MIME types listed in the initial scope. Imported media uses the
+generic asset path. Files selected directly inside the legacy page/table picker remain backward
+compatible with persisted document URIs until that picker is migrated to the generic staging flow.
 
 ### Phase A: Asset foundation
 
@@ -348,28 +354,31 @@ Exit condition: an imported attachment opens correctly on a second device.
 
 ### Phase C: Share intake
 
-1. Add `ShareIntentParser` and unit tests.
-2. Add `IncomingShareCoordinator` and durable draft repository.
-3. Handle cold-start and warm-start intents.
-4. Add supported `ACTION_SEND` and `ACTION_SEND_MULTIPLE` filters last.
+1. [x] Add `ShareIntentParser`.
+2. [x] Add `IncomingShareCoordinator` and durable draft repository.
+3. [x] Handle cold-start and warm-start intents.
+4. [x] Add supported `ACTION_SEND` and `ACTION_SEND_MULTIPLE` filters last.
 
 Exit condition: CYL appears only for supported types and never creates duplicate drafts.
 
 ### Phase D: Import UI and page mutation
 
-1. Add `ShareImportRoute` and ViewModel.
-2. Add preview, destination selection, title edit, remove, retry, cancel, and confirm.
-3. Map content into CYL blocks.
-4. Commit with the existing page mutation boundary.
+1. [x] Add `ShareImportRoute` and ViewModel.
+2. [x] Add preview, destination selection, title edit, remove, retry, cancel, and confirm.
+3. [x] Map plain text, passive HTML, URLs, images, and PDFs into CYL blocks.
+4. [x] Commit page content and asset metadata atomically through `PageRepository`.
+5. [x] Reject stale existing-page imports using revision and local update-time checks.
+6. [x] Finalize the draft and queue durable asset uploads in the same Room transaction.
 
 Exit condition: new-page and existing-page imports are atomic and recoverable.
 
 ### Phase E: AI integration
 
-1. Extract the current chat attachment reader out of UI code.
-2. Reuse generic assets for image and text attachments.
-3. Add PDF extraction as a separate backend capability.
-4. Keep `Ask AI` explicit and auditable.
+1. [x] Extract the current chat attachment reader out of UI code.
+2. [x] Reuse generic assets for image and text-file attachments.
+3. [x] Add bounded PDF extraction as a separate backend capability.
+4. [x] Keep `Ask AI` explicit and auditable.
+5. [x] Persist only lightweight chat snapshots for asset-backed attachments; inline AI payloads are not synced.
 
 Exit condition: AI receives only supported, user-approved content and never raw oversized files.
 

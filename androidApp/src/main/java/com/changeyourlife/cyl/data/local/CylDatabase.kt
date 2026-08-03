@@ -10,6 +10,7 @@ import com.changeyourlife.cyl.data.local.dao.ChatAttachmentDao
 import com.changeyourlife.cyl.data.local.dao.PageDao
 import com.changeyourlife.cyl.data.local.dao.PageContentDao
 import com.changeyourlife.cyl.data.local.dao.PageAssetDao
+import com.changeyourlife.cyl.data.local.dao.IncomingShareDao
 import com.changeyourlife.cyl.data.local.dao.ReminderDao
 import com.changeyourlife.cyl.data.local.dao.SearchIndexDao
 import com.changeyourlife.cyl.data.local.dao.SyncTombstoneDao
@@ -23,6 +24,8 @@ import com.changeyourlife.cyl.data.local.entity.ChatAttachmentEntity
 import com.changeyourlife.cyl.data.local.entity.ChatSessionEntity
 import com.changeyourlife.cyl.data.local.entity.PageBlockEntity
 import com.changeyourlife.cyl.data.local.entity.PageAssetEntity
+import com.changeyourlife.cyl.data.local.entity.IncomingShareDraftEntity
+import com.changeyourlife.cyl.data.local.entity.IncomingShareItemEntity
 import com.changeyourlife.cyl.data.local.entity.PageEntity
 import com.changeyourlife.cyl.data.local.entity.ReminderEntity
 import com.changeyourlife.cyl.data.local.entity.SearchIndexEntity
@@ -56,8 +59,10 @@ import com.changeyourlife.cyl.data.local.entity.WorkspaceEntity
         AiSkillEntity::class,
         SearchIndexEntity::class,
         PageAssetEntity::class,
+        IncomingShareDraftEntity::class,
+        IncomingShareItemEntity::class,
     ],
-    version = 21,
+    version = 22,
     exportSchema = true,
 )
 abstract class CylDatabase : RoomDatabase() {
@@ -74,4 +79,5 @@ abstract class CylDatabase : RoomDatabase() {
     abstract fun aiSkillDao(): AiSkillDao
     abstract fun searchIndexDao(): SearchIndexDao
     abstract fun pageAssetDao(): PageAssetDao
+    abstract fun incomingShareDao(): IncomingShareDao
 }

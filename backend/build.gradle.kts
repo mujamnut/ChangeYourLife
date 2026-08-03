@@ -45,6 +45,7 @@ dependencies {
     implementation(libs.flyway.core)
     implementation(libs.aws.sdk.s3)
     implementation(libs.aws.sdk.url.connection.client)
+    implementation(libs.pdfbox)
 
     testImplementation(libs.ktor.server.test.host)
     testImplementation(libs.kotlin.test.junit)

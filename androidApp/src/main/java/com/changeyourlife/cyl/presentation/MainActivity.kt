@@ -16,6 +16,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import com.changeyourlife.cyl.data.local.session.SyncSettingsStore
+import com.changeyourlife.cyl.data.share.IncomingShareCoordinator
 import com.changeyourlife.cyl.domain.repository.ReminderRepository
 import com.changeyourlife.cyl.presentation.app.CylApp
 import dagger.hilt.android.AndroidEntryPoint
@@ -30,10 +31,14 @@ class MainActivity : ComponentActivity() {
     @Inject
     lateinit var syncSettingsStore: SyncSettingsStore
 
+    @Inject
+    lateinit var incomingShareCoordinator: IncomingShareCoordinator
+
     private var wasExactAlarmAllowed = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        incomingShareCoordinator.accept(intent)
         wasExactAlarmAllowed = canScheduleExactAlarms()
         requestNotificationPermission()
         requestExactAlarmPermissionIfNeeded()
@@ -42,6 +47,12 @@ class MainActivity : ComponentActivity() {
             val themeMode by syncSettingsStore.themeMode.collectAsState()
             CylApp(themeMode = themeMode)
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        incomingShareCoordinator.accept(intent)
     }
 
     override fun onResume() {

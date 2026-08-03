@@ -52,6 +52,7 @@ class AiService(
     private val promptActionRecovery: AiPromptActionRecovery = AiPromptActionRecovery(actionSchemaValidator),
     private val completionProvider: ((List<ChatMessage>, Boolean, Double) -> String)? = null,
     private val webSearchService: WebSearchService? = null,
+    private val pdfAttachmentTextExtractor: PdfAttachmentTextExtractor = PdfAttachmentTextExtractor(),
 ) {
     private val logger = LoggerFactory.getLogger(AiService::class.java)
     private val actionContextBuilder = AiActionContextBuilder()
@@ -703,7 +704,11 @@ class AiService(
             .filter { file -> file.textContent.isNotBlank() }
             .take(MaxTextContextFiles)
             .toList()
-        if (validImages.isEmpty() && textFiles.isEmpty()) {
+        val pdfFiles = images
+            .asSequence()
+            .filter { file -> file.attachmentKind == com.changeyourlife.cyl.aicontract.ChatAttachmentKind.Pdf }
+            .toList()
+        if (validImages.isEmpty() && textFiles.isEmpty() && pdfFiles.isEmpty()) {
             return AttachmentContext(
                 content = "",
                 diagnostics = images.toAttachmentDiagnostics(phase = "no_attachments"),
@@ -714,6 +719,7 @@ class AiService(
             validImages.isEmpty() -> VisionAnalysisResult(status = "not_attempted")
             else -> analyzeImagesWithVisionFallback(validImages)
         }
+        val pdfResult = pdfAttachmentTextExtractor.extract(pdfFiles)
         val textSummary = textFiles.joinToString(separator = "\n\n") { file ->
             """
                 File: ${file.name.ifBlank { "attached file" }}
@@ -726,12 +732,14 @@ class AiService(
 
         val content = """
             CYL_FILE_CONTEXT:
-            The user attached ${validImages.size} image(s) and ${textFiles.size} readable text file(s).
+            The user attached ${validImages.size} image(s), ${textFiles.size} readable text file(s), and ${pdfResult.fileCount} PDF file(s).
             Use this extracted attachment context as user-provided evidence.
             If Image context says image reading failed or unavailable, tell the user the attachment reached CYL but CYL could not extract readable image context. Ask the user to retry or check the LM Studio vision model/tunnel. Do not mention provider status codes unless the user asks.
             Do not mention internal attachment pipeline details unless the user asks.
             ${if (visionResult.content.isNotBlank()) "Image context:\n${visionResult.content}" else ""}
             ${if (textSummary.isNotBlank()) "Text file context:\n$textSummary" else ""}
+            ${if (pdfResult.content.isNotBlank()) "PDF context:\n${pdfResult.content}" else ""}
+            ${if (pdfResult.status == "no_text") "The PDF contains no selectable text. OCR was not attempted; do not invent its contents." else ""}
         """.trimIndent()
         return AttachmentContext(
             content = content,
@@ -739,12 +747,18 @@ class AiService(
                 phase = "attachments_prepared",
                 imageCount = validImages.size,
                 textFileCount = textFiles.size,
+                pdfFileCount = pdfResult.fileCount,
+                pdfPageCount = pdfResult.pageCount,
+                pdfExtractionStatus = pdfResult.status,
                 visionAttempted = validImages.isNotEmpty(),
                 visionProvider = visionResult.provider,
                 visionModel = visionResult.model,
                 visionStatus = visionResult.status,
                 visionPipelineVersion = VisionPipelineVersion,
-                warning = visionResult.warning,
+                warning = listOf(visionResult.warning, pdfResult.warning)
+                    .filter(String::isNotBlank)
+                    .joinToString(" | ")
+                    .take(MaxDiagnosticsWarningChars),
             ),
         )
     }
@@ -755,10 +769,15 @@ class AiService(
                 image.kind.equals("image", ignoreCase = true)
         }
         val textFileCount = count { file -> file.textContent.isNotBlank() }
+        val pdfFileCount = count { file ->
+            file.attachmentKind == com.changeyourlife.cyl.aicontract.ChatAttachmentKind.Pdf
+        }
         return AiDiagnostics(
             phase = phase,
             imageCount = imageCount.coerceAtMost(MaxVisionImages),
             textFileCount = textFileCount.coerceAtMost(MaxTextContextFiles),
+            pdfFileCount = pdfFileCount,
+            pdfExtractionStatus = if (pdfFileCount > 0) "queued" else "",
             visionAttempted = imageCount > 0,
             visionProvider = when {
                 imageCount == 0 -> ""

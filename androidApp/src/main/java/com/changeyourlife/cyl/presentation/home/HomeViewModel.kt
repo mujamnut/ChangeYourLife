@@ -1,10 +1,12 @@
 package com.changeyourlife.cyl.presentation.home
 
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.changeyourlife.cyl.core.constants.CylDefaults
 import com.changeyourlife.cyl.core.network.toBackendConnectionMessage
 import com.changeyourlife.cyl.domain.model.AiSearchContext
+import com.changeyourlife.cyl.domain.model.AiAttachmentSources
 import com.changeyourlife.cyl.domain.model.AiSkill
 import com.changeyourlife.cyl.domain.model.Page
 import com.changeyourlife.cyl.domain.model.PageBlock
@@ -59,6 +61,8 @@ import com.changeyourlife.cyl.domain.usecase.ResolveMentionUseCase
 import com.changeyourlife.cyl.domain.usecase.SearchWorkspaceUseCase
 import com.changeyourlife.cyl.domain.usecase.chat.LinkVoiceNoteToMessageUseCase
 import com.changeyourlife.cyl.domain.usecase.chat.QueueVoiceNoteUploadUseCase
+import com.changeyourlife.cyl.domain.usecase.ai.CompleteIncomingShareAiHandoffUseCase
+import com.changeyourlife.cyl.domain.usecase.asset.QueueContentAssetUploadUseCase
 import com.changeyourlife.cyl.presentation.ai.AiActionExecutionUseCase
 import com.changeyourlife.cyl.presentation.ai.AiActionLogFactory
 import com.changeyourlife.cyl.presentation.ai.AiChatActionOrchestrator
@@ -107,6 +111,7 @@ import java.util.UUID
 
 @HiltViewModel
 class HomeViewModel @Inject constructor(
+    private val savedStateHandle: SavedStateHandle,
     private val workspaceRepository: WorkspaceRepository,
     private val pageRepository: PageRepository,
     private val taskRepository: TaskRepository,
@@ -126,10 +131,16 @@ class HomeViewModel @Inject constructor(
     private val chatHistoryRepository: ChatHistoryRepository,
     private val linkVoiceNoteToMessage: LinkVoiceNoteToMessageUseCase,
     private val queueVoiceNoteUpload: QueueVoiceNoteUploadUseCase,
+    private val queueContentAssetUpload: QueueContentAssetUploadUseCase,
+    private val completeIncomingShareAiHandoff: CompleteIncomingShareAiHandoffUseCase,
     private val syncStatusRepository: SyncStatusRepository,
     private val syncSettingsStore: SyncSettingsStore,
     private val backgroundSyncQueue: com.changeyourlife.cyl.data.sync.BackgroundSyncQueue,
 ) : ViewModel() {
+    val pendingAiShareDraftId: StateFlow<String?> = savedStateHandle.getStateFlow(
+        PendingAiShareDraftKey,
+        null,
+    )
     private val workspaceFormState = MutableStateFlow(WorkspaceFormState())
     private val activeChatSessionId = MutableStateFlow<String?>(null)
     private val activeWorkspaceChatScope: Flow<String> = workspaceRepository.observeActiveWorkspaceId()
@@ -713,6 +724,18 @@ class HomeViewModel @Inject constructor(
         aiSkillError.value = null
     }
 
+    fun openIncomingShareInAi(draftId: String) {
+        draftId.takeIf(String::isNotBlank)?.let { value ->
+            savedStateHandle[PendingAiShareDraftKey] = value
+        }
+    }
+
+    fun consumeIncomingShareForAi(draftId: String) {
+        if (pendingAiShareDraftId.value == draftId) {
+            savedStateHandle[PendingAiShareDraftKey] = null
+        }
+    }
+
     fun sendChatMessage(
         prompt: String,
         mentionedPageIds: List<String> = emptyList(),
@@ -781,9 +804,25 @@ class HomeViewModel @Inject constructor(
             var responseSessionId: String? = null
             aiChatError.value = null
             try {
+                val approvedAt = System.currentTimeMillis()
+                val approvedAttachments = images.map { attachment ->
+                    val attachmentId = attachment.id.ifBlank { UUID.randomUUID().toString() }
+                    attachment.copy(
+                        id = attachmentId,
+                        source = attachment.source.ifBlank {
+                            if (attachment.kind.equals("audio", ignoreCase = true)) {
+                                AiAttachmentSources.VoiceNote
+                            } else {
+                                AiAttachmentSources.ComposerPicker
+                            }
+                        },
+                        sourceReferenceId = attachment.sourceReferenceId.ifBlank { attachmentId },
+                        approvedAtEpochMillis = approvedAt,
+                    )
+                }
                 val visiblePrompt = prompt.trim()
                 val requestPrompt = visiblePrompt.ifBlank {
-                    if (images.isNotEmpty()) ImageOnlyAiRequestPrompt else visiblePrompt
+                    if (approvedAttachments.isNotEmpty()) ImageOnlyAiRequestPrompt else visiblePrompt
                 }
 
                 val workspaceId = workspaceRepository.getActiveWorkspaceId()
@@ -797,13 +836,14 @@ class HomeViewModel @Inject constructor(
                 val pendingDestructiveDecision = pendingClarification.destructiveDecision(visiblePrompt)
                 val currentMessages = AiChatMessageMapper.toAiChatMessages(currentSessionMessages)
                 val userMessage = AiChatMessage(role = "user", content = visiblePrompt)
-                val messageAttachments = images.map { image ->
+                val messageAttachments = approvedAttachments.map { image ->
                     ChatMessageAttachment(
                         id = image.id.ifBlank { UUID.randomUUID().toString() },
                         name = image.name.ifBlank {
                             when (image.kind) {
                                 "audio" -> "Voice note"
                                 "text" -> "Attached file"
+                                "pdf" -> "Attached PDF"
                                 else -> "Attached image"
                             }
                         },
@@ -819,6 +859,9 @@ class HomeViewModel @Inject constructor(
                         remoteAssetId = image.assetId,
                         waveform = image.waveform,
                         status = image.status,
+                        source = image.source,
+                        sourceReferenceId = image.sourceReferenceId,
+                        approvedAtEpochMillis = image.approvedAtEpochMillis,
                     )
                 }
                 val savedUserMessage = chatHistoryRepository.appendMessage(
@@ -827,7 +870,27 @@ class HomeViewModel @Inject constructor(
                     content = userMessage.content,
                     attachments = messageAttachments,
                 )
-                val localVoiceAttachments = images.filter { attachment ->
+                approvedAttachments
+                    .asSequence()
+                    .filterNot { attachment -> attachment.kind.equals("audio", ignoreCase = true) }
+                    .map(AiImageAttachment::assetId)
+                    .filter(String::isNotBlank)
+                    .distinct()
+                    .forEach { assetId ->
+                        runCatching { queueContentAssetUpload(assetId) }
+                    }
+                approvedAttachments
+                    .asSequence()
+                    .filter { attachment -> attachment.source == AiAttachmentSources.IncomingShare }
+                    .mapNotNull { attachment -> attachment.incomingShareDraftId() }
+                    .distinct()
+                    .forEach { draftId ->
+                        val completed = runCatching {
+                            completeIncomingShareAiHandoff(draftId)
+                        }.getOrDefault(false)
+                        if (completed) consumeIncomingShareForAi(draftId)
+                    }
+                val localVoiceAttachments = approvedAttachments.filter { attachment ->
                     attachment.kind.equals("audio", ignoreCase = true) &&
                         attachment.assetId.isBlank() &&
                         attachment.localPath.isNotBlank()
@@ -872,7 +935,10 @@ class HomeViewModel @Inject constructor(
                 val allChatMessages = chatHistoryRepository.observeMessagesForScope(scopeId)
                     .first()
                     .filterNot { message -> message.id == savedUserMessage.id }
-                val searchContext = if (images.isEmpty() && !requestPrompt.referencesCurrentAttachment()) {
+                val searchContext = if (
+                    approvedAttachments.isEmpty() &&
+                    !requestPrompt.referencesCurrentAttachment()
+                ) {
                     buildAiSearchContextUseCase(
                         workspaceId = workspaceId,
                         prompt = requestPrompt,
@@ -965,7 +1031,7 @@ class HomeViewModel @Inject constructor(
                             retrievalScope = retrievalSelection.scope,
                             pages = pageContext,
                             tasks = taskContext,
-                            images = images,
+                            images = approvedAttachments,
                             webSearchEnabled = webSearchEnabled,
                             webSearchQuery = requestPrompt,
                         )
@@ -1484,6 +1550,7 @@ private const val HomeAiRetrievedSearchContextLimit = 4
 private const val ChatHistorySearchResultLimit = 40
 private const val ChatHistorySearchDebounceMs = 250L
 private const val DraftHomeChatSessionId = "draft-home-chat"
+private const val PendingAiShareDraftKey = "pending_ai_share_draft_id"
 private const val ActiveAiResponseSessionLockMessage =
     "Please wait for the current AI response to finish before switching chats."
 private const val ImageOnlyAiRequestPrompt =
@@ -1491,6 +1558,11 @@ private const val ImageOnlyAiRequestPrompt =
 private const val MaxAiSkillNameChars = 64
 private const val MaxAiSkillWhenToUseChars = 320
 private const val MaxAiSkillInstructionsChars = 2_000
+
+private fun AiImageAttachment.incomingShareDraftId(): String? {
+    if (source != AiAttachmentSources.IncomingShare) return null
+    return sourceReferenceId.substringBefore('/').takeIf(String::isNotBlank)
+}
 
 private fun String.referencesCurrentAttachment(): Boolean {
     val text = lowercase()

@@ -20,8 +20,20 @@ interface PageAssetDao {
     @Query("SELECT * FROM page_assets WHERE id = :assetId LIMIT 1")
     suspend fun getById(assetId: String): PageAssetEntity?
 
+    @Query(
+        """
+        SELECT * FROM page_assets
+        WHERE deletedAt IS NULL AND status IN (:statuses)
+        ORDER BY updatedAt ASC
+        """,
+    )
+    suspend fun getPendingUploads(statuses: List<String>): List<PageAssetEntity>
+
     @Upsert
     suspend fun upsert(asset: PageAssetEntity)
+
+    @Upsert
+    suspend fun upsertAll(assets: List<PageAssetEntity>)
 
     @Query(
         """

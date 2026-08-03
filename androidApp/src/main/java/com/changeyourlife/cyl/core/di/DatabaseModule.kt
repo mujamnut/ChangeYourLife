@@ -13,6 +13,7 @@ import com.changeyourlife.cyl.data.local.dao.ChatAttachmentDao
 import com.changeyourlife.cyl.data.local.dao.PageDao
 import com.changeyourlife.cyl.data.local.dao.PageContentDao
 import com.changeyourlife.cyl.data.local.dao.PageAssetDao
+import com.changeyourlife.cyl.data.local.dao.IncomingShareDao
 import com.changeyourlife.cyl.data.local.dao.ReminderDao
 import com.changeyourlife.cyl.data.local.dao.SearchIndexDao
 import com.changeyourlife.cyl.data.local.dao.SyncTombstoneDao
@@ -56,6 +57,7 @@ object DatabaseModule {
             .addMigrations(MIGRATION_18_19)
             .addMigrations(MIGRATION_19_20)
             .addMigrations(MIGRATION_20_21)
+            .addMigrations(MIGRATION_21_22)
             .build()
     }
 
@@ -122,6 +124,11 @@ object DatabaseModule {
     @Provides
     fun providePageAssetDao(database: CylDatabase): PageAssetDao {
         return database.pageAssetDao()
+    }
+
+    @Provides
+    fun provideIncomingShareDao(database: CylDatabase): IncomingShareDao {
+        return database.incomingShareDao()
     }
 
     val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -796,6 +803,72 @@ object DatabaseModule {
             db.execSQL(
                 "CREATE UNIQUE INDEX IF NOT EXISTS `index_page_assets_remoteAssetId` " +
                     "ON `page_assets` (`remoteAssetId`)",
+            )
+        }
+    }
+
+    val MIGRATION_21_22 = object : Migration(21, 22) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `incoming_share_drafts` (
+                    `id` TEXT NOT NULL,
+                    `eventId` TEXT NOT NULL,
+                    `action` TEXT NOT NULL,
+                    `subject` TEXT NOT NULL,
+                    `status` TEXT NOT NULL,
+                    `errorCode` TEXT,
+                    `createdAt` INTEGER NOT NULL,
+                    `updatedAt` INTEGER NOT NULL,
+                    `expiresAt` INTEGER NOT NULL,
+                    PRIMARY KEY(`id`)
+                )
+                """.trimIndent(),
+            )
+            db.execSQL(
+                "CREATE UNIQUE INDEX IF NOT EXISTS `index_incoming_share_drafts_eventId` " +
+                    "ON `incoming_share_drafts` (`eventId`)",
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_incoming_share_drafts_status_updatedAt` " +
+                    "ON `incoming_share_drafts` (`status`, `updatedAt`)",
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_incoming_share_drafts_expiresAt` " +
+                    "ON `incoming_share_drafts` (`expiresAt`)",
+            )
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `incoming_share_items` (
+                    `id` TEXT NOT NULL,
+                    `draftId` TEXT NOT NULL,
+                    `position` INTEGER NOT NULL,
+                    `kind` TEXT NOT NULL,
+                    `sourceUri` TEXT,
+                    `text` TEXT,
+                    `html` TEXT,
+                    `displayName` TEXT NOT NULL,
+                    `declaredMimeType` TEXT NOT NULL,
+                    `stagedPath` TEXT,
+                    `resolvedMimeType` TEXT NOT NULL,
+                    `assetKind` TEXT,
+                    `sizeBytes` INTEGER NOT NULL,
+                    `sha256` TEXT NOT NULL,
+                    `status` TEXT NOT NULL,
+                    `errorCode` TEXT,
+                    PRIMARY KEY(`id`),
+                    FOREIGN KEY(`draftId`) REFERENCES `incoming_share_drafts`(`id`)
+                        ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+                """.trimIndent(),
+            )
+            db.execSQL(
+                "CREATE UNIQUE INDEX IF NOT EXISTS `index_incoming_share_items_draftId_position` " +
+                    "ON `incoming_share_items` (`draftId`, `position`)",
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_incoming_share_items_status` " +
+                    "ON `incoming_share_items` (`status`)",
             )
         }
     }

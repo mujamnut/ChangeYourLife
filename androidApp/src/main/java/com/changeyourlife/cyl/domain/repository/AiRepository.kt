@@ -35,6 +35,9 @@ data class AiDiagnostics(
     val phase: String = "",
     val imageCount: Int = 0,
     val textFileCount: Int = 0,
+    val pdfFileCount: Int = 0,
+    val pdfPageCount: Int = 0,
+    val pdfExtractionStatus: String = "",
     val visionAttempted: Boolean = false,
     val visionProvider: String = "",
     val visionModel: String = "",
@@ -47,7 +50,8 @@ data class AiDiagnostics(
     val warning: String = "",
 ) {
     val hasAttachmentContext: Boolean
-        get() = imageCount > 0 || textFileCount > 0 || visionAttempted || warning.isNotBlank()
+        get() = imageCount > 0 || textFileCount > 0 || pdfFileCount > 0 ||
+            visionAttempted || warning.isNotBlank()
 }
 
 typealias AiImageAttachment = AiAttachment

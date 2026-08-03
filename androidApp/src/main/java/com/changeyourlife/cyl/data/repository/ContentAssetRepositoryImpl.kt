@@ -19,6 +19,9 @@ class ContentAssetRepositoryImpl @Inject constructor(
     override suspend fun getById(assetId: String): ContentAsset? =
         dao.getById(assetId)?.let(::toDomain)
 
+    override suspend fun getPendingUploads(): List<ContentAsset> =
+        dao.getPendingUploads(PendingUploadStatuses.map(ContentAssetStatus::wireValue)).map(::toDomain)
+
     override suspend fun upsert(asset: ContentAsset) {
         dao.upsert(asset.toEntity())
     }
@@ -96,3 +99,9 @@ class ContentAssetRepositoryImpl @Inject constructor(
         deletedAt = deletedAt,
     )
 }
+
+private val PendingUploadStatuses = setOf(
+    ContentAssetStatus.UPLOAD_QUEUED,
+    ContentAssetStatus.UPLOADING,
+    ContentAssetStatus.RETRYABLE_FAILURE,
+)

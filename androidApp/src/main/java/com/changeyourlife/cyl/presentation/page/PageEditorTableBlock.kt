@@ -6926,6 +6926,7 @@ internal fun TableMediaCellEditor(
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
+    val openAttachment = rememberContentAssetOpener()
     var isSheetOpen by remember { mutableStateOf(isEditing) }
     val attachments = remember(value) { value.toTableMediaAttachments() }
     val dismissEditor = {
@@ -6982,7 +6983,7 @@ internal fun TableMediaCellEditor(
                     attachments.forEach { attachment ->
                         MediaAttachmentCard(
                             attachment = attachment,
-                            onOpen = { context.openMediaAttachment(attachment) },
+                            onOpen = { openAttachment(attachment) },
                             onRemove = {
                                 onValueChange(
                                     attachments

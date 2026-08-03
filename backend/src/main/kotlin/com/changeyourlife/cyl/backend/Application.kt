@@ -6,6 +6,7 @@ import com.changeyourlife.cyl.backend.data.InMemoryAiJobRepository
 import com.changeyourlife.cyl.backend.data.InMemoryAiSkillSyncRepository
 import com.changeyourlife.cyl.backend.data.InMemoryChatSyncRepository
 import com.changeyourlife.cyl.backend.data.InMemoryChatAttachmentRepository
+import com.changeyourlife.cyl.backend.data.InMemoryContentAssetRepository
 import com.changeyourlife.cyl.backend.data.InMemoryContentRepository
 import com.changeyourlife.cyl.backend.data.InMemoryUserRepository
 import com.changeyourlife.cyl.backend.data.PostgresAiActionLogRepository
@@ -13,13 +14,16 @@ import com.changeyourlife.cyl.backend.data.PostgresAiJobRepository
 import com.changeyourlife.cyl.backend.data.PostgresAiSkillSyncRepository
 import com.changeyourlife.cyl.backend.data.PostgresChatSyncRepository
 import com.changeyourlife.cyl.backend.data.PostgresChatAttachmentRepository
+import com.changeyourlife.cyl.backend.data.PostgresContentAssetRepository
 import com.changeyourlife.cyl.backend.data.PostgresContentRepository
 import com.changeyourlife.cyl.backend.data.PostgresUserRepository
 import com.changeyourlife.cyl.backend.domain.AiActionLogRepository
 import com.changeyourlife.cyl.backend.domain.AiSkillSyncRepository
 import com.changeyourlife.cyl.backend.domain.ChatSyncRepository
 import com.changeyourlife.cyl.backend.domain.ChatAttachmentRepository
+import com.changeyourlife.cyl.backend.domain.ContentAssetRepository
 import com.changeyourlife.cyl.backend.domain.ContentRepository
+import com.changeyourlife.cyl.backend.domain.PrivateAssetStorage
 import com.changeyourlife.cyl.backend.domain.UserRepository
 import com.changeyourlife.cyl.backend.plugins.configureAuthentication
 import com.changeyourlife.cyl.backend.plugins.configureDatabase
@@ -35,8 +39,13 @@ import com.changeyourlife.cyl.backend.service.WebSearchService
 import com.changeyourlife.cyl.backend.service.ChatAttachmentCleanupScheduler
 import com.changeyourlife.cyl.backend.service.ChatAttachmentLimits
 import com.changeyourlife.cyl.backend.service.ChatAttachmentService
-import com.changeyourlife.cyl.backend.storage.R2VoiceAssetStorage
+import com.changeyourlife.cyl.backend.service.ContentAssetCleanupScheduler
+import com.changeyourlife.cyl.backend.service.ContentAssetLimits
+import com.changeyourlife.cyl.backend.service.ContentAssetService
+import com.changeyourlife.cyl.backend.storage.R2PrivateAssetStorage
 import com.changeyourlife.cyl.backend.storage.UnavailableVoiceAssetStorage
+import com.changeyourlife.cyl.backend.storage.UnavailablePrivateAssetStorage
+import com.changeyourlife.cyl.backend.storage.VoiceAssetStorageAdapter
 import com.changeyourlife.cyl.backend.domain.VoiceAssetStorage
 import io.ktor.server.application.Application
 import io.ktor.server.application.ApplicationStopped
@@ -79,6 +88,8 @@ fun Application.module(
     aiSkillSyncRepositoryOverride: AiSkillSyncRepository? = null,
     chatAttachmentRepositoryOverride: ChatAttachmentRepository? = null,
     voiceAssetStorageOverride: VoiceAssetStorage? = null,
+    contentAssetRepositoryOverride: ContentAssetRepository? = null,
+    privateAssetStorageOverride: PrivateAssetStorage? = null,
 ) {
     configureSerialization()
     configureMonitoring()
@@ -104,6 +115,9 @@ fun Application.module(
     val chatAttachmentRepository = chatAttachmentRepositoryOverride
         ?: dataSource?.let { PostgresChatAttachmentRepository(it) }
         ?: InMemoryChatAttachmentRepository()
+    val contentAssetRepository = contentAssetRepositoryOverride
+        ?: dataSource?.let { PostgresContentAssetRepository(it) }
+        ?: InMemoryContentAssetRepository()
 
     val aiService = AiService(
         lmStudioBaseUrl = appConfig.lmStudioBaseUrl,
@@ -128,17 +142,26 @@ fun Application.module(
     val aiJobService = AiJobService(aiJobRepository)
     val emailService = EmailService(appConfig.email)
     environment.log.info("Email provider initialized: resendConfigured=${appConfig.email.isConfigured}")
-    val voiceAssetStorage = voiceAssetStorageOverride ?: appConfig.voiceNotes.r2
-        .takeIf { config -> appConfig.voiceNotes.enabled && config.isConfigured }
+    val privateStorageConfigured = appConfig.contentAssets.r2.isConfigured || privateAssetStorageOverride != null
+    val privateAssetStorage = privateAssetStorageOverride ?: appConfig.contentAssets.r2
+        .takeIf { config ->
+            config.isConfigured && (appConfig.voiceNotes.enabled || appConfig.contentAssets.enabled)
+        }
         ?.let { config ->
-            R2VoiceAssetStorage(
+            R2PrivateAssetStorage(
                 endpoint = checkNotNull(config.endpoint),
                 bucket = checkNotNull(config.bucket),
                 accessKeyId = checkNotNull(config.accessKeyId),
                 secretAccessKey = checkNotNull(config.secretAccessKey),
             )
         }
-        ?: UnavailableVoiceAssetStorage(featureEnabled = appConfig.voiceNotes.enabled)
+        ?: UnavailablePrivateAssetStorage()
+    val voiceAssetStorage = voiceAssetStorageOverride
+        ?: if (appConfig.voiceNotes.enabled && privateStorageConfigured) {
+            VoiceAssetStorageAdapter(privateAssetStorage)
+        } else {
+            UnavailableVoiceAssetStorage(featureEnabled = appConfig.voiceNotes.enabled)
+        }
     val chatAttachmentService = ChatAttachmentService(
         repository = chatAttachmentRepository,
         storage = voiceAssetStorage,
@@ -152,7 +175,7 @@ fun Application.module(
         ),
     )
     val attachmentCleanupScheduler = appConfig.voiceNotes.enabled
-        .takeIf { enabled -> enabled && (appConfig.voiceNotes.r2.isConfigured || voiceAssetStorageOverride != null) }
+        .takeIf { enabled -> enabled && (privateStorageConfigured || voiceAssetStorageOverride != null) }
         ?.let {
             ChatAttachmentCleanupScheduler(
                 service = chatAttachmentService,
@@ -161,11 +184,39 @@ fun Application.module(
             ).also(ChatAttachmentCleanupScheduler::start)
         }
     environment.log.info(
-        "Voice-note asset foundation initialized: enabled=${appConfig.voiceNotes.enabled}, storageConfigured=${appConfig.voiceNotes.r2.isConfigured || voiceAssetStorageOverride != null}",
+        "Voice-note asset foundation initialized: enabled=${appConfig.voiceNotes.enabled}, storageConfigured=${privateStorageConfigured || voiceAssetStorageOverride != null}",
+    )
+    val contentAssetService = ContentAssetService(
+        repository = contentAssetRepository,
+        contentRepository = contentRepository,
+        storage = privateAssetStorage,
+        featureEnabled = appConfig.contentAssets.enabled,
+        limits = ContentAssetLimits(
+            maxImageBytes = appConfig.contentAssets.maxImageBytes,
+            maxPdfBytes = appConfig.contentAssets.maxPdfBytes,
+            maxTextBytes = appConfig.contentAssets.maxTextBytes,
+            uploadUrlTtlMillis = appConfig.contentAssets.uploadUrlTtlMillis,
+            downloadUrlTtlMillis = appConfig.contentAssets.downloadUrlTtlMillis,
+            orphanTtlMillis = appConfig.contentAssets.orphanTtlMillis,
+        ),
+    )
+    val contentAssetCleanupScheduler = appConfig.contentAssets.enabled
+        .takeIf { enabled -> enabled && privateStorageConfigured }
+        ?.let {
+            ContentAssetCleanupScheduler(
+                service = contentAssetService,
+                intervalMillis = appConfig.contentAssets.cleanupIntervalMillis,
+                logger = environment.log,
+            ).also(ContentAssetCleanupScheduler::start)
+        }
+    environment.log.info(
+        "Content asset foundation initialized: enabled=${appConfig.contentAssets.enabled}, storageConfigured=$privateStorageConfigured",
     )
     monitor.subscribe(ApplicationStopped) {
         attachmentCleanupScheduler?.close()
-        (voiceAssetStorage as? AutoCloseable)?.close()
+        contentAssetCleanupScheduler?.close()
+        (voiceAssetStorageOverride as? AutoCloseable)?.close()
+        (privateAssetStorage as? AutoCloseable)?.close()
     }
 
     configureRouting(
@@ -180,5 +231,6 @@ fun Application.module(
         aiJobService = aiJobService,
         passwordResetEmailSender = emailService,
         chatAttachmentService = chatAttachmentService,
+        contentAssetService = contentAssetService,
     )
 }

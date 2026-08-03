@@ -37,3 +37,17 @@ services:
         sync: false
       - key: EMAIL_REPLY_TO
         sync: false
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_BUCKET
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: CONTENT_ASSET_ENABLED
+        value: true
+      - key: CONTENT_ASSET_ORPHAN_TTL_HOURS
+        value: 24
+      - key: CONTENT_ASSET_CLEANUP_INTERVAL_SECONDS
+        value: 3600

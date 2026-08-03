@@ -6,9 +6,15 @@ import com.changeyourlife.cyl.data.repository.AiAppliedActionLedgerRepositoryImp
 import com.changeyourlife.cyl.data.repository.ChatHistoryRepositoryImpl
 import com.changeyourlife.cyl.data.repository.ChatAttachmentRepositoryImpl
 import com.changeyourlife.cyl.data.repository.ContentAssetRepositoryImpl
+import com.changeyourlife.cyl.data.repository.IncomingShareDraftRepositoryImpl
+import com.changeyourlife.cyl.data.ai.AndroidAiAttachmentPayloadReader
+import com.changeyourlife.cyl.data.ai.AndroidAiCameraCaptureGateway
+import com.changeyourlife.cyl.data.share.AndroidIncomingShareContentMapper
 import com.changeyourlife.cyl.data.asset.AndroidContentAssetLocalStore
+import com.changeyourlife.cyl.data.asset.BackgroundContentAssetUploadScheduler
 import com.changeyourlife.cyl.data.attachment.BackgroundChatAttachmentUploadScheduler
 import com.changeyourlife.cyl.data.remote.attachment.HttpChatAttachmentUploadGateway
+import com.changeyourlife.cyl.data.remote.asset.HttpContentAssetTransferGateway
 import com.changeyourlife.cyl.data.repository.PageRepositoryImpl
 import com.changeyourlife.cyl.data.repository.ReminderRepositoryImpl
 import com.changeyourlife.cyl.data.repository.SearchRepositoryImpl
@@ -28,6 +34,12 @@ import com.changeyourlife.cyl.domain.repository.ChatHistoryRepository
 import com.changeyourlife.cyl.domain.repository.ChatAttachmentRepository
 import com.changeyourlife.cyl.domain.repository.ContentAssetLocalStore
 import com.changeyourlife.cyl.domain.repository.ContentAssetRepository
+import com.changeyourlife.cyl.domain.repository.ContentAssetTransferGateway
+import com.changeyourlife.cyl.domain.repository.ContentAssetUploadScheduler
+import com.changeyourlife.cyl.domain.repository.IncomingShareDraftRepository
+import com.changeyourlife.cyl.domain.repository.AiAttachmentPayloadReader
+import com.changeyourlife.cyl.domain.repository.AiCameraCaptureGateway
+import com.changeyourlife.cyl.domain.repository.IncomingShareContentMapper
 import com.changeyourlife.cyl.domain.repository.ChatAttachmentUploadGateway
 import com.changeyourlife.cyl.domain.repository.ChatAttachmentUploadScheduler
 import com.changeyourlife.cyl.domain.repository.PageRepository
@@ -118,6 +130,42 @@ abstract class RepositoryModule {
     abstract fun bindContentAssetLocalStore(
         implementation: AndroidContentAssetLocalStore,
     ): ContentAssetLocalStore
+
+    @Binds
+    @Singleton
+    abstract fun bindAiAttachmentPayloadReader(
+        implementation: AndroidAiAttachmentPayloadReader,
+    ): AiAttachmentPayloadReader
+
+    @Binds
+    @Singleton
+    abstract fun bindAiCameraCaptureGateway(
+        implementation: AndroidAiCameraCaptureGateway,
+    ): AiCameraCaptureGateway
+
+    @Binds
+    @Singleton
+    abstract fun bindContentAssetTransferGateway(
+        implementation: HttpContentAssetTransferGateway,
+    ): ContentAssetTransferGateway
+
+    @Binds
+    @Singleton
+    abstract fun bindContentAssetUploadScheduler(
+        implementation: BackgroundContentAssetUploadScheduler,
+    ): ContentAssetUploadScheduler
+
+    @Binds
+    @Singleton
+    abstract fun bindIncomingShareDraftRepository(
+        implementation: IncomingShareDraftRepositoryImpl,
+    ): IncomingShareDraftRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindIncomingShareContentMapper(
+        implementation: AndroidIncomingShareContentMapper,
+    ): IncomingShareContentMapper
 
     @Binds
     @Singleton

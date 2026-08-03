@@ -42,3 +42,23 @@ sdk.dir=C\:/Users/<your-user>/AppData/Local/Android/Sdk
 # RESEND_API_KEY=re_your-key-here
 # EMAIL_FROM=ChangeYourLife <noreply@yourdomain.com>
 # EMAIL_REPLY_TO=support@yourdomain.com
+
+# Private R2 storage used by voice notes and imported page assets.
+# Configure these as backend environment variables on Render, never in the APK.
+# R2_ACCOUNT_ID=
+# R2_BUCKET=
+# R2_ACCESS_KEY_ID=
+# R2_SECRET_ACCESS_KEY=
+# Optional override; normally derived from R2_ACCOUNT_ID.
+# R2_ENDPOINT=https://<ACCOUNT_ID>.r2.cloudflarestorage.com
+# R2_SIGNED_URL_TTL_SECONDS=300
+# R2_DOWNLOAD_URL_TTL_SECONDS=300
+
+# Generic image, PDF, and text asset lifecycle.
+# Defaults to enabled when all R2 settings above are configured.
+# CONTENT_ASSET_ENABLED=true
+# CONTENT_ASSET_MAX_IMAGE_BYTES=15728640
+# CONTENT_ASSET_MAX_PDF_BYTES=52428800
+# CONTENT_ASSET_MAX_TEXT_BYTES=1048576
+# CONTENT_ASSET_ORPHAN_TTL_HOURS=24
+# CONTENT_ASSET_CLEANUP_INTERVAL_SECONDS=3600

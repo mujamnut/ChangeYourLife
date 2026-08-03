@@ -6,6 +6,7 @@ import android.os.Bundle
 import com.changeyourlife.cyl.data.sync.BackgroundSyncQueue
 import com.changeyourlife.cyl.domain.repository.ReminderRepository
 import com.changeyourlife.cyl.domain.repository.ChatAttachmentUploadScheduler
+import com.changeyourlife.cyl.domain.repository.ContentAssetUploadScheduler
 import dagger.hilt.android.HiltAndroidApp
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
@@ -22,6 +23,8 @@ class ChangeYourLifeApplication : Application() {
     lateinit var reminderRepository: ReminderRepository
     @Inject
     lateinit var chatAttachmentUploadScheduler: ChatAttachmentUploadScheduler
+    @Inject
+    lateinit var contentAssetUploadScheduler: ContentAssetUploadScheduler
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var startedActivityCount = 0
 
@@ -40,6 +43,15 @@ class ChangeYourLifeApplication : Application() {
                 throw cancelled
             } catch (_: Throwable) {
                 // WorkManager and the next app start will retry durable queued attachments.
+            }
+        }
+        applicationScope.launch {
+            try {
+                contentAssetUploadScheduler.resumePendingUploads()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Throwable) {
+                // Durable asset rows remain queued and are retried at the next app start.
             }
         }
     }

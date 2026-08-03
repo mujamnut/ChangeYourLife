@@ -741,11 +741,14 @@ private fun AiAttachmentChip(
     onRemove: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var thumbnail by remember(attachment.dataUrl) {
+    val isImage = attachment.kind.equals("image", ignoreCase = true) ||
+        attachment.mimeType.startsWith("image/", ignoreCase = true)
+    var thumbnail by remember(attachment.dataUrl, isImage) {
         mutableStateOf<ImageBitmap?>(null)
     }
-    LaunchedEffect(attachment.dataUrl) {
+    LaunchedEffect(attachment.dataUrl, isImage) {
         thumbnail = null
+        if (!isImage || attachment.dataUrl.isBlank()) return@LaunchedEffect
         thumbnail = withContext(Dispatchers.Default) {
             decodeBase64ImageDataUrlToImageBitmap(
                 dataUrl = attachment.dataUrl,
@@ -790,7 +793,7 @@ private fun AiAttachmentChip(
                 )
             } else {
                 Icon(
-                    imageVector = if (attachment.kind == "text") Icons.Rounded.AttachFile else Icons.Rounded.Photo,
+                    imageVector = if (isImage) Icons.Rounded.Photo else Icons.Rounded.AttachFile,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(17.dp),

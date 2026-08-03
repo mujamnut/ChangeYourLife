@@ -2,6 +2,7 @@ package com.changeyourlife.cyl.domain.repository
 
 import com.changeyourlife.cyl.domain.model.Page
 import com.changeyourlife.cyl.domain.model.PageBlock
+import com.changeyourlife.cyl.domain.model.ContentAsset
 import com.changeyourlife.cyl.domain.model.PageProperty
 import com.changeyourlife.cyl.domain.model.PageSyncState
 import com.changeyourlife.cyl.domain.model.PageTable
@@ -159,6 +160,13 @@ interface PageRepository {
         parentPageId: String? = null,
     ): Page
 
+    suspend fun commitImportedContent(
+        draftId: String,
+        destination: PageImportDestination,
+        blocks: List<PageBlock>,
+        assets: List<ContentAsset>,
+    ): PageImportCommitResult
+
     suspend fun getPageTreeSnapshot(pageId: String): List<Page> {
         return getPage(pageId)?.let(::listOf).orEmpty()
     }
@@ -191,4 +199,26 @@ interface PageRepository {
     ): AiActionPlanRemoteCommitResult = AiActionPlanRemoteCommitResult.NotSupported
 
     suspend fun rollbackAiActionPlanLocalState() = Unit
+}
+
+sealed interface PageImportDestination {
+    data class NewPage(
+        val pageId: String,
+        val workspaceId: String,
+        val title: String,
+        val parentPageId: String? = null,
+    ) : PageImportDestination
+
+    data class ExistingPage(
+        val pageId: String,
+        val expectedRevision: Long,
+        val expectedUpdatedAt: Long,
+    ) : PageImportDestination
+}
+
+sealed interface PageImportCommitResult {
+    data class Success(val page: Page) : PageImportCommitResult
+    data object DestinationNotFound : PageImportCommitResult
+    data object RevisionConflict : PageImportCommitResult
+    data object InvalidContent : PageImportCommitResult
 }

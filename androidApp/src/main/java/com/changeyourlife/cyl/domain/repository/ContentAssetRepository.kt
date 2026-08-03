@@ -9,6 +9,8 @@ interface ContentAssetRepository {
 
     suspend fun getById(assetId: String): ContentAsset?
 
+    suspend fun getPendingUploads(): List<ContentAsset>
+
     suspend fun upsert(asset: ContentAsset)
 
     suspend fun transitionStatus(

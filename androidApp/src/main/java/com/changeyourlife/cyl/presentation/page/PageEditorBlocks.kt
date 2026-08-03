@@ -1080,6 +1080,7 @@ internal fun MediaFileBlockEditor(
     isTableRowPage: Boolean = false,
 ) {
     val context = LocalContext.current
+    val openAttachment = rememberContentAssetOpener()
     val filePicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments(),
     ) { uris ->
@@ -1135,7 +1136,7 @@ internal fun MediaFileBlockEditor(
             block.mediaAttachments.forEach { attachment ->
                 MediaAttachmentCard(
                     attachment = attachment,
-                    onOpen = { context.openMediaAttachment(attachment) },
+                    onOpen = { openAttachment(attachment) },
                     onRemove = { onRemoveAttachment(attachment.id) },
                 )
             }

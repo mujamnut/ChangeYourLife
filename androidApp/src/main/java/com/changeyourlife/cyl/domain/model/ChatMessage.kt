@@ -33,6 +33,9 @@ data class ChatMessageAttachment(
     val progressPercent: Int = 0,
     val aiJobId: String = "",
     val errorCode: String = "",
+    val source: String = "",
+    val sourceReferenceId: String = "",
+    val approvedAtEpochMillis: Long = 0L,
 )
 
 data class ChatSession(

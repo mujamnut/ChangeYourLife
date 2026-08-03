@@ -6,8 +6,11 @@ import com.changeyourlife.cyl.aicontract.CYL_ACTION_SCHEMA_VERSION
 import com.changeyourlife.cyl.data.local.CylDatabase
 import com.changeyourlife.cyl.data.local.dao.PageDao
 import com.changeyourlife.cyl.data.local.dao.PageContentDao
+import com.changeyourlife.cyl.data.local.dao.PageAssetDao
+import com.changeyourlife.cyl.data.local.dao.IncomingShareDao
 import com.changeyourlife.cyl.data.local.dao.SyncTombstoneDao
 import com.changeyourlife.cyl.data.local.entity.PageEntity
+import com.changeyourlife.cyl.data.local.entity.PageAssetEntity
 import com.changeyourlife.cyl.data.local.entity.SyncStatus
 import com.changeyourlife.cyl.data.local.entity.SyncTombstoneEntity
 import com.changeyourlife.cyl.data.local.entity.SyncTombstoneType
@@ -27,6 +30,9 @@ import com.changeyourlife.cyl.domain.model.PageBlock
 import com.changeyourlife.cyl.domain.model.PageBlockDocument
 import com.changeyourlife.cyl.domain.model.PageBlockType
 import com.changeyourlife.cyl.domain.model.PageContentCodec
+import com.changeyourlife.cyl.domain.model.ContentAsset
+import com.changeyourlife.cyl.domain.model.ContentAssetStatus
+import com.changeyourlife.cyl.domain.model.IncomingShareDraftStatus
 import com.changeyourlife.cyl.domain.model.PageProperty
 import com.changeyourlife.cyl.domain.model.PageSyncState
 import com.changeyourlife.cyl.domain.model.PageSyncStatus
@@ -44,6 +50,8 @@ import com.changeyourlife.cyl.domain.repository.AiActionPlanCommit
 import com.changeyourlife.cyl.domain.repository.AiActionPlanPageOperation
 import com.changeyourlife.cyl.domain.repository.AiActionPlanRemoteCommitResult
 import com.changeyourlife.cyl.domain.repository.PageRepository
+import com.changeyourlife.cyl.domain.repository.PageImportCommitResult
+import com.changeyourlife.cyl.domain.repository.PageImportDestination
 import java.util.UUID
 import javax.inject.Inject
 import kotlin.coroutines.AbstractCoroutineContextElement
@@ -90,6 +98,8 @@ class PageRepositoryImpl @Inject constructor(
     private val database: CylDatabase,
     private val pageDao: PageDao,
     private val pageContentDao: PageContentDao,
+    private val pageAssetDao: PageAssetDao,
+    private val incomingShareDao: IncomingShareDao,
     private val syncTombstoneDao: SyncTombstoneDao,
     private val sessionSyncCoordinator: SessionSyncCoordinator,
     private val backgroundSyncQueue: BackgroundSyncQueue,
@@ -839,6 +849,157 @@ class PageRepositoryImpl @Inject constructor(
         return page
     }
 
+    override suspend fun commitImportedContent(
+        draftId: String,
+        destination: PageImportDestination,
+        blocks: List<PageBlock>,
+        assets: List<ContentAsset>,
+    ): PageImportCommitResult {
+        if (draftId.isBlank() || blocks.isEmpty() || blocks.any { block -> block.id.isBlank() }) {
+            return PageImportCommitResult.InvalidContent
+        }
+        if (blocks.map(PageBlock::id).distinct().size != blocks.size) {
+            return PageImportCommitResult.InvalidContent
+        }
+        if (assets.any { asset ->
+                asset.id.isBlank() ||
+                    asset.localPath.isNullOrBlank() ||
+                    asset.sizeBytes <= 0L ||
+                    asset.sha256.isBlank()
+            } || assets.map(ContentAsset::id).distinct().size != assets.size
+        ) {
+            return PageImportCommitResult.InvalidContent
+        }
+
+        val now = System.currentTimeMillis()
+        val mutationResult = try {
+            database.withTransaction {
+                val draft = incomingShareDao.getDraft(draftId)
+                    ?: return@withTransaction ImportTransactionResult.Invalid
+                if (draft.status != IncomingShareDraftStatus.IMPORTING.wireValue) {
+                    return@withTransaction ImportTransactionResult.Invalid
+                }
+            when (destination) {
+                is PageImportDestination.NewPage -> {
+                    if (destination.pageId.isBlank() || destination.workspaceId.isBlank()) {
+                        return@withTransaction ImportTransactionResult.Invalid
+                    }
+                    val pageId = destination.pageId
+                    if (pageDao.getPage(pageId) != null) {
+                        return@withTransaction ImportTransactionResult.Invalid
+                    }
+                    val document = PageBlockDocument(blocks = blocks)
+                    val page = PageEntity(
+                        id = pageId,
+                        workspaceId = destination.workspaceId,
+                        parentPageId = destination.parentPageId,
+                        title = destination.title.trim().ifBlank { "Untitled page" },
+                        content = PageContentCodec.encodeDocument(document),
+                        sortOrder = 0,
+                        createdAt = now,
+                        updatedAt = now,
+                        deletedAt = null,
+                        revision = 0L,
+                        syncStatus = SyncStatus.PendingPush,
+                    )
+                    persistPageState(page)
+                    pageAssetDao.upsertAll(
+                        assets.map { asset ->
+                            asset.toImportEntity(
+                                workspaceId = destination.workspaceId,
+                                ownerPageId = pageId,
+                                now = now,
+                            )
+                        },
+                    )
+                    finalizeImportedDraft(draftId, assets.isNotEmpty(), now)
+                    ImportTransactionResult.Committed(page, document)
+                }
+
+                is PageImportDestination.ExistingPage -> {
+                    val currentPage = pageDao.getPage(destination.pageId)
+                        ?: return@withTransaction ImportTransactionResult.NotFound
+                    if (currentPage.deletedAt != null) {
+                        return@withTransaction ImportTransactionResult.NotFound
+                    }
+                    if (
+                        currentPage.revision != destination.expectedRevision ||
+                        currentPage.updatedAt != destination.expectedUpdatedAt
+                    ) {
+                        return@withTransaction ImportTransactionResult.Conflict
+                    }
+                    if (assets.any { asset ->
+                            asset.workspaceId.isNotBlank() && asset.workspaceId != currentPage.workspaceId
+                        }
+                    ) {
+                        return@withTransaction ImportTransactionResult.Invalid
+                    }
+                    val currentDocument = PageContentCodec.decodeDocument(currentPage.content)
+                    val currentBlocks = currentDocument.blocks
+                    val existingBlockIds = currentBlocks.map(PageBlock::id).toSet()
+                    if (blocks.any { block -> block.id in existingBlockIds }) {
+                        return@withTransaction ImportTransactionResult.Invalid
+                    }
+                    val baseBlocks = currentBlocks.takeUnless(List<PageBlock>::isSingleBlankTextBlock).orEmpty()
+                    val document = currentDocument.copy(blocks = baseBlocks + blocks)
+                    val updatedPage = currentPage.copy(
+                        content = PageContentCodec.encodeDocument(document),
+                        updatedAt = currentPage.nextUpdatedAt(now),
+                        syncStatus = SyncStatus.PendingPush,
+                    )
+                    persistPageState(updatedPage)
+                    pageAssetDao.upsertAll(
+                        assets.map { asset ->
+                            asset.toImportEntity(
+                                workspaceId = currentPage.workspaceId,
+                                ownerPageId = currentPage.id,
+                                now = now,
+                            )
+                        },
+                    )
+                    finalizeImportedDraft(draftId, assets.isNotEmpty(), now)
+                    ImportTransactionResult.Committed(updatedPage, document)
+                }
+            }
+            }
+        } catch (_: ImportTransactionAbortException) {
+            ImportTransactionResult.Invalid
+        }
+
+        return when (mutationResult) {
+            ImportTransactionResult.NotFound -> PageImportCommitResult.DestinationNotFound
+            ImportTransactionResult.Conflict -> PageImportCommitResult.RevisionConflict
+            ImportTransactionResult.Invalid -> PageImportCommitResult.InvalidContent
+            is ImportTransactionResult.Committed -> {
+                searchIndexRebuilder.rebuildPage(
+                    page = mutationResult.page,
+                    document = mutationResult.document,
+                )
+                backgroundSyncQueue.enqueuePendingPushDebounced()
+                PageImportCommitResult.Success(mutationResult.page.toDomain())
+            }
+        }
+    }
+
+    private suspend fun finalizeImportedDraft(
+        draftId: String,
+        hasAssets: Boolean,
+        now: Long,
+    ) {
+        val changed = incomingShareDao.transitionDraft(
+            draftId = draftId,
+            expectedStatuses = listOf(IncomingShareDraftStatus.IMPORTING.wireValue),
+            status = if (hasAssets) {
+                IncomingShareDraftStatus.UPLOAD_QUEUED.wireValue
+            } else {
+                IncomingShareDraftStatus.COMPLETED.wireValue
+            },
+            errorCode = null,
+            updatedAt = now,
+        )
+        if (changed != 1) throw ImportTransactionAbortException()
+    }
+
     override suspend fun getPageTreeSnapshot(pageId: String): List<Page> {
         val root = pageDao.getPage(pageId)?.toDomain() ?: return emptyList()
         val pagesByParentId = pageDao
@@ -1354,6 +1515,46 @@ class PageRepositoryImpl @Inject constructor(
         return mutable
     }
 }
+
+private sealed interface ImportTransactionResult {
+    data class Committed(
+        val page: PageEntity,
+        val document: PageBlockDocument,
+    ) : ImportTransactionResult
+
+    data object NotFound : ImportTransactionResult
+    data object Conflict : ImportTransactionResult
+    data object Invalid : ImportTransactionResult
+}
+
+private class ImportTransactionAbortException : IllegalStateException()
+
+private fun List<PageBlock>.isSingleBlankTextBlock(): Boolean =
+    size == 1 && first().type == PageBlockType.Text && first().text.isBlank() &&
+        first().mediaAttachments.isEmpty() && first().children.isEmpty()
+
+private fun ContentAsset.toImportEntity(
+    workspaceId: String,
+    ownerPageId: String,
+    now: Long,
+): PageAssetEntity = PageAssetEntity(
+    id = id,
+    workspaceId = workspaceId,
+    ownerPageId = ownerPageId,
+    kind = kind.wireValue,
+    displayName = displayName,
+    mimeType = mimeType,
+    sizeBytes = sizeBytes,
+    sha256 = sha256,
+    localPath = localPath,
+    remoteAssetId = remoteAssetId,
+    status = ContentAssetStatus.UPLOAD_QUEUED.wireValue,
+    progressPercent = progressPercent.coerceIn(0, 100),
+    errorCode = errorCode,
+    createdAt = createdAt.takeIf { created -> created > 0L } ?: now,
+    updatedAt = now,
+    deletedAt = null,
+)
 
 private data class BlockListMutation(
     val blocks: List<PageBlock>,

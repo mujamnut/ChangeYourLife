@@ -1,5 +1,7 @@
 package com.changeyourlife.cyl.backend.routes
 
+import com.changeyourlife.cyl.aicontract.AiAttachmentInputWire
+import com.changeyourlife.cyl.aicontract.CYL_MAX_AI_ATTACHMENTS
 import com.changeyourlife.cyl.backend.model.ai.ChatRequest
 import com.changeyourlife.cyl.backend.model.ai.ChatResponse
 import com.changeyourlife.cyl.backend.model.ai.ChatWithActionsRequest
@@ -59,6 +61,7 @@ fun Route.aiRoutes(
         route("/ai") {
             post("/chat") {
                 val request = call.receive<ChatRequest>()
+                if (!call.validateAiAttachments(request.images)) return@post
                 val reply = withContext(Dispatchers.IO) {
                     aiService.chat(
                         messages = request.messages,
@@ -71,6 +74,7 @@ fun Route.aiRoutes(
             post("/chat-actions") {
                 val userId = call.requireUserId() ?: return@post
                 val rawRequest = call.receive<ChatWithActionsRequest>()
+                if (!call.validateAiAttachments(rawRequest.images)) return@post
                 val request = call.enforceRetrievalBoundary(
                     boundary = retrievalPrivacyBoundary,
                     userId = userId,
@@ -95,6 +99,7 @@ fun Route.aiRoutes(
                 val userId = call.requireUserId() ?: return@post
                 val idempotencyKey = call.requireIdempotencyKey() ?: return@post
                 val rawRequest = call.receive<ChatWithActionsRequest>()
+                if (!call.validateAiAttachments(rawRequest.images)) return@post
                 val request = call.enforceRetrievalBoundary(
                     boundary = retrievalPrivacyBoundary,
                     userId = userId,
@@ -168,6 +173,45 @@ private suspend fun ApplicationCall.enforceRetrievalBoundary(
             null
         }
     }
+}
+
+private suspend fun ApplicationCall.validateAiAttachments(
+    attachments: List<AiAttachmentInputWire>,
+): Boolean {
+    val issues = buildList {
+        if (attachments.size > CYL_MAX_AI_ATTACHMENTS) {
+            add(
+                mapOf(
+                    "field" to "images",
+                    "code" to "too_many_attachments",
+                    "message" to "A maximum of $CYL_MAX_AI_ATTACHMENTS AI attachments is allowed.",
+                ),
+            )
+        }
+        attachments.forEachIndexed { index, attachment ->
+            attachment.validate().forEach { issue ->
+                add(
+                    mapOf(
+                        "field" to "images[$index].${issue.field}",
+                        "code" to issue.code,
+                        "message" to issue.message,
+                    ),
+                )
+            }
+        }
+    }
+    if (issues.isEmpty()) return true
+    respond(
+        HttpStatusCode.UnprocessableEntity,
+        mapOf(
+            "error" to mapOf(
+                "code" to "invalid_ai_attachment",
+                "message" to "One or more AI attachments are invalid.",
+                "issues" to issues,
+            ),
+        ),
+    )
+    return false
 }
 
 private suspend fun ApplicationCall.requireIdempotencyKey(): String? {
@@ -278,6 +322,9 @@ private fun ChatWithActionsRequest.idempotencyFingerprint(): String {
         digest.updateField(image.kind)
         digest.updateField(image.durationMs?.toString().orEmpty())
         digest.updateField(image.sha256)
+        digest.updateField(image.source)
+        digest.updateField(image.sourceReferenceId)
+        digest.updateField(image.approvedAtEpochMillis.toString())
     }
     digest.updateField(webSearchEnabled.toString())
     digest.updateField(webSearchQuery)

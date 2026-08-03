@@ -133,9 +133,11 @@ fun HomeRoute(
     viewModel: HomeViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val pendingAiShareDraftId by viewModel.pendingAiShareDraftId.collectAsStateWithLifecycle()
 
     HomeScreen(
         uiState = uiState,
+        pendingAiShareDraftId = pendingAiShareDraftId,
         aiPersona = aiPersona,
         onCreatePage = {
             viewModel.createQuickPage { page ->
@@ -205,6 +207,7 @@ fun HomeSearchRoute(
 @Composable
 private fun HomeScreen(
     uiState: HomeUiState,
+    pendingAiShareDraftId: String?,
     aiPersona: AiPersonaUiState,
     onCreatePage: () -> Unit,
     onCreateModule: (PageModuleType) -> Unit,
@@ -254,6 +257,12 @@ private fun HomeScreen(
             .firstOrNull { page -> page.id == selectedPageActionId }
     }
 
+    LaunchedEffect(pendingAiShareDraftId) {
+        if (!pendingAiShareDraftId.isNullOrBlank()) {
+            isChatSheetOpen = true
+        }
+    }
+
     if (isChatSheetOpen) {
             AiChatSheet(
                 messages = uiState.chatMessages,
@@ -266,6 +275,7 @@ private fun HomeScreen(
                 visionPipelineLabel = uiState.aiVisionPipelineLabel,
                 enabledSkillsCount = uiState.aiSkills.count { skill -> skill.isEnabled },
                 totalSkillsCount = uiState.aiSkills.size,
+                initialSharedDraftId = pendingAiShareDraftId,
                 onSendMessage = onSendChatMessage,
                 onMentionQueryChange = onAiMentionQueryChange,
                 onUndoAction = onUndoAiAction,
@@ -2157,6 +2167,7 @@ private fun HomeRoutePreview() {
                 isLoading = false,
                 pageCount = 2,
             ),
+            pendingAiShareDraftId = null,
             aiPersona = AiPersonaUiState(),
             onCreatePage = {},
             onCreateModule = {},

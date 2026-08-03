@@ -9,4 +9,6 @@ interface ContentAssetLocalStore {
     ): LocalContentAssetCopyResult
 
     suspend fun delete(localPath: String): Boolean
+
+    suspend fun isAvailable(localPath: String): Boolean
 }

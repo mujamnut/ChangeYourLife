@@ -4,10 +4,15 @@ import kotlinx.serialization.Serializable
 
 const val CYL_CHAT_ATTACHMENT_SCHEMA_NAME = "CYL_CHAT_ATTACHMENT_SCHEMA"
 const val CYL_CHAT_ATTACHMENT_SCHEMA_VERSION = 1
+const val CYL_MAX_AI_ATTACHMENTS = 4
+const val CYL_MAX_AI_IMAGE_BYTES = 4L * 1024L * 1024L
+const val CYL_MAX_AI_TEXT_BYTES = 256L * 1024L
+const val CYL_MAX_AI_PDF_BYTES = 8L * 1024L * 1024L
 
 enum class ChatAttachmentKind(val wireValue: String) {
     Image("image"),
     TextFile("text"),
+    Pdf("pdf"),
     Audio("audio"),
     Unknown("unknown"),
     ;
@@ -90,6 +95,9 @@ data class AiAttachmentInputWire(
     val kind: String = ChatAttachmentKind.Image.wireValue,
     val durationMs: Long? = null,
     val sha256: String = "",
+    val source: String = "",
+    val sourceReferenceId: String = "",
+    val approvedAtEpochMillis: Long = 0L,
 ) {
     val attachmentKind: ChatAttachmentKind
         get() = ChatAttachmentKind.fromWireValue(kind)
@@ -128,52 +136,179 @@ data class AiAttachmentInputWire(
                 ),
             )
         }
-        if (attachmentKind == ChatAttachmentKind.Audio) {
-            if (assetId.isBlank()) {
-                add(
-                    ChatAttachmentContractIssue(
-                        field = "assetId",
-                        code = "missing_audio_asset_id",
-                        message = "Audio attachments require a private assetId.",
-                    ),
-                )
+        if (source.isBlank()) {
+            add(
+                ChatAttachmentContractIssue(
+                    field = "source",
+                    code = "missing_attachment_source",
+                    message = "Attachments require an auditable source.",
+                ),
+            )
+        }
+        if (source.length > MaxAttachmentSourceLength) {
+            add(
+                ChatAttachmentContractIssue(
+                    field = "source",
+                    code = "invalid_attachment_source",
+                    message = "Attachment source is too long.",
+                ),
+            )
+        }
+        if (sourceReferenceId.isBlank()) {
+            add(
+                ChatAttachmentContractIssue(
+                    field = "sourceReferenceId",
+                    code = "missing_attachment_source_reference",
+                    message = "Attachments require an auditable source reference.",
+                ),
+            )
+        }
+        if (sourceReferenceId.length > MaxAttachmentSourceReferenceLength) {
+            add(
+                ChatAttachmentContractIssue(
+                    field = "sourceReferenceId",
+                    code = "invalid_attachment_source_reference",
+                    message = "Attachment source reference is too long.",
+                ),
+            )
+        }
+        if (approvedAtEpochMillis <= 0L) {
+            add(
+                ChatAttachmentContractIssue(
+                    field = "approvedAtEpochMillis",
+                    code = "missing_attachment_approval",
+                    message = "Attachments require explicit user approval before AI processing.",
+                ),
+            )
+        }
+        when (attachmentKind) {
+            ChatAttachmentKind.Image -> {
+                if (!mimeType.startsWith("image/", ignoreCase = true)) {
+                    add(
+                        ChatAttachmentContractIssue(
+                            field = "mimeType",
+                            code = "invalid_image_mime_type",
+                            message = "Image attachment mimeType must start with image/.",
+                        ),
+                    )
+                }
+                if (dataUrl.isBlank()) {
+                    add(
+                        ChatAttachmentContractIssue(
+                            field = "dataUrl",
+                            code = "missing_image_payload",
+                            message = "Image attachments require an inline image payload.",
+                        ),
+                    )
+                }
             }
-            if (hasInlinePayload) {
-                add(
-                    ChatAttachmentContractIssue(
-                        field = "dataUrl",
-                        code = "inline_audio_not_allowed",
-                        message = "Audio attachments cannot contain inline dataUrl or textContent payloads.",
-                    ),
-                )
+            ChatAttachmentKind.TextFile -> {
+                if (textContent.isBlank()) {
+                    add(
+                        ChatAttachmentContractIssue(
+                            field = "textContent",
+                            code = "missing_text_payload",
+                            message = "Text attachments require inline text content.",
+                        ),
+                    )
+                }
             }
-            if (!mimeType.startsWith("audio/", ignoreCase = true)) {
-                add(
-                    ChatAttachmentContractIssue(
-                        field = "mimeType",
-                        code = "invalid_audio_mime_type",
-                        message = "Audio attachment mimeType must start with audio/.",
-                    ),
-                )
+            ChatAttachmentKind.Pdf -> {
+                if (!mimeType.equals("application/pdf", ignoreCase = true)) {
+                    add(
+                        ChatAttachmentContractIssue(
+                            field = "mimeType",
+                            code = "invalid_pdf_mime_type",
+                            message = "PDF attachment mimeType must be application/pdf.",
+                        ),
+                    )
+                }
+                if (dataUrl.isBlank()) {
+                    add(
+                        ChatAttachmentContractIssue(
+                            field = "dataUrl",
+                            code = "missing_pdf_payload",
+                            message = "PDF attachments require an inline PDF payload.",
+                        ),
+                    )
+                }
             }
-            if ((durationMs ?: 0L) <= 0L) {
-                add(
-                    ChatAttachmentContractIssue(
-                        field = "durationMs",
-                        code = "missing_audio_duration",
-                        message = "Audio attachments require a positive durationMs.",
-                    ),
-                )
+            ChatAttachmentKind.Audio -> {
+                if (assetId.isBlank()) {
+                    add(
+                        ChatAttachmentContractIssue(
+                            field = "assetId",
+                            code = "missing_audio_asset_id",
+                            message = "Audio attachments require a private assetId.",
+                        ),
+                    )
+                }
+                if (hasInlinePayload) {
+                    add(
+                        ChatAttachmentContractIssue(
+                            field = "dataUrl",
+                            code = "inline_audio_not_allowed",
+                            message = "Audio attachments cannot contain inline dataUrl or textContent payloads.",
+                        ),
+                    )
+                }
+                if (!mimeType.startsWith("audio/", ignoreCase = true)) {
+                    add(
+                        ChatAttachmentContractIssue(
+                            field = "mimeType",
+                            code = "invalid_audio_mime_type",
+                            message = "Audio attachment mimeType must start with audio/.",
+                        ),
+                    )
+                }
+                if ((durationMs ?: 0L) <= 0L) {
+                    add(
+                        ChatAttachmentContractIssue(
+                            field = "durationMs",
+                            code = "missing_audio_duration",
+                            message = "Audio attachments require a positive durationMs.",
+                        ),
+                    )
+                }
+                if (!sha256.matches(Sha256Pattern)) {
+                    add(
+                        ChatAttachmentContractIssue(
+                            field = "sha256",
+                            code = "invalid_audio_checksum",
+                            message = "Audio attachments require a lowercase or uppercase SHA-256 hex digest.",
+                        ),
+                    )
+                }
             }
-            if (!sha256.matches(Sha256Pattern)) {
-                add(
-                    ChatAttachmentContractIssue(
-                        field = "sha256",
-                        code = "invalid_audio_checksum",
-                        message = "Audio attachments require a lowercase or uppercase SHA-256 hex digest.",
-                    ),
-                )
-            }
+            ChatAttachmentKind.Unknown -> Unit
+        }
+        if (
+            attachmentKind in InlineAttachmentKinds &&
+            sizeBytes == 0L
+        ) {
+            add(
+                ChatAttachmentContractIssue(
+                    field = "sizeBytes",
+                    code = "invalid_attachment_size",
+                    message = "Inline attachments require a positive sizeBytes value.",
+                ),
+            )
+        }
+        val maximumBytes = when (attachmentKind) {
+            ChatAttachmentKind.Image -> CYL_MAX_AI_IMAGE_BYTES
+            ChatAttachmentKind.TextFile -> CYL_MAX_AI_TEXT_BYTES
+            ChatAttachmentKind.Pdf -> CYL_MAX_AI_PDF_BYTES
+            ChatAttachmentKind.Audio,
+            ChatAttachmentKind.Unknown -> null
+        }
+        if (maximumBytes != null && sizeBytes > maximumBytes) {
+            add(
+                ChatAttachmentContractIssue(
+                    field = "sizeBytes",
+                    code = "attachment_too_large",
+                    message = "Attachment exceeds the maximum AI input size.",
+                ),
+            )
         }
     }
 }
@@ -185,6 +320,13 @@ data class ChatAttachmentContractIssue(
 )
 
 private val Sha256Pattern = Regex("[A-Fa-f0-9]{64}")
+private val InlineAttachmentKinds = setOf(
+    ChatAttachmentKind.Image,
+    ChatAttachmentKind.TextFile,
+    ChatAttachmentKind.Pdf,
+)
+private const val MaxAttachmentSourceLength = 80
+private const val MaxAttachmentSourceReferenceLength = 180
 
 fun ChatAttachmentStatus.canTransitionTo(next: ChatAttachmentStatus): Boolean {
     if (this == next) return true
