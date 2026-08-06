@@ -75,7 +75,7 @@ internal object AiRetrievalActionBoundary {
                 rawTitle = reference.value,
             )
             reference.field.takeIf {
-                page == null || !page.hasReadableAiContext()
+                page != null && !page.hasReadableAiContext()
             }
         }
     }
