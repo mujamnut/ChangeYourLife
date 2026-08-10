@@ -1,8 +1,112 @@
-*** Begin Patch
-*** Update File: androidApp/src/main/java/com/changeyourlife/cyl/core/di/NetworkModule.kt
-@@
--private const val NetworkTimeoutSeconds = 300L
-+// Reduce network timeouts so the UI stops waiting too long for hung requests.
-+// 300s made the app appear to 'load forever' when the backend/provider hung.
-+private const val NetworkTimeoutSeconds = 60L
-*** End Patch
+package com.changeyourlife.cyl.core.di
+
+import com.changeyourlife.cyl.BuildConfig
+import com.changeyourlife.cyl.data.remote.auth.AuthApi
+import com.changeyourlife.cyl.data.remote.ai.AiApi
+import com.changeyourlife.cyl.data.remote.attachment.ChatAttachmentApi
+import com.changeyourlife.cyl.data.remote.asset.ContentAssetApi
+import com.changeyourlife.cyl.data.remote.sync.SyncApi
+import dagger.Module
+import dagger.Provides
+import dagger.hilt.InstallIn
+import dagger.hilt.components.SingletonComponent
+import javax.inject.Singleton
+import java.net.InetAddress
+import java.net.UnknownHostException
+import kotlinx.serialization.json.Json
+import okhttp3.Dns
+import okhttp3.OkHttpClient
+import java.util.concurrent.TimeUnit
+import okhttp3.MediaType.Companion.toMediaType
+import retrofit2.Retrofit
+import retrofit2.converter.kotlinx.serialization.asConverterFactory
+
+// Reduce network timeouts so the UI stops waiting too long for hung requests.
+// 300s made the app appear to 'load forever' when the backend/provider hung.
+private const val NetworkTimeoutSeconds = 60L
+
+@Module
+@InstallIn(SingletonComponent::class)
+object NetworkModule {
+    @Provides
+    @Singleton
+    fun provideJson(): Json {
+        return Json {
+            ignoreUnknownKeys = true
+            isLenient = true
+            coerceInputValues = true
+            explicitNulls = false
+        }
+    }
+
+    @Provides
+    @Singleton
+    fun provideOkHttpClient(): OkHttpClient {
+        return OkHttpClient.Builder()
+            .dns(CylRenderFallbackDns)
+            .connectTimeout(NetworkTimeoutSeconds, TimeUnit.SECONDS)
+            .readTimeout(NetworkTimeoutSeconds, TimeUnit.SECONDS)
+            .writeTimeout(NetworkTimeoutSeconds, TimeUnit.SECONDS)
+            .build()
+    }
+
+    @Provides
+    @Singleton
+    fun provideRetrofit(json: Json, okHttpClient: OkHttpClient): Retrofit {
+        return Retrofit.Builder()
+            .baseUrl(BuildConfig.CYL_API_BASE_URL)
+            .client(okHttpClient)
+            .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
+            .build()
+    }
+
+    @Provides
+    @Singleton
+    fun provideAuthApi(retrofit: Retrofit): AuthApi {
+        return retrofit.create(AuthApi::class.java)
+    }
+
+    @Provides
+    @Singleton
+    fun provideAiApi(retrofit: Retrofit): AiApi {
+        return retrofit.create(AiApi::class.java)
+    }
+
+    @Provides
+    @Singleton
+    fun provideSyncApi(retrofit: Retrofit): SyncApi {
+        return retrofit.create(SyncApi::class.java)
+    }
+
+    @Provides
+    @Singleton
+    fun provideChatAttachmentApi(retrofit: Retrofit): ChatAttachmentApi {
+        return retrofit.create(ChatAttachmentApi::class.java)
+    }
+
+    @Provides
+    @Singleton
+    fun provideContentAssetApi(retrofit: Retrofit): ContentAssetApi {
+        return retrofit.create(ContentAssetApi::class.java)
+    }
+}
+
+private object CylRenderFallbackDns : Dns {
+    private val fallbackAddresses = mapOf(
+        "changeyourlife.onrender.com" to listOf(
+            byteArrayOf(216.toByte(), 24, 57, 9),
+            byteArrayOf(216.toByte(), 24, 57, 8),
+        ),
+    )
+
+    override fun lookup(hostname: String): List<InetAddress> {
+        return try {
+            Dns.SYSTEM.lookup(hostname)
+        } catch (error: UnknownHostException) {
+            fallbackAddresses[hostname.lowercase()]
+                ?.map { address -> InetAddress.getByAddress(hostname, address) }
+                ?.takeIf { addresses -> addresses.isNotEmpty() }
+                ?: throw error
+        }
+    }
+}
