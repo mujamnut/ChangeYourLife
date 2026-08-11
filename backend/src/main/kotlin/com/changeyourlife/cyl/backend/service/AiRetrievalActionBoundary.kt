@@ -11,7 +11,9 @@ internal object AiRetrievalActionBoundary {
     ): AiService.AiActionResult {
         if (result.actions.isEmpty()) return result
 
-        val createdPageTitles = mutableSetOf<String>()
+        val createdPageTitles = result.actions
+            .mapNotNull { action -> action.createdRootPageTitle() }
+            .mapTo(mutableSetOf()) { title -> title.normalizedPageReference() }
         val boundaryIssues = mutableListOf<AiActionValidationIssue>()
 
         result.actions.forEachIndexed { actionIndex, action ->
@@ -20,7 +22,7 @@ internal object AiRetrievalActionBoundary {
                 createdPageTitles = createdPageTitles,
             )
             if (blockedField == null) {
-                if (action.type.uppercase(Locale.ROOT) in CreatePageActions) {
+                if (action.type.uppercase(Locale.ROOT) == CreateSubpageAction) {
                     action.title.normalizedPageReference()
                         .takeIf(String::isNotBlank)
                         ?.let(createdPageTitles::add)
@@ -47,21 +49,34 @@ internal object AiRetrievalActionBoundary {
         pages: List<AiPageContext>,
         createdPageTitles: Set<String>,
     ): String? {
-        val references = listOf(
-            PageReference(
-                field = "targetTitle",
-                value = targetTitle,
-                mayReferenceNewPage = true,
-            ),
-            PageReference(
-                field = if (sourcePageId.isNotBlank()) "sourcePageId" else "sourcePageTitle",
-                value = sourcePageId.ifBlank { sourcePageTitle },
-            ),
-            PageReference(
-                field = if (parentPageId.isNotBlank()) "parentPageId" else "parentPageTitle",
-                value = parentPageId.ifBlank { parentPageTitle },
-            ),
-        )
+        val actionType = type.uppercase(Locale.ROOT)
+        val references = buildList {
+            if (actionType != CreateRootPageAction) {
+                add(
+                    PageReference(
+                        field = "targetTitle",
+                        value = targetTitle,
+                        mayReferenceNewPage = true,
+                    ),
+                )
+            }
+            if (actionType == AttachTableDataSourceAction) {
+                add(
+                    PageReference(
+                        field = if (sourcePageId.isNotBlank()) "sourcePageId" else "sourcePageTitle",
+                        value = sourcePageId.ifBlank { sourcePageTitle },
+                    ),
+                )
+            }
+            if (actionType == MovePageAction && !movesPageToWorkspaceRoot()) {
+                add(
+                    PageReference(
+                        field = if (parentPageId.isNotBlank()) "parentPageId" else "parentPageTitle",
+                        value = parentPageId.ifBlank { parentPageTitle },
+                    ),
+                )
+            }
+        }
         return references.firstNotNullOfOrNull { reference ->
             if (
                 reference.value.isBlank() ||
@@ -92,6 +107,26 @@ internal object AiRetrievalActionBoundary {
             .replace(Regex("\\s+"), " ")
             .trim()
 
+    private fun AiService.AiActionItem.createdRootPageTitle(): String? {
+        return when (type.uppercase(Locale.ROOT)) {
+            CreateRootPageAction -> title.ifBlank { tableTitle }.ifBlank { content }
+            "CREATE_DATABASE", "CREATE_TABLE" -> if (targetTitle.isBlank()) {
+                title.ifBlank { tableTitle }.ifBlank { content }
+            } else {
+                ""
+            }
+            else -> ""
+        }.takeIf(String::isNotBlank)
+    }
+
+    private fun AiService.AiActionItem.movesPageToWorkspaceRoot(): Boolean {
+        if (parentPageId.isNotBlank()) return false
+        val parent = parentPageTitle.trim().removePrefix("@").trim()
+        return parent.isBlank() ||
+            parent.equals("root", ignoreCase = true) ||
+            parent.equals("workspace", ignoreCase = true)
+    }
+
     private data class PageReference(
         val field: String,
         val value: String,
@@ -102,5 +137,8 @@ internal object AiRetrievalActionBoundary {
 
     private const val AccessTarget = "Target"
     private const val AccessRetrieved = "Retrieved"
-    private val CreatePageActions = setOf("CREATE_PAGE", "CREATE_SUBPAGE")
+    private const val CreateRootPageAction = "CREATE_PAGE"
+    private const val CreateSubpageAction = "CREATE_SUBPAGE"
+    private const val AttachTableDataSourceAction = "ATTACH_TABLE_DATA_SOURCE"
+    private const val MovePageAction = "MOVE_PAGE"
 }

@@ -466,6 +466,7 @@ class AiService(
 
             Decision rules:
             - Home request to create a new tracker/jadual/table/page: use CREATE_PAGE with tableTitle, tableColumns, and tableRows when useful.
+            - When the user asks to turn an attachment into a new root page, use CREATE_PAGE and put the extracted attachment content or table shape directly in that action. Leave targetTitle empty; a similarly named workspace page is not the destination unless the user explicitly selected it.
             - Request inside or mentioning an existing page to create a table: use CREATE_DATABASE with targetTitle.
             - Request to add spending/expense/record to an existing budget/monthly expense page: use ADD_TABLE_ROW with tableTitle "Transactions", Category, Type, Amount, Status, Month (YYYY-MM) when known, and Date when known. Do not create a new table unless user asks for a new table/page.
             - CYL_MENTION_CONTEXT may contain either explicit page mentions or the currently open default page; follow its targeting instructions exactly.

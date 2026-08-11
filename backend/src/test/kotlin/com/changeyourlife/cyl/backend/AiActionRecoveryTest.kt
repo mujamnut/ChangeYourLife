@@ -1,5 +1,7 @@
 package com.changeyourlife.cyl.backend
 
+import com.changeyourlife.cyl.aicontract.AiAttachmentInputWire
+import com.changeyourlife.cyl.aicontract.ChatAttachmentKind
 import com.changeyourlife.cyl.backend.model.ai.AiBlockContext
 import com.changeyourlife.cyl.backend.model.ai.AiPageContext
 import com.changeyourlife.cyl.backend.model.ai.ChatMessage
@@ -491,6 +493,126 @@ class AiActionRecoveryTest {
         assertEquals("AI Planned Chicken Care", action.title)
         assertEquals("Care Schedule", action.tableTitle)
         assertEquals("Morning", action.tableRows.single()["When"])
+    }
+
+    @Test
+    fun attachmentCreatePageDoesNotBecomeMetadataPageMutation() = runBlocking {
+        val attachmentText = "Meeting notes that should become a new page."
+        val aiService = AiService(
+            openRouterApiKey = "test-key",
+            completionProvider = { messages, jsonMode, _ ->
+                assertTrue(jsonMode)
+                assertTrue(messages.any { message -> message.content.contains(attachmentText) })
+                """
+                    {
+                      "reply": "Siap - saya buat page baru daripada fail itu.",
+                      "actions": [
+                        {
+                          "type": "CREATE_PAGE",
+                          "title": "Imported Note",
+                          "content": "$attachmentText"
+                        }
+                      ]
+                    }
+                """.trimIndent()
+            },
+        )
+
+        val result = aiService.chatWithActions(
+            messages = listOf(
+                ChatMessage(role = "user", content = "masukkan fail ini dalam page baru"),
+            ),
+            pages = listOf(
+                AiPageContext(
+                    id = "existing-note",
+                    title = "Only Existing Page",
+                    access = "Metadata",
+                ),
+            ),
+            images = listOf(
+                AiAttachmentInputWire(
+                    textContent = attachmentText,
+                    mimeType = "text/plain",
+                    name = "Imported Note.txt",
+                    sizeBytes = attachmentText.toByteArray().size.toLong(),
+                    kind = ChatAttachmentKind.TextFile.wireValue,
+                    source = "incoming_share",
+                    sourceReferenceId = "draft-1/item-1",
+                    approvedAtEpochMillis = 1L,
+                ),
+            ),
+        )
+
+        val action = result.actions.single()
+        assertEquals("CREATE_PAGE", action.type)
+        assertEquals("Imported Note", action.title)
+        assertEquals("", action.targetTitle)
+        assertEquals(emptyList(), result.validationIssues)
+        assertEquals(1, result.diagnostics.textFileCount)
+    }
+
+    @Test
+    fun plannedNewPageTargetIsNotRewrittenToCurrentPage() {
+        val result = service.recoverActionFromModelReply(
+            reply = """
+                {
+                  "reply": "Done",
+                  "actions": [
+                    { "type": "CREATE_PAGE", "title": "Imported Note" },
+                    {
+                      "type": "APPEND_BLOCK",
+                      "targetTitle": "Imported Note",
+                      "blockType": "Text",
+                      "content": "Imported content"
+                    }
+                  ]
+                }
+            """.trimIndent(),
+            prompt = "create a new page from this file in the current workspace",
+            pages = listOf(
+                AiPageContext(
+                    id = "current-page",
+                    title = "Current Page",
+                    access = "Target",
+                    isFocused = true,
+                ),
+            ),
+        )
+
+        val actions = assertNotNull(result).actions
+        assertEquals("", actions[0].targetTitle)
+        assertEquals("Imported Note", actions[1].targetTitle)
+    }
+
+    @Test
+    fun homeDatabaseCreationDoesNotTargetSoleMetadataPage() {
+        val result = service.recoverActionFromModelReply(
+            reply = """
+                {
+                  "reply": "Done",
+                  "actions": [
+                    {
+                      "type": "CREATE_DATABASE",
+                      "title": "Imported Note",
+                      "tableTitle": "Notes"
+                    }
+                  ]
+                }
+            """.trimIndent(),
+            prompt = "buat database daripada fail ini dalam page baru",
+            pages = listOf(
+                AiPageContext(
+                    id = "only-existing-page",
+                    title = "Only Existing Page",
+                    access = "Metadata",
+                ),
+            ),
+        )
+
+        val action = assertNotNull(result).actions.single()
+        assertEquals("CREATE_DATABASE", action.type)
+        assertEquals("", action.targetTitle)
+        assertEquals("Notes", action.tableTitle)
     }
 
     @Test

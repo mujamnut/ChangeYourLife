@@ -80,10 +80,24 @@ class AiModelActionNormalizer(
                 cellValues.isEmpty() -> "CLEAR_TABLE_CELL"
             else -> rawNormalizedType
         }
-        val explicitTarget = targetTitle.cleanAiPageTitle()
-            .ifBlank { title.cleanAiPageTitle().takeIf { normalizedType != "CREATE_DATABASE" }.orEmpty() }
-        val targetPage = AiPageTargetMatcher.findPageByAiTitle(pages, explicitTarget)
-            ?: pages.findTargetPage(prompt)
+        val createsRootPage = normalizedType == "CREATE_PAGE"
+        val explicitTarget = if (createsRootPage) {
+            ""
+        } else {
+            targetTitle.cleanAiPageTitle()
+        }
+        val targetPage = when {
+            createsRootPage -> null
+            explicitTarget.isNotBlank() ->
+                AiPageTargetMatcher.findPageByAiTitle(pages, explicitTarget)
+            normalizedType in actionsWithoutImplicitWorkspaceFallback ->
+                AiPageTargetMatcher.findTargetPage(
+                    pages = pages,
+                    prompt = prompt,
+                    allowSinglePageFallback = false,
+                )
+            else -> pages.findTargetPage(prompt)
+        }
         return copy(
             type = normalizedType,
             targetTitle = targetPage?.title ?: explicitTarget,
@@ -467,6 +481,11 @@ class AiModelActionNormalizer(
         val clearMutationWords = setOf("clear", "delete", "empty", "hapus", "kosongkan", "padam", "remove")
         val cellTargetWords = setOf("cell", "sel")
         val bulkTargetWords = setOf("all", "every", "semua", "seluruh")
+        val actionsWithoutImplicitWorkspaceFallback = setOf(
+            "CREATE_SUBPAGE",
+            "CREATE_DATABASE",
+            "CREATE_TABLE",
+        )
         val legacyEnvelopeKeys = setOf("page", "targetpage", "targettitle", "action", "data", "rows", "row", "table", "tabletitle")
         val ignoredLegacyDataKeys = setOf("id", "rowid", "row_id", "uuid")
     }

@@ -109,6 +109,56 @@ class AiRetrievalActionBoundaryTest {
     }
 
     @Test
+    fun createRootPageIgnoresIrrelevantMetadataTarget() {
+        val result = AiRetrievalActionBoundary.enforce(
+            result = AiService.AiActionResult(
+                reply = "done",
+                actions = listOf(
+                    AiService.AiActionItem(
+                        type = "CREATE_PAGE",
+                        title = "Imported Note",
+                        targetTitle = "Catalog only",
+                        content = "Imported attachment content",
+                    ),
+                ),
+            ),
+            pages = listOf(
+                page(id = "catalog", title = "Catalog only", access = "Metadata"),
+            ),
+        )
+
+        assertTrue(
+            result.validationIssues.isEmpty(),
+            "CREATE_PAGE is home-scoped and must not read its unused targetTitle.",
+        )
+    }
+
+    @Test
+    fun moveToWorkspaceRootDoesNotTreatRootAsMetadataPage() {
+        val result = AiRetrievalActionBoundary.enforce(
+            result = AiService.AiActionResult(
+                reply = "done",
+                actions = listOf(
+                    AiService.AiActionItem(
+                        type = "MOVE_PAGE",
+                        targetTitle = "Current",
+                        parentPageTitle = "root",
+                    ),
+                ),
+            ),
+            pages = listOf(
+                page(id = "current", title = "Current", access = "Target"),
+                page(id = "root-page", title = "Root", access = "Metadata"),
+            ),
+        )
+
+        assertTrue(
+            result.validationIssues.isEmpty(),
+            "The root sentinel means workspace root, not a page named Root.",
+        )
+    }
+
+    @Test
     fun allowsCreatePagePlusCreateDatabaseWithMismatchedTitles() {
         // When the AI uses slightly different titles between CREATE_PAGE and
         // CREATE_DATABASE (e.g. "August Monthly Expenses" vs "August 2026 Monthly
