@@ -82,6 +82,7 @@ internal data class ProjectedTableRow(
 
 internal data class ProjectedTableCell(
     val rowId: String,
+    val tableId: String,
     val columnId: String,
     val value: String,
     val valueType: String,
@@ -273,6 +274,7 @@ private class ProjectionCollector(
                 )
                 cells += ProjectedTableCell(
                     rowId = rowId,
+                    tableId = blockId,
                     columnId = column.id,
                     value = displayCellValue(
                         type = column.type,
@@ -602,21 +604,22 @@ private fun Connection.insertCells(projection: PageContentProjection) {
     executeProjectionBatch(
         """
         INSERT INTO page_table_cells (
-            row_id, column_id, value, value_type, value_json,
+            row_id, table_id, column_id, value, value_type, value_json,
             created_at, updated_at, deleted_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """.trimIndent(),
         projection.cells,
     ) { statement, cell ->
         statement.setString(1, cell.rowId)
-        statement.setString(2, cell.columnId)
-        statement.setString(3, cell.value)
-        statement.setString(4, cell.valueType)
-        statement.setString(5, cell.valueJson)
-        statement.setLong(6, projection.source.createdAt)
-        statement.setLong(7, projection.source.updatedAt)
-        statement.setNullableLong(8, projection.source.deletedAt)
+        statement.setString(2, cell.tableId)
+        statement.setString(3, cell.columnId)
+        statement.setString(4, cell.value)
+        statement.setString(5, cell.valueType)
+        statement.setString(6, cell.valueJson)
+        statement.setLong(7, projection.source.createdAt)
+        statement.setLong(8, projection.source.updatedAt)
+        statement.setNullableLong(9, projection.source.deletedAt)
     }
 }
 

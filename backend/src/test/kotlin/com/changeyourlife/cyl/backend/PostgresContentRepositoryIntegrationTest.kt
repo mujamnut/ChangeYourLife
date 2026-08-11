@@ -484,6 +484,76 @@ class PostgresContentRepositoryIntegrationTest {
         }
     }
 
+    @Test
+    fun postgresProjectionScopesDuplicateRowIdsToTheirTables() = runBlocking {
+        val config = testDatabaseConfig()
+        assumeTrue(
+            "Set CYL_TEST_DATABASE_URL to run PostgreSQL integration tests.",
+            config.isConfigured,
+        )
+
+        val userId = "test-user-${UUID.randomUUID()}"
+        val workspaceId = "row-scope-workspace-${UUID.randomUUID()}"
+        val sharedRowId = "shared-row-${UUID.randomUUID()}"
+        val firstPageId = "row-scope-page-${UUID.randomUUID()}"
+        val secondPageId = "row-scope-page-${UUID.randomUUID()}"
+        val dataSource = DatabaseFactory.createDataSource(config)
+        try {
+            DatabaseFactory.migrate(dataSource)
+            dataSource.createTestUser(userId, "$userId@example.test")
+            val repository = PostgresContentRepository(dataSource)
+            assertNotNull(
+                repository.upsertWorkspace(
+                    WorkspaceRecord(
+                        id = workspaceId,
+                        userId = userId,
+                        name = "Duplicate row ID workspace",
+                        createdAt = 100,
+                        updatedAt = 100,
+                        deletedAt = null,
+                    ),
+                ),
+            )
+
+            fun createPage(pageId: String, rowName: String): PageRecord = PageRecord(
+                id = pageId,
+                workspaceId = workspaceId,
+                parentPageId = null,
+                title = rowName,
+                content = databasePageContent(
+                    tableId = "table-$pageId",
+                    nameColumnId = "name-$pageId",
+                    amountColumnId = "amount-$pageId",
+                    rowId = sharedRowId,
+                    rowName = rowName,
+                    rowNote = "Note for $rowName",
+                ),
+                sortOrder = 0,
+                createdAt = 200,
+                updatedAt = 200,
+                deletedAt = null,
+            )
+
+            repository.upsertPage(userId, createPage(firstPageId, "First collision value")).appliedPage()
+            repository.upsertPage(userId, createPage(secondPageId, "Second collision value")).appliedPage()
+
+            val results = repository.search(
+                userId = userId,
+                query = ContentSearchQuery(
+                    workspaceId = workspaceId,
+                    query = "collision value",
+                    scopes = setOf("Cell"),
+                    limit = 10,
+                ),
+            )
+            assertEquals(setOf(firstPageId, secondPageId), results.map { result -> result.pageId }.toSet())
+            assertTrue(results.all { result -> result.rowId == sharedRowId })
+        } finally {
+            dataSource.deleteTestUser(userId)
+            dataSource.close()
+        }
+    }
+
     private fun testDatabaseConfig(): DatabaseConfig {
         val parsed = parseTestDatabaseUrl(System.getenv("CYL_TEST_DATABASE_URL"))
         return DatabaseConfig(

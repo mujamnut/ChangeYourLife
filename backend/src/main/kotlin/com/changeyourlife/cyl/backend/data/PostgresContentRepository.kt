@@ -1353,8 +1353,8 @@ SELECT 'Cell'::text AS target_type,
        ) AS score,
        cell.updated_at AS updated_at
 FROM page_table_cells cell
-INNER JOIN page_table_rows r ON r.id = cell.row_id
 INNER JOIN page_table_columns c ON c.id = cell.column_id
+INNER JOIN page_table_rows r ON r.id = cell.row_id AND r.table_id = cell.table_id
 INNER JOIN page_tables t ON t.id = r.table_id
 INNER JOIN owned_pages p ON p.id = t.page_id
 CROSS JOIN input
