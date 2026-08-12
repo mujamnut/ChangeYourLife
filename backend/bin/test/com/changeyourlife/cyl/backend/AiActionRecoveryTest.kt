@@ -10,6 +10,7 @@ import java.time.LocalDate
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -546,9 +547,97 @@ class AiActionRecoveryTest {
         val action = result.actions.single()
         assertEquals("CREATE_PAGE", action.type)
         assertEquals("Imported Note", action.title)
+        assertEquals(attachmentText, action.content)
         assertEquals("", action.targetTitle)
         assertEquals(emptyList(), result.validationIssues)
+        assertEquals(AiService.AiActionSource.Model, result.source)
         assertEquals(1, result.diagnostics.textFileCount)
+    }
+
+    @Test
+    fun attachmentCreatePageRejectsAnExtraModelMutation(): Unit = runBlocking {
+        val attachmentText = "Meeting notes that should become a new page."
+        val aiService = AiService(
+            openRouterApiKey = "test-key",
+            completionProvider = { _, _, _ ->
+                """
+                    {
+                      "reply": "Siap.",
+                      "actions": [
+                        { "type": "CREATE_PAGE", "title": "Imported Note", "content": "$attachmentText" },
+                        { "type": "CREATE_PAGE", "title": "Injected Extra Page" }
+                      ]
+                    }
+                """.trimIndent()
+            },
+        )
+
+        val result = aiService.chatWithActions(
+            messages = listOf(ChatMessage(role = "user", content = "masukkan fail ini dalam page baru")),
+            pages = listOf(AiPageContext(id = "existing-note", title = "Only Existing Page", access = "Metadata")),
+            images = listOf(
+                AiAttachmentInputWire(
+                    textContent = attachmentText,
+                    mimeType = "text/plain",
+                    name = "Imported Note.txt",
+                    sizeBytes = attachmentText.toByteArray().size.toLong(),
+                    kind = ChatAttachmentKind.TextFile.wireValue,
+                    source = "incoming_share",
+                    sourceReferenceId = "draft-1/item-extra",
+                    approvedAtEpochMillis = 1L,
+                ),
+            ),
+        )
+
+        assertEquals(AiService.AiActionSource.PromptRecovery, result.source)
+        assertEquals(1, result.actions.size)
+        assertEquals("CREATE_PAGE", result.actions.single().type)
+        assertFalse(result.actions.any { action -> action.title == "Injected Extra Page" })
+    }
+
+    @Test
+    fun attachmentCreatePageRejectsASubpageScopeChange(): Unit = runBlocking {
+        val attachmentText = "Meeting notes that should become a new page."
+        val aiService = AiService(
+            openRouterApiKey = "test-key",
+            completionProvider = { _, _, _ ->
+                """
+                    {
+                      "reply": "Siap.",
+                      "actions": [
+                        {
+                          "type": "CREATE_SUBPAGE",
+                          "targetTitle": "Only Existing Page",
+                          "title": "Injected Child",
+                          "content": "$attachmentText"
+                        }
+                      ]
+                    }
+                """.trimIndent()
+            },
+        )
+
+        val result = aiService.chatWithActions(
+            messages = listOf(ChatMessage(role = "user", content = "masukkan fail ini dalam page baru")),
+            pages = listOf(AiPageContext(id = "existing-note", title = "Only Existing Page", access = "Metadata")),
+            images = listOf(
+                AiAttachmentInputWire(
+                    textContent = attachmentText,
+                    mimeType = "text/plain",
+                    name = "Imported Note.txt",
+                    sizeBytes = attachmentText.toByteArray().size.toLong(),
+                    kind = ChatAttachmentKind.TextFile.wireValue,
+                    source = "incoming_share",
+                    sourceReferenceId = "draft-1/item-subpage",
+                    approvedAtEpochMillis = 1L,
+                ),
+            ),
+        )
+
+        assertEquals(AiService.AiActionSource.PromptRecovery, result.source)
+        assertEquals("CREATE_PAGE", result.actions.single().type)
+        assertEquals("", result.actions.single().targetTitle)
+        assertFalse(result.actions.any { action -> action.title == "Injected Child" })
     }
 
     @Test

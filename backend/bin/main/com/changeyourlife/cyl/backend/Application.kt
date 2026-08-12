@@ -134,7 +134,7 @@ fun Application.module(
         ),
     )
     environment.log.info(
-        "AI provider initialized: provider=${aiService.activeProvider}, model=${aiService.activeModel}",
+        "AI routing initialized: mode=${aiService.statusMode}, textActionProvider=${aiService.textProviderLabel}, visualProvider=${aiService.visualProviderLabel}, activeModel=${aiService.activeModel}",
     )
     environment.log.info(
         "AI vision initialized: pipeline=${aiService.visionPipelineVersion}, maxDimension=${aiService.visionMaxImageDimension}, maxBytes=${aiService.visionMaxImageBytes}, lmStudioVisionModels=${aiService.lmStudioVisionModelLabel}",

@@ -2,7 +2,7 @@
 
 Status: Phase A through Phase E implemented. Phase F hardening remains.
 
-Last reviewed: 2026-08-03
+Last reviewed: 2026-08-12
 
 ## Objective
 
@@ -20,7 +20,7 @@ The supported share flow is now implemented through explicit domain boundaries:
 4. Page import commits through the page repository with revision checks and queues asset upload separately.
 5. `Ask AI` is an explicit handoff. Send approval is stamped with source, source reference, and approval time before the backend accepts an attachment.
 6. Composer file IO, bounded reads, hashing, image validation, and thumbnail generation live outside Compose UI.
-7. The backend validates the shared attachment contract and extracts selectable PDF text with bounded file, page, and context limits. Scanned PDFs still require later OCR support.
+7. The backend validates actual attachment payload sizes, extracts selectable PDF text per page, and renders only scanned/insufficient pages for bounded LM Studio OCR before sanitized text is passed to OpenRouter.
 
 The remaining work is Phase F operational hardening and broader device/cross-device verification.
 
@@ -49,14 +49,14 @@ Do not register `*/*` in the initial release. CYL should only appear for content
 - Maximum 1 MB shared text
 - Unknown file size is allowed only while streaming with an enforced byte limit
 
-Limits must be centralized in a domain policy rather than duplicated in UI and backend code.
+These are share-staging/product limits. The narrower AI handoff policy is enforced independently by the backend: at most three PDFs, 8 MiB decoded per PDF, 24 MiB decoded across PDFs, 40 inspected pages per PDF, and a 40 MiB authenticated AI request body. Limits must be centralized in the relevant domain policy rather than duplicated in UI and backend code.
 
 ### Later support
 
 - Office documents
 - CSV/JSON/Markdown as imported text or files
 - Audio and video media blocks
-- OCR for scanned PDFs and images
+- Broader OCR beyond the bounded AI attachment pipeline
 - Broader document AI analysis
 - Direct Share shortcuts
 
@@ -329,6 +329,7 @@ Recoverable failures expose Retry. Permanent failures explain the rejected item.
 - [x] Explicit Incoming Share to AI handoff with auditable approval metadata
 - [x] Generic image/text/PDF attachment preparation outside Compose UI
 - [x] Backend attachment validation and bounded selectable-text PDF extraction
+- [x] Bounded scanned/mixed-PDF rendering and LM Studio OCR routing, with sanitized text-only OpenRouter handoff
 
 The manifest advertises only the MIME types listed in the initial scope. Imported media uses the
 generic asset path. Files selected directly inside the legacy page/table picker remain backward
@@ -376,11 +377,12 @@ Exit condition: new-page and existing-page imports are atomic and recoverable.
 
 1. [x] Extract the current chat attachment reader out of UI code.
 2. [x] Reuse generic assets for image and text-file attachments.
-3. [x] Add bounded PDF extraction as a separate backend capability.
+3. [x] Add bounded per-page PDF text extraction as a separate backend capability.
 4. [x] Keep `Ask AI` explicit and auditable.
 5. [x] Persist only lightweight chat snapshots for asset-backed attachments; inline AI payloads are not synced.
+6. [x] Render only scanned/insufficient PDF pages for bounded LM Studio OCR and pass only sanitized evidence to OpenRouter.
 
-Exit condition: AI receives only supported, user-approved content and never raw oversized files.
+Exit condition: AI receives only supported, user-approved content; raw oversized files are rejected, visual data remains in the LM Studio stage, and attachment instructions cannot authorize a page mutation without the original user prompt.
 
 ### Phase F: Hardening
 

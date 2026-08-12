@@ -6,22 +6,30 @@ sdk.dir=C\:/Users/<your-user>/AppData/Local/Android/Sdk
 # Physical phone:
 # cyl.api.base.url=http://<your-computer-ip>:8080/
 
-# Local LM Studio image reading. Backend must be able to reach this URL.
+# Local LM Studio visual extraction/OCR only. It is never used for final text/actions.
+# Backend must be able to reach this URL.
 # If backend runs on the same PC as LM Studio, keep 127.0.0.1.
 # If backend runs on Render, 127.0.0.1 will not reach your PC.
 # LMSTUDIO_BASE_URL=http://127.0.0.1:1234
-# LMSTUDIO_MODEL=qwen/qwen3.5-9b
 # LMSTUDIO_VISION_MODEL=qwen/qwen3.5-9b
 # LMSTUDIO_API_KEY=
+# Legacy compatibility only; accepted but ignored by Phase A runtime.
+# LMSTUDIO_MODEL=qwen/qwen3.5-9b
 #
-# OpenRouter is used when LM Studio is not configured or fails.
+# OpenRouter is the only provider for normal text chat and structured actions.
+# Requests without visual input skip LM Studio entirely.
 # OPENROUTER_API_KEY=sk-or-v1-your-key-here
 # OPENROUTER_MODEL=openai/gpt-oss-20b:free
-# Optional OpenRouter image-reading models for AI chat attachments. Must support image input.
-# Backend will try these in order until one succeeds.
+# Legacy compatibility only; accepted but ignored by Phase A runtime.
 # OPENROUTER_VISION_MODELS=google/gemma-4-26b-a4b-it:free,google/gemma-3-4b-it:free
+# OPENROUTER_VISION_MODEL=
+# AI_VISION_MODEL=
+#
+# There is no implicit cross-role fallback. With only LM Studio configured, AI
+# status is degraded because OpenRouter is required for the final response.
 
 # Optional AI deadline policy. Every remote attempt is capped by the shared remaining budget.
+# LM Studio timeout applies to vision/OCR; OpenRouter timeout applies to text/actions.
 # AI_JOB_DEADLINE_MS=180000
 # AI_CONNECT_TIMEOUT_MS=5000
 # LMSTUDIO_REQUEST_TIMEOUT_MS=90000

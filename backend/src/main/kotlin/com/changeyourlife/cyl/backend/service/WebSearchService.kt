@@ -143,7 +143,7 @@ class WebSearchService(
             provider = "web search/jina",
         )
         if (response.statusCode() !in 200..299) {
-            throw IllegalStateException("HTTP ${response.statusCode()} - ${response.body().take(MaxErrorBodyChars)}")
+            throw IllegalStateException("HTTP ${response.statusCode()}")
         }
         return WebSearchContext(
             query = query,
@@ -174,7 +174,7 @@ class WebSearchService(
             provider = "web search/duckduckgo_lite",
         )
         if (response.statusCode() !in 200..299) {
-            throw IllegalStateException("HTTP ${response.statusCode()} - ${response.body().take(MaxErrorBodyChars)}")
+            throw IllegalStateException("HTTP ${response.statusCode()}")
         }
         return WebSearchContext(
             query = query,
@@ -216,7 +216,7 @@ class WebSearchService(
             provider = "web search/exa",
         )
         if (response.statusCode() !in 200..299) {
-            throw IllegalStateException("HTTP ${response.statusCode()} - ${response.body().take(MaxErrorBodyChars)}")
+            throw IllegalStateException("HTTP ${response.statusCode()}")
         }
         return WebSearchContext(
             query = query,
@@ -254,7 +254,7 @@ class WebSearchService(
             provider = "web search/tavily",
         )
         if (response.statusCode() !in 200..299) {
-            throw IllegalStateException("HTTP ${response.statusCode()} - ${response.body().take(MaxErrorBodyChars)}")
+            throw IllegalStateException("HTTP ${response.statusCode()}")
         }
         return WebSearchContext(
             query = query,
@@ -510,7 +510,6 @@ class WebSearchService(
         private const val MaxContentChars = 1_500
         private const val MaxWarningChars = 500
         private const val MaxErrorChars = 220
-        private const val MaxErrorBodyChars = 500
         private const val JinaSearchTimeoutMillis = 5_000L
         private const val DuckDuckGoSearchTimeoutMillis = 8_000L
         private const val MaxQueryCandidates = 4

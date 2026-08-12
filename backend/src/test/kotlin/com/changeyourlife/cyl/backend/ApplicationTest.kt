@@ -1,10 +1,14 @@
 package com.changeyourlife.cyl.backend
 
+import com.changeyourlife.cyl.aicontract.AiAttachmentInputWire
+import com.changeyourlife.cyl.aicontract.ChatAttachmentKind
 import com.changeyourlife.cyl.backend.config.AppConfig
 import com.changeyourlife.cyl.backend.config.DatabaseConfig
 import com.changeyourlife.cyl.backend.config.EmailConfig
 import com.changeyourlife.cyl.backend.config.JwtConfig
 import com.changeyourlife.cyl.backend.config.WebSearchConfig
+import com.changeyourlife.cyl.backend.model.ai.ChatMessage
+import com.changeyourlife.cyl.backend.model.ai.ChatRequest
 import com.changeyourlife.cyl.backend.model.ai.ChatWithActionsResponse
 import com.changeyourlife.cyl.backend.model.auth.AuthResponse
 import com.changeyourlife.cyl.backend.model.auth.ForgotPasswordResponse
@@ -116,6 +120,123 @@ class ApplicationTest {
         assertTrue(body.reply.isNotBlank())
         assertEquals(emptyList(), body.actions)
         assertEquals(emptyList(), body.validationIssues)
+    }
+
+    @Test
+    fun authenticatedAiChatRejectsAttachmentSizeMismatch() = testApplication {
+        application {
+            module(appConfig = inMemoryTestConfig())
+        }
+        val authHeader = registerAndReturnAuthHeader(
+            email = "ai-size-mismatch@example.com",
+            password = "strong-password",
+        )
+        val request = ChatRequest(
+            messages = listOf(ChatMessage(role = "user", content = "Summarise this PDF.")),
+            images = listOf(approvedPdfAttachment(sizeBytes = ValidPdfPayloadSizeBytes - 1L)),
+        )
+
+        val response = client.post("/ai/chat") {
+            header(HttpHeaders.Authorization, authHeader)
+            contentType(ContentType.Application.Json)
+            setBody(Json.encodeToString(request))
+        }
+
+        assertEquals(HttpStatusCode.UnprocessableEntity, response.status)
+        val body = response.bodyAsText()
+        assertTrue(body.contains("attachment_size_mismatch"), body)
+        assertFalse(body.contains(ValidPdfDataUrl), "Rejected inline payload must not be reflected: $body")
+    }
+
+    @Test
+    fun authenticatedAiChatRejectsMoreThanThreePdfAttachments() = testApplication {
+        application {
+            module(appConfig = inMemoryTestConfig())
+        }
+        val authHeader = registerAndReturnAuthHeader(
+            email = "ai-pdf-count@example.com",
+            password = "strong-password",
+        )
+        val request = ChatRequest(
+            messages = listOf(ChatMessage(role = "user", content = "Summarise these PDFs.")),
+            images = List(4) { index ->
+                approvedPdfAttachment(
+                    name = "document-${index + 1}.pdf",
+                    sourceReferenceId = "ai-pdf-count/item-${index + 1}",
+                )
+            },
+        )
+
+        val response = client.post("/ai/chat") {
+            header(HttpHeaders.Authorization, authHeader)
+            contentType(ContentType.Application.Json)
+            setBody(Json.encodeToString(request))
+        }
+
+        assertEquals(HttpStatusCode.UnprocessableEntity, response.status)
+        val body = response.bodyAsText()
+        assertTrue(body.contains("too_many_pdf_attachments"), body)
+        assertFalse(body.contains(ValidPdfDataUrl), "Rejected inline payload must not be reflected: $body")
+    }
+
+    @Test
+    fun authenticatedAiChatRejectsMalformedBase64Padding() = testApplication {
+        application {
+            module(appConfig = inMemoryTestConfig())
+        }
+        val authHeader = registerAndReturnAuthHeader(
+            email = "ai-base64-padding@example.com",
+            password = "strong-password",
+        )
+        val malformedDataUrl = "data:application/pdf;base64,AAAA="
+        val request = ChatRequest(
+            messages = listOf(ChatMessage(role = "user", content = "Read this PDF.")),
+            images = listOf(
+                approvedPdfAttachment(
+                    dataUrl = malformedDataUrl,
+                    sizeBytes = 3L,
+                ),
+            ),
+        )
+
+        val response = client.post("/ai/chat") {
+            header(HttpHeaders.Authorization, authHeader)
+            contentType(ContentType.Application.Json)
+            setBody(Json.encodeToString(request))
+        }
+
+        assertEquals(HttpStatusCode.UnprocessableEntity, response.status)
+        val body = response.bodyAsText()
+        assertTrue(body.contains("invalid_inline_attachment_payload"), body)
+        assertFalse(body.contains(malformedDataUrl), "Rejected payload must not be reflected: $body")
+    }
+
+    @Test
+    fun authenticatedAiChatRejectsRequestBodyOverFortyMebibytes() = testApplication {
+        application {
+            module(appConfig = inMemoryTestConfig())
+        }
+        val authHeader = registerAndReturnAuthHeader(
+            email = "ai-body-limit@example.com",
+            password = "strong-password",
+        )
+        val oversizedBody = buildString(TestAiRequestBodyLimitBytes + 256) {
+            append("{\"messages\":[{\"role\":\"user\",\"content\":\"")
+            repeat(TestAiRequestBodyLimitBytes) { append('a') }
+            append("\"}]}")
+        }
+
+        val response = client.post("/ai/chat") {
+            header(HttpHeaders.Authorization, authHeader)
+            contentType(ContentType.Application.Json)
+            setBody(oversizedBody)
+        }
+
+        assertEquals(HttpStatusCode.PayloadTooLarge, response.status)
+        val body = response.bodyAsText()
+        assertTrue(body.contains("Request body exceeds the allowed size."), body)
+        assertTrue(body.length < 256, "Payload-too-large response must stay bounded: ${body.length}")
+        assertFalse(body.contains("aaaaa"), "Payload-too-large response must not reflect request content.")
     }
 
     @Test
@@ -1187,6 +1308,22 @@ class ApplicationTest {
         return "Bearer ${authResponse.token}"
     }
 
+    private fun approvedPdfAttachment(
+        name: String = "document.pdf",
+        sourceReferenceId: String = "ai-route-test/item-1",
+        sizeBytes: Long = ValidPdfPayloadSizeBytes,
+        dataUrl: String = ValidPdfDataUrl,
+    ): AiAttachmentInputWire = AiAttachmentInputWire(
+        dataUrl = dataUrl,
+        mimeType = "application/pdf",
+        name = name,
+        sizeBytes = sizeBytes,
+        kind = ChatAttachmentKind.Pdf.wireValue,
+        source = "test_fixture",
+        sourceReferenceId = sourceReferenceId,
+        approvedAtEpochMillis = 1L,
+    )
+
     private fun inMemoryTestConfig(): AppConfig {
         return AppConfig(
             database = DatabaseConfig(
@@ -1219,5 +1356,9 @@ class ApplicationTest {
         )
     }
 }
+
+private const val ValidPdfDataUrl = "data:application/pdf;base64,JVBERi0xLjQKJSVFT0YK"
+private const val ValidPdfPayloadSizeBytes = 15L
+private const val TestAiRequestBodyLimitBytes = 40 * 1024 * 1024
 
 private fun Long.toPageEtag(): String = "\"$this\""

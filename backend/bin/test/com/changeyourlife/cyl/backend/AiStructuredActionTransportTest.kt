@@ -85,8 +85,9 @@ class AiStructuredActionTransportTest {
     }
 
     private fun service(endpoint: String): AiService = AiService(
-        lmStudioBaseUrl = endpoint,
-        lmStudioModel = "test-model",
+        openRouterApiKey = "test-key",
+        openRouterModel = "test-model",
+        openRouterCompletionsUrl = endpoint,
     )
 
     private fun withAiServer(

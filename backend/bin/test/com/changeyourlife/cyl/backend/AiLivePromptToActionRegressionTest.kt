@@ -26,8 +26,8 @@ class AiLivePromptToActionRegressionTest {
             timeoutConfig = config.aiTimeouts,
         )
         assumeTrue(
-            "Configure LMSTUDIO_BASE_URL or a supported provider API key before running live regressions.",
-            !service.isMockMode,
+            "Configure OPENROUTER_API_KEY before running live action regressions.",
+            service.textProviderLabel == "openrouter",
         )
 
         AiPromptActionRegressionCorpus.liveCases.forEach { regressionCase ->

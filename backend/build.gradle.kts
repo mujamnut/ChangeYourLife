@@ -39,6 +39,7 @@ dependencies {
     implementation(libs.ktor.server.cors)
     implementation(libs.ktor.server.auth)
     implementation(libs.ktor.server.auth.jwt)
+    implementation(libs.ktor.server.body.limit)
     implementation(libs.logback.classic)
     implementation(libs.hikari.cp)
     implementation(libs.postgresql)

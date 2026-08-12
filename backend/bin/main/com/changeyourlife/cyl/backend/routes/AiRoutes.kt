@@ -2,6 +2,10 @@ package com.changeyourlife.cyl.backend.routes
 
 import com.changeyourlife.cyl.aicontract.AiAttachmentInputWire
 import com.changeyourlife.cyl.aicontract.CYL_MAX_AI_ATTACHMENTS
+import com.changeyourlife.cyl.aicontract.CYL_MAX_AI_IMAGE_BYTES
+import com.changeyourlife.cyl.aicontract.CYL_MAX_AI_PDF_BYTES
+import com.changeyourlife.cyl.aicontract.CYL_MAX_AI_TEXT_BYTES
+import com.changeyourlife.cyl.aicontract.ChatAttachmentKind
 import com.changeyourlife.cyl.backend.model.ai.ChatRequest
 import com.changeyourlife.cyl.backend.model.ai.ChatResponse
 import com.changeyourlife.cyl.backend.model.ai.ChatWithActionsRequest
@@ -19,11 +23,13 @@ import com.changeyourlife.cyl.backend.service.toContractWire
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.application.call
+import io.ktor.server.application.install
 import io.ktor.server.auth.authenticate
 import io.ktor.server.auth.jwt.JWTPrincipal
 import io.ktor.server.auth.principal
 import io.ktor.server.request.receive
 import io.ktor.server.request.header
+import io.ktor.server.plugins.bodylimit.RequestBodyLimit
 import io.ktor.server.response.respond
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
@@ -32,6 +38,7 @@ import com.changeyourlife.cyl.backend.model.ai.AiStatusResponse
 import io.ktor.server.routing.route
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.Serializable
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 
@@ -45,7 +52,7 @@ fun Route.aiRoutes(
         get("/status") {
             call.respond(
                 AiStatusResponse(
-                    mode = if (aiService.isMockMode) "sandbox" else "live",
+                    mode = aiService.statusMode,
                     provider = aiService.activeProvider,
                     model = aiService.activeModel,
                     visionPipelineVersion = aiService.visionPipelineVersion,
@@ -59,6 +66,10 @@ fun Route.aiRoutes(
 
     authenticate("auth-jwt") {
         route("/ai") {
+            install(RequestBodyLimit) {
+                bodyLimit { AiRequestBodyLimitBytes }
+            }
+
             post("/chat") {
                 val request = call.receive<ChatRequest>()
                 if (!call.validateAiAttachments(request.images)) return@post
@@ -181,38 +192,174 @@ private suspend fun ApplicationCall.validateAiAttachments(
     val issues = buildList {
         if (attachments.size > CYL_MAX_AI_ATTACHMENTS) {
             add(
-                mapOf(
-                    "field" to "images",
-                    "code" to "too_many_attachments",
-                    "message" to "A maximum of $CYL_MAX_AI_ATTACHMENTS AI attachments is allowed.",
+                AiAttachmentValidationIssueResponse(
+                    field = "images",
+                    code = "too_many_attachments",
+                    message = "A maximum of $CYL_MAX_AI_ATTACHMENTS AI attachments is allowed.",
                 ),
             )
         }
+        val pdfCount = attachments.count { attachment ->
+            attachment.attachmentKind == ChatAttachmentKind.Pdf
+        }
+        if (pdfCount > MaxAiPdfAttachments) {
+            add(
+                AiAttachmentValidationIssueResponse(
+                    field = "images",
+                    code = "too_many_pdf_attachments",
+                    message = "A maximum of $MaxAiPdfAttachments PDF attachments is allowed per AI request.",
+                ),
+            )
+        }
+        var aggregateInlineBytes = 0L
+        var aggregatePdfBytes = 0L
         attachments.forEachIndexed { index, attachment ->
             attachment.validate().forEach { issue ->
                 add(
-                    mapOf(
-                        "field" to "images[$index].${issue.field}",
-                        "code" to issue.code,
-                        "message" to issue.message,
+                    AiAttachmentValidationIssueResponse(
+                        field = "images[$index].${issue.field}",
+                        code = issue.code,
+                        message = issue.message,
                     ),
                 )
             }
+            val measuredBytes = attachment.measuredInlinePayloadBytes()
+            if (attachment.attachmentKind in InlineAttachmentKinds) {
+                if (measuredBytes == null && attachment.hasInlinePayload) {
+                    add(
+                        AiAttachmentValidationIssueResponse(
+                            field = "images[$index].dataUrl",
+                            code = "invalid_inline_attachment_payload",
+                            message = "Attachment payload encoding does not match its declared kind.",
+                        ),
+                    )
+                } else if (measuredBytes != null) {
+                    aggregateInlineBytes += measuredBytes
+                    if (attachment.attachmentKind == ChatAttachmentKind.Pdf) {
+                        aggregatePdfBytes += measuredBytes
+                    }
+                    if (measuredBytes != attachment.sizeBytes) {
+                        add(
+                            AiAttachmentValidationIssueResponse(
+                                field = "images[$index].sizeBytes",
+                                code = "attachment_size_mismatch",
+                                message = "Attachment sizeBytes does not match the inline payload.",
+                            ),
+                        )
+                    }
+                    val maximumBytes = when (attachment.attachmentKind) {
+                        ChatAttachmentKind.Image -> CYL_MAX_AI_IMAGE_BYTES
+                        ChatAttachmentKind.TextFile -> CYL_MAX_AI_TEXT_BYTES
+                        ChatAttachmentKind.Pdf -> CYL_MAX_AI_PDF_BYTES
+                        else -> 0L
+                    }
+                    if (measuredBytes > maximumBytes) {
+                        add(
+                            AiAttachmentValidationIssueResponse(
+                                field = "images[$index].dataUrl",
+                                code = "attachment_payload_too_large",
+                                message = "Decoded attachment payload exceeds the maximum AI input size.",
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+        if (aggregatePdfBytes > MaxAiPdfAggregateBytes) {
+            add(
+                AiAttachmentValidationIssueResponse(
+                    field = "images",
+                    code = "pdf_payload_total_too_large",
+                    message = "Combined decoded PDF payloads exceed the per-request limit.",
+                ),
+            )
+        }
+        if (aggregateInlineBytes > MaxAiInlineAggregateBytes) {
+            add(
+                AiAttachmentValidationIssueResponse(
+                    field = "images",
+                    code = "attachment_payload_total_too_large",
+                    message = "Combined decoded attachment payloads exceed the per-request limit.",
+                ),
+            )
         }
     }
     if (issues.isEmpty()) return true
     respond(
         HttpStatusCode.UnprocessableEntity,
-        mapOf(
-            "error" to mapOf(
-                "code" to "invalid_ai_attachment",
-                "message" to "One or more AI attachments are invalid.",
-                "issues" to issues,
+        AiAttachmentValidationResponse(
+            error = AiAttachmentValidationErrorResponse(
+                code = "invalid_ai_attachment",
+                message = "One or more AI attachments are invalid.",
+                issues = issues,
             ),
         ),
     )
     return false
 }
+
+@Serializable
+private data class AiAttachmentValidationResponse(
+    val error: AiAttachmentValidationErrorResponse,
+)
+
+@Serializable
+private data class AiAttachmentValidationErrorResponse(
+    val code: String,
+    val message: String,
+    val issues: List<AiAttachmentValidationIssueResponse>,
+)
+
+@Serializable
+private data class AiAttachmentValidationIssueResponse(
+    val field: String,
+    val code: String,
+    val message: String,
+)
+
+private fun AiAttachmentInputWire.measuredInlinePayloadBytes(): Long? = when (attachmentKind) {
+    ChatAttachmentKind.Image -> dataUrl.estimatedBase64PayloadBytes(expectedMediaTypePrefix = "image/")
+    ChatAttachmentKind.Pdf -> dataUrl.estimatedBase64PayloadBytes(expectedMediaType = "application/pdf")
+    ChatAttachmentKind.TextFile -> textContent.toByteArray(StandardCharsets.UTF_8).size.toLong()
+    else -> null
+}
+
+private fun String.estimatedBase64PayloadBytes(
+    expectedMediaTypePrefix: String = "",
+    expectedMediaType: String = "",
+): Long? {
+    if (!startsWith("data:", ignoreCase = true)) return null
+    val commaIndex = indexOf(',')
+    if (commaIndex <= "data:".length || commaIndex == lastIndex) return null
+    if (commaIndex > MaxInlineDataUrlMetadataChars) return null
+    val metadata = substring("data:".length, commaIndex)
+    val segments = metadata.split(';')
+    val mediaType = segments.firstOrNull().orEmpty()
+    val mediaTypeMatches = when {
+        expectedMediaType.isNotBlank() -> mediaType.equals(expectedMediaType, ignoreCase = true)
+        else -> mediaType.startsWith(expectedMediaTypePrefix, ignoreCase = true)
+    }
+    if (!mediaTypeMatches) return null
+    if (segments.none { segment -> segment.equals("base64", ignoreCase = true) }) return null
+
+    val payload = substring(commaIndex + 1)
+    val padding = payload.takeLastWhile { character -> character == '=' }.length
+    if (payload.isEmpty() || payload.length % 4 != 0) return null
+    if (padding > 2 || payload.dropLast(padding).contains('=')) return null
+    val unpaddedLength = payload.length - padding
+    val hasValidPadding = when (padding) {
+        0 -> unpaddedLength % 4 == 0
+        1 -> unpaddedLength % 4 == 3
+        2 -> unpaddedLength % 4 == 2
+        else -> false
+    }
+    if (!hasValidPadding) return null
+    if (payload.take(unpaddedLength).any { character -> !character.isBase64Character() }) return null
+    return (payload.length / 4L) * 3L - padding
+}
+
+private fun Char.isBase64Character(): Boolean =
+    this in 'A'..'Z' || this in 'a'..'z' || this in '0'..'9' || this == '+' || this == '/'
 
 private suspend fun ApplicationCall.requireIdempotencyKey(): String? {
     val value = request.header(IdempotencyHeader)
@@ -251,6 +398,16 @@ private fun AiChatActionsJob.toAcceptedResponse(): AiChatActionsJobAcceptedRespo
     )
 
 private const val IdempotencyHeader = "Idempotency-Key"
+private const val MaxAiPdfAttachments = 3
+private const val AiRequestBodyLimitBytes = 40L * 1024L * 1024L
+private const val MaxAiPdfAggregateBytes = 24L * 1024L * 1024L
+private const val MaxAiInlineAggregateBytes = 28L * 1024L * 1024L
+private const val MaxInlineDataUrlMetadataChars = 256
+private val InlineAttachmentKinds = setOf(
+    ChatAttachmentKind.Image,
+    ChatAttachmentKind.TextFile,
+    ChatAttachmentKind.Pdf,
+)
 private val IdempotencyKeyLengthRange = 8..128
 private val IdempotencyKeyPattern = Regex("[A-Za-z0-9._:-]+")
 

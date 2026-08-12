@@ -21,22 +21,28 @@ services:
         sync: false
       - key: LMSTUDIO_API_KEY
         sync: false
+      # Legacy compatibility only; ignored by Phase A runtime.
       - key: LMSTUDIO_MODEL
         value: qwen/qwen3.5-9b
+      # Active LM Studio visual extraction/OCR model.
       - key: LMSTUDIO_VISION_MODEL
         value: qwen/qwen3.5-9b
+      # Required for live final text chat and structured-action planning.
       - key: OPENROUTER_API_KEY
         sync: false
       - key: OPENROUTER_MODEL
         value: openai/gpt-oss-20b:free
+      # Legacy compatibility only; ignored by Phase A runtime.
       - key: OPENROUTER_VISION_MODELS
         value: google/gemma-4-26b-a4b-it:free,google/gemma-3-4b-it:free
       - key: AI_JOB_DEADLINE_MS
         value: 180000
       - key: AI_CONNECT_TIMEOUT_MS
         value: 5000
+      # LM Studio visual extraction/OCR request cap.
       - key: LMSTUDIO_REQUEST_TIMEOUT_MS
         value: 90000
+      # OpenRouter text/action request cap.
       - key: OPENROUTER_REQUEST_TIMEOUT_MS
         value: 60000
       - key: AI_FINALIZATION_RESERVE_MS

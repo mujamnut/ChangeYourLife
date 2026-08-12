@@ -55,6 +55,17 @@ internal class AiRequestDeadline private constructor(
     internal fun availableRemoteWorkMillis(): Long =
         (remainingMillis() - finalizationReserveMs).coerceAtLeast(0L)
 
+    internal fun checkpoint(operation: String) {
+        if (Thread.currentThread().isInterrupted) {
+            throw InterruptedException("AI work was interrupted during $operation.")
+        }
+        if (availableRemoteWorkMillis() <= 0L) {
+            throw AiDeadlineExceededException(
+                "AI job deadline exhausted during $operation.",
+            )
+        }
+    }
+
     private fun remainingMillis(): Long =
         ((deadlineNanos - nanoTime()).coerceAtLeast(0L) / NanosPerMillisecond)
 

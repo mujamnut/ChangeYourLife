@@ -2,7 +2,7 @@
 agp = "8.10.1"
 kotlin = "2.3.21"
 ksp = "2.3.7"
-ktor = "3.5.0"
+ktor = "3.5.1"
 composeBom = "2026.05.00"
 androidxCore = "1.18.0"
 activityCompose = "1.13.0"
@@ -68,6 +68,7 @@ ktor-server-status-pages = { module = "io.ktor:ktor-server-status-pages", versio
 ktor-server-cors = { module = "io.ktor:ktor-server-cors", version.ref = "ktor" }
 ktor-server-auth = { module = "io.ktor:ktor-server-auth", version.ref = "ktor" }
 ktor-server-auth-jwt = { module = "io.ktor:ktor-server-auth-jwt", version.ref = "ktor" }
+ktor-server-body-limit = { module = "io.ktor:ktor-server-body-limit", version.ref = "ktor" }
 ktor-server-test-host = { module = "io.ktor:ktor-server-test-host", version.ref = "ktor" }
 logback-classic = { module = "ch.qos.logback:logback-classic", version.ref = "logback" }
 hikari-cp = { module = "com.zaxxer:HikariCP", version.ref = "hikari" }
