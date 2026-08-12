@@ -1212,8 +1212,6 @@ class ApplicationTest {
             lmStudioApiKey = null,
             lmStudioModel = "qwen/qwen3.5-9b",
             lmStudioVisionModels = listOf("qwen/qwen3.5-9b"),
-            glmApiKey = null,
-            geminiApiKey = null,
             openRouterApiKey = null,
             openRouterModel = "test-model",
             openRouterVisionModels = listOf("test-vision-model"),

@@ -25,6 +25,7 @@ import org.slf4j.LoggerFactory
 
 class WebSearchService(
     private val config: WebSearchConfig,
+    connectTimeoutMs: Long = config.timeoutMs,
 ) {
     private val logger = LoggerFactory.getLogger(WebSearchService::class.java)
     private val json = Json {
@@ -33,11 +34,15 @@ class WebSearchService(
         coerceInputValues = true
     }
     private val httpClient = HttpClient.newBuilder()
-        .connectTimeout(Duration.ofMillis(config.timeoutMs))
+        .connectTimeout(Duration.ofMillis(connectTimeoutMs))
         .build()
     private val cache = ConcurrentHashMap<String, CachedWebSearch>()
 
-    fun search(query: String, limit: Int = DefaultResultLimit): WebSearchContext {
+    internal fun search(
+        query: String,
+        limit: Int = DefaultResultLimit,
+        deadline: AiRequestDeadline? = null,
+    ): WebSearchContext {
         val normalizedQuery = query.normalizeWebSearchQuery()
         if (normalizedQuery.isBlank()) {
             return WebSearchContext(query = query, status = "skipped")
@@ -69,13 +74,14 @@ class WebSearchService(
                 logger.info("Web search started: provider={}, query='{}'", provider, queryCandidate.take(160))
                 val context = runCatching {
                     when (provider) {
-                        "jina" -> searchJina(queryCandidate, cappedLimit)
-                        "duckduckgo_lite" -> searchDuckDuckGoLite(queryCandidate, cappedLimit)
-                        "exa" -> searchExa(queryCandidate, cappedLimit)
-                        "tavily" -> searchTavily(queryCandidate, cappedLimit)
+                        "jina" -> searchJina(queryCandidate, cappedLimit, deadline)
+                        "duckduckgo_lite" -> searchDuckDuckGoLite(queryCandidate, cappedLimit, deadline)
+                        "exa" -> searchExa(queryCandidate, cappedLimit, deadline)
+                        "tavily" -> searchTavily(queryCandidate, cappedLimit, deadline)
                         else -> WebSearchContext(query = queryCandidate, status = "skipped")
                     }
                 }.onFailure { error ->
+                    error.rethrowIfAiWorkMustStop()
                     val message = error.compactWebSearchError()
                     failures += "$provider/$queryCandidate: $message"
                     logger.warn("Web search provider failed: provider={}, query='{}', error={}", provider, queryCandidate.take(160), message)
@@ -112,10 +118,16 @@ class WebSearchService(
         )
     }
 
-    private fun searchJina(query: String, limit: Int): WebSearchContext {
+    private fun searchJina(
+        query: String,
+        limit: Int,
+        deadline: AiRequestDeadline?,
+    ): WebSearchContext {
+        val providerTimeoutMs = minOf(config.timeoutMs, JinaSearchTimeoutMillis)
+        val budget = webSearchRequestBudget("jina", providerTimeoutMs, deadline)
         val request = HttpRequest.newBuilder()
             .uri(URI.create("https://s.jina.ai/?q=${query.urlEncoded()}"))
-            .timeout(Duration.ofMillis(minOf(config.timeoutMs, JinaSearchTimeoutMillis)))
+            .timeout(budget.timeout)
             .header("Accept", "application/json")
             .apply {
                 if (!config.jinaApiKey.isNullOrBlank()) {
@@ -124,7 +136,12 @@ class WebSearchService(
             }
             .GET()
             .build()
-        val response = httpClient.send(request, HttpResponse.BodyHandlers.ofString())
+        val response = httpClient.sendWithinAiBudget(
+            request = request,
+            bodyHandler = HttpResponse.BodyHandlers.ofString(),
+            budget = budget,
+            provider = "web search/jina",
+        )
         if (response.statusCode() !in 200..299) {
             throw IllegalStateException("HTTP ${response.statusCode()} - ${response.body().take(MaxErrorBodyChars)}")
         }
@@ -136,15 +153,26 @@ class WebSearchService(
         )
     }
 
-    private fun searchDuckDuckGoLite(query: String, limit: Int): WebSearchContext {
+    private fun searchDuckDuckGoLite(
+        query: String,
+        limit: Int,
+        deadline: AiRequestDeadline?,
+    ): WebSearchContext {
+        val providerTimeoutMs = minOf(config.timeoutMs, DuckDuckGoSearchTimeoutMillis)
+        val budget = webSearchRequestBudget("duckduckgo_lite", providerTimeoutMs, deadline)
         val request = HttpRequest.newBuilder()
             .uri(URI.create("https://lite.duckduckgo.com/lite/?q=${query.urlEncoded()}"))
-            .timeout(Duration.ofMillis(minOf(config.timeoutMs, DuckDuckGoSearchTimeoutMillis)))
+            .timeout(budget.timeout)
             .header("Accept", "text/html,application/xhtml+xml")
             .header("User-Agent", "CYLBot/1.0 (+https://changeyourlife.app)")
             .GET()
             .build()
-        val response = httpClient.send(request, HttpResponse.BodyHandlers.ofString())
+        val response = httpClient.sendWithinAiBudget(
+            request = request,
+            bodyHandler = HttpResponse.BodyHandlers.ofString(),
+            budget = budget,
+            provider = "web search/duckduckgo_lite",
+        )
         if (response.statusCode() !in 200..299) {
             throw IllegalStateException("HTTP ${response.statusCode()} - ${response.body().take(MaxErrorBodyChars)}")
         }
@@ -156,7 +184,12 @@ class WebSearchService(
         )
     }
 
-    private fun searchExa(query: String, limit: Int): WebSearchContext {
+    private fun searchExa(
+        query: String,
+        limit: Int,
+        deadline: AiRequestDeadline?,
+    ): WebSearchContext {
+        val budget = webSearchRequestBudget("exa", config.timeoutMs, deadline)
         val body = buildJsonObject {
             put("query", query)
             put("numResults", limit)
@@ -170,13 +203,18 @@ class WebSearchService(
         }
         val request = HttpRequest.newBuilder()
             .uri(URI.create("https://api.exa.ai/search"))
-            .timeout(Duration.ofMillis(config.timeoutMs))
+            .timeout(budget.timeout)
             .header("Content-Type", "application/json")
             .header("Accept", "application/json")
             .header("x-api-key", config.exaApiKey.orEmpty())
             .POST(HttpRequest.BodyPublishers.ofString(json.encodeToString(body)))
             .build()
-        val response = httpClient.send(request, HttpResponse.BodyHandlers.ofString())
+        val response = httpClient.sendWithinAiBudget(
+            request = request,
+            bodyHandler = HttpResponse.BodyHandlers.ofString(),
+            budget = budget,
+            provider = "web search/exa",
+        )
         if (response.statusCode() !in 200..299) {
             throw IllegalStateException("HTTP ${response.statusCode()} - ${response.body().take(MaxErrorBodyChars)}")
         }
@@ -188,7 +226,12 @@ class WebSearchService(
         )
     }
 
-    private fun searchTavily(query: String, limit: Int): WebSearchContext {
+    private fun searchTavily(
+        query: String,
+        limit: Int,
+        deadline: AiRequestDeadline?,
+    ): WebSearchContext {
+        val budget = webSearchRequestBudget("tavily", config.timeoutMs, deadline)
         val body = buildJsonObject {
             put("api_key", config.tavilyApiKey.orEmpty())
             put("query", query)
@@ -199,12 +242,17 @@ class WebSearchService(
         }
         val request = HttpRequest.newBuilder()
             .uri(URI.create("https://api.tavily.com/search"))
-            .timeout(Duration.ofMillis(config.timeoutMs))
+            .timeout(budget.timeout)
             .header("Content-Type", "application/json")
             .header("Accept", "application/json")
             .POST(HttpRequest.BodyPublishers.ofString(json.encodeToString(body)))
             .build()
-        val response = httpClient.send(request, HttpResponse.BodyHandlers.ofString())
+        val response = httpClient.sendWithinAiBudget(
+            request = request,
+            bodyHandler = HttpResponse.BodyHandlers.ofString(),
+            budget = budget,
+            provider = "web search/tavily",
+        )
         if (response.statusCode() !in 200..299) {
             throw IllegalStateException("HTTP ${response.statusCode()} - ${response.body().take(MaxErrorBodyChars)}")
         }
@@ -215,6 +263,16 @@ class WebSearchService(
             results = parseSearchResults(response.body(), provider = "tavily", limit = limit),
         )
     }
+
+    private fun webSearchRequestBudget(
+        provider: String,
+        providerLimitMs: Long,
+        deadline: AiRequestDeadline?,
+    ): AiHttpRequestBudget = deadline?.requestBudget("web search/$provider", providerLimitMs)
+        ?: AiHttpRequestBudget(
+            timeout = Duration.ofMillis(providerLimitMs),
+            isDeadlineBound = false,
+        )
 
     private fun parseSearchResults(body: String, provider: String, limit: Int): List<WebSearchResult> {
         val root = runCatching { json.parseToJsonElement(body) }.getOrNull()

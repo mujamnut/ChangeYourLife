@@ -19,7 +19,14 @@ sdk.dir=C\:/Users/<your-user>/AppData/Local/Android/Sdk
 # OPENROUTER_MODEL=openai/gpt-oss-20b:free
 # Optional OpenRouter image-reading models for AI chat attachments. Must support image input.
 # Backend will try these in order until one succeeds.
-# OPENROUTER_VISION_MODELS=google/gemma-4-26b-a4b-it:free,google/gemma-3-4b-it:free,google/gemini-2.0-flash-exp:free
+# OPENROUTER_VISION_MODELS=google/gemma-4-26b-a4b-it:free,google/gemma-3-4b-it:free
+
+# Optional AI deadline policy. Every remote attempt is capped by the shared remaining budget.
+# AI_JOB_DEADLINE_MS=180000
+# AI_CONNECT_TIMEOUT_MS=5000
+# LMSTUDIO_REQUEST_TIMEOUT_MS=90000
+# OPENROUTER_REQUEST_TIMEOUT_MS=60000
+# AI_FINALIZATION_RESERVE_MS=10000
 
 # Optional AI web source.
 # Android chat settings decide per-message whether web search is used.

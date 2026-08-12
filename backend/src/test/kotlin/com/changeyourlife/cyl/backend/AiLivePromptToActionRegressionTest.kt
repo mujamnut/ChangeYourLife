@@ -20,11 +20,10 @@ class AiLivePromptToActionRegressionTest {
             lmStudioApiKey = config.lmStudioApiKey,
             lmStudioModel = config.lmStudioModel,
             lmStudioVisionModels = config.lmStudioVisionModels,
-            glmApiKey = config.glmApiKey,
-            geminiApiKey = config.geminiApiKey,
             openRouterApiKey = config.openRouterApiKey,
             openRouterModel = config.openRouterModel,
             openRouterVisionModels = config.openRouterVisionModels,
+            timeoutConfig = config.aiTimeouts,
         )
         assumeTrue(
             "Configure LMSTUDIO_BASE_URL or a supported provider API key before running live regressions.",

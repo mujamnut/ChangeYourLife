@@ -65,10 +65,26 @@ For OpenRouter fallback, add this to `local.properties` and restart the backend:
 ```properties
 OPENROUTER_API_KEY=sk-or-v1-your-key-here
 OPENROUTER_MODEL=openai/gpt-oss-20b:free
-OPENROUTER_VISION_MODELS=google/gemma-4-26b-a4b-it:free,google/gemma-3-4b-it:free,google/gemini-2.0-flash-exp:free
+OPENROUTER_VISION_MODELS=google/gemma-4-26b-a4b-it:free,google/gemma-3-4b-it:free
 ```
 
-The backend uses LM Studio first for chat/action generation and image reading when `LMSTUDIO_BASE_URL` is present, then falls back to OpenRouter, Gemini, GLM, and sandbox mode.
+Completion generation tries LM Studio first and then OpenRouter. Image reading uses LM Studio when it is configured; otherwise it uses OpenRouter. Sandbox mode is used only when neither live completion provider is configured.
+
+### AI timeout policy
+
+Remote AI work uses one shared deadline instead of restarting a full timeout for every provider or structured-output attempt. The default policy is:
+
+```properties
+AI_JOB_DEADLINE_MS=180000
+AI_CONNECT_TIMEOUT_MS=5000
+LMSTUDIO_REQUEST_TIMEOUT_MS=90000
+OPENROUTER_REQUEST_TIMEOUT_MS=60000
+AI_FINALIZATION_RESERVE_MS=10000
+```
+
+Before each remote request, the backend calculates `min(provider request limit, remaining job time - finalization reserve)`. Vision retries, optional web search, LM Studio/OpenRouter fallback, and structured tool/JSON transports therefore consume the same budget. The backend also cancels an asynchronous HTTP future when this budget expires, which bounds the full response body even if a provider sends headers and then stalls. Once only the reserve remains, no new remote attempt starts. The reserve leaves time to validate and persist the result before the Android polling deadline.
+
+This is a deadline for remote work, not a hard process kill: local parsing, validation, and persistence use the reserved margin. The configuration loader clamps the total deadline to 30–600 seconds, connect timeout to 1–30 seconds, provider caps to 5 seconds–the total deadline, and reserve to 1–60 seconds while keeping at least one second for work. It also accepts `LM_STUDIO_REQUEST_TIMEOUT_MS` as an alias for `LMSTUDIO_REQUEST_TIMEOUT_MS`. Restart the backend after changing any timeout value.
 
 ### Live AI action regression
 

@@ -2,6 +2,7 @@ package com.changeyourlife.cyl.backend.service
 
 import com.changeyourlife.cyl.aicontract.AiActionContractSchema
 import com.changeyourlife.cyl.aicontract.CYL_ACTION_SCHEMA_VERSION
+import com.changeyourlife.cyl.backend.config.AiTimeoutConfig
 import com.changeyourlife.cyl.backend.domain.AiJobPhases
 import com.changeyourlife.cyl.backend.model.ai.AiActionValidationIssue
 import com.changeyourlife.cyl.backend.model.ai.AiImageInput
@@ -37,15 +38,13 @@ class AiService(
     private val lmStudioApiKey: String? = null,
     private val lmStudioModel: String = "qwen/qwen3.5-9b",
     private val lmStudioVisionModels: List<String> = listOf("qwen/qwen3.5-9b"),
-    private val glmApiKey: String? = null,
-    private val geminiApiKey: String? = null,
     private val openRouterApiKey: String? = null,
     private val openRouterModel: String = "openai/gpt-oss-20b:free",
     private val openRouterVisionModels: List<String> = listOf(
         "google/gemma-4-26b-a4b-it:free",
         "google/gemma-3-4b-it:free",
-        "google/gemini-2.0-flash-exp:free",
     ),
+    private val timeoutConfig: AiTimeoutConfig = AiTimeoutConfig(),
     private val actionPlanner: AiActionPlanner = AiActionPlanner(),
     private val actionSchemaValidator: AiActionSchemaValidator = AiActionSchemaValidator(),
     private val modelActionNormalizer: AiModelActionNormalizer = AiModelActionNormalizer(actionSchemaValidator),
@@ -68,7 +67,7 @@ class AiService(
     }
 
     private val httpClient = HttpClient.newBuilder()
-        .connectTimeout(Duration.ofSeconds(30))
+        .connectTimeout(Duration.ofMillis(timeoutConfig.connectTimeoutMs))
         .build()
 
     private val completionEndpoints: List<CompletionEndpoint> = buildList {
@@ -79,6 +78,7 @@ class AiService(
                     model = lmStudioModel.ifBlank { DefaultLmStudioModel },
                     url = lmStudioBaseUrl.orEmpty().toChatCompletionsUrl(),
                     apiKey = lmStudioApiKey,
+                    requestTimeoutMs = timeoutConfig.lmStudioRequestTimeoutMs,
                 ),
             )
         }
@@ -89,26 +89,7 @@ class AiService(
                     model = openRouterModel.ifBlank { "openai/gpt-oss-20b:free" },
                     url = OpenRouterCompletionsUrl,
                     apiKey = openRouterApiKey,
-                ),
-            )
-        }
-        if (!geminiApiKey.isNullOrBlank()) {
-            add(
-                CompletionEndpoint(
-                    provider = "gemini",
-                    model = "gemini-3.5-flash",
-                    url = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-                    apiKey = geminiApiKey,
-                ),
-            )
-        }
-        if (!glmApiKey.isNullOrBlank()) {
-            add(
-                CompletionEndpoint(
-                    provider = "glm",
-                    model = "glm-4-flash",
-                    url = "https://open.bigmodel.cn/api/paas/v4/chat/completions",
-                    apiKey = glmApiKey,
+                    requestTimeoutMs = timeoutConfig.openRouterRequestTimeoutMs,
                 ),
             )
         }
@@ -129,17 +110,19 @@ class AiService(
         messages: List<ChatMessage>,
         images: List<AiImageInput> = emptyList(),
     ): String {
-        val preparedMessages = messages.withImageContext(images)
-        completionProvider?.invoke(preparedMessages, false, 0.7)?.let { reply -> return reply }
-        if (isMockMode) {
-            val userMsg = preparedMessages.lastOrNull { it.role == "user" }?.content.orEmpty()
-            return "[AI Sandbox Mode - No API Key]\nHere is a simulated response to your question: \"$userMsg\". Add LMSTUDIO_BASE_URL or OPENROUTER_API_KEY to enable live AI answers."
-        }
-
+        val deadline = AiRequestDeadline.start(timeoutConfig)
         return try {
-            chatCompletions(preparedMessages, temperature = 0.7)
-        } catch (e: Exception) {
-            "Error contacting AI completions endpoint: ${e.localizedMessage}"
+            val preparedMessages = messages.withImageContext(images, deadline)
+            completionProvider?.invoke(preparedMessages, false, 0.7)?.let { reply -> return reply }
+            if (isMockMode) {
+                val userMsg = preparedMessages.lastOrNull { it.role == "user" }?.content.orEmpty()
+                "[AI Sandbox Mode - No API Key]\nHere is a simulated response to your question: \"$userMsg\". Add LMSTUDIO_BASE_URL or OPENROUTER_API_KEY to enable live AI answers."
+            } else {
+                chatCompletions(preparedMessages, temperature = 0.7, deadline = deadline)
+            }
+        } catch (error: Exception) {
+            error.rethrowIfAiExecutionCancelled()
+            "Error contacting AI completions endpoint: ${error.localizedMessage}"
         }
     }
 
@@ -289,13 +272,14 @@ class AiService(
         webSearchQuery: String = "",
         progress: AiJobProgressSink? = null,
     ): AiActionResult {
+        val deadline = AiRequestDeadline.start(timeoutConfig)
         if (images.isNotEmpty()) {
             progress?.invoke(
                 AiJobPhases.VisionProcessing,
                 initialDiagnosticsFor(images).copy(phase = AiJobPhases.VisionProcessing),
             )
         }
-        val attachmentPreparedMessages = messages.withAttachmentContext(images)
+        val attachmentPreparedMessages = messages.withAttachmentContext(images, deadline)
         val userMessage = messages.lastOrNull { message -> message.role.equals("user", ignoreCase = true) }
             ?.content
             .orEmpty()
@@ -311,7 +295,10 @@ class AiService(
                     webSearchStatus = "running",
                 ),
             )
-            val webContext = webSearchService?.search(searchQuery)
+            val webContext = webSearchService?.search(
+                query = searchQuery,
+                deadline = deadline,
+            )
                 ?: WebSearchContext(query = searchQuery, status = "disabled")
             logger.info(
                 "AI web search prepared: requested={}, auto={}, status={}, provider={}, results={}, query='{}'",
@@ -341,6 +328,7 @@ class AiService(
                 tasks = tasks,
                 clientDate = clientDate,
                 clientTimezone = clientTimezone,
+                deadline = deadline,
             ).ifBlank { "I received your message, but the AI returned an empty reply." }
         }
 
@@ -384,6 +372,7 @@ class AiService(
         tasks: List<AiTaskContext>,
         clientDate: String,
         clientTimezone: String,
+        deadline: AiRequestDeadline,
     ): String {
         val actionMessages = buildActionPlannerMessages(
             messages = messages,
@@ -393,7 +382,7 @@ class AiService(
             clientTimezone = clientTimezone,
         )
         completionProvider?.invoke(actionMessages, true, 0.15)?.let { reply -> return reply }
-        return chatCompletionsForActions(actionMessages, temperature = 0.15)
+        return chatCompletionsForActions(actionMessages, temperature = 0.15, deadline = deadline)
     }
 
     private fun buildActionPlannerMessages(
@@ -614,8 +603,10 @@ class AiService(
         val warning: String = "",
     )
 
-    private fun List<ChatMessage>.withImageContext(images: List<AiImageInput>): List<ChatMessage> =
-        withAttachmentContext(images).messages
+    private fun List<ChatMessage>.withImageContext(
+        images: List<AiImageInput>,
+        deadline: AiRequestDeadline,
+    ): List<ChatMessage> = withAttachmentContext(images, deadline).messages
 
     private fun List<ChatMessage>.withWebSearchContext(webContext: WebSearchContext): List<ChatMessage> {
         val promptContext = webContext.toPromptContext()
@@ -659,8 +650,11 @@ class AiService(
         return WebSearchTriggerPhrases.any { trigger -> lower.contains(trigger) }
     }
 
-    private fun List<ChatMessage>.withAttachmentContext(images: List<AiImageInput>): PreparedAttachmentContext {
-        val context = buildAttachmentContext(images)
+    private fun List<ChatMessage>.withAttachmentContext(
+        images: List<AiImageInput>,
+        deadline: AiRequestDeadline,
+    ): PreparedAttachmentContext {
+        val context = buildAttachmentContext(images, deadline)
         if (context.content.isBlank()) {
             return PreparedAttachmentContext(
                 messages = this,
@@ -691,7 +685,10 @@ class AiService(
         )
     }
 
-    private fun buildAttachmentContext(images: List<AiImageInput>): AttachmentContext {
+    private fun buildAttachmentContext(
+        images: List<AiImageInput>,
+        deadline: AiRequestDeadline,
+    ): AttachmentContext {
         val validImages = images
             .asSequence()
             .filter { image ->
@@ -718,7 +715,7 @@ class AiService(
 
         val visionResult = when {
             validImages.isEmpty() -> VisionAnalysisResult(status = "not_attempted")
-            else -> analyzeImagesWithVisionFallback(validImages)
+            else -> analyzeImagesWithVisionFallback(validImages, deadline)
         }
         val pdfResult = pdfAttachmentTextExtractor.extract(pdfFiles)
         val textSummary = textFiles.joinToString(separator = "\n\n") { file ->
@@ -797,18 +794,21 @@ class AiService(
         )
     }
 
-    private fun analyzeImagesWithVisionFallback(images: List<AiImageInput>): VisionAnalysisResult {
+    private fun analyzeImagesWithVisionFallback(
+        images: List<AiImageInput>,
+        deadline: AiRequestDeadline,
+    ): VisionAnalysisResult {
         val failures = mutableListOf<String>()
 
         if (!lmStudioBaseUrl.isNullOrBlank()) {
-            val lmStudioResult = analyzeImagesWithLmStudioFallback(images)
+            val lmStudioResult = analyzeImagesWithLmStudioFallback(images, deadline)
             if (lmStudioResult.status != "failed") return lmStudioResult
             failures += lmStudioResult.content
             return lmStudioResult
         }
 
         if (!openRouterApiKey.isNullOrBlank()) {
-            val openRouterResult = analyzeImagesWithOpenRouterFallback(images)
+            val openRouterResult = analyzeImagesWithOpenRouterFallback(images, deadline)
             if (openRouterResult.status != "failed") {
                 return openRouterResult
             }
@@ -831,7 +831,10 @@ class AiService(
         )
     }
 
-    private fun analyzeImagesWithLmStudioFallback(images: List<AiImageInput>): VisionAnalysisResult {
+    private fun analyzeImagesWithLmStudioFallback(
+        images: List<AiImageInput>,
+        deadline: AiRequestDeadline,
+    ): VisionAnalysisResult {
         val baseUrl = lmStudioBaseUrl?.trim().orEmpty()
         val completionsUrl = baseUrl.toChatCompletionsUrl()
         val models = lmStudioVisionModels
@@ -850,6 +853,9 @@ class AiService(
                     defaultModel = DefaultLmStudioVisionModels.first(),
                     completionsUrl = completionsUrl,
                     apiKey = lmStudioApiKey.orEmpty(),
+                    provider = "lmstudio",
+                    requestTimeoutMs = timeoutConfig.lmStudioRequestTimeoutMs,
+                    deadline = deadline,
                     stream = true,
                 )
             }.onSuccess { content ->
@@ -866,6 +872,7 @@ class AiService(
                 }
                 failures += "$model: empty response"
             }.onFailure { error ->
+                error.rethrowIfAiWorkMustStop()
                 failures += "$model: ${error.compactVisionError()}"
             }
         }
@@ -886,7 +893,10 @@ class AiService(
         )
     }
 
-    private fun analyzeImagesWithOpenRouterFallback(images: List<AiImageInput>): VisionAnalysisResult {
+    private fun analyzeImagesWithOpenRouterFallback(
+        images: List<AiImageInput>,
+        deadline: AiRequestDeadline,
+    ): VisionAnalysisResult {
         val models = openRouterVisionModels
             .ifEmpty { DefaultVisionModels }
             .map { model -> model.trim() }
@@ -900,6 +910,7 @@ class AiService(
                 analyzeImagesWithOpenRouter(
                     images = images,
                     model = model,
+                    deadline = deadline,
                 )
             }.onSuccess { content ->
                 if (content.isNotBlank()) {
@@ -915,6 +926,7 @@ class AiService(
                 }
                 failures += "$model: empty response"
             }.onFailure { error ->
+                error.rethrowIfAiWorkMustStop()
                 failures += "$model: ${error.compactVisionError()}"
             }
         }
@@ -936,12 +948,16 @@ class AiService(
     private fun analyzeImagesWithOpenRouter(
         images: List<AiImageInput>,
         model: String,
+        deadline: AiRequestDeadline,
     ): String = analyzeImagesWithVisionProvider(
         images = images,
         model = model,
         defaultModel = DefaultVisionModels.first(),
         completionsUrl = OpenRouterCompletionsUrl,
         apiKey = openRouterApiKey.orEmpty(),
+        provider = "openrouter",
+        requestTimeoutMs = timeoutConfig.openRouterRequestTimeoutMs,
+        deadline = deadline,
     )
 
     private fun analyzeImagesWithVisionProvider(
@@ -950,6 +966,9 @@ class AiService(
         defaultModel: String,
         completionsUrl: String,
         apiKey: String,
+        provider: String,
+        requestTimeoutMs: Long,
+        deadline: AiRequestDeadline,
         stream: Boolean = false,
     ): String {
         val visionImages = images.map { image -> image.optimizedForVision() }
@@ -1023,23 +1042,34 @@ class AiService(
             )
         }.toString()
 
-        val requestBuilder = HttpRequest.newBuilder()
-            .uri(URI.create(completionsUrl))
-            .header("Content-Type", "application/json")
-            .header("HTTP-Referer", "https://changeyourlife.local")
-            .header("X-Title", "ChangeYourLife")
-            .timeout(AiRequestTimeout)
-            .POST(HttpRequest.BodyPublishers.ofString(body))
-        if (apiKey.isNotBlank()) {
-            requestBuilder.header("Authorization", "Bearer $apiKey")
+        fun buildRequest(): Pair<HttpRequest, AiHttpRequestBudget> {
+            val budget = deadline.requestBudget(provider, requestTimeoutMs)
+            val requestBuilder = HttpRequest.newBuilder()
+                .uri(URI.create(completionsUrl))
+                .header("Content-Type", "application/json")
+                .header("HTTP-Referer", "https://changeyourlife.local")
+                .header("X-Title", "ChangeYourLife")
+                .timeout(budget.timeout)
+                .POST(HttpRequest.BodyPublishers.ofString(body))
+            if (apiKey.isNotBlank()) {
+                requestBuilder.header("Authorization", "Bearer $apiKey")
+            }
+            return requestBuilder.build() to budget
         }
-        val request = requestBuilder.build()
 
         var lastError: Exception? = null
         repeat(VisionRequestMaxAttempts) { attempt ->
+            val (request, budget) = buildRequest()
             val startedAt = System.nanoTime()
             if (stream) {
-                val response = httpClient.send(request, HttpResponse.BodyHandlers.ofLines())
+                // The response is small and is not streamed onward to the client. Buffering it
+                // also lets the future-based deadline cover the complete SSE body.
+                val response = httpClient.sendWithinAiBudget(
+                    request = request,
+                    bodyHandler = HttpResponse.BodyHandlers.ofString(),
+                    budget = budget,
+                    provider = provider,
+                )
                 if (response.statusCode() == 200) {
                     val streamContent = response.body().readVisionStreamContent()
                     logger.info(
@@ -1075,7 +1105,12 @@ class AiService(
                     throw error
                 }
             } else {
-                val response = httpClient.send(request, HttpResponse.BodyHandlers.ofString())
+                val response = httpClient.sendWithinAiBudget(
+                    request = request,
+                    bodyHandler = HttpResponse.BodyHandlers.ofString(),
+                    budget = budget,
+                    provider = provider,
+                )
                 if (response.statusCode() == 200) {
                     val apiResponse = json.decodeFromString<ApiResponse>(response.body())
                     val message = apiResponse.choices.firstOrNull()?.message
@@ -1115,7 +1150,9 @@ class AiService(
                     throw error
                 }
             }
-            Thread.sleep(VisionRetryDelayMillis * (attempt + 1))
+            val retryDelayMs = VisionRetryDelayMillis * (attempt + 1)
+            deadline.requireRetryDelay(provider, retryDelayMs)
+            Thread.sleep(retryDelayMs)
         }
         throw lastError ?: Exception("Vision request failed.")
     }
@@ -1125,25 +1162,22 @@ class AiService(
         val reasoning: String,
     )
 
-    private fun java.util.stream.Stream<String>.readVisionStreamContent(): VisionStreamContent {
+    private fun String.readVisionStreamContent(): VisionStreamContent {
         val content = StringBuilder()
         val reasoning = StringBuilder()
-        use { lines ->
-            val iterator = lines.iterator()
-            while (iterator.hasNext()) {
-                val line = iterator.next().trim()
-                val payload = when {
-                    line.startsWith("data:", ignoreCase = true) -> line.removePrefix("data:").trim()
-                    line.startsWith("{") -> line
-                    else -> continue
-                }
-                if (payload == "[DONE]") break
-                appendVisionStreamPayload(
-                    payload = payload,
-                    content = content,
-                    reasoning = reasoning,
-                )
+        for (rawLine in lineSequence()) {
+            val line = rawLine.trim()
+            val payload = when {
+                line.startsWith("data:", ignoreCase = true) -> line.removePrefix("data:").trim()
+                line.startsWith("{") -> line
+                else -> continue
             }
+            if (payload == "[DONE]") break
+            appendVisionStreamPayload(
+                payload = payload,
+                content = content,
+                reasoning = reasoning,
+            )
         }
         return VisionStreamContent(
             content = content.toString().trim(),
@@ -1175,15 +1209,12 @@ class AiService(
         }
     }
 
-    private fun java.util.stream.Stream<String>.readLinesForError(): String =
-        use { lines ->
-            lines
-                .limit(20)
-                .toList()
-                .joinToString(separator = " ")
-                .replace(Regex("\\s+"), " ")
-                .take(480)
-        }
+    private fun String.readLinesForError(): String =
+        lineSequence()
+            .take(20)
+            .joinToString(separator = " ")
+            .replace(Regex("\\s+"), " ")
+            .take(480)
 
     private fun AiImageInput.optimizedForVision(): AiImageInput {
         if (!dataUrl.startsWith("data:image/", ignoreCase = true)) return this
@@ -1296,6 +1327,7 @@ class AiService(
     private fun chatCompletionsForActions(
         messages: List<ChatMessage>,
         temperature: Double,
+        deadline: AiRequestDeadline,
     ): String {
         val failures = mutableListOf<String>()
         completionEndpoints.forEach { endpoint ->
@@ -1304,11 +1336,13 @@ class AiService(
                     endpoint = endpoint,
                     messages = messages,
                     temperature = temperature,
+                    deadline = deadline,
                 )
             }.onSuccess { content ->
                 if (content.isNotBlank()) return content
                 failures += "${endpoint.provider}/${endpoint.model}: empty structured response"
             }.onFailure { error ->
+                error.rethrowIfAiWorkMustStop()
                 failures += "${endpoint.provider}/${endpoint.model}: ${error.compactVisionError()}"
             }
         }
@@ -1321,6 +1355,7 @@ class AiService(
         endpoint: CompletionEndpoint,
         messages: List<ChatMessage>,
         temperature: Double,
+        deadline: AiRequestDeadline,
     ): String {
         val schema = AiActionContractSchema.structuredResponseJsonSchema()
         val attempts = listOf(
@@ -1372,7 +1407,7 @@ class AiService(
 
         var lastFailure = "empty structured response"
         attempts.forEachIndexed { index, attempt ->
-            val response = sendApiRequest(endpoint, attempt.request)
+            val response = sendApiRequest(endpoint, attempt.request, deadline)
             if (response.statusCode() == 200) {
                 val apiResponse = runCatching {
                     json.decodeFromString<ApiResponse>(response.body())
@@ -1443,18 +1478,25 @@ class AiService(
     private fun sendApiRequest(
         endpoint: CompletionEndpoint,
         requestBody: ApiRequest,
+        deadline: AiRequestDeadline,
     ): HttpResponse<String> {
+        val budget = deadline.requestBudget(endpoint.provider, endpoint.requestTimeoutMs)
         val requestBuilder = HttpRequest.newBuilder()
             .uri(URI.create(endpoint.url))
             .header("Content-Type", "application/json")
             .header("HTTP-Referer", "https://changeyourlife.local")
             .header("X-Title", "ChangeYourLife")
-            .timeout(AiRequestTimeout)
+            .timeout(budget.timeout)
             .POST(HttpRequest.BodyPublishers.ofString(requestJson.encodeToString(requestBody)))
         if (!endpoint.apiKey.isNullOrBlank()) {
             requestBuilder.header("Authorization", "Bearer ${endpoint.apiKey}")
         }
-        return httpClient.send(requestBuilder.build(), HttpResponse.BodyHandlers.ofString())
+        return httpClient.sendWithinAiBudget(
+            request = requestBuilder.build(),
+            bodyHandler = HttpResponse.BodyHandlers.ofString(),
+            budget = budget,
+            provider = endpoint.provider,
+        )
     }
 
     private fun HttpResponse<String>.isStructuredCapabilityRejection(): Boolean {
@@ -1483,17 +1525,20 @@ class AiService(
 
     private fun chatCompletionsJson(
         messages: List<ChatMessage>,
+        deadline: AiRequestDeadline,
         temperature: Double = 0.2,
     ): String = chatCompletions(
         messages = messages,
         temperature = temperature,
         responseFormat = ApiResponseFormat("json_object"),
+        deadline = deadline,
     )
 
     private fun chatCompletions(
         messages: List<ChatMessage>,
         temperature: Double = 0.7,
         responseFormat: ApiResponseFormat? = null,
+        deadline: AiRequestDeadline,
     ): String {
         val failures = mutableListOf<String>()
         completionEndpoints.forEach { endpoint ->
@@ -1503,11 +1548,13 @@ class AiService(
                     messages = messages,
                     temperature = temperature,
                     responseFormat = responseFormat,
+                    deadline = deadline,
                 )
             }.onSuccess { content ->
                 if (content.isNotBlank()) return content
                 failures += "${endpoint.provider}/${endpoint.model}: empty response"
             }.onFailure { error ->
+                error.rethrowIfAiWorkMustStop()
                 failures += "${endpoint.provider}/${endpoint.model}: ${error.compactVisionError()}"
             }
         }
@@ -1521,6 +1568,7 @@ class AiService(
         messages: List<ChatMessage>,
         temperature: Double,
         responseFormat: ApiResponseFormat?,
+        deadline: AiRequestDeadline,
     ): String {
         fun requestBody(format: ApiResponseFormat?): String =
             requestJson.encodeToString(
@@ -1533,17 +1581,23 @@ class AiService(
             )
 
         fun send(format: ApiResponseFormat?): HttpResponse<String> {
+            val budget = deadline.requestBudget(endpoint.provider, endpoint.requestTimeoutMs)
             val requestBuilder = HttpRequest.newBuilder()
                 .uri(URI.create(endpoint.url))
                 .header("Content-Type", "application/json")
                 .header("HTTP-Referer", "https://changeyourlife.local")
                 .header("X-Title", "ChangeYourLife")
-                .timeout(AiRequestTimeout) // read + response timeout
+                .timeout(budget.timeout)
                 .POST(HttpRequest.BodyPublishers.ofString(requestBody(format)))
             if (!endpoint.apiKey.isNullOrBlank()) {
                 requestBuilder.header("Authorization", "Bearer ${endpoint.apiKey}")
             }
-            return httpClient.send(requestBuilder.build(), HttpResponse.BodyHandlers.ofString())
+            return httpClient.sendWithinAiBudget(
+                request = requestBuilder.build(),
+                bodyHandler = HttpResponse.BodyHandlers.ofString(),
+                budget = budget,
+                provider = endpoint.provider,
+            )
         }
 
         val response = send(responseFormat).let { initialResponse ->
@@ -1574,6 +1628,7 @@ class AiService(
         val model: String,
         val url: String,
         val apiKey: String?,
+        val requestTimeoutMs: Long,
     )
 
     private data class StructuredActionAttempt(
@@ -1711,14 +1766,12 @@ class AiService(
         const val MaxTextContextFiles = 4
         const val MaxTextContextChars = 16_000
         const val MaxDiagnosticsWarningChars = 500
-        val AiRequestTimeout: Duration = Duration.ofMinutes(5)
         const val DefaultLmStudioModel = "qwen/qwen3.5-9b"
         val DefaultLmStudioVisionModels = listOf("qwen/qwen3.5-9b")
         const val OpenRouterCompletionsUrl = "https://openrouter.ai/api/v1/chat/completions"
         val DefaultVisionModels = listOf(
             "google/gemma-4-26b-a4b-it:free",
             "google/gemma-3-4b-it:free",
-            "google/gemini-2.0-flash-exp:free",
         )
         val WebSearchTriggerPhrases = listOf(
             "search web",

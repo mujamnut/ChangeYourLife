@@ -60,7 +60,7 @@ data class AiDiagnosticsDto(
     val warning: String = "",
 )
 
-// Chat-with-actions: Gemini JSON-mode endpoint for reliable action detection
+// Chat-with-actions request for structured reply and action detection.
 @Serializable
 data class ChatWithActionsRequestDto(
     val messages: List<ChatMessageDto>,

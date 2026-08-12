@@ -14,12 +14,11 @@ data class AppConfig(
     val lmStudioApiKey: String?,
     val lmStudioModel: String,
     val lmStudioVisionModels: List<String>,
-    val glmApiKey: String?,
-    val geminiApiKey: String?,
     val openRouterApiKey: String?,
     val openRouterModel: String,
     val openRouterVisionModels: List<String>,
     val webSearch: WebSearchConfig,
+    val aiTimeouts: AiTimeoutConfig = AiTimeoutConfig(),
     val voiceNotes: VoiceNoteConfig = VoiceNoteConfig(),
     val contentAssets: ContentAssetConfig = ContentAssetConfig(),
 ) {
@@ -30,7 +29,6 @@ data class AppConfig(
         private val DefaultOpenRouterVisionModels = listOf(
             "google/gemma-4-26b-a4b-it:free",
             "google/gemma-3-4b-it:free",
-            "google/gemini-2.0-flash-exp:free",
         )
 
         fun fromEnvironment(environment: Map<String, String> = System.getenv()): AppConfig {
@@ -67,16 +65,6 @@ data class AppConfig(
                 )?.toModelList()
                     ?.takeIf { models -> models.isNotEmpty() }
                     ?: DefaultLmStudioVisionModels,
-                glmApiKey = loadApiKey(
-                    environment = environment,
-                    envNames = listOf("GLM_API_KEY"),
-                    propNames = listOf("glm.api.key", "GLM_API_KEY"),
-                ),
-                geminiApiKey = loadApiKey(
-                    environment = environment,
-                    envNames = listOf("GEMINI_API_KEY"),
-                    propNames = listOf("gemini.api.key", "GEMINI_API_KEY"),
-                ),
                 openRouterApiKey = loadApiKey(
                     environment = environment,
                     envNames = listOf("OPENROUTER_API_KEY"),
@@ -132,8 +120,52 @@ data class AppConfig(
                         propNames = listOf("web.search.cache.ttl.seconds", "WEB_SEARCH_CACHE_TTL_SECONDS"),
                     )?.toLongOrNull()?.coerceIn(60L, 86_400L) ?: 900L,
                 ),
+                aiTimeouts = loadAiTimeoutConfig(environment),
                 voiceNotes = loadVoiceNoteConfig(environment, r2),
                 contentAssets = loadContentAssetConfig(environment, r2),
+            )
+        }
+
+        private fun loadAiTimeoutConfig(environment: Map<String, String>): AiTimeoutConfig {
+            val jobDeadlineMs = loadSetting(
+                environment = environment,
+                envNames = listOf("AI_JOB_DEADLINE_MS"),
+                propNames = listOf("ai.job.deadline.ms", "AI_JOB_DEADLINE_MS"),
+            )?.toLongOrNull()?.coerceIn(30_000L, 600_000L)
+                ?: AiTimeoutConfig.DefaultJobDeadlineMs
+            val finalizationReserveMs = loadSetting(
+                environment = environment,
+                envNames = listOf("AI_FINALIZATION_RESERVE_MS"),
+                propNames = listOf("ai.finalization.reserve.ms", "AI_FINALIZATION_RESERVE_MS"),
+            )?.toLongOrNull()
+                ?.coerceIn(1_000L, minOf(60_000L, jobDeadlineMs - 1_000L))
+                ?: AiTimeoutConfig.DefaultFinalizationReserveMs
+                    .coerceAtMost(jobDeadlineMs - 1_000L)
+            return AiTimeoutConfig(
+                jobDeadlineMs = jobDeadlineMs,
+                connectTimeoutMs = loadSetting(
+                    environment = environment,
+                    envNames = listOf("AI_CONNECT_TIMEOUT_MS"),
+                    propNames = listOf("ai.connect.timeout.ms", "AI_CONNECT_TIMEOUT_MS"),
+                )?.toLongOrNull()?.coerceIn(1_000L, 30_000L)
+                    ?: AiTimeoutConfig.DefaultConnectTimeoutMs,
+                lmStudioRequestTimeoutMs = loadSetting(
+                    environment = environment,
+                    envNames = listOf("LMSTUDIO_REQUEST_TIMEOUT_MS", "LM_STUDIO_REQUEST_TIMEOUT_MS"),
+                    propNames = listOf(
+                        "lmstudio.request.timeout.ms",
+                        "LMSTUDIO_REQUEST_TIMEOUT_MS",
+                        "LM_STUDIO_REQUEST_TIMEOUT_MS",
+                    ),
+                )?.toLongOrNull()?.coerceIn(5_000L, jobDeadlineMs)
+                    ?: AiTimeoutConfig.DefaultLmStudioRequestTimeoutMs.coerceAtMost(jobDeadlineMs),
+                openRouterRequestTimeoutMs = loadSetting(
+                    environment = environment,
+                    envNames = listOf("OPENROUTER_REQUEST_TIMEOUT_MS"),
+                    propNames = listOf("openrouter.request.timeout.ms", "OPENROUTER_REQUEST_TIMEOUT_MS"),
+                )?.toLongOrNull()?.coerceIn(5_000L, jobDeadlineMs)
+                    ?: AiTimeoutConfig.DefaultOpenRouterRequestTimeoutMs.coerceAtMost(jobDeadlineMs),
+                finalizationReserveMs = finalizationReserveMs,
             )
         }
 
@@ -372,6 +404,33 @@ data class WebSearchConfig(
     val timeoutMs: Long = 12_000L,
     val cacheTtlSeconds: Long = 900L,
 )
+
+data class AiTimeoutConfig(
+    val jobDeadlineMs: Long = DefaultJobDeadlineMs,
+    val connectTimeoutMs: Long = DefaultConnectTimeoutMs,
+    val lmStudioRequestTimeoutMs: Long = DefaultLmStudioRequestTimeoutMs,
+    val openRouterRequestTimeoutMs: Long = DefaultOpenRouterRequestTimeoutMs,
+    val finalizationReserveMs: Long = DefaultFinalizationReserveMs,
+) {
+    init {
+        require(jobDeadlineMs > 0L) { "AI job deadline must be positive." }
+        require(connectTimeoutMs > 0L) { "AI connect timeout must be positive." }
+        require(lmStudioRequestTimeoutMs > 0L) { "LM Studio request timeout must be positive." }
+        require(openRouterRequestTimeoutMs > 0L) { "OpenRouter request timeout must be positive." }
+        require(finalizationReserveMs >= 0L) { "AI finalization reserve cannot be negative." }
+        require(finalizationReserveMs < jobDeadlineMs) {
+            "AI finalization reserve must be shorter than the job deadline."
+        }
+    }
+
+    companion object {
+        const val DefaultJobDeadlineMs = 180_000L
+        const val DefaultConnectTimeoutMs = 5_000L
+        const val DefaultLmStudioRequestTimeoutMs = 90_000L
+        const val DefaultOpenRouterRequestTimeoutMs = 60_000L
+        const val DefaultFinalizationReserveMs = 10_000L
+    }
+}
 
 data class EmailConfig(
     val resendApiKey: String?,

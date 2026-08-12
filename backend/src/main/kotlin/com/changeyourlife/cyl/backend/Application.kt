@@ -124,18 +124,23 @@ fun Application.module(
         lmStudioApiKey = appConfig.lmStudioApiKey,
         lmStudioModel = appConfig.lmStudioModel,
         lmStudioVisionModels = appConfig.lmStudioVisionModels,
-        glmApiKey = appConfig.glmApiKey,
-        geminiApiKey = appConfig.geminiApiKey,
         openRouterApiKey = appConfig.openRouterApiKey,
         openRouterModel = appConfig.openRouterModel,
         openRouterVisionModels = appConfig.openRouterVisionModels,
-        webSearchService = WebSearchService(appConfig.webSearch),
+        timeoutConfig = appConfig.aiTimeouts,
+        webSearchService = WebSearchService(
+            config = appConfig.webSearch,
+            connectTimeoutMs = appConfig.aiTimeouts.connectTimeoutMs,
+        ),
     )
     environment.log.info(
         "AI provider initialized: provider=${aiService.activeProvider}, model=${aiService.activeModel}",
     )
     environment.log.info(
         "AI vision initialized: pipeline=${aiService.visionPipelineVersion}, maxDimension=${aiService.visionMaxImageDimension}, maxBytes=${aiService.visionMaxImageBytes}, lmStudioVisionModels=${aiService.lmStudioVisionModelLabel}",
+    )
+    environment.log.info(
+        "AI timeout policy initialized: deadlineMs=${appConfig.aiTimeouts.jobDeadlineMs}, connectMs=${appConfig.aiTimeouts.connectTimeoutMs}, lmStudioRequestMs=${appConfig.aiTimeouts.lmStudioRequestTimeoutMs}, openRouterRequestMs=${appConfig.aiTimeouts.openRouterRequestTimeoutMs}, finalizationReserveMs=${appConfig.aiTimeouts.finalizationReserveMs}",
     )
     val aiJobRepository = dataSource?.let { PostgresAiJobRepository(it) }
         ?: InMemoryAiJobRepository()
